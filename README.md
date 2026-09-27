@@ -1,48 +1,98 @@
-# Durable-DAV-Router
+# Edge-Sonic
 
-Request router to backend Durable-DAV instances (RFC 4918 WebDAV reverse proxy on Cloudflare Workers).
+A Cloudflare Worker that speaks the **Subsonic REST API v1.16.1** over a **WebDAV**
+library. No transcoding, no Durable Objects, no cron: WebDAV is the only data source,
+D1 is the index, and KV is a cache the server works without.
 
-- Multi-backend from day one: each user registers backend Durable-DAV origins at `/user/backends`; buckets stay at `/:owner/:volume/` and proxy to the selected backend via `?backend=<slug>` (or `X-Backend`; lone backend implicit, multiples without selector → `409`).
-- Auth passthrough (router stores no secrets): Cloudflare Access JWT for `/user/*` fan-out + per-bucket Basic for WebDAV, forwarded verbatim. Each user gets up to `MAX_BACKENDS_PER_USER` (20) registered backends.
-- Uniform browser UI: aggregated bucket view grouped by backend with health badges; per-bucket files/settings/credentials proxy to the owning backend through one shape.
-- Only needed binding: D1 `DB` (registry only; files/props/locks live on backends).
-
-## Quick Start
-
-```bash
-pnpm install --ignore-scripts
-pnpm -r typecheck
-pnpm run test
-pnpm exec wrangler dev --config ./wrangler.jsonc
-```
-
-Register a backend (authenticated via Access in browser, or DEV email locally):
-
-```bash
-curl -X POST http://localhost:8787/user/backends \
-  -H 'Content-Type: application/json' \
-  -d '{"slug":"office","baseUrl":"https://dav.example.com"}'
-```
-
-Aggregated buckets:
-
-```bash
-curl http://localhost:8787/user/volumes
-```
-
-WebDAV via router (single backend implicit, else `?backend=office`):
-
-```bash
-curl -X PROPFIND http://localhost:8787/test/photos/?backend=office \
-  -H 'Depth: 1' -u username:password
-```
+- **No transcoding.** `stream` and `download` are a `Range` passthrough to the origin.
+  The response is the origin's response, so the `Content-Type` is never rewritten and
+  seeking is a seek.
+- **D1 is authoritative; KV is only a cache.** Every response is reconstructible from
+  `nodes` + `songs` plus a `PROPFIND`, so a missing or broken `CACHE` binding costs
+  latency and nothing else. `test/worker.int.test.ts` asserts byte-identical responses
+  with a poisoned cache entry, a corrupt one, no binding at all, and every operation
+  throwing.
+- **The protocol, honestly.** A `NotFoundError` becomes `code=70`, an
+  `UnauthorizedError` never becomes `code=40`, a library whose credential is wrong never
+  tells the user their password is wrong, and an unknown id for a library you cannot see
+  answers the same as an id that does not exist.
+- **One key per feature.** `SUBSONIC_USER_ENCRYPTION_KEY_SECRET` and
+  `WEBDAV_ENCRYPTION_KEY_SECRET` are separate Cloudflare Secrets Store entries, so
+  rotating one never invalidates the other. Merging them is forbidden.
+- **Incremental, client-driven scanning.** A `Depth: 0` root probe settles "is anything
+  new" in one subrequest; only folders whose mtime moved are descended. `getScanStatus`
+  advances one chunk, so no cron, no Durable Object, and no scheduled trigger.
 
 ## Layout
 
-- `packages/webdav/` — pure RFC 4918 proxy helpers (`SUPPORT_METHODS`, `DAV_CLASS`, CORS).
-- `packages/backend-data/` — D1 DAOs (`users`/`namespaces` + `router_backends`).
-- `packages/backend-services/` — `AccessAuthService` + `UserService` + `router/BackendService` + `router/BackendProxyService`.
-- `apps/api/` — `DurableDavRouterWorker` front (backend CRUD, aggregated fan-out, WebDAV + browser/credential proxy, CORS, SPA shell).
-- `apps/web/` — uniform SPA (aggregated Dashboard, backend management, `?backend=`-aware VolumeView).
-- `migrations/0001_router_init.sql` baseline (router registry only).
-- `test/router-backends.test.ts` + `test/integration/api/RouterBackends.int.test.ts` — unit + D1 integration.
+```
+apps/api          the Worker: /rest, /admin, the SPA shell
+apps/web          the admin SPA
+packages/subsonic the protocol: ids, envelope, node model, serializers, MD5
+packages/webdav   the 207 reader and the PROPFIND/GET client
+packages/media-tags  MP3, FLAC, Ogg Vorbis/Opus header readers
+packages/shared   i18n and small utilities
+packages/backend-errors    the error taxonomy
+packages/backend-data      DAOs over D1Queryable
+packages/backend-runtime   config, KV cache + breaker, the worker base class
+packages/backend-services  auth, library, scan, enrichment, composition
+migrations        one baseline schema
+test              the suite; runs under Node, no workerd
+```
+
+The layer rules are in [`eslint.config.mjs`](eslint.config.mjs) and summarized in
+[`AGENTS.md`](AGENTS.md).
+
+## Getting started
+
+```bash
+pnpm install --ignore-scripts
+pnpm run checks            # typecheck + lint + god-files + SPA shell
+pnpm run test              # the whole suite
+pnpm run test:coverage     # with the coverage gate
+pnpm run build             # builds apps/web into the worker
+pnpm exec wrangler dev
+```
+
+## Configuring a deployment
+
+`apps/api/wrangler.template.jsonc` is the starting point. It declares two
+`secrets_store_secrets[]` entries, one per feature:
+
+```jsonc
+"secrets_store_secrets": [
+  { "store_id": "<store id>", "name": "SUBSONIC_USER_ENCRYPTION_KEY_SECRET" },
+  { "store_id": "<store id>", "name": "WEBDAV_ENCRYPTION_KEY_SECRET" }
+]
+```
+
+`scripts/init-secrets.ts` creates the store and writes both 32-byte keys. Each is
+AES-256-GCM under its own key: user passwords under one, WebDAV credentials under the
+other. The bindings they resolve to are named `edge-sonic-subsonic-user-encryption-key`
+and `edge-sonic-webdav-encryption-key`.
+
+`ENVIRONMENT` is an **allow-list**, not a deny-list: `development` enables the
+`DEV_AUTH_EMAIL` bypass and `production` is the only other value that does anything, so
+`staging`, `Preview`, and a misspelled `prodcution` all fall on the safe side.
+`AppConfiguration.validate()` runs once per isolate and reports the things that are
+wrong but not fatal, including a bypass variable that is live in production and a
+`base_url` that would send a stored credential to a private address.
+
+## What is deliberately not here
+
+No `dav-store`, no Durable Objects, no cron triggers, no queues, no transcoding, no
+FTS5 (the migration names it as the answer to the one search that has to scan), and no
+second identity system: `/rest` is a Subsonic password and `/admin` is Cloudflare
+Access, and neither credential opens the other surface.
+
+## Where to read next
+
+| Area                          | Guide                             |
+| ----------------------------- | --------------------------------- |
+| The Worker, routes, `/rest`   | [`apps/api/AGENTS.md`](apps/api/AGENTS.md) |
+| The admin SPA                 | [`apps/web/AGENTS.md`](apps/web/AGENTS.md) |
+| DAOs and the D1 rules         | [`packages/backend-data/AGENTS.md`](packages/backend-data/AGENTS.md) |
+| Services, auth, composition   | [`packages/backend-services/AGENTS.md`](packages/backend-services/AGENTS.md) |
+| Bindings, wrangler, secrets   | [`docs/agents/runtime/AGENTS.md`](docs/agents/runtime/AGENTS.md) |
+| Tests and the doubles         | [`docs/agents/testing/AGENTS.md`](docs/agents/testing/AGENTS.md) |
+| The invariants                | [`AGENTS.md`](AGENTS.md) |

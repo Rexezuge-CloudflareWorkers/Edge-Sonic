@@ -1,40 +1,101 @@
-# Durable-DAV-Router — Testing
+# Edge-Sonic — Testing
 
-Scope: unit + integration tests. Parent index: `../../../AGENTS.md`.
+Scope: the whole suite. Parent index: `../../../AGENTS.md`.
 
-Current thresholds (`vitest.config.mts`): **statements 80 / branches 75 / functions 80 / lines 80** (enforced floor; measured 87/79/89/90). Never lower a threshold to make CI pass — raise it as coverage grows.
+Everything runs under **Node**. There is no workerd, no pool, and no second toolchain.
 
-Exclusions: `**/*.test.{ts,tsx}`, `**/*.d.ts`, `**/index.ts`, `**/types.d.ts`, `**/model/**`, plus the build-generated `apps/api/src/generated/**` blob, type-only modules (`D1Types`, `ServiceEnv`, `env.d.ts`), and re-export barrels (`dao/identity.ts`, `dao/router.ts`) — none of which have runtime behavior to exercise.
+Thresholds (`vitest.config.mts`): **78 / 65 / 79 / 80** (statements / branches /
+functions / lines), against a measured 79 / 66 / 81 / 82. These are a **measured
+floor**, not an aspiration: lower one to make CI green and the gate stops saying
+anything. Raise them as coverage grows.
 
-Integration in `test/integration/` uses `@cloudflare/vitest-pool-workers` and collects no coverage (the v8 provider needs `node:inspector/promises`, which does not exist inside workerd). God-file guard: `scripts/check-god-files.mjs` (soft 300 / hard 400 LOC, blocking in CI, wired into `pnpm run checks`).
+## Why there is no Workers integration pool
+
+`@cloudflare/vitest-pool-workers` was tried and removed. It builds the worker with
+Miniflare, whose module locator resolves a bare specifier in its *entry* file and not one
+reached through a relative import — so a monorepo worker and a monorepo's tests both
+failed to load with "Cannot find package" for packages that resolve under `tsc`, Vite,
+and `esbuild` alike. The available workarounds (a pre-bundled entry with esbuild, an
+alias table derived from the manifests, a second `wrangler` config at the repo root) each
+fixed one half of the problem, and none survived a package being added.
+
+What replaced it is better for the assertions that matter:
+
+- **D1 is SQLite, so the DAOs run against `node:sqlite`** through a `D1Queryable`
+  adapter (`test/helpers/sqlite.ts`). Same engine, real collation, real
+  `ON DELETE CASCADE`, real `PRAGMA foreign_key_check`, and a real planner — so
+  `EXPLAIN QUERY PLAN` is an assertion rather than a hope. The adapter preserves the
+  SQL and is honest about what it does not emulate: D1's `bind()` coercion, and
+  anything that depends on `meta.changes` beyond what SQLite reports.
+- **The Worker is driven through its own `fetch`** (`test/helpers/harness.ts`) with a
+  real D1 and a real KV double. That covers route order, the envelope, and HTTP status —
+  the three things that only exist in the composition and that every isolated test
+  passes without noticing.
+
+What is genuinely lost is workerd-specific behaviour: `executionCtx` timing, worker's own
+`Response` quirks, and KV's eventual consistency. That is stated in the harness rather
+than papered over.
+
+## Test doubles must model the platform
+
+A double that shares a wrong assumption with the code it tests makes both look right.
+Three from this repository's own history, all of which shipped:
+
+- **A D1 double that lowercased both sides** of a comparison is why the reference project
+  carried `lower(owner_email) = lower(?)` through a full green suite. The predicate was
+  wrong in SQL, right in the double, and the rows were identical — the plan was the only
+  observable difference.
+- **A FLAC fixture and a FLAC reader that shared a wrong byte offset.** Every duration was
+  wrong by 2^16 and nothing failed. When a fixture and a reader can both be wrong the same
+  way, only the spec breaks the tie, so the fixture is written from the spec and the
+  offsets are spelled out in both.
+- **A `Range`-ignoring WebDAV double.** `fakeDav` used to answer any range with the whole
+  file and a `Content-Range` header claiming a prefix, which models a server lying about
+  what it served — and it hid the one bug this product exists to avoid. It truncates now,
+  answers `416` past the end, and `test/streaming.test.ts` asserts the recorded range
+  *and* the received bytes.
+
+Two more rules that are easy to get wrong:
+
+- **Only KV and WebDAV are doubled**, because they are exactly the two things that are
+  modellable without lying. D1 is real.
+- **A fake's input shape is part of its contract.** `EnrichmentService` decides whether
+  to read a file from `enriched_at !== null`; a camelCase stand-in leaves that `undefined`,
+  `undefined !== null` is true, and the service correctly concludes every row is already
+  enriched and does nothing. A test that passes while asserting nothing.
 
 ## Suites
 
-| Suite                                         | Covers                                                                                                                    |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `test/config.test.ts`                         | `EnvParser`, `RouterLimits`, `AuthConfig` environment gating, `AppConfiguration.validate()`                               |
-| `test/errors.test.ts`                         | Every error class's status/type/message, `ErrorMapper` masking, `toServiceStatus`                                         |
-| `test/kv.test.ts`                             | Key construction, TTL clamping, fail-soft reads/writes, paginated purge                                                   |
-| `test/di.test.ts`                             | `Container` memoization/disposal/child scopes, `memoizeAsync` non-caching of rejections, request-scope plumbing           |
-| `test/backend-data.test.ts`                   | `isD1ErrorRetryable` precedence, `isMissingSchemaError`, `executeD1WithRetry` backoff, `buildSetClause` ordering          |
-| `test/middleware.test.ts`                     | `securityHeaders`, `rateLimit` (registration validation, buckets, fail-open, map bound), `clientIp` trust order           |
-| `test/auth.test.ts`                           | `AccessAuthService` strategy chain and the bypass allow-list, `verifyAccessJwt` failure modes                             |
-| `test/proxy-helpers.test.ts`                  | Header allowlists, `Destination` rewrite, byte-preserving query strip, `resolveBackend`, probe classification and fan-out |
-| `test/api-routes.test.ts`                     | `/user/*` route layer over a SQL-faithful D1 double                                                                       |
-| `test/user-service.test.ts`                   | Email normalization parity between `upsertUser` and `getProfileByEmail`                                                   |
-| `test/logger.test.ts`, `test/worker.test.ts`  | Log levels, worker bootstrap, one-shot config validation, rate-limit wiring, preflight, error masking                     |
-| `test/web-lib.test.ts`                        | `apps/web/src/lib`: API client, error decoding, formatters, DAV path helpers, `toLocalizedErrorMessage`                   |
-| `test/dav-webdav.test.ts`                     | `SUPPORT_METHODS`/`DAV_CLASS`, CORS origin policy and preflight contract                                                  |
-| `test/i18n.test.ts`                           | Locale bundles, structure and placeholder parity, fallback chain                                                          |
-| `test/integration/api/Migrations.int.test.ts` | Migration chain against a **seeded** database: the cascade-wipe regression, FK survival, index usage                      |
-| `test/integration/api/RouterApi.int.test.ts`  | End-to-end `/user/*` + DAV routing over real D1, plus `EXPLAIN QUERY PLAN` assertions                                     |
+| File                                     | Covers                                                                                  |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| `subsonic-md5.test.ts`                   | MD5 against RFC 1321 and the spec's own `sesame`/`c19b2d` worked example                   |
+| `subsonic-protocol.test.ts`              | The node model, all three serializers, the error envelope, id round-trips                  |
+| `kv-outage.test.ts`                      | Fail-soft reads/writes, the breaker, the version-in-key policy                            |
+| `webdav-client.test.ts`                  | The 207 parser, the credential boundary, `Range` forwarding, the URL guard                 |
+| `media-tags.test.ts`                     | MP3, FLAC, and Ogg readers against fixtures written from the specs                         |
+| `library-ssrf.test.ts`                   | The private-host classifier, the URL canonicalizer, the client's own refusals              |
+| `scan-incremental.test.ts`               | The root probe, mtime-driven descent, the prune, chunk accounting                         |
+| `enrichment-config.test.ts`              | Lazy enrichment, `AppConfiguration.validate()`, `resolveKey`, both error mappers           |
+| `admin-auth.test.ts`                     | The Access strategy chain, the allow-list, and the never-trust-the-header rule            |
+| `schema.int.test.ts`                     | The real schema, cascades, `EXPLAIN QUERY PLAN` on every hot lookup, DAO round-trips       |
+| `worker.int.test.ts`                     | The Worker end to end: route order, auth, the envelope, error surface, the cache          |
+| `streaming.test.ts`                      | `stream`/`download`/`getCoverArt`: no transcoding, no buffering, upstream failures        |
+| `admin-api.test.ts`                      | The operator API: the SSRF gate, quotas, key separation, credential handling             |
+| `endpoints.test.ts`                      | The rest of `/rest`: lists, state, users, ratings, scrobbling, the scan controls          |
 
-## Mock patterns
+## Rules for writing an assertion here
 
-- **DAOs/services**: in-memory fakes implementing the DAO surface; assert via state, not `vi.mock`. Services take `() => Promise<DAO>` factories, so a fake is passed in through the constructor — no module mocking anywhere.
-- **A D1 double must match SQLite's semantics**, not be more forgiving. A double that lowercased both sides of a comparison is exactly why `lower(owner_email) = lower(?)` survived a full suite: the predicate was wrong in SQL but right in the double, so only the _query plan_ differed. Compare exactly and case-sensitively.
-- **Assert query plans where the difference is invisible in the result set.** `test/integration/api/RouterApi.int.test.ts` runs `EXPLAIN QUERY PLAN` and requires `USING INDEX` and the absence of a bare `SCAN` — the only place a plan regression is observable.
-- **Don't assert a global count to prove an upper bound.** The rate-limit bucket cap is asserted as `<= MAX_BUCKETS`, which is what the invariant actually is.
-- **Watch for clock and boundary sensitivity.** A formatter that floors a millisecond difference can be off by one on a bucket edge; assert the unit or a range, and confirm an apparent off-by-one is not a real bug before changing product code.
-- Access auth: stub env (`DEV_AUTH_EMAIL`/`DEMO_MODE` with `ENVIRONMENT` in the allow-list); never trust `Cf-Access-Authenticated-User-Email`.
-- Integration: `test/integration/vitest.config.mts` + `wrangler.test.jsonc` pool, `__INTEGRATION_MIGRATIONS__` (a per-file map, so a test can apply a prefix and seed before the rest); `helpers/setup.ts` (`setupIntegrationTest`/`ensureUser`/`seedBackend`) + `helpers/migrations.ts` (`splitSql`, `applyMigrations`/`UpTo`/`After`). Migrations are tracked per file because `ALTER TABLE ... ADD COLUMN` is not re-runnable and the D1 database is shared across a test file.
+- **Assert the count, not the shape.** `songCount`, `playCount`, and `position` are
+  numbers clients display and arithmetic on. Assert them even when the expected value is
+  `0`; a field that is *absent* and a field that is `0` are different answers.
+- **Assert the empty case, not just the populated one.** Every list can be empty, and the
+  JSON shape of an empty list is where a client breaks.
+- **Assert a property, not an implementation.** "The response is byte-identical with a
+  dead cache" is a property. "the cache was not written" is an implementation detail that
+  stops being true when the cache is replaced.
+- **Assert what a client reads, not what the code returns.** A `getScanStatus` that
+  ignores `libraryId` is correct because the protocol has no such parameter — the
+  assertion is that it only ever reaches a library the caller already has.
+- **Do not assert a global count to prove an upper bound.** Assert the bound.
+- **Watch the clock and the boundaries.** A minute-resolution age that lands on a bucket
+  edge is a flaky assertion, not a product bug — assert the unit or a range.

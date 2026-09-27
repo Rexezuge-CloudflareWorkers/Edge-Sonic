@@ -35,22 +35,93 @@
       "id": "00000000000000000000000000000000",
     },
   ],
-  // No DEV_AUTH_EMAIL / DEMO_MODE here on purpose. Those are authentication
-  // bypasses: with either set, every unauthenticated request authenticates as
-  // that identity. `isBypassAllowed()` only honors them for ENVIRONMENT in
-  // {development, dev, local, test}, but shipping a ready-made bypass identity
-  // inside the production template makes a one-word edit (`ENVIRONMENT:
-  // "staging"`, or an `env.staging` block that inherits `vars`) a full account
-  // takeover with no attacker effort. Set them only in a non-production
-  // environment block, and prefer a secret over a plaintext var.
+
+  // One secret per feature, and never merged.
+  //
+  // The three fields are the whole schema (`additionalProperties: false`, and `wrangler
+  // typegen` rejects anything else):
+  //
+  // - `binding`  - the name the Worker reads it as, `env.SUBSONIC_USER_ENCRYPTION_KEY_SECRET`.
+  //                It is an object with a `.get()` method, not a string; typing it as a
+  //                string would compile and then resolve to undefined, turning every
+  //                credential read into a silent failure.
+  // - `store_id` - the Secrets Store that holds it.
+  // - `secret_name` - the key's name *inside* the store. The two are deliberately
+  //                different strings (`edge-sonic-subsonic-user-encryption-key` and
+  //                `edge-sonic-webdav-encryption-key`), so a binding and a stored value
+  //                cannot be confused for each other in a log or a support ticket.
+  //
+  // `scripts/init-secrets.ts` reads this array, creates anything missing, and writes a
+  // fresh 32-byte AES-256 key for each.
+  //
+  // Two keys, not one, because they guard different things. Rotating the WebDAV credential
+  // must not require re-entering every user's password, and a compromise of one store must
+  // not yield both. `users.key_version` and `users.token_epoch` exist for the same reason.
+  //
+  // NOTE: this field is NOT inherited by a named `env.*` block, so a multi-environment
+  // deployment has to repeat it in each one.
+  "secrets_store_secrets": [
+    {
+      "binding": "SUBSONIC_USER_ENCRYPTION_KEY_SECRET",
+      "store_id": "REPLACE_WITH_YOUR_SECRETS_STORE_ID",
+      "secret_name": "edge-sonic-subsonic-user-encryption-key",
+    },
+    {
+      "binding": "WEBDAV_ENCRYPTION_KEY_SECRET",
+      "store_id": "REPLACE_WITH_YOUR_SECRETS_STORE_ID",
+      "secret_name": "edge-sonic-webdav-encryption-key",
+    },
+  ],
+
+  // No DEV_AUTH_EMAIL / DEMO_MODE here on purpose, and no raw
+  // SUBSONIC_USER_ENCRYPTION_KEY / WEBDAV_ENCRYPTION_KEY.
+  //
+  // The first two are authentication bypasses: with either set, every unauthenticated
+  // request authenticates as that identity. `isBypassAllowed()` only honors them for
+  // ENVIRONMENT in {development, dev, local, test}, but shipping a ready-made bypass
+  // identity inside the production template makes a one-word edit - `ENVIRONMENT:
+  // "staging"`, or an `env.staging` block that inherits `vars` - a full account takeover
+  // with no attacker effort. `validate()` warns when one is present but inert, which is
+  // exactly the case worth warning about.
+  //
+  // The raw keys are a TEST-ONLY escape hatch so `wrangler dev` works without a Secrets
+  // Store. They are absent here on purpose, and `resolveKey` is written so a broken
+  // binding can never be masked by one.
   "vars": {
     "ENVIRONMENT": "production",
     "DEBUG_MODE": "false",
     "SITE_URL": "",
-    "POLICY_AUD": "",
+
+    // Cloudflare Access, required for /admin and nothing else. /rest authenticates
+    // against the users table, so these have no defaults on purpose: a typo here
+    // presents as an Access outage rather than as a failed startup.
     "TEAM_DOMAIN": "",
-    "MAX_BACKENDS_PER_USER": "20",
-    "BACKEND_FETCH_TIMEOUT_MS": "8000",
-    "ROUTE_CACHE_TTL_SECONDS": "86400",
+    "POLICY_AUD": "",
+
+    // Library and scan limits.
+    "MAX_LIBRARIES": "10",
+    "WEBDAV_TIMEOUT_MS": "10000",
+    "SCAN_CHUNK_FOLDERS": "40",
+    "MAX_PAGE_SIZE": "500",
+    "DEFAULT_PAGE_SIZE": "20",
+
+    // Tag enrichment reads at most this many bytes from the front of a file. A prefix
+    // read, never a whole file: a 4 GiB track must not be pulled through the Worker to
+    // learn its length.
+    "TAG_READ_BYTES": "131072",
+
+    // Streaming and the auth throttle.
+    "STREAM_RATE_LIMIT": "600",
+    "STREAM_TIMEOUT_MS": "30000",
+    "AUTH_FAILURE_LIMIT": "10",
+    "AUTH_FAILURE_WINDOW_SECONDS": "900",
+
+    // Unset means "allowed outside production", so a co-located dev server works, and
+    // "denied" in production. Set it only deliberately: the Worker fetches base_url with
+    // the library's stored DAV password, so a private address here is a way to send that
+    // credential somewhere the operator cannot see.
+    "ALLOW_PRIVATE_WEBDAV_HOSTS": "",
+
+    "LOG_LEVEL": "info",
   },
 }

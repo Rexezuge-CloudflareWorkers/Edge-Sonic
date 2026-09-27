@@ -1,15 +1,65 @@
-# Durable-DAV-Router — Web SPA
+# Edge-Sonic — Admin SPA
 
 Scope: `apps/web/**`. Parent index: `../../AGENTS.md`.
 
-- Vite + React 19 SPA (`src/main.tsx`: `BrowserRouter` → `SpaApp`). Build embeds `dist/index.html` into `apps/api/src/generated/spa-shell.ts` (Vite plugin `spa-shell-embed`; never edit generated file; `scripts/ensure-spa-shell-stub.mjs` creates the empty stub on install).
-- **Rebuild before deploy: `pnpm run build`.** The API worker serves `SPA_HTML` from the *last local build*, and both `dist/` and `apps/api/src/generated/` are gitignored — so a source fix here is inert until `vite build` runs again. `scripts/verify-spa-shell.mjs` (in `pnpm run checks`) rejects a missing/stubbed/mismatched artifact. It cannot detect a stale-but-self-consistent pair, which is why the rebuild is an operational duty, not just a checked one.
-- **The bucket browser's contract with the backend is path addressing.** `lib/davXml.ts` strips the `/<owner>/<volume>` base from `DAV:href` (RFC 4918 §8.3) to recover the volume-relative `path`; `services/davClient.ts` turns that `path` straight back into a request URL. The router forwards upstream 207 bodies verbatim, so nothing strips the base in transit. Both halves must agree: an href format change on the backend silently breaks every folder click and download here, because the volume root stops being recognised as the self-response and every path comes back double-prefixed. Always pair "parse a real 207 body" with "use the parsed `path` in a real request" — a disagreement is invisible when either half is checked alone. `test/web-davxml.test.ts` and `test/web-davclient.test.ts` are that pair.
-- `?path=` is user-supplied and reaches `davClient.entryUrl`, so `VolumeView.cleanPath` drops `''`/`.`/`..` and any segment containing `/` or `\`, and `entryUrl` filters dot segments again and fails closed on a base escape. `encodeURIComponent` leaves `.` alone, so without both layers `?path=../../admin` resolves to `/user/volumes/<owner>/admin` — outside the volume.
-- `?backend=` (the upstream selector) is implemented four different ways across `services/*` — a param map, a string helper, an inlined query, and a bare template literal. `test/web-services.test.ts` pins each shape; a dropped selector silently targets the wrong backend.
-- `SpaApp.tsx` — thin composition root: `useCurrentUser` + `useSpaLanguage` + `useNotice` hook slices, `Header`/`NoticeBar`, then `SpaViewRouter` (no data fetching in router).
-- `components/layout/SpaViewRouter.tsx` — routes: `/` (Dashboard or Landing), `/new` (gated `NewVolumeView` with backend selector + auto-loaded read-only owner), `/backends/new` (gated `NewBackendView`), `/:owner/:volume` (`VolumeView`, backend in `?backend=` + subpath in `?path=` so deep file URLs never collide with WebDAV `GET`, settings in `?tab=settings`), `/settings` (user settings + `BackendsSettingsCard`), `*` (localized 404 `Card`). Views in `src/views/`; shared `ui/` primitives in `src/components/`.
-- API access: `src/lib/api.ts` + `src/services/*` (`backend/volume/credential/userService`) + `src/lib/davXml.ts` (PROPFIND multistatus parser) + `src/services/davClient.ts` (PROPFIND/GET/PUT/MKCOL/DELETE/COPY/MOVE over `/user/volumes/:owner/:volume/files` browser plane with `?backend=`).
-- Aggregated dashboard: `src/views/DashboardView.tsx` (buckets grouped by backend + backend health badges + add-backend entrypoint); per-bucket settings: `src/components/volume/VolumeSettingsTab.tsx` (description + visibility + Danger Zone delete, all `backend`-aware) + `VolumeCredentialsCard.tsx` (proxied per-bucket Basic credentials, copy-once password) + `HrefPrefixModeCard.tsx` (Link Prefix: the backend's `base` | `root` `DAV:href` anchoring, proxied through the unreshaped `/user/volumes` JSON). `Volume.hrefPrefixMode` is optional (a backend predating the setting omits it) but `VolumeDetail.hrefPrefixMode` is required, because `toVolumeDetail` resolves an absent value to the conforming `base` in one place.
-- i18n: `src/i18n.ts` (i18next + `react-i18next`) — `SUPPORTED_LANGUAGES` (English-only today; grows bundle-by-bundle under `src/locales/<tag>/translation.json`, enforced by `pnpm run validate:locales`), single `canonicalizeLanguageTag` + `normalizeLanguage`, `detectInitialLanguage` (stored `edge-sonic-lng` → `navigator.language` → `en`), `loadLanguage` (static `import.meta.glob` per-locale chunks, falls back to `en` for unshipped bundles).
-- English UI text uses Title Case. Pure helpers are unit-tested from the root suite (`src/lib/davXml.ts` via `test/web-davxml.test.ts`, `src/services/davClient.ts` via `test/web-davclient.test.ts`, `src/services/*` via `test/web-services.test.ts`). The logic-bearing layers (`src/lib`, `src/services`) are inside the coverage gate; `src/components/**` and `src/views/**` are measured but at 0% and are named as follow-up in `vitest.config.mts`.
+A Vite + React 19 SPA for the operator surface: registering a WebDAV library, managing
+users, and granting them access. It speaks only to `/admin/*`, which is behind Cloudflare
+Access — it has no Subsonic credential and could not use one.
+
+- `src/main.tsx` — `BrowserRouter` → `SpaApp`.
+- `src/views/` — `LibrariesView`, `UsersView`.
+- `src/components/` — `AppHeader`, `NoticeBar`, and the `ui/` primitives.
+- `src/hooks/useNotice.ts` — the transient status message, whose timer is cleared on
+  replace so a fast sequence of messages does not leave an earlier timeout cutting a
+  later one short.
+- `src/lib/api.ts` — the typed client for `/admin/*`.
+- `src/i18n.ts` — i18next, English-only for now.
+
+## Rebuild before deploying
+
+**`pnpm run build`.** The Worker serves `SPA_HTML` from the *last local build*, and both
+`dist/` and `apps/api/src/generated/` are gitignored, so a source change here is inert
+until `vite build` runs again. `scripts/verify-spa-shell.mjs` runs in `pnpm run checks` and
+rejects a missing, stubbed, or mismatched artifact. It cannot detect a stale-but-
+self-consistent pair, which is why the rebuild is an operational duty and not only a
+checked one.
+
+## Data loading owns its own cancellation
+
+Each view's `load` callback does the fetching and the effect that runs it owns the
+"am I still mounted" check:
+
+```ts
+useEffect(() => {
+  let cancelled = false;
+  void load().then((next) => { if (!cancelled) setState(next); });
+  return () => { cancelled = true; };
+}, [load]);
+```
+
+The effect has to own the guard because only the effect knows when the component goes
+away. Without it a slow first response can land after a faster refresh the user triggered,
+and React 18 turns a set-state-after-unmount into a silent leak rather than a warning.
+The fetch itself is a separate `useCallback` so the initial load and every refresh button
+share it without the effect reaching into component state.
+
+An unreachable admin API renders as an **empty list plus a notice**, not an error screen:
+the operator can still read what is on the page, and the notice says what went wrong.
+
+## Not in the coverage gate
+
+`apps/web` is deliberately **not** in `vitest.config.mts`'s coverage `include`. The
+reference project added it on a comment claiming a vitest config in `apps/web` that never
+existed; the entire SPA was then invisible and the floor quietly dropped from 80 to 64
+with 44 presentational modules at 0%. Publishing a number that is mostly untested UI is
+worse than saying "not measured yet" — so it is excluded **visibly**, and re-including it
+is meant to be a deliberate act once the components have tests.
+
+What is testable without a DOM harness — `src/lib/api.ts` and the formatters — is
+exercised from the root suite instead. The two `useEffect` cancellation guards are the
+load-bearing logic in this app, and the lint rule that catches a missing one is on.
+
+## Style
+
+English UI text is Title Case. No component reaches for `fetch` directly: the typed client
+in `src/lib/api.ts` is the only thing that knows a request shape.
