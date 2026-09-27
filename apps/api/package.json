@@ -1,0 +1,22 @@
+{
+  "name": "@edge-sonic/api",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@edge-sonic/backend-errors": "workspace:*",
+    "@edge-sonic/backend-runtime": "workspace:*",
+    "@edge-sonic/backend-services": "workspace:*",
+    "@edge-sonic/shared": "workspace:*",
+    "@edge-sonic/webdav": "workspace:*",
+    "chanfana": "3.4.0",
+    "hono": "4.13.8"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "typescript": "6.0.3"
+  }
+}

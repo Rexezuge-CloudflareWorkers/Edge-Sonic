@@ -1,0 +1,29 @@
+{
+  "name": "@edge-sonic/backend-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./base": "./src/base/index.ts",
+    "./base/*": "./src/base/*.ts",
+    "./config": "./src/config/index.ts",
+    "./config/*": "./src/config/*.ts",
+    "./di": "./src/di/index.ts",
+    "./di/*": "./src/di/*.ts",
+    "./logger": "./src/logger.ts",
+    "./kv": "./src/kv/index.ts",
+    "./kv/*": "./src/kv/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@edge-sonic/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.2",
+    "typescript": "6.0.3"
+  }
+}
