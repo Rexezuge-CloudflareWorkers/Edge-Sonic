@@ -120,11 +120,11 @@ class SubsonicParams {
    * Subsonic clients send these unvalidated, and `size=abc` is a client bug, not
    * a reason to refuse a page of results.
    */
-  public int(name: string, fallback: number, bounds?: { min?: number; max?: number }): number {
+  public int(name: string, fallback?: number, bounds?: { min?: number; max?: number }): number {
     const raw = this.get(name);
-    if (raw === undefined || raw.trim().length === 0) return fallback;
+    if (raw === undefined || raw.trim().length === 0) return fallback ?? 0;
     const parsed = Number.parseInt(raw.trim(), 10);
-    if (!Number.isFinite(parsed)) return fallback;
+    if (!Number.isFinite(parsed)) return fallback ?? 0;
     const min = bounds?.min ?? Number.MIN_SAFE_INTEGER;
     const max = bounds?.max ?? Number.MAX_SAFE_INTEGER;
     return Math.min(Math.max(parsed, min), max);

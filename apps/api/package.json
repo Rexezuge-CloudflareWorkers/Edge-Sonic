@@ -7,13 +7,16 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@edge-sonic/backend-data": "workspace:*",
     "@edge-sonic/backend-errors": "workspace:*",
     "@edge-sonic/backend-runtime": "workspace:*",
     "@edge-sonic/backend-services": "workspace:*",
+    "@edge-sonic/media-tags": "workspace:*",
     "@edge-sonic/shared": "workspace:*",
+    "@edge-sonic/subsonic": "workspace:*",
     "@edge-sonic/webdav": "workspace:*",
-    "chanfana": "3.4.0",
-    "hono": "4.13.8"
+    "hono": "4.13.8",
+    "jose": "6.1.0"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

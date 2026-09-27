@@ -1,27 +1,42 @@
-import type { RouterBackendDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import type { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { Token } from '@edge-sonic/backend-runtime/di';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
-import type { AccessAuthService } from '../auth/AccessAuthService';
-import type { UserService } from '../user/UserService';
-import type { BackendService } from '../router/BackendService';
+import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
+import type { LibraryService } from '../library/LibraryService';
+import type { ScanService } from '../index/ScanService';
+import type { TreeService } from '../index/TreeService';
+import type { EnrichmentService } from '../index/EnrichmentService';
 
-// Central token registry for the per-request composition root
-// (`requestScope.ts`). Call sites resolve services via
-// `scope.get(Tokens.BackendService)` instead of `new X(env)`.
-//
-// Tokens carry their value type (`Token<T>`) so `scope.get(...)` infers the
-// service type without an explicit generic at call sites.
+/**
+ * Central token registry for the per-request composition root.
+ *
+ * Tokens carry their value type so `scope.get(Tokens.X)` infers the service type
+ * without an explicit generic at the ~40 call sites that use it.
+ */
 const Tokens = {
   KvCache: Symbol('KvCache') as Token<KvCache>,
-  UserDAO: Symbol('UserDAO') as Token<() => Promise<UserDAO>>,
-  RouterBackendDAO: Symbol('RouterBackendDAO') as Token<() => Promise<RouterBackendDAO>>,
-  AccessAuthService: Symbol('AccessAuthService') as Token<AccessAuthService>,
-  UserService: Symbol('UserService') as Token<UserService>,
-  BackendService: Symbol('BackendService') as Token<BackendService>,
-  // `AppConfig` is bound for services that need injected configuration; it is
-  // not resolved by handlers (they receive a fully-built service instead).
   AppConfig: Symbol('AppConfig') as Token<AppConfiguration>,
+
+  UserDAO: Symbol('UserDAO') as Token<() => Promise<UserDAO>>,
+  LibraryDAO: Symbol('LibraryDAO') as Token<() => Promise<LibraryDAO>>,
+  NodeDAO: Symbol('NodeDAO') as Token<() => Promise<NodeDAO>>,
+  SongDAO: Symbol('SongDAO') as Token<() => Promise<SongDAO>>,
+  PlaylistDAO: Symbol('PlaylistDAO') as Token<() => Promise<PlaylistDAO>>,
+  AnnotationDAO: Symbol('AnnotationDAO') as Token<() => Promise<AnnotationDAO>>,
+  AuthThrottleDAO: Symbol('AuthThrottleDAO') as Token<() => Promise<AuthThrottleDAO>>,
+  ScanStateDAO: Symbol('ScanStateDAO') as Token<() => Promise<ScanStateDAO>>,
+
+  SubsonicAuthService: Symbol('SubsonicAuthService') as Token<SubsonicAuthService>,
+  LibraryService: Symbol('LibraryService') as Token<LibraryService>,
+  TreeService: Symbol('TreeService') as Token<TreeService>,
+  ScanService: Symbol('ScanService') as Token<ScanService>,
+  EnrichmentService: Symbol('EnrichmentService') as Token<EnrichmentService>,
+
+  // Per-feature encryption keys, as memoized thunks. Resolving one never fetches
+  // the other — see `resolveKey` in `requestScope.ts`.
+  UserKey: Symbol('UserKey') as Token<() => Promise<string>>,
+  WebdavKey: Symbol('WebdavKey') as Token<() => Promise<string>>,
 } satisfies Record<string, Token<unknown>>;
 
 export { Tokens };

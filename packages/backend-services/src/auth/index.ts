@@ -1,2 +1,3 @@
-export { AccessAuthService, DEFAULT_ACCESS_AUTH_STRATEGIES } from './AccessAuthService';
-export type { AccessAuthEnv, AccessIdentityContext, AccessAuthStrategy } from './AccessAuthService';
+export { SubsonicAuthService, throttleIdentity } from './SubsonicAuthService';
+export { AccessAuthService, DEMO_USER_EMAIL } from './AccessAuthService';
+export type { AccessAuthEnv, AccessIdentityContext } from './AccessAuthService';

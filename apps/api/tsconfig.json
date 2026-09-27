@@ -13,26 +13,27 @@
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
+    "types": ["node"],
     "paths": {
       "@/*": ["./src/*"],
-      "@edge-sonic/background": ["../../apps/background/src"],
-      "@edge-sonic/background/*": ["../../apps/background/src/*"],
-      "@edge-sonic/backend-data": ["../../packages/backend-data/src"],
-      "@edge-sonic/backend-data/*": ["../../packages/backend-data/src/*"],
+      "@edge-sonic/shared": ["../../packages/shared/src"],
+      "@edge-sonic/shared/*": ["../../packages/shared/src/*"],
       "@edge-sonic/backend-errors": ["../../packages/backend-errors/src"],
       "@edge-sonic/backend-errors/*": ["../../packages/backend-errors/src/*"],
       "@edge-sonic/backend-runtime": ["../../packages/backend-runtime/src"],
       "@edge-sonic/backend-runtime/*": ["../../packages/backend-runtime/src/*"],
+      "@edge-sonic/backend-data": ["../../packages/backend-data/src"],
+      "@edge-sonic/backend-data/*": ["../../packages/backend-data/src/*"],
       "@edge-sonic/backend-services": ["../../packages/backend-services/src"],
       "@edge-sonic/backend-services/*": ["../../packages/backend-services/src/*"],
+      "@edge-sonic/subsonic": ["../../packages/subsonic/src"],
+      "@edge-sonic/subsonic/*": ["../../packages/subsonic/src/*"],
+      "@edge-sonic/media-tags": ["../../packages/media-tags/src"],
+      "@edge-sonic/media-tags/*": ["../../packages/media-tags/src/*"],
       "@edge-sonic/webdav": ["../../packages/webdav/src"],
-      "@edge-sonic/webdav/*": ["../../packages/webdav/src/*"],
-      "@edge-sonic/dav-store": ["../../packages/dav-store/src"],
-      "@edge-sonic/dav-store/*": ["../../packages/dav-store/src/*"],
-      "@edge-sonic/shared": ["../../packages/shared/src"],
-      "@edge-sonic/shared/*": ["../../packages/shared/src/*"]
+      "@edge-sonic/webdav/*": ["../../packages/webdav/src/*"]
     }
   },
-  "include": ["../../worker-configuration.d.ts", "../../packages/backend-runtime/src/env.d.ts", "src/**/*.ts"],
+  "include": ["src/**/*.ts", "../../worker-configuration.d.ts"],
   "exclude": ["node_modules"]
 }

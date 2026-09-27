@@ -1,7 +1,7 @@
 import type { Context, Next } from 'hono';
 import { RateLimitedError } from '@edge-sonic/backend-errors';
 
-type RateLimitContext = Context<{ Bindings: Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
+type RateLimitContext = Context<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
 
 interface Bucket {
   count: number;

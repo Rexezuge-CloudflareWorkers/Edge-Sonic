@@ -1,25 +1,87 @@
-import type { D1Queryable } from '@edge-sonic/backend-data/utils';
+/**
+ * Minimal structural env for scope creation, and the `resolveKey` policy.
+ *
+ * ### No index signature, on purpose
+ *
+ * `RequestScopeEnv` deliberately has no `[key: string]: unknown`. An interface with
+ * one carries an implicit index signature, so it would make this type accept
+ * *any* object — including a bare `{}` — and a typo in a binding name would
+ * compile. Extra bindings remain assignable structurally, so `Env` still passes.
+ *
+ * ### `resolveKey`: the whole per-feature key policy, in one place
+ *
+ * Three rules, and each exists because of a specific failure:
+ *
+ * 1. **Secrets Store binding first.** That is where the key lives in production.
+ * 2. **A raw `*_ENCRYPTION_KEY` var is a test-only escape hatch.** It exists so the
+ *    integration pool and local `wrangler dev` work without a Secrets Store. It
+ *    must never appear in the production template, and it must never *mask* a
+ *    broken production binding.
+ * 3. **Otherwise throw, fail closed.** A missing key means every stored credential
+ *    is unrecoverable. Degrading to "no key, so no users can log in" silently is
+ *    how a lost store turns into an unexplained "nobody's credentials work"
+ *    support ticket instead of a clear configuration error.
+ *
+ * A *declared but unreadable* binding still throws, because `binding.get()`
+ * rejecting is a broken production configuration and the var fallback must not
+ * paper over it.
+ */
+import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
+import { isUsableKey } from '@edge-sonic/backend-data/crypto';
 
-// Minimal structural env for scope creation.
+interface SecretsStoreSecret {
+  get(): Promise<string>;
+}
+
 interface RequestScopeEnv {
-  DB: D1Queryable;
-  CACHE?: KvNamespaceLike | null;
+  DB: unknown;
+  CACHE?: unknown;
+  SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
+  WEBDAV_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
+  /** Test-only. Never declared in the production template. */
+  SUBSONIC_USER_ENCRYPTION_KEY?: string;
+  /** Test-only. Never declared in the production template. */
+  WEBDAV_ENCRYPTION_KEY?: string;
 }
 
-// Single audited unsafe-cast location for service envs. Services declare
-// narrow `*Env` interfaces (e.g. `{ DB, MAX_* }`); the composition root holds
-// the minimal `RequestScopeEnv`. Centralizing `as never` here keeps call
-// sites readable.
-function asServiceEnv(env: RequestScopeEnv): never {
-  return env as never;
+/** A memoized key provider. Throws on use when unconfigured. */
+type KeyProvider = () => Promise<string>;
+
+function resolveKey(binding: SecretsStoreSecret | undefined, rawVar: string | undefined, bindingName: string, varName: string): KeyProvider {
+  let pending: Promise<string> | undefined;
+  return () => {
+    if (pending) return pending;
+    pending = (async () => {
+      if (binding) {
+        // Deliberately no fallback to `rawVar` on failure: a binding that throws is
+        // a broken production configuration, and silently using a var instead
+        // would produce credentials encrypted under a key nobody is tracking.
+        const value = await binding.get();
+        if (!isUsableKey(value)) {
+          throw new Error(`${bindingName} is present but is not a 32-byte base64 key.`);
+        }
+        return value;
+      }
+      if (rawVar) {
+        if (!isUsableKey(rawVar)) {
+          throw new Error(`${varName} is set but is not a 32-byte base64 key.`);
+        }
+        return rawVar;
+      }
+      throw new Error(
+        `${bindingName} is not configured for this scope. ` +
+          `Set the Secrets Store binding in production, or ${varName} for tests.`,
+      );
+    })();
+    // A rejection must not be cached: the next call retries, so a transient
+    // Secrets Store failure does not poison the whole request scope.
+    pending.catch(() => {
+      pending = undefined;
+    });
+    return pending;
+  };
 }
 
-// Generic service factory. Kills `new X(env)` boilerplate repetition and
-// keeps ctor-injection visible in one place.
-function createService<T, D>(Ctor: new (env: never, deps?: D) => T, env: RequestScopeEnv, deps?: D): T {
-  return new Ctor(asServiceEnv(env), deps);
-}
-
-export { asServiceEnv, createService };
-export type { RequestScopeEnv };
+export { resolveKey, KvCache };
+export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider, KvNamespaceLike };

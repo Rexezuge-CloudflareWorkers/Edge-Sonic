@@ -18,7 +18,7 @@ import type { NodeRow } from './rows';
 import { nowSeconds } from './identity';
 
 const UPSERT = `INSERT INTO nodes (library_id, path, parent_path, name, name_ci, mtime_ms, etag, depth, is_scanned, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (library_id, path) DO UPDATE SET
   parent_path = excluded.parent_path,
   name = excluded.name,
@@ -26,6 +26,7 @@ ON CONFLICT (library_id, path) DO UPDATE SET
   mtime_ms = excluded.mtime_ms,
   etag = excluded.etag,
   depth = excluded.depth,
+  is_scanned = excluded.is_scanned,
   updated_at = excluded.updated_at`;
 
 interface NodeInput {
@@ -36,6 +37,18 @@ interface NodeInput {
   mtimeMs: number | null;
   etag: string | null;
   depth: number;
+  /**
+   * Whether the scan still has to descend into this folder.
+   *
+   * Defaults to `0` (needs descending), which is right for a folder a parent
+   * listing just reported as new or changed. A folder the scan has already
+   * reconciled is written as `1` so it leaves the frontier.
+   *
+   * This flag *is* the incrementality mechanism, so it belongs in the write rather
+   * than in a follow-up `patch`: a node row is written once, correctly, instead of
+   * twice — and a second write is a second spend from a 5,000/day allowance.
+   */
+  isScanned?: boolean;
 }
 
 /** Fields a caller wants to overwrite in place. */
@@ -122,6 +135,7 @@ class NodeDAO extends BaseDAO {
           input.mtimeMs,
           input.etag,
           input.depth,
+          input.isScanned ? 1 : 0,
           timestamp,
           timestamp,
         ),
