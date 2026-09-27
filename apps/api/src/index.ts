@@ -1,7 +1,7 @@
-import { DurableDavRouterWorker } from './workers/DurableDavRouterWorker';
+import { EdgeSonicWorker } from './workers/EdgeSonicWorker';
 
-const worker = new DurableDavRouterWorker();
+const worker = new EdgeSonicWorker();
 
 export default {
-  fetch: (request: Request, env: Env, ctx: ExecutionContext) => worker.fetch(request, env, ctx),
+  fetch: (request: Request, env: Cloudflare.Env, ctx: ExecutionContext) => worker.fetch(request, env, ctx),
 };

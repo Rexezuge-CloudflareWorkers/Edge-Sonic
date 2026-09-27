@@ -273,13 +273,13 @@ class AnnotationDAO extends BaseDAO {
     return new Map((result.results ?? []).map((row) => [row.item_id, row.rating]));
   }
 
-  public async listBookmarks(userId: string): Promise<Array<{ song_id: string; position_ms: number; comment: string | null; created_at: number }>> {
+  public async listBookmarks(userId: string): Promise<Array<{ song_id: string; position_ms: number; comment: string | null; created_at: number; updated_at: number }>> {
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare('SELECT song_id, position_ms, comment, created_at FROM bookmarks WHERE user_id = ? ORDER BY created_at DESC')
+          .prepare('SELECT song_id, position_ms, comment, created_at, updated_at FROM bookmarks WHERE user_id = ? ORDER BY created_at DESC')
           .bind(userId)
-          .all<{ song_id: string; position_ms: number; comment: string | null; created_at: number }>(),
+          .all<{ song_id: string; position_ms: number; comment: string | null; created_at: number; updated_at: number }>(),
       'annotations.listBookmarks',
     );
     return result.results ?? [];
@@ -332,6 +332,59 @@ class AnnotationDAO extends BaseDAO {
       'annotations.listPlayCounts',
     );
     return new Map((result.results ?? []).map((row) => [row.song_id, row.play_count]));
+  }
+
+  /**
+   * Replace the play queue wholesale.
+   *
+   * Delete-then-insert rather than a diff: the protocol has no "add to queue"
+   * operation, so a client that adds a track sends the entire list, and a diffing
+   * implementation would have to guess which of the two shapes it received.
+   */
+  public async savePlayQueue(input: { userId: string; songIds: readonly string[]; currentSongId: string | null; positionMs: number; changed: string }): Promise<void> {
+    const timestamp = nowSeconds();
+    const statements = [this.database.prepare('DELETE FROM play_queue_entries WHERE user_id = ?').bind(input.userId)];
+    input.songIds.forEach((songId, position) => {
+      statements.push(
+        this.database
+          .prepare('INSERT INTO play_queue_entries (user_id, position, song_id) VALUES (?, ?, ?)')
+          .bind(input.userId, position, songId),
+      );
+    });
+    statements.push(
+      this.database
+        .prepare(
+          `INSERT INTO play_queue (user_id, current_song_id, position_ms, changed, updated_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (user_id) DO UPDATE SET current_song_id = excluded.current_song_id, position_ms = excluded.position_ms, changed = excluded.changed, updated_at = excluded.updated_at`,
+        )
+        .bind(input.userId, input.currentSongId, input.positionMs, input.changed, timestamp),
+    );
+    await this.runWriteBatch(statements, 'annotations.savePlayQueue');
+  }
+
+  /** The saved queue, in order. Empty when nothing is saved. */
+  public async listPlayQueue(userId: string): Promise<{ currentSongId: string | null; positionMs: number; songIds: string[] }> {
+    const head = await this.withRetry(
+      async () =>
+        await this.database
+          .prepare('SELECT current_song_id, position_ms FROM play_queue WHERE user_id = ?')
+          .bind(userId)
+          .first<{ current_song_id: string | null; position_ms: number }>(),
+      'annotations.listPlayQueue.head',
+    );
+    const entries = await this.withRetry(
+      async () =>
+        await this.database
+          .prepare('SELECT song_id FROM play_queue_entries WHERE user_id = ? ORDER BY position ASC')
+          .bind(userId)
+          .all<{ song_id: string }>(),
+      'annotations.listPlayQueue.entries',
+    );
+    return {
+      currentSongId: head?.current_song_id ?? null,
+      positionMs: head?.position_ms ?? 0,
+      songIds: (entries.results ?? []).map((row) => row.song_id),
+    };
   }
 
   public async setNowPlaying(input: { userId: string; username: string; songId: string | null; playerName: string | null; playerId: string | null }): Promise<void> {

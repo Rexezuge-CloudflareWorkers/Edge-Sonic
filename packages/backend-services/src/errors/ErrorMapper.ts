@@ -1,74 +1,77 @@
-import { DatabaseError, DefaultInternalServerError, ServiceError } from '@edge-sonic/backend-errors';
-import type { ErrorResponse } from '@edge-sonic/backend-errors';
+/**
+ * Turning a thrown value into a response.
+ *
+ * ### Two error taxonomies, deliberately
+ *
+ * The reference project this was scaffolded from had a single `ErrorMapper` that
+ * emitted `{Exception:{Type,Message}}` with a non-200 status. **That wire shape is
+ * wrong for Subsonic**, and copying it would be the single most damaging thing in
+ * this port: a client that receives a 401 with an `Exception` body shows "server
+ * error" instead of "wrong password", because Subsonic clients branch on the
+ * envelope, not the status.
+ *
+ * So there are two mappers and no overlap:
+ *
+ * - `toSubsonicError` — the `/rest/*` surface. Always a
+ *   `<subsonic-response status="failed">` with a numeric `code`, and an HTTP
+ *   status derived from that code.
+ * - `toAdminResponse` — the `/admin/*` JSON surface, for the SPA. A conventional
+ *   `{error:{code,message}}` with conventional statuses, because an SPA does read
+ *   the status.
+ */
+import { DatabaseError, ServiceError } from '@edge-sonic/backend-errors';
 import { getBackendStrings } from '@edge-sonic/shared/i18n';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
+import { ErrorCode, isSubsonicError, SubsonicError } from '@edge-sonic/subsonic';
 
-interface MappedError {
-  status: number;
-  body: ErrorResponse;
+/** HTTP statuses the admin API is allowed to return. */
+const ADMIN_STATUSES = new Set([400, 401, 403, 404, 409, 413, 429, 502, 503]);
+
+interface AdminErrorBody {
+  error: { code: string; message: string };
 }
 
 /**
- * Central error mapper (DIP): routes convert domain errors here instead of
- * duplicating `instanceof ServiceError` switches or `.catch(() => null)`
- * existence-hiding.
+ * Map any thrown value to a `SubsonicError`.
  *
- * Wire shape follows the project convention: `{ "Exception": { "Type",
- * "Message" } }`.
- *
- * Every 5xx body is masked. `DatabaseError` and a 5xx `ServiceError` both carry
- * driver-level text (D1 table and column names, constraint names), and
- * `AppConfiguration.validate()` already reports the "unexpected failure" case to
- * operators, so echoing it to a client only helps an attacker map the schema.
+ * A `DatabaseError` becomes `code=0` with a **generic** message. D1 errors carry
+ * table and column names, so echoing one discloses the schema to an unauthenticated
+ * caller; the cause is logged and the client learns nothing. Every other 5xx is
+ * masked the same way.
  */
-function buildBody(error: ServiceError, locale?: string | null): ErrorResponse {
-  if (error.getErrorCode() < 500) {
-    return { Exception: { Type: error.getErrorType(), Message: error.getErrorMessage() } };
-  }
-  console.error('Server-side error surfaced to a request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
-  return { Exception: { Type: error.getErrorType(), Message: internalErrorMessage(locale) } };
-}
-
-function internalErrorMessage(locale?: string | null): string {
-  return getBackendStrings(locale ?? 'en').common.internalError;
-}
-
-function mapServiceError(error: unknown, locale?: string | null): MappedError {
+function toSubsonicError(error: unknown): SubsonicError {
+  if (isSubsonicError(error)) return error;
   if (error instanceof DatabaseError) {
-    console.error('Caught database error during execution:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
-    return {
-      status: 500,
-      body: { Exception: { Type: DefaultInternalServerError.getErrorType(), Message: internalErrorMessage(locale) } },
-    };
+    console.error('Database error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+    return new SubsonicError(ErrorCode.Generic);
   }
   if (error instanceof ServiceError) {
-    return { status: error.getErrorCode(), body: buildBody(error, locale) };
+    if (error.getErrorCode() < 500) {
+      return new SubsonicError(ErrorCode.Generic, error.getErrorMessage());
+    }
+    console.error('Service error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+    return new SubsonicError(ErrorCode.Generic);
   }
-  console.error('Unhandled error during execution:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
-  return {
-    status: 500,
-    body: {
-      Exception: {
-        Type: DefaultInternalServerError.getErrorType(),
-        Message: internalErrorMessage(locale),
-      },
-    },
-  };
+  console.error('Unhandled error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+  return new SubsonicError(ErrorCode.Generic);
 }
 
-/**
- * Collapse an error to the wire status set the JSON API uses.
- *
- * A registry rather than a branch: known client statuses pass through, and
- * everything else — including 5xx typed errors and unknown throwables — becomes
- * 500 so an unexpected failure can never be reported as a client error.
- */
-const KNOWN_CLIENT_STATUSES = new Set([400, 401, 403, 404, 409, 413, 429]);
+/** A service-error code mapped onto the closest Subsonic protocol code. */
+function toAdminResponse(error: unknown, locale?: string | null): { status: number; body: AdminErrorBody } {
+  const strings = getBackendStrings(locale).common;
 
-function toServiceStatus(error: unknown): 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 {
-  const mapped = mapServiceError(error);
-  return KNOWN_CLIENT_STATUSES.has(mapped.status) ? (mapped.status as 400 | 401 | 403 | 404 | 409 | 413 | 429) : 500;
+  if (error instanceof ServiceError) {
+    const status = ADMIN_STATUSES.has(error.getErrorCode()) ? error.getErrorCode() : 500;
+    const message = status >= 500 ? strings.internalError : error.getErrorMessage();
+    if (status >= 500) {
+      console.error('Admin API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+    }
+    return { status, body: { error: { code: error.getErrorType(), message } } };
+  }
+
+  console.error('Unhandled admin API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+  return { status: 500, body: { error: { code: 'InternalServerError', message: strings.internalError } } };
 }
 
-export { mapServiceError, toServiceStatus, buildBody };
-export type { MappedError };
+export { toSubsonicError, toAdminResponse };
+export type { AdminErrorBody };

@@ -2,7 +2,7 @@ import type { Context, Next } from 'hono';
 import { asScopedContext, setRequestScope } from '@edge-sonic/backend-runtime/di';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
 
-type ScopeContext = Context<{ Bindings: Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
+type ScopeContext = Context<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
 
 /**
  * Single-scope-per-request middleware (Otter composition-root pattern).

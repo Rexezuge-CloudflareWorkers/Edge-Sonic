@@ -119,8 +119,8 @@ interface Playlist {
   readonly isPublic: boolean;
   readonly songCount: number;
   readonly duration: number;
-  readonly created: string;
-  readonly changed: string;
+  readonly created?: string;
+  readonly changed?: string;
   readonly coverArt?: string;
 }
 

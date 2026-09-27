@@ -105,27 +105,36 @@ importers:
 
   apps/api:
     dependencies:
-      '@durable-dav-router/backend-errors':
+      '@edge-sonic/backend-data':
+        specifier: workspace:*
+        version: link:../../packages/backend-data
+      '@edge-sonic/backend-errors':
         specifier: workspace:*
         version: link:../../packages/backend-errors
-      '@durable-dav-router/backend-runtime':
+      '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../../packages/backend-runtime
-      '@durable-dav-router/backend-services':
+      '@edge-sonic/backend-services':
         specifier: workspace:*
         version: link:../../packages/backend-services
-      '@durable-dav-router/shared':
+      '@edge-sonic/media-tags':
+        specifier: workspace:*
+        version: link:../../packages/media-tags
+      '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../../packages/shared
-      '@durable-dav-router/webdav':
+      '@edge-sonic/subsonic':
+        specifier: workspace:*
+        version: link:../../packages/subsonic
+      '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../../packages/webdav
-      chanfana:
-        specifier: 3.4.0
-        version: 3.4.0
       hono:
         specifier: 4.13.8
         version: 4.13.8
+      jose:
+        specifier: 6.1.0
+        version: 6.1.0
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -191,10 +200,10 @@ importers:
 
   packages/backend-data:
     dependencies:
-      '@durable-dav-router/backend-errors':
+      '@edge-sonic/backend-errors':
         specifier: workspace:*
         version: link:../backend-errors
-      '@durable-dav-router/shared':
+      '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
     devDependencies:
@@ -219,7 +228,7 @@ importers:
 
   packages/backend-runtime:
     dependencies:
-      '@durable-dav-router/shared':
+      '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
     devDependencies:
@@ -232,21 +241,30 @@ importers:
 
   packages/backend-services:
     dependencies:
-      '@durable-dav-router/backend-data':
+      '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:../backend-data
-      '@durable-dav-router/backend-errors':
+      '@edge-sonic/backend-errors':
         specifier: workspace:*
         version: link:../backend-errors
-      '@durable-dav-router/backend-runtime':
+      '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../backend-runtime
-      '@durable-dav-router/shared':
+      '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
       jose:
         specifier: 6.2.12
         version: 6.2.12
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.2
+        version: 26.6.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+  packages/media-tags:
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -264,12 +282,21 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  packages/subsonic:
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.2
+        version: 26.6.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
   packages/webdav:
     dependencies:
-      '@durable-dav-router/backend-errors':
+      '@edge-sonic/backend-errors':
         specifier: workspace:*
         version: link:../backend-errors
-      '@durable-dav-router/shared':
+      '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
       '@xmldom/xmldom':
@@ -285,22 +312,22 @@ importers:
 
   test:
     dependencies:
-      '@durable-dav-router/backend-data':
+      '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:../packages/backend-data
-      '@durable-dav-router/backend-errors':
+      '@edge-sonic/backend-errors':
         specifier: workspace:*
         version: link:../packages/backend-errors
-      '@durable-dav-router/backend-runtime':
+      '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../packages/backend-runtime
-      '@durable-dav-router/backend-services':
+      '@edge-sonic/backend-services':
         specifier: workspace:*
         version: link:../packages/backend-services
-      '@durable-dav-router/shared':
+      '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../packages/shared
-      '@durable-dav-router/webdav':
+      '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../packages/webdav
       vitest:
@@ -347,11 +374,6 @@ packages:
   '@asamuzakjp/dom-selector@9.2.1':
     resolution: {integrity: sha512-NT4s3yZLjovPpliRpTvdsdzyPjqRqiCZj9MxnarBihbaY5MbAG7DWAJcrLlhmC7xKTNCXsTELcqB8YsqpLnUFQ==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
-
-  '@asteasolutions/zod-to-openapi@8.5.0':
-    resolution: {integrity: sha512-SABbKiObg5dLRiTFnqiW1WWwGcg1BJfmHtT2asIBnBHg6Smy/Ms2KHc650+JI4Hw7lSkdiNebEGXpwoxfben8Q==}
-    peerDependencies:
-      zod: ^4.0.0
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -1719,9 +1741,6 @@ packages:
     resolution: {integrity: sha512-Cxwpt2SfTzTtXcfOlzGEee8O+c+MmUgGrNiBcXnuWxuFJHe6a5Hz7qwhwe5OgaSYI0IJvkLqWX1ASG+cJOkEiA==}
     engines: {node: '>=10'}
 
-  argparse@2.0.1:
-    resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
-
   aria-query@5.3.0:
     resolution: {integrity: sha512-b0P0sZPKtyu8HkeRAfCq0IfURZK+SuwMjY1UXGBU27wpAiTwQAIlq56IbIO+ytk/JjS1fMR14ee5WBBfKi5J6A==}
 
@@ -1781,11 +1800,6 @@ packages:
   chai@6.2.2:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
     engines: {node: '>=18'}
-
-  chanfana@3.4.0:
-    resolution: {integrity: sha512-zNXyjQWnuhxd2m5QOQjAT7dCi8jg/SXckhD3y/Z6PKJfsf/XfSlvxyxFJpJh8O19lrvrsM4SUgEz2628imtWJQ==}
-    engines: {node: '>=18'}
-    hasBin: true
 
   change-case@5.4.4:
     resolution: {integrity: sha512-HRQyTk2/YPEkt9TnUPbOpr64Uw3KOicFWPVBb+xiHvd6eBx/qPr9xqfBFDT8P2vWsvvz4jbEkfDe71W3VyNu2w==}
@@ -2158,6 +2172,9 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
+  jose@6.1.0:
+    resolution: {integrity: sha512-TTQJyoEoKcC1lscpVDCSsVgYzUDg/0Bt3WE//WiTPK6uOCQC2KZS4MpugbMWt/zyjkopgZoXhZuCi00gLudfUA==}
+
   jose@6.2.12:
     resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
@@ -2166,10 +2183,6 @@ packages:
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
-
-  js-yaml@4.3.2:
-    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
-    hasBin: true
 
   jsdoc-type-pratt-parser@9.2.2:
     resolution: {integrity: sha512-eFY7Rlscvv/BpY6UsVsjKwMhu1tJO/F4U/vC9g3yeRy/JqszuO1UP6Vdq+85G+3FP6fEw/sWR8a5ftPFY86csw==}
@@ -2439,9 +2452,6 @@ packages:
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
-
-  openapi3-ts@4.6.1:
-    resolution: {integrity: sha512-XW9MOldkhoICNeXVzzmXzmOW5G73ppOEGmh7fLCqHjgfdEYCGGN+00MlVCeUZgovjjfC56j9tvtDt1zGabNjjA==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -2940,10 +2950,6 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
-  yargs-parser@22.0.0:
-    resolution: {integrity: sha512-rwu/ClNdSMpkSrUb+d6BRsSkLUq1fmfsY6TOpYzTwvwkg1/NRG85KBy3kq++A8LKQwX6lsu+aWad+2khvuXrqw==}
-    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
-
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
@@ -2984,11 +2990,6 @@ snapshots:
       css-tree: 3.2.1
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
-
-  '@asteasolutions/zod-to-openapi@8.5.0(zod@4.6.5)':
-    dependencies:
-      openapi3-ts: 4.6.1
-      zod: 4.6.5
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -4028,8 +4029,6 @@ snapshots:
 
   ansi-styles@5.2.0: {}
 
-  argparse@2.0.1: {}
-
   aria-query@5.3.0:
     dependencies:
       dequal: 2.0.3
@@ -4083,14 +4082,6 @@ snapshots:
   caniuse-lite@1.0.30001810: {}
 
   chai@6.2.2: {}
-
-  chanfana@3.4.0:
-    dependencies:
-      '@asteasolutions/zod-to-openapi': 8.5.0(zod@4.6.5)
-      js-yaml: 4.3.2
-      openapi3-ts: 4.6.1
-      yargs-parser: 22.0.0
-      zod: 4.6.5
 
   change-case@5.4.4: {}
 
@@ -4499,15 +4490,13 @@ snapshots:
 
   jiti@2.7.0: {}
 
+  jose@6.1.0: {}
+
   jose@6.2.12: {}
 
   js-tokens@10.0.0: {}
 
   js-tokens@4.0.0: {}
-
-  js-yaml@4.3.2:
-    dependencies:
-      argparse: 2.0.1
 
   jsdoc-type-pratt-parser@9.2.2:
     dependencies:
@@ -4736,10 +4725,6 @@ snapshots:
   node-releases@2.0.56: {}
 
   obug@2.2.1: {}
-
-  openapi3-ts@4.6.1:
-    dependencies:
-      yaml: 2.9.1
 
   optionator@0.9.4:
     dependencies:
@@ -5218,8 +5203,6 @@ snapshots:
   yallist@3.1.1: {}
 
   yaml@2.9.1: {}
-
-  yargs-parser@22.0.0: {}
 
   yocto-queue@0.1.0: {}
 

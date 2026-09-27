@@ -1,2 +1,2 @@
-export { mapServiceError, toServiceStatus, buildBody } from './ErrorMapper';
-export type { MappedError } from './ErrorMapper';
+export { toSubsonicError, toAdminResponse } from './ErrorMapper';
+export type { AdminErrorBody } from './ErrorMapper';
