@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Durable-DAV-Router</title>
+    <!--
+      The favicon is inlined as a data URI rather than linked as
+      `/favicon.svg` on purpose: the API worker has no assets binding, so a
+      path-based icon 404s on the worker host, while a data URI resolves on both
+      the worker and the Pages host. There is deliberately no
+      `apps/web/public/favicon.svg` to drift out of sync with this copy - the
+      markup below is the single source of truth. Edit it and re-run
+      `pnpm run build`, or the worker keeps serving the previous bundle.
+    -->
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Crect%20width%3D%2232%22%20height%3D%2232%22%20rx%3D%227%22%20fill%3D%22%23100f0d%22%2F%3E%3Cpath%20d%3D%22M16%2025v-8m0%200-6.4-5.9M16%2017l6.4-5.9%22%20fill%3D%22none%22%20stroke%3D%22%236ee7b7%22%20stroke-width%3D%224%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Ccircle%20cx%3D%228.5%22%20cy%3D%229%22%20r%3D%224%22%20fill%3D%22%236ee7b7%22%2F%3E%3Ccircle%20cx%3D%2223.5%22%20cy%3D%229%22%20r%3D%224%22%20fill%3D%22%236ee7b7%22%2F%3E%3C%2Fsvg%3E"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

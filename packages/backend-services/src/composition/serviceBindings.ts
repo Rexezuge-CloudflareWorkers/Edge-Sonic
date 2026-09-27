@@ -1,0 +1,20 @@
+// Service bindings for the per-request composition root.
+import type { RouterBackendDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import type { Container, Token } from '@edge-sonic/backend-runtime/di';
+import { Tokens } from './tokens';
+import type { RequestScopeEnv } from './serviceFactory';
+import type { DaoThunks } from './serviceBindings/daoThunks';
+import { bindCoreServices } from './serviceBindings/coreServices';
+
+function bindServiceBindings(scope: Container, env: RequestScopeEnv): void {
+  const getDao = <T>(token: Token<() => Promise<T>>): (() => Promise<T>) => scope.get(token);
+
+  const daos: DaoThunks = {
+    userDAO: getDao<UserDAO>(Tokens.UserDAO),
+    routerBackendDAO: getDao<RouterBackendDAO>(Tokens.RouterBackendDAO),
+  };
+
+  bindCoreServices(scope, { env, daos });
+}
+
+export { bindServiceBindings };
