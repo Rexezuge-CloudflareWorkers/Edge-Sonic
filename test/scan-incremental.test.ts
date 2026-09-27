@@ -17,6 +17,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ScanService } from '@edge-sonic/backend-services/index';
+import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavEntry } from './helpers/fakeDav';
@@ -24,7 +25,9 @@ import type { DavEntry } from './helpers/fakeDav';
 const LIBRARY_ID = 'L1';
 const ROOT = '/dav/music';
 
-/** An in-memory index that records how many rows each write touched. */
+/**
+An in-memory index that records how many rows each write touched.
+*/
 function createIndex() {
   const nodes = new Map<string, NodeRow>();
   const songs = new Map<string, SongRow>();
@@ -58,7 +61,7 @@ function createIndex() {
         // what makes a partial scan produce a browsable top of the tree.
         listFrontier: async (_libraryId: string, limit: number) =>
           [...nodes.values()].filter((node) => node.is_scanned === 0).sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path)).slice(0, limit),
-        upsertMany: async (inputs: readonly Record<string, unknown>[]) => {
+        upsertMany: async (inputs: readonly NodeInput[]) => {
           let changed = 0;
           for (const raw of inputs) {
             const input = raw as {
@@ -128,7 +131,7 @@ function createIndex() {
         countByLibrary: async () => nodes.size,
       },
       songs: {
-        upsertFileFacts: async (inputs: readonly Record<string, unknown>[]) => {
+        upsertFileFacts: async (inputs: readonly SongUpsertInput[]) => {
           let changed = 0;
           for (const raw of inputs) {
             const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
@@ -241,17 +244,17 @@ function library(overrides: Partial<LibraryRow> = {}): LibraryRow {
  * that folder, including the folder itself first — because that is what a
  * `Depth: 1` PROPFIND answers with.
  */
-function sampleTree(mtimeBase = 1_000_000, albumMtimes: number[] = [2_000, 3_000, 4_000]): Record<string, DavEntry[]> {
+function sampleTree(mtimeBase = 1_000_000, albumMtimes: number[] = [2000, 3000, 4000]): Record<string, DavEntry[]> {
   const albums = ['Blur', 'Holocene', 'For Emma'];
   const tree: Record<string, DavEntry[]> = {
     [ROOT]: [
       { path: ROOT, collection: true, mtime: mtimeBase },
-      { path: `${ROOT}/Blur`, collection: true, mtime: mtimeBase + 1_000 },
+      { path: `${ROOT}/Blur`, collection: true, mtime: mtimeBase + 1000 },
     ],
-    [`${ROOT}/Blur`]: [{ path: `${ROOT}/Blur`, collection: true, mtime: mtimeBase + 1_000 }],
+    [`${ROOT}/Blur`]: [{ path: `${ROOT}/Blur`, collection: true, mtime: mtimeBase + 1000 }],
   };
   albums.forEach((album, index) => {
-    const mtime = mtimeBase + (albumMtimes[index] ?? 5_000);
+    const mtime = mtimeBase + (albumMtimes[index] ?? 5000);
     tree[`${ROOT}/Blur`]!.push({ path: `${ROOT}/Blur/${album}`, collection: true, mtime });
     tree[`${ROOT}/Blur/${album}`] = [
       { path: `${ROOT}/Blur/${album}`, collection: true, mtime },
@@ -285,10 +288,17 @@ function touch(tree: Record<string, DavEntry[]>, libraryRelative: string, mtime 
     // exist, so the ancestor bump would silently no-op and the test would look like
     // a product bug.
     const parentPath = depth <= 1 ? ROOT : `${ROOT}/${segments.slice(0, depth - 1).join('/')}`;
-    const own = tree[folderPath]?.find((entry) => entry.path === folderPath);
-    if (own) own.mtime = mtime;
-    const inParent = tree[parentPath]?.find((entry) => entry.path === folderPath);
-    if (inParent) inParent.mtime = mtime;
+    // The fake's entries are `readonly` because nothing in production mutates them. A
+    // test that models a file changing has to, so the mutation is a spread that keeps
+    // the type honest rather than a cast that hides it.
+    for (const [directory, path] of [
+      [folderPath, folderPath],
+      [parentPath, folderPath],
+    ] as const) {
+      const listing = tree[directory];
+      const at = listing?.findIndex((entry) => entry.path === path) ?? -1;
+      if (listing !== undefined && at >= 0) listing[at] = { ...listing[at]!, mtime };
+    }
   }
 }
 
@@ -311,7 +321,9 @@ describe('ScanService', () => {
     row = library();
   });
 
-  /** Run `startScan` then poll `getScanStatus` until the scan reports idle. */
+  /**
+  Run `startScan` then poll `getScanStatus` until the scan reports idle.
+  */
   async function runToCompletion(limit = 50): Promise<{ requests: number; chunks: number }> {
     await service.start(row);
     let chunks = 0;
@@ -377,7 +389,10 @@ describe('ScanService', () => {
     // One album's mtime moves. Its parent's mtime does not, so the scan descends
     // only into the folder that actually changed.
     const tree = sampleTree();
-    tree[`${ROOT}/Blur/Holocene`]![1]!.etag = '"Holocene-1-changed"';
+    {
+      const listing = tree[`${ROOT}/Blur/Holocene`]!;
+      listing[1] = { ...listing[1]!, etag: '"Holocene-1-changed"' };
+    }
     touch(tree, 'Blur/Holocene');
     dav.setTree(tree);
     dav.reset();

@@ -14,21 +14,23 @@
  * is a well-formed envelope whether the endpoint exists, threw, or declined to
  * implement.
  */
-import { errorResponse, missingParameter, notFound, resolveFormat, successResponse } from '@edge-sonic/subsonic';
+import { errorResponse,  notFound, resolveFormat,  } from '@edge-sonic/subsonic';
 import { ErrorCode, isClientVersionSupported, SubsonicError } from '@edge-sonic/subsonic';
-import type { SubsonicError as SubsonicErrorType } from '@edge-sonic/subsonic';
+
 import { SubsonicParams, decodeLegacyPassword } from '@edge-sonic/subsonic';
 import { toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { BaseRoute } from '../admin/routes';
 import type { RestContext } from './context';
 import type { AdminContext } from '../admin/routes';
-import { ENDPOINTS, ENDPOINT_NAMES } from './endpoints';
+import { ENDPOINTS,  } from './endpoints';
 import type { RestHandler } from './endpoints';
 
 type RestOutcome = Response | { response: Response };
 
-/** The trusted client IP, used only to key the auth throttle. */
+/**
+The trusted client IP, used only to key the auth throttle.
+*/
 function clientIpOf(request: Request): string {
   return request.headers.get('cf-connecting-ip') ?? request.headers.get('x-real-ip') ?? '0.0.0.0';
 }
@@ -50,8 +52,7 @@ function endpointNameFromPath(pathname: string): string | null {
   if (lower.endsWith('.view')) return rest.slice(0, -'.view'.length);
   if (lower.endsWith('.do')) return rest.slice(0, -'.do'.length);
   // A name that is all dots, or that ends mid-suffix, is not an endpoint.
-  if (lower.endsWith('.')) return null;
-  return rest;
+  return lower.endsWith('.') ? null : rest;
 }
 
 /**
@@ -82,7 +83,11 @@ async function dispatchRest(c: AdminContext, pathname: string, request: Request)
     const token = params.get('t') ?? null;
     const salt = params.get('s') ?? null;
     const rawPassword = params.get('p');
-    const legacyPassword = rawPassword === null || rawPassword === undefined ? null : safeDecodeLegacyPassword(rawPassword);
+    // `get` returns `string | undefined`. This compared against `null`, which is never
+    // equal, so an **absent** `p` parameter was passed to the decoder instead of being
+    // treated as absent — and the legacy cleartext path only ever worked when the
+    // parameter was present.
+    const legacyPassword = rawPassword === undefined ? null : safeDecodeLegacyPassword(rawPassword);
 
     const scope = BaseRoute.getScope(c);
     const user = await scope.get(Tokens.SubsonicAuthService).authenticate({
@@ -131,8 +136,8 @@ function assertClientVersion(raw: string): void {
     // values. Treated as compatible rather than refused.
     return;
   }
-  const major = Number.parseInt(match[1]!, 10);
-  const minor = Number.parseInt(match[2]!, 10);
+  const major = Number.parseInt(match[1], 10);
+  const minor = Number.parseInt(match[2], 10);
   if (isClientVersionSupported(major, minor)) return;
   // Same major but a higher minor means this server is the old one.
   throw new SubsonicError(
@@ -178,6 +183,7 @@ async function buildContext(
     scan: scope.get(Tokens.ScanService),
     enrichment: scope.get(Tokens.EnrichmentService),
     songs: await scope.get(Tokens.SongDAO)(),
+    songIndex: await scope.get(Tokens.SongIndexDAO)(),
     users: await scope.get(Tokens.UserDAO)(),
     playlists: await scope.get(Tokens.PlaylistDAO)(),
     annotations: await scope.get(Tokens.AnnotationDAO)(),
@@ -188,5 +194,8 @@ async function buildContext(
   };
 }
 
-export { dispatchRest, endpointNameFromPath, clientIpOf, assertClientVersion, successResponse, errorResponse, missingParameter, ENDPOINT_NAMES };
-export type { RestOutcome, SubsonicErrorType };
+export { dispatchRest, endpointNameFromPath, clientIpOf, assertClientVersion,     };
+export type { RestOutcome,  };
+
+export {missingParameter, successResponse, type SubsonicError as SubsonicErrorType, errorResponse} from '@edge-sonic/subsonic';
+export {ENDPOINT_NAMES} from './endpoints';

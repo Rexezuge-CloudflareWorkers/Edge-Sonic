@@ -75,7 +75,7 @@ async function unstar(context: RestContext): Promise<EnvelopeResponse> {
  * where clamping records it.
  */
 async function setRating(context: RestContext): Promise<EnvelopeResponse> {
-  const raw = context.params.int('rating', Number.NaN);
+  const raw = context.params.int('rating', NaN);
   if (!Number.isFinite(raw)) throw new SubsonicError(ErrorCode.MissingParameter, 'Required parameter is missing: rating');
   const rating = Math.min(5, Math.max(0, raw));
   for (const target of collectTargets(context)) {
@@ -120,11 +120,11 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
   // One row for the whole batch, holding the first id: `getNowPlaying` reports a
   // user's current track, and writing one row per scrobbled id would have the last
   // one win arbitrarily.
-  const first = decodeId(ids[0]!, IdKind.Song);
+  const first = decodeId(ids[0], IdKind.Song);
   await context.annotations.setNowPlaying({
     userId: context.user.id,
     username: context.username,
-    songId: submission ? ids[0]! : ids[0]!,
+    songId: submission ? ids[0] : ids[0],
     playerName,
     playerId,
   });

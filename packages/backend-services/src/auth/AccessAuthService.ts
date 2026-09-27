@@ -46,7 +46,9 @@ function isValidAuthEmail(raw: string): boolean {
 }
 
 class AccessAuthService {
-  /** Bounded LRU of JWKS resolvers, keyed by team domain. */
+  /**
+  Bounded LRU of JWKS resolvers, keyed by team domain.
+  */
   private static readonly jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
   private static jwksFor(teamDomain: string): ReturnType<typeof createRemoteJWKSet> {

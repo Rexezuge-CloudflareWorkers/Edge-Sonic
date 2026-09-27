@@ -98,10 +98,12 @@ const ENDPOINTS: Record<string, RestHandler> = new Proxy(IMPLEMENTED, {
   get(target, property: string) {
     const handler = Reflect.get(target, property) as RestHandler | undefined;
     if (handler) return handler;
-    const reason = UNIMPLEMENTED[property];
-    // A recognised-but-unimplemented endpoint and an unknown one both fail, but
-    // the message differs so an operator reading a client log can tell which.
-    if (reason !== undefined) {
+    // `hasOwn` rather than a `!== undefined` check: the record's type gives every key a
+    // `string`, so the check reads as always-true to a reader and to the type checker
+    // alike. What is being asked is "is this endpoint one we know about", which is a
+    // question about the *key*.
+    if (Object.hasOwn(UNIMPLEMENTED, property)) {
+      const reason = UNIMPLEMENTED[property];
       return () => {
         throw new SubsonicError(ErrorCode.NotFound, `${property}: ${reason}.`);
       };
@@ -113,7 +115,7 @@ const ENDPOINTS: Record<string, RestHandler> = new Proxy(IMPLEMENTED, {
   },
 });
 
-const ENDPOINT_NAMES: readonly string[] = [...Object.keys(IMPLEMENTED), ...Object.keys(UNIMPLEMENTED)].sort();
+const ENDPOINT_NAMES: readonly string[] = [...Object.keys(IMPLEMENTED), ...Object.keys(UNIMPLEMENTED)].sort((a, b) => a.localeCompare(b));
 
 export { ENDPOINTS, ENDPOINT_NAMES, UNIMPLEMENTED };
 export type { RestHandler };

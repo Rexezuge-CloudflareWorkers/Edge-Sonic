@@ -32,21 +32,37 @@
  */
 import { ErrorCode, SubsonicError } from './errors';
 
-/** Discriminator carried in the ID prefix. */
+/**
+Discriminator carried in the ID prefix.
+*/
 const IdKind = {
-  /** A music directory (any folder, from `getIndexes`/`getMusicDirectory`). */
+  /**
+  A music directory (any folder, from `getIndexes`/`getMusicDirectory`).
+  */
   Directory: 'dir',
-  /** A music folder root (a registered library, from `getMusicFolders`). */
+  /**
+  A music folder root (a registered library, from `getMusicFolders`).
+  */
   MusicFolder: 'mf',
-  /** A directory-based artist (`getIndexes`). */
+  /**
+  A directory-based artist (`getIndexes`).
+  */
   DirectoryArtist: 'dira',
-  /** A tag-derived artist (`getArtists`/`getArtist`). */
+  /**
+  A tag-derived artist (`getArtists`/`getArtist`).
+  */
   Artist: 'ar',
-  /** An album. */
+  /**
+  An album.
+  */
   Album: 'al',
-  /** A song. */
+  /**
+  A song.
+  */
   Song: 's',
-  /** Reserved for `getVideos`. Never issued while videos are unimplemented. */
+  /**
+  Reserved for `getVideos`. Never issued while videos are unimplemented.
+  */
   Video: 'vid',
 } as const;
 
@@ -70,12 +86,12 @@ const SEPARATOR = '\n';
  * safe — without it, a crafted id could smuggle a separator into the library
  * half and shift the boundary between the two fields.
  */
-const LIBRARY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+const LIBRARY_ID_PATTERN = /^[\w-]{1,64}$/i;
 
 function toBase64Url(bytes: Uint8Array): string {
   let binary = '';
   // Chunked to stay clear of the argument-count limit on large payloads.
-  const CHUNK = 0x8000;
+  const CHUNK = 0x80_00;
   for (let index = 0; index < bytes.length; index += CHUNK) {
     binary += String.fromCharCode(...bytes.subarray(index, index + CHUNK));
   }
@@ -110,19 +126,18 @@ function fromBase64Url(value: string): Uint8Array {
  *   normalize differently from the URL layer.
  */
 function normalizeRelativePath(path: string): string | null {
-  if (path.length === 0 || path.length > 1024) return null;
-  if (path.includes('\0') || path.includes('\\')) return null;
+  if (path.length === 0 || path.length > 1024 || path.includes('\0') || path.includes('\\')) return null;
   // Control characters are refused for a structural reason, not a cosmetic one: the
   // payload is split on a newline, so a path containing one would make the
   // library/path boundary ambiguous to anything that splits it differently. A
   // filename with a newline in it is pathological, and refusing it is free.
-  if (/[\u0000-\u001f\u007f]/.test(path)) return null;
+  // eslint-disable-next-line no-control-regex -- the control characters ARE the check.
+  if (/[\u0000-\u001F\u007F]/.test(path)) return null;
   if (path.startsWith('/') || path.endsWith('/')) return null;
 
   const segments = path.split('/');
   for (const segment of segments) {
-    if (segment.length === 0) return null;
-    if (segment === '.' || segment === '..') return null;
+    if ((segment.length === 0) || segment === '.' || segment === '..') return null;
   }
   return segments.join('/');
 }
@@ -145,7 +160,9 @@ function decodeAndNormalizePath(raw: string): string | null {
   return normalizeRelativePath(decoded);
 }
 
-/** Build a Subsonic ID. */
+/**
+Build a Subsonic ID.
+*/
 function encodeId(kind: IdKindValue, libraryId: string, path: string): string {
   const payload = `${libraryId}${SEPARATOR}${path}`;
   return `${kind}:${toBase64Url(new TextEncoder().encode(payload))}`;

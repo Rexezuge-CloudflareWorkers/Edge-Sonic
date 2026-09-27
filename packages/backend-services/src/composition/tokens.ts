@@ -1,4 +1,14 @@
-import type { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import type {
+  AnnotationDAO,
+  AuthThrottleDAO,
+  LibraryDAO,
+  NodeDAO,
+  PlaylistDAO,
+  ScanStateDAO,
+  SongDAO,
+  SongIndexDAO,
+  UserDAO,
+} from '@edge-sonic/backend-data/dao';
 import type { Token } from '@edge-sonic/backend-runtime/di';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
@@ -22,6 +32,10 @@ const Tokens = {
   LibraryDAO: Symbol('LibraryDAO') as Token<() => Promise<LibraryDAO>>,
   NodeDAO: Symbol('NodeDAO') as Token<() => Promise<NodeDAO>>,
   SongDAO: Symbol('SongDAO') as Token<() => Promise<SongDAO>>,
+  /**
+  The aggregate reads. Separate from `SongDAO` because they page over groups, not rows.
+  */
+  SongIndexDAO: Symbol('SongIndexDAO') as Token<() => Promise<SongIndexDAO>>,
   PlaylistDAO: Symbol('PlaylistDAO') as Token<() => Promise<PlaylistDAO>>,
   AnnotationDAO: Symbol('AnnotationDAO') as Token<() => Promise<AnnotationDAO>>,
   AuthThrottleDAO: Symbol('AuthThrottleDAO') as Token<() => Promise<AuthThrottleDAO>>,

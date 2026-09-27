@@ -21,7 +21,9 @@ import type { Album, Artist, Child, Directory, MusicFolder, Playlist, ScanStatus
 
 type Attrs = Record<string, string | number | boolean | undefined>;
 
-/** Shared field set for anything the protocol allows as a `child`. */
+/**
+Shared field set for anything the protocol allows as a `child`.
+*/
 function childAttrs(child: Child): Attrs {
   return {
     id: child.id,
@@ -161,6 +163,22 @@ function userElement(user: SubsonicUserView): ElementNode {
   });
 }
 
+/**
+ * The `folder` children of a `user` element.
+ *
+ * `folder` is in the 1.16.1 schema and is the list every `musicFolderId` in any other
+ * response is an **index** into — `musicFolderId=0` means the first entry here. It is
+ * separate from the role booleans above because a client that predates those still needs
+ * it to resolve a folder id, and one that has them still uses `folder` to render the
+ * library switcher.
+ *
+ * Positional and stable, which is the whole contract: reordering this list would
+ * silently repoint every stored `musicFolderId` a client is holding.
+ */
+function userFolderElements(libraryIds: readonly string[]): ElementNode[] {
+  return libraryIds.map((_, index) => ({ ...el('folder', { id: index }), array: true as const }));
+}
+
 function childElement(child: Child): ElementNode {
   return el('child', childAttrs(child));
 }
@@ -169,7 +187,9 @@ function scanStatusElement(status: ScanStatus): ElementNode {
   return el('scanStatus', { scanning: status.scanning, count: status.count });
 }
 
-/** `{ error }` is handled by the envelope, not here. */
+/**
+`{ error }` is handled by the envelope, not here.
+*/
 export {
   songElement,
   albumElement,
@@ -178,6 +198,7 @@ export {
   musicFolderElement,
   playlistElement,
   userElement,
+  userFolderElements,
   scanStatusElement,
   childElement,
 };

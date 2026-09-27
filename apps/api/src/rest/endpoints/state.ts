@@ -1,7 +1,7 @@
 /**
  * Per-user state the filesystem cannot hold: bookmarks and the play queue.
  */
-import { decodeId, el, elList, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { decodeId, el, elList,  IdKind, songElement,  successResponse } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { RestContext } from '../context';
 import { songToModel } from '../mappers';
@@ -80,18 +80,61 @@ async function deleteBookmark(context: RestContext): Promise<EnvelopeResponse> {
  * implementation would have to guess which of the two shapes it received.
  */
 async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
-  const library = (await context.libraries.listForUser(context.user.id))[0];
-  // An empty `subsonic-response` is the spec's way of saying "no queue saved", and
-  // some clients treat a `playQueue` element with no children as an error.
-  if (library === undefined) return respond(context, null);
+  const [library] = await context.libraries.listForUser(context.user.id);
+
+  // An empty queue is reported as an **empty `playQueue` element**, not as an absent
+  // one. Both were tried: the comment this replaces claimed some clients treat a
+  // childless `playQueue` as an error, which is true of exactly the clients that then
+  // do `response.playQueue.entry.map(...)` — for those, an absent key throws and
+  // `{"entry": []}` renders an empty queue. The element is what the schema describes,
+  // and `elList` guarantees the array is present even with no children.
+  if (library === undefined) return respond(context, elList('playQueue', 'entry', {}, []));
 
   const saved = await context.annotations.listPlayQueue(context.user.id);
-  if (saved.songIds.length === 0) return respond(context, null);
+  if (saved.songIds.length === 0) return respond(context, elList('playQueue', 'entry', {}, []));
   const queue = await context.songs.listIdsIn(library.id, saved.songIds);
-  if (queue.length === 0) return respond(context, null);
+  // Every queued track was deleted or lost access since the queue was saved. The
+  // position and current track are still the user's, so they are reported; only the
+  // entries are gone. Spread rather than passed as extra arguments, because `elList`'s
+  // signature *is* the list contract and a childless list still has to declare its key.
+  if (queue.length === 0) {
+    const empty: ElementNode = elList('playQueue', 'entry', {}, []);
+    return respond(context, {
+      ...empty,
+      children: [
+        el('current', {}, [saved.currentSongId ?? '']),
+        el('position', {}, [saved.positionMs]),
+        el('username', {}, [context.username]),
+      ],
+    });
+  }
 
   const annotations = await annotationsFor(context, queue.map((song) => song.id));
-  return respond(context, elList('playQueue', 'entry', {}, queue.map((song) => songElement(songToModel(song, library, annotations)))));
+  return respond(
+    context,
+    elList(
+      'playQueue',
+      'entry',
+      {},
+      [
+        // `current` and `position` are what a client resumes from, so they are reported
+        // on **every** path. They used to be emitted only when the queue was empty, which
+        // is exactly backwards: a saved queue resumed from zero.
+        //
+        // `current` is reported only when the track is still in the queue. Naming an id
+        // the client cannot resolve is worse than naming none.
+        ...(saved.currentSongId !== null && queue.some((song) => song.id === saved.currentSongId) ? [el('current', {}, [saved.currentSongId])] : []),
+        el('position', {}, [saved.positionMs]),
+        // `username` and `changed` are part of the same element, and a client that syncs a
+        // queue between devices needs to know whose queue it is and when it moved.
+        el('username', {}, [context.username]),
+        ...(saved.changedAt === null ? [] : [el('changed', {}, [new Date(saved.changedAt * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')])]),
+        // Renamed: see the note on `getBookmarks`. The element name is the key, so a
+        // `song` element here would put the queue under `playQueue.song`.
+        ...queue.map((song) => ({ ...songElement(songToModel(song, library, annotations)), name: 'entry' })),
+      ],
+    ),
+  );
 }
 
 async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {
@@ -99,15 +142,21 @@ async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   const current = context.params.get('current') ?? null;
   const position = context.params.int('position', 0, { min: 0 });
 
-  // Validate every id against this user's libraries *before* replacing the queue, so
-  // a bad id in the middle cannot leave a half-saved queue.
+  // Validate every id against this user's libraries *before* replacing the queue, so a
+  // bad id in the middle cannot leave a half-saved queue.
+  //
+  // **Awaited.** These calls used to be `void`ed, which started the check and discarded
+  // its promise: the rejection surfaced as an unhandled rejection rather than as a
+  // `code=50`, and the queue was written with an id pointing at a library the caller
+  // cannot see. `getPlayQueue` then filtered it out, so the queue simply came back
+  // shorter than it was saved — a silent data loss with an authorization hole under it.
   for (const id of ids) {
     const decoded = decodeId(id, IdKind.Song);
-    void context.libraries.requireForUser(context.user.id, decoded.libraryId);
+    await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   }
   if (current !== null) {
     const decoded = decodeId(current, IdKind.Song);
-    void context.libraries.requireForUser(context.user.id, decoded.libraryId);
+    await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   }
 
   await context.annotations.savePlayQueue({
@@ -130,4 +179,6 @@ function safeDecode(id: string, kind: string) {
 
 const stateEndpoints = { getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue };
 
-export { stateEndpoints, getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue, SubsonicError, ErrorCode };
+export { stateEndpoints, getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue,   };
+
+export {ErrorCode, SubsonicError} from '@edge-sonic/subsonic';

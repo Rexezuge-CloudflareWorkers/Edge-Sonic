@@ -110,7 +110,7 @@ describe('KV circuit breaker', () => {
     for (let attempt = 0; attempt < 3; attempt += 1) await cache.getText(DOMAIN, [PART, 'k']);
     expect(failing.calls.get).toBe(3);
 
-    vi.advanceTimersByTime(4_000);
+    vi.advanceTimersByTime(4000);
     expect(await cache.getText(DOMAIN, [PART, 'k'])).toBeNull();
     expect(failing.calls.get).toBe(3);
   });
@@ -127,7 +127,7 @@ describe('KV circuit breaker', () => {
     // The namespace recovers.
     const recovered = fakeKv({ 'libIndex:v1:lib1:k': 'value' });
     const shared = new KvCache(recovered.ns);
-    vi.advanceTimersByTime(5_100);
+    vi.advanceTimersByTime(5100);
 
     // The breaker state is module-level (one namespace, one breaker per isolate),
     // so a fresh instance observes the same state. This call is the half-open probe.

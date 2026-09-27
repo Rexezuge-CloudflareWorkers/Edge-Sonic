@@ -23,7 +23,9 @@
  * this file is the thing to fix.
  */
 
-/** Every locale the server ships. `en` is the fallback and must never be empty. */
+/**
+Every locale the server ships. `en` is the fallback and must never be empty.
+*/
 type Locale = 'en';
 
 const DEFAULT_LOCALE: Locale = 'en';
@@ -64,8 +66,7 @@ const BUNDLES: Record<Locale, BackendStrings> = { en };
  * the user cannot tell which one they are reading.
  */
 function getBackendStrings(locale?: string | null): BackendStrings {
-  if (typeof locale !== 'string' || locale.length === 0) return BUNDLES[DEFAULT_LOCALE];
-  return BUNDLES[locale.trim().toLowerCase() as Locale] ?? BUNDLES[DEFAULT_LOCALE];
+  return typeof locale !== 'string' || locale.length === 0 ? BUNDLES[DEFAULT_LOCALE] : BUNDLES[locale.trim().toLowerCase() as Locale] ?? BUNDLES[DEFAULT_LOCALE];
 }
 
 export { getBackendStrings, BUNDLES, DEFAULT_LOCALE };

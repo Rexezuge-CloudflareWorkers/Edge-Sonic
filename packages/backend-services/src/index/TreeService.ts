@@ -67,7 +67,9 @@ interface TreeDeps {
   timeoutMs: number;
 }
 
-/** File suffixes the indexer treats as playable audio. */
+/**
+File suffixes the indexer treats as playable audio.
+*/
 const AUDIO_SUFFIXES: ReadonlySet<string> = new Set([
   'mp3',
   'flac',
@@ -89,13 +91,14 @@ const AUDIO_SUFFIXES: ReadonlySet<string> = new Set([
   'alac',
 ]);
 
-/** Cover art filenames probed in an album folder, in preference order. */
+/**
+Cover art filenames probed in an album folder, in preference order.
+*/
 const COVER_NAMES: readonly string[] = ['cover', 'folder', 'front', 'album', 'albumart', 'thumb'];
 
 function isAudioFile(name: string): boolean {
   const dot = name.lastIndexOf('.');
-  if (dot <= 0) return false;
-  return AUDIO_SUFFIXES.has(name.slice(dot + 1).toLowerCase());
+  return dot <= 0 ? false : AUDIO_SUFFIXES.has(name.slice(dot + 1).toLowerCase());
 }
 
 function suffixOf(name: string): string {
@@ -171,7 +174,9 @@ class TreeService {
     return { folder: { path, node, isCollection: true }, children };
   }
 
-  /** Top-level entries, for `getIndexes` and `getMusicFolders`. */
+  /**
+  Top-level entries, for `getIndexes` and `getMusicFolders`.
+  */
   public async roots(library: LibraryRow): Promise<NodeRow[]> {
     const known = await this.deps.nodes.listRoots(library.id);
     if (known.length > 0) return known;
@@ -325,7 +330,9 @@ class TreeService {
     return null;
   }
 
-  /** Reject a path before it reaches either DAO. */
+  /**
+  Reject a path before it reaches either DAO.
+  */
   public static assertPath(path: string): void {
     if (path.length > 1024) throw new BadRequestError('Path is too long.');
     if (path.includes('\0') || path.includes('\\')) throw new BadRequestError('Path contains an illegal character.');
@@ -336,5 +343,7 @@ class TreeService {
   }
 }
 
-export { TreeService, isAudioFile, suffixOf, toLibraryPath, parentOf, depthOf, basename, AUDIO_SUFFIXES, COVER_NAMES };
+export { TreeService, isAudioFile, suffixOf,  parentOf, depthOf, basename, AUDIO_SUFFIXES, COVER_NAMES };
 export type { TreeDeps, MaterializedFolder };
+
+export {toLibraryPath} from '@edge-sonic/webdav';

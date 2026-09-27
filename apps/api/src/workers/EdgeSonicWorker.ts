@@ -27,7 +27,7 @@ import { AbstractEntrypointWorker } from '@edge-sonic/backend-runtime/base';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { Hono } from 'hono';
 import { errorResponse, resolveFormat } from '@edge-sonic/subsonic';
-import { toSubsonicError } from '@edge-sonic/backend-services/errors';
+import { toAdminResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { registerAdminRoutes } from '../admin/routes';
 import { registerRateLimits } from '../middleware/rateLimitConfig';
 import { scopeMiddleware } from '../middleware/scopeMiddleware';
@@ -39,7 +39,9 @@ import { SPA_HTML } from '../generated/spa-shell';
 type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
 type App = Hono<WorkerEnv>;
 
-/** The SPA's client-side routes. Anything else is a 404 in the SPA itself. */
+/**
+The SPA's client-side routes. Anything else is a 404 in the SPA itself.
+*/
 const SPA_ROUTES = ['/', '/libraries', '/users'] as const;
 
 class EdgeSonicWorker extends AbstractEntrypointWorker {
@@ -57,14 +59,21 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
 
     app.use('*', securityHeaders());
 
-    // Anything that escapes the dispatcher still answers with a valid Subsonic
-    // envelope rather than Hono's default text body, because a client parsing this
-    // surface has no way to interpret anything else.
+    // Anything that escapes the dispatcher still answers in the right dialect rather
+    // than Hono's default text body: a client parsing `/rest` has no way to interpret
+    // anything else, and the admin SPA reads HTTP statuses and a typed error body.
     app.onError((error, c) => {
       console.error('Unhandled worker error:', error instanceof Error ? (error.stack ?? error.message) : error);
       const url = new URL(c.req.url);
       if (!url.pathname.startsWith('/rest/')) {
-        return c.json({ error: { code: 'InternalServerError', message: 'An internal error occurred.' } }, 500);
+        // The **admin** API, which is a JSON surface whose client reads the status. A
+        // blanket 500 here threw away the whole error taxonomy: a missing field, a
+        // duplicate slug, and a grant for a library that does not exist all became
+        // "InternalServerError", which is an answer an operator cannot act on and a
+        // support ticket that cannot be reproduced. `toAdminResponse` keeps the 4xx and
+        // its message, and still masks a 5xx.
+        const mapped = toAdminResponse(error, c.req.header('accept-language'));
+        return c.json(mapped.body, mapped.status as 400);
       }
       const mapped = toSubsonicError(error);
       return errorResponse(mapped, { format: resolveFormat(url.searchParams.get('f')), jsonpCallback: url.searchParams.get('callback') });

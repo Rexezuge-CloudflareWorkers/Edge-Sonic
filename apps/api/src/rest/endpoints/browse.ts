@@ -34,7 +34,7 @@ function baseName(path: string): string {
 
 function isPlayable(name: string): boolean {
   const dot = name.lastIndexOf('.');
-  return dot > 0 && /\.(mp3|flac|ogg|oga|opus|m4a|mp4|aac|wav|wma|aiff|aif|ape|wv|mpc|dsf|dff)$/i.test(name);
+  return dot > 0 && /\.(?:mp3|flac|ogg|oga|opus|m4a|mp4|aac|wav|wma|aiff|aif|ape|wv|mpc|dsf|dff)$/i.test(name);
 }
 
 /**
@@ -51,7 +51,7 @@ async function resolveLibrary(context: RestContext, requested: string | undefine
   if (libraries.length === 0) {
     throw new SubsonicError(ErrorCode.NotFound, 'No library has been granted to this user.');
   }
-  if (requested === undefined || requested.length === 0) return libraries[0]!;
+  if (requested === undefined || requested.length === 0) return libraries[0];
   // Authorization happens inside `requireForUser`, so an id for a library this user
   // cannot see is reported as "not found" rather than "forbidden" — the latter
   // would confirm the library exists.
@@ -68,7 +68,7 @@ async function resolveLibrary(context: RestContext, requested: string | undefine
  */
 function firstLetterOf(name: string): string {
   const trimmed = name.trim();
-  const first = [...trimmed][0];
+  const first = [...trimmed].at(0);
   if (first === undefined) return '#';
   const upper = first.toUpperCase();
   return /^[A-Z]$/.test(upper) ? upper : '#';
@@ -90,7 +90,7 @@ function buildIndexes(roots: readonly NodeRow[], library: LibraryRow, lastModifi
     'indexes',
     'index',
     { lastModified, ignoredArticles: 'The El La Los Las Le Les' },
-    [...buckets.entries()]
+    [...buckets]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([letter, nodes]) =>
         elList(
@@ -121,10 +121,7 @@ async function getIndexes(context: RestContext): Promise<EnvelopeResponse> {
   const roots = await context.tree.roots(library);
   const ifModifiedSince = context.params.int('ifModifiedSince', 0);
   const newest = roots.reduce((max, node) => Math.max(max, node.mtime_ms ?? 0), 0);
-  if (ifModifiedSince > 0 && newest <= ifModifiedSince) {
-    return respond(context, el('indexes', { lastModified: newest, ignoredArticles: 'The El La Los Las Le Les' }));
-  }
-  return respond(context, buildIndexes(roots, library, newest));
+  return ifModifiedSince > 0 && newest <= ifModifiedSince ? respond(context, el('indexes', { lastModified: newest, ignoredArticles: 'The El La Los Las Le Les' })) : respond(context, buildIndexes(roots, library, newest));
 }
 
 /**

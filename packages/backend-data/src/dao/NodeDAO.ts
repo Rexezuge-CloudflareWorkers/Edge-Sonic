@@ -51,7 +51,9 @@ interface NodeInput {
   isScanned?: boolean;
 }
 
-/** Fields a caller wants to overwrite in place. */
+/**
+Fields a caller wants to overwrite in place.
+*/
 interface NodePatch {
   mtimeMs?: number | null;
   etag?: string | null;
@@ -167,8 +169,7 @@ class NodeDAO extends BaseDAO {
     }
     if (assignments.length === 0) return;
     assignments.push('updated_at = ?');
-    values.push(nowSeconds());
-    values.push(libraryId, path);
+    values.push(nowSeconds(), libraryId, path);
 
     await this.withRetry(
       async () =>
@@ -230,7 +231,7 @@ class NodeDAO extends BaseDAO {
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare("DELETE FROM nodes WHERE library_id = ? AND (path = ? OR path LIKE ? ESCAPE '\\')")
+          .prepare(String.raw`DELETE FROM nodes WHERE library_id = ? AND (path = ? OR path LIKE ? ESCAPE '\')`)
           .bind(libraryId, path, escaped)
           .run(),
       'nodes.deleteSubtree',

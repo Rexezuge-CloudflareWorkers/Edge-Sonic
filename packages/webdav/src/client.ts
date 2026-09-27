@@ -18,7 +18,9 @@ import { INDEX_PROPS, parseMultistatus } from './multistatus';
 import type { DavResource } from './multistatus';
 import { buildDavUrl } from './url';
 
-/** Default per-request timeout. Overridable per library. */
+/**
+Default per-request timeout. Overridable per library.
+*/
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
@@ -30,7 +32,9 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  */
 const MAX_METADATA_BYTES = 8 * 1024 * 1024;
 
-/** Cap on a single ranged media read, for the same reason. */
+/**
+Cap on a single ranged media read, for the same reason.
+*/
 const MAX_MEDIA_CHUNK_BYTES = 32 * 1024 * 1024;
 
 /**
@@ -45,7 +49,9 @@ const MAX_MEDIA_CHUNK_BYTES = 32 * 1024 * 1024;
  * filters rather than treating as an error.
  */
 interface PropfindOptions {
-  /** `0` for the resource itself, `1` for its immediate children. */
+  /**
+  `0` for the resource itself, `1` for its immediate children.
+  */
   depth?: 0 | 1;
   timeoutMs?: number;
 }
@@ -55,7 +61,9 @@ interface DavCredentials {
   readonly password: string;
 }
 
-/** Raised for a non-2xx WebDAV response, carrying the status for classification. */
+/**
+Raised for a non-2xx WebDAV response, carrying the status for classification.
+*/
 class WebDavError extends Error {
   public readonly status: number;
 
@@ -79,8 +87,8 @@ function basicAuthHeader(credentials: DavCredentials): string {
   let binary = '';
   // Chunked rather than spread: `String.fromCharCode(...bytes)` on a long
   // credential would exceed the argument limit.
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  for (let index = 0; index < bytes.length; index += 0x80_00) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x80_00));
   }
   return `Basic ${btoa(binary)}`;
 }
@@ -196,7 +204,7 @@ class WebDavClient {
    */
   public async readPrefix(relativePath: string, bytes: number, timeoutMs?: number): Promise<Uint8Array> {
     const end = Math.max(0, bytes - 1);
-    const response = await this.get(relativePath, { range: `bytes=0-${end}`, ...(timeoutMs ? { timeoutMs } : {}) });
+    const response = await this.get(relativePath, { range: `bytes=0-${end}`, ...(timeoutMs && { timeoutMs }) });
     const buffer = await this.readBounded(response, Math.min(bytes, MAX_MEDIA_CHUNK_BYTES) + 1024);
     return new Uint8Array(buffer);
   }

@@ -18,6 +18,8 @@
 import { BaseDAO } from './BaseDAO';
 import type { CountRow, SongRow } from './rows';
 import { nowSeconds } from './identity';
+import { chunkArray } from './chunking';
+import { UPSERT_FILE_FACTS } from './songSql';
 
 interface SongUpsertInput {
   id: string;
@@ -39,18 +41,6 @@ interface SongUpsertInput {
  * metadata an enrichment pass already filled in — that is the difference between
  * a rescan costing zero writes and it destroying the index.
  */
-const UPSERT_FILE_FACTS = `INSERT INTO songs
-  (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix, duration, bitrate, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
-ON CONFLICT (library_id, path) DO UPDATE SET
-  id = excluded.id,
-  name = excluded.name,
-  name_ci = excluded.name_ci,
-  size = excluded.size,
-  mtime_ms = excluded.mtime_ms,
-  content_type = excluded.content_type,
-  suffix = excluded.suffix,
-  updated_at = excluded.updated_at`;
 
 interface SongQuery {
   libraryId: string;
@@ -59,6 +49,17 @@ interface SongQuery {
 }
 
 class SongDAO extends BaseDAO {
+  /**
+   * The library's genres, with real counts.
+   *
+   * An aggregate rather than a representative row, for the same reason as `listAlbums`: a
+   * `GROUP BY genre_ci` row is one track, so a caller counting rows reports 1 song and 0
+   * albums for every genre. `COUNT(*)` and `COUNT(DISTINCT ...)` are the counts
+   * themselves, so they cannot drift from the rows they summarize.
+   *
+   * Returned rather than computed in the endpoint because the distinct-album count has to
+   * be `DISTINCT` over the album key, which is a job for the database.
+   */
   public async findById(id: string): Promise<SongRow | null> {
     return await this.withRetry(async () => await this.database.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first<SongRow>(), 'songs.findById');
   }
@@ -86,7 +87,9 @@ class SongDAO extends BaseDAO {
     return result.results ?? [];
   }
 
-  /** Every song whose containing folder is exactly `dirPath` — how an album resolves. */
+  /**
+  Every song whose containing folder is exactly `dirPath` — how an album resolves.
+  */
   public async listByAlbumDir(libraryId: string, dirPath: string): Promise<SongRow[]> {
     return await this.listByDirectory(libraryId, dirPath);
   }
@@ -181,7 +184,9 @@ class SongDAO extends BaseDAO {
     );
   }
 
-  /** Song ids under a directory. Used to expand a starred album. */
+  /**
+  Song ids under a directory. Used to expand a starred album.
+  */
   public async listIdsByAlbumDir(libraryId: string, dirPath: string): Promise<string[]> {
     const result = await this.withRetry(
       async () =>
@@ -197,7 +202,14 @@ class SongDAO extends BaseDAO {
   public async listIdsIn(libraryId: string, ids: readonly string[]): Promise<SongRow[]> {
     if (ids.length === 0) return [];
     // Chunked to stay inside SQLite's bound-parameter limit (999 by default).
-    const found: SongRow[] = [];
+    //
+    // The order is part of the contract, not a nicety. `id IN (...)` returns rows in
+    // whatever order the index scan produces, so returning them directly shuffled every
+    // saved play queue: the client stored "Holocene, then Skinny Love" and got them back
+    // in an order that changed per request. Ids that do not resolve are **omitted** rather
+    // than substituted, so an entry for a deleted track disappears and the rest of the
+    // order is preserved.
+    const found = new Map<string, SongRow>();
     for (const chunk of chunkArray(ids, 200)) {
       const placeholders = chunk.map(() => '?').join(', ');
       const result = await this.withRetry(
@@ -208,9 +220,9 @@ class SongDAO extends BaseDAO {
             .all<SongRow>(),
         'songs.listIdsIn',
       );
-      found.push(...(result.results ?? []));
+      for (const row of result.results ?? []) found.set(row.id, row);
     }
-    return found;
+    return ids.flatMap((id) => (found.has(id) ? [found.get(id)!] : []));
   }
 
   public async countByLibrary(libraryId: string): Promise<number> {
@@ -225,58 +237,9 @@ class SongDAO extends BaseDAO {
     return row?.cnt ?? 0;
   }
 
-  /** Distinct albums, for `getArtists`/`getAlbumList2`. */
-  public async listAlbums(
-    libraryId: string,
-    options: { albumArtistCi?: string | null; genreCi?: string | null; fromYear?: number; toYear?: number; limit: number; offset: number; orderBy: string },
-  ): Promise<SongRow[]> {
-    const where: string[] = ['library_id = ?', "album_ci IS NOT NULL AND album_ci <> ''"];
-    const values: unknown[] = [libraryId];
-    if (options.albumArtistCi) {
-      where.push('album_artist_ci = ?');
-      values.push(options.albumArtistCi);
-    }
-    if (options.genreCi) {
-      where.push('genre_ci = ?');
-      values.push(options.genreCi);
-    }
-    if (options.fromYear !== undefined) {
-      where.push('year >= ?');
-      values.push(options.fromYear);
-    }
-    if (options.toYear !== undefined) {
-      where.push('year <= ?');
-      values.push(options.toYear);
-    }
-    values.push(options.limit, options.offset);
-
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(
-            `SELECT * FROM songs WHERE ${where.join(' AND ')} GROUP BY album_artist_ci, album_ci ORDER BY ${options.orderBy} LIMIT ? OFFSET ?`,
-          )
-          .bind(...values)
-          .all<SongRow>(),
-      'songs.listAlbums',
-    );
-    return result.results ?? [];
-  }
-
-  public async listArtists(libraryId: string, limit: number, offset: number): Promise<SongRow[]> {
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(
-            `SELECT * FROM songs WHERE library_id = ? AND artist_ci IS NOT NULL AND artist_ci <> '' GROUP BY artist_ci ORDER BY artist_ci ASC LIMIT ? OFFSET ?`,
-          )
-          .bind(libraryId, limit, offset)
-          .all<SongRow>(),
-      'songs.listArtists',
-    );
-    return result.results ?? [];
-  }
-
+  /**
+  Distinct albums, for `getArtists`/`getAlbumList2`.
+  */
   public async listByGenre(libraryId: string, genreCi: string, limit: number, offset: number): Promise<SongRow[]> {
     const result = await this.withRetry(
       async () =>
@@ -289,27 +252,6 @@ class SongDAO extends BaseDAO {
     return result.results ?? [];
   }
 
-  public async listGenres(libraryId: string): Promise<SongRow[]> {
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(
-            `SELECT * FROM songs WHERE library_id = ? AND genre_ci IS NOT NULL AND genre_ci <> '' GROUP BY genre_ci ORDER BY genre_ci ASC`,
-          )
-          .bind(libraryId)
-          .all<SongRow>(),
-      'songs.listGenres',
-    );
-    return result.results ?? [];
-  }
-
-  /**
-   * Random songs, with optional genre and year filters.
-   *
-   * `ORDER BY RANDOM()` is a full sort and is documented as a follow-up (an
-   * FTS5 or a precomputed ordering column) rather than hidden: a 5,000-row sort
-   * is a few milliseconds, and a 50,000-row one is not.
-   */
   public async listRandom(
     libraryId: string,
     options: { genreCi?: string | null; fromYear?: number; toYear?: number; limit: number },
@@ -358,12 +300,12 @@ class SongDAO extends BaseDAO {
     const field = options.field ?? 'any';
     const predicate =
       field === 'title'
-        ? 'title_ci LIKE ? ESCAPE \'\\\''
+        ? String.raw`title_ci LIKE ? ESCAPE '\'`
         : field === 'artist'
-          ? 'artist_ci LIKE ? ESCAPE \'\\\''
+          ? String.raw`artist_ci LIKE ? ESCAPE '\'`
           : field === 'album'
-            ? 'album_ci LIKE ? ESCAPE \'\\\''
-            : '(title_ci LIKE ? ESCAPE \'\\\' OR artist_ci LIKE ? ESCAPE \'\\\' OR album_ci LIKE ? ESCAPE \'\\\' OR genre_ci LIKE ? ESCAPE \'\\\')';
+            ? String.raw`album_ci LIKE ? ESCAPE '\'`
+            : String.raw`(title_ci LIKE ? ESCAPE '\' OR artist_ci LIKE ? ESCAPE '\' OR album_ci LIKE ? ESCAPE '\' OR genre_ci LIKE ? ESCAPE '\')`;
 
     const values: unknown[] = field === 'any' ? [libraryId, like, like, like, like, options.limit, options.offset] : [libraryId, like, options.limit, options.offset];
 
@@ -378,7 +320,9 @@ class SongDAO extends BaseDAO {
     return result.results ?? [];
   }
 
-  /** Songs whose derived metadata is still missing, for tag enrichment. */
+  /**
+  Songs whose derived metadata is still missing, for tag enrichment.
+  */
   public async listEnrichmentCandidates(libraryId: string, limit: number): Promise<SongRow[]> {
     const result = await this.withRetry(
       async () =>
@@ -433,7 +377,7 @@ class SongDAO extends BaseDAO {
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare("DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\\')")
+          .prepare(String.raw`DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\')`)
           .bind(libraryId, dirPath, escaped)
           .run(),
       'songs.deleteSubtree',
@@ -443,14 +387,7 @@ class SongDAO extends BaseDAO {
 
 }
 
-function chunkArray<T>(items: readonly T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    chunks.push(items.slice(index, index + size));
-  }
-  return chunks;
-}
 
 
-export { SongDAO, chunkArray };
+export { SongDAO };
 export type { SongUpsertInput, SongQuery };

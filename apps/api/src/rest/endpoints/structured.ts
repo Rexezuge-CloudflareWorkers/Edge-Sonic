@@ -14,13 +14,13 @@
  * ids are derived from `dir_path` and never from the album name: the name is
  * precisely the part that is allowed to change.
  */
-import { albumElement, artistElement, decodeId, el, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { albumElement, artistElement, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import type { AnnotationLookup } from '../mappers';
-import { songToModel, titleFromPath } from '../mappers';
+import { songToModel } from '../mappers';
 import { resolveLibrary } from './browse';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
@@ -29,7 +29,9 @@ function respond(context: RestContext, payload: ElementNode | null): EnvelopeRes
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
 }
 
-/** Album name for a row the scan has not tag-read: the containing folder's name. */
+/**
+Album name for a row the scan has not tag-read: the containing folder's name.
+*/
 function albumNameOf(song: SongRow): string {
   if (song.album) return song.album;
   const slash = song.dir_path.lastIndexOf('/');
@@ -45,7 +47,9 @@ function artistNameOf(song: SongRow): string {
   return dir.length > 0 ? dir : 'Unknown Artist';
 }
 
-/** The key an album groups under. `dir_path` when known, else the album name. */
+/**
+The key an album groups under. `dir_path` when known, else the album name.
+*/
 function albumKeyOf(song: SongRow): string {
   return song.dir_path.length > 0 ? song.dir_path : `name:${albumNameOf(song)}`;
 }
@@ -76,10 +80,10 @@ async function annotationsFor(context: RestContext, ids: readonly string[]): Pro
  */
 async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
-  const limit = context.pageSize(context.params.int('size', undefined), 500);
+  const limit = context.pageSize(context.params.optionalInt('size'), 500);
   const offset = context.params.int('offset', 0, { min: 0 });
 
-  const rows = await context.songs.listArtists(library.id, limit + offset, 0);
+  const rows = await context.songIndex.listArtists(library.id, limit + offset, 0);
   const byName = new Map<string, { albums: Set<string>; songs: number }>();
   for (const row of rows) {
     const name = artistNameOf(row);
@@ -95,18 +99,18 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
 
   const annotations = await annotationsFor(context, [...byName.keys()]);
   const buckets = new Map<string, ElementNode[]>();
-  const ordered = [...byName.entries()].sort(([a], [b]) => a.localeCompare(b)).slice(offset, offset + limit);
+  const ordered = [...byName].sort(([a], [b]) => a.localeCompare(b)).slice(offset, offset + limit);
 
   for (const [key, group] of ordered) {
     const name = rows.find((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === key);
     if (!name) continue;
     const id = encodeId(IdKind.Artist, library.id, name.artist ?? artistNameOf(name));
-    const letter = /^[A-Z]/i.test(name.artist ?? artistNameOf(name)) ? (name.artist ?? artistNameOf(name))[0]!.toUpperCase() : '#';
+    const letter = /^[A-Z]/i.test(name.artist ?? artistNameOf(name)) ? (name.artist ?? artistNameOf(name))[0].toUpperCase() : '#';
     const node = artistElement({
       id,
       name: name.artist ?? artistNameOf(name),
       albumCount: group.albums.size,
-      ...(annotations.stars.has(id) ? { starred: undefined } : {}),
+      ...(annotations.stars.has(id) && { starred: undefined }),
     });
     const existing = buckets.get(letter);
     if (existing) {
@@ -116,21 +120,23 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
     }
   }
 
-  const indexes = [...buckets.entries()]
+  const indexes = [...buckets]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, artists]) => elList('index', 'artist', { name }, artists));
 
   return respond(context, elList('artists', 'index', { ignoredArticles: 'The El La Los Las Le Les' }, indexes));
 }
 
-/** `getArtist` — an artist's albums. */
+/**
+`getArtist` — an artist's albums.
+*/
 async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const id = context.params.require('id');
   const decoded = decodeId(id, IdKind.Artist);
   const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   const artistName = decoded.path;
 
-  const all = await context.songs.listArtists(library.id, 5000, 0);
+  const all = await context.songIndex.listArtists(library.id, 5000, 0);
   const mine = all.filter((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === artistName.toLowerCase());
   if (mine.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Artist not found.');
 
@@ -158,11 +164,11 @@ function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations:
     }
   }
 
-  const starred = new Set([...annotations.stars]);
-  return [...groups.entries()]
+  const starred = new Set(annotations.stars);
+  return [...groups]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, songs]) => {
-      const first = songs[0]!;
+      const first = songs[0];
       const id = encodeId(IdKind.Album, library.id, key.startsWith('name:') ? key : key);
       songs.sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
       return albumElement({
@@ -176,13 +182,15 @@ function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations:
         genre: first.genre ?? undefined,
         coverArt: id,
         created: first.created_at > 0 ? new Date(first.created_at * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z') : undefined,
-        ...(starred.has(id) ? { starred: new Date(first.mtime_ms).toISOString() } : {}),
-        ...(annotations.ratings.has(id) ? { userRating: annotations.ratings.get(id) } : {}),
+        ...(starred.has(id) && { starred: new Date(first.mtime_ms).toISOString() }),
+        ...(annotations.ratings.has(id) && { userRating: annotations.ratings.get(id) }),
       });
     });
 }
 
-/** `getAlbum` — an album's songs. */
+/**
+`getAlbum` — an album's songs.
+*/
 async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   const id = context.params.require('id');
   const decoded = decodeId(id, IdKind.Album);
@@ -194,7 +202,7 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
 
   const annotations = await annotationsFor(context, songs.map((song) => song.id));
   const ordered = [...songs].sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
-  const first = ordered[0]!;
+  const first = ordered[0];
   const album = {
     id,
     name: albumNameOf(first),
@@ -205,8 +213,8 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
     year: first.year ?? undefined,
     genre: first.genre ?? undefined,
     coverArt: id,
-    ...(annotations.stars.has(id) ? { starred: new Date(first.mtime_ms).toISOString() } : {}),
-    ...(annotations.ratings.has(id) ? { userRating: annotations.ratings.get(id) } : {}),
+    ...(annotations.stars.has(id) && { starred: new Date(first.mtime_ms).toISOString() }),
+    ...(annotations.ratings.has(id) && { userRating: annotations.ratings.get(id) }),
   };
 
   // `albumElement` builds the attribute set from the domain model; the songs are
@@ -241,7 +249,9 @@ async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   return respond(context, songElement(songToModel(song, library, annotations)));
 }
 
-/** Handlers only — the registry rejects a signature that is not `(context) => ...`. */
+/**
+Handlers only — the registry rejects a signature that is not `(context) => ...`.
+*/
 const structuredEndpoints = { getArtists, getArtist, getAlbum, getSong };
 
 export {
@@ -256,4 +266,6 @@ export {
   albumKeyOf,
   annotationsFor,
 };
-export type { AnnotationLookup as StructuredAnnotationLookup };
+
+
+export {type AnnotationLookup as StructuredAnnotationLookup} from '../mappers';

@@ -6,11 +6,11 @@
  * `openSubsonic`) — a failure envelope missing `version` is reported by some
  * clients as a server outage rather than as the actual error.
  */
-import { API_VERSION, DEFAULT_FORMAT, OPEN_SUBSONIC, SERVER_TYPE, SERVER_VERSION, XML_NAMESPACE } from './constants';
+import { API_VERSION, DEFAULT_FORMAT, OPEN_SUBSONIC, SERVER_TYPE, SERVER_VERSION,  } from './constants';
 import type { ResponseFormat } from './constants';
 import { ErrorCode, SubsonicError, httpStatusForErrorCode } from './errors';
-import type { ElementNode, Node } from './nodes';
-import { el, elList } from './nodes';
+import type { ElementNode,  } from './nodes';
+import { el,  } from './nodes';
 import { isValidJsonpCallback, serializeJson, serializeJsonp, serializeXml } from './serialize';
 
 const CONTENT_TYPES: Record<ResponseFormat, string> = {
@@ -27,8 +27,7 @@ const CONTENT_TYPES: Record<ResponseFormat, string> = {
  * difference when the same data is available in the default form.
  */
 function resolveFormat(raw: string | null | undefined): ResponseFormat {
-  if (raw === 'json' || raw === 'jsonp' || raw === 'xml') return raw;
-  return DEFAULT_FORMAT;
+  return raw === 'json' || raw === 'jsonp' || raw === 'xml' ? raw : DEFAULT_FORMAT;
 }
 
 function rootAttributes(status: 'ok' | 'failed'): Record<string, string | number | boolean> {
@@ -41,19 +40,20 @@ function rootAttributes(status: 'ok' | 'failed'): Record<string, string | number
   };
 }
 
-/** Options every response builder accepts. */
+/**
+Options every response builder accepts.
+*/
 interface EnvelopeOptions {
   format: ResponseFormat;
-  /** Only consulted for `jsonp`. */
+  /**
+  Only consulted for `jsonp`.
+  */
   jsonpCallback?: string | null;
 }
 
 function render(root: ElementNode, options: EnvelopeOptions): string {
   if (options.format === 'json') return serializeJson(root);
-  if (options.format === 'jsonp' && options.jsonpCallback && isValidJsonpCallback(options.jsonpCallback)) {
-    return serializeJsonp(root, options.jsonpCallback);
-  }
-  return serializeXml(root);
+  return options.format === 'jsonp' && options.jsonpCallback && isValidJsonpCallback(options.jsonpCallback) ? serializeJsonp(root, options.jsonpCallback) : serializeXml(root);
 }
 
 /**
@@ -68,7 +68,7 @@ function successResponse(payload: ElementNode | null, options: EnvelopeOptions):
   const root: ElementNode = {
     name: 'subsonic-response',
     attrs: rootAttributes('ok'),
-    ...(payload ? { children: [payload] } : {}),
+    ...(payload && { children: [payload] }),
   };
   return new Response(render(root, options), {
     status: 200,
@@ -102,12 +102,16 @@ function errorResponse(error: SubsonicError, options: EnvelopeOptions, throttled
   });
 }
 
-/** Convenience constructor for a missing-parameter failure. */
+/**
+Convenience constructor for a missing-parameter failure.
+*/
 function missingParameter(name: string): SubsonicError {
   return new SubsonicError(ErrorCode.MissingParameter, `Required parameter is missing: ${name}`);
 }
 
-/** Convenience constructor for a not-found failure. */
+/**
+Convenience constructor for a not-found failure.
+*/
 function notFound(what: string): SubsonicError {
   return new SubsonicError(ErrorCode.NotFound, `The requested data was not found: ${what}`);
 }
@@ -119,8 +123,11 @@ export {
   missingParameter,
   notFound,
   CONTENT_TYPES,
-  XML_NAMESPACE,
-  el,
-  elList,
+  
+  
+  
 };
-export type { EnvelopeOptions, ResponseFormat, Node, ElementNode };
+export type { EnvelopeOptions,    };
+
+export {XML_NAMESPACE, type ResponseFormat} from './constants';
+export {type Node, elList, el, type ElementNode} from './nodes';

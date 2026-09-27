@@ -105,8 +105,8 @@ describe('normalizeRootPath', () => {
   it('refuses a query, a fragment, a backslash, and a NUL', () => {
     expect(() => normalizeRootPath('/music?a=1')).toThrow(BadRequestError);
     expect(() => normalizeRootPath('/music#x')).toThrow(BadRequestError);
-    expect(() => normalizeRootPath('/music\\sub')).toThrow(BadRequestError);
-    expect(() => normalizeRootPath('/mus\u0000ic')).toThrow(BadRequestError);
+    expect(() => normalizeRootPath(String.raw`/music\sub`)).toThrow(BadRequestError);
+    expect(() => normalizeRootPath('/mus\u{0}ic')).toThrow(BadRequestError);
   });
 });
 
@@ -257,7 +257,9 @@ describe('LibraryService', () => {
     expect(dav.propfinds).toEqual(['/dav/music/Blur']);
   });
 
-  /** A row with a credential that actually decrypts, so a probe reaches the network. */
+  /**
+  A row with a credential that actually decrypts, so a probe reaches the network.
+  */
   async function probeRow() {
     const encrypted = await encryptData('hunter2', KEY);
     return {
@@ -329,17 +331,47 @@ describe('WebDavClient', () => {
   });
 
   it('forwards a Range header verbatim and returns the 206 untouched', async () => {
-    // Seeking is how every Subsonic client skips a track. A `206` has to stay a
-    // `206`, and the body must not be re-buffered.
-    const dav = fakeDav({ '/a.flac': [{ path: '/a.flac', size: 5000, contentType: 'audio/flac' }] });
+    // Seeking is how every Subsonic client skips a track, so three things have to hold:
+    // the request range reaches the origin unchanged, the response is still a `206`,
+    // and the body is the **requested slice** rather than the whole file.
+    //
+    // The last one is the one a lying test double hid. The fake used to answer any
+    // range with the entire file and a `Content-Range` header claiming a prefix, so a
+    // client that sent `bytes=100-199` and then read 5000 bytes — the bug that breaks
+    // seeking for every user — was indistinguishable from a correct one.
+    const body = new Uint8Array(5000);
+    for (let index = 0; index < body.length; index += 1) body[index] = index % 251;
+    const dav = fakeDav({ '/a.flac': [{ path: '/a.flac', size: 5000, contentType: 'audio/flac', body }] });
     vi.stubGlobal('fetch', dav.fetch);
     const client = new WebDavClient('https://dav.example.com', '/', { username: 'u', password: 'p' });
     const response = await client.get('a.flac', { range: 'bytes=100-199' });
+    const received = new Uint8Array(await response.arrayBuffer());
     vi.unstubAllGlobals();
 
     expect(dav.gets[0]!.range).toBe('bytes=100-199');
     expect(response.status).toBe(206);
-    expect(response.headers.get('content-range')).toContain('bytes 0-');
+    // The total is the *file's* size, not the slice's — that is what lets a client know
+    // the track is longer than what it has.
+    expect(response.headers.get('content-range')).toBe('bytes 100-199/5000');
+    expect(response.headers.get('content-length')).toBe('100');
+    expect(received).toHaveLength(100);
+    expect(Array.from(received)).toEqual(Array.from(body.subarray(100, 200)));
+  });
+
+  it('surfaces a range past the end as a 416, rather than quietly reading the file', async () => {
+    // A `200` here would make a client read the entire track while believing it asked
+    // for a slice that does not exist. `get` throws on any non-2xx, so the caller sees
+    // the origin's own status and can decide — and `stream` does not turn a failed
+    // range into a full-body response.
+    const dav = fakeDav({ '/a.flac': [{ path: '/a.flac', size: 100, contentType: 'audio/flac' }] });
+    vi.stubGlobal('fetch', dav.fetch);
+    const client = new WebDavClient('https://dav.example.com', '/', { username: 'u', password: 'p' });
+    vi.unstubAllGlobals();
+
+    await expect(client.get('a.flac', { range: 'bytes=500-600' })).rejects.toThrow(WebDavError);
+    await client.get('a.flac', { range: 'bytes=500-600' }).catch((error: unknown) => {
+      expect((error as WebDavError).status).toBe(416);
+    });
   });
 
   it('refuses to build a URL outside the library root', async () => {

@@ -31,7 +31,9 @@ import type { SqliteQueryable } from './helpers/sqlite';
 
 const MIGRATION = readFileSync(fileURLToPath(new URL('../migrations/0001_edge_sonic_init.sql', import.meta.url)), 'utf8');
 
-/** Base64 of a 32-byte key, generated once so a file's rows stay readable. */
+/**
+Base64 of a 32-byte key, generated once so a file's rows stay readable.
+*/
 let keyPromise: Promise<string> | null = null;
 function testKey(): Promise<string> {
   keyPromise ??= generateAesGcmKey();
@@ -274,7 +276,7 @@ describe('every hot lookup uses an index', () => {
     ['songs in a directory', 'SELECT * FROM songs WHERE library_id = ? AND dir_path = ? ORDER BY disc ASC, track ASC', ['L', 'A']],
     ['songs in an album', 'SELECT * FROM songs WHERE library_id = ? AND album_artist_ci = ? AND album_ci = ?', ['L', 'a', 'b']],
     ['songs by genre', 'SELECT * FROM songs WHERE library_id = ? AND genre_ci = ?', ['L', 'indie']],
-    ['prefix search', "SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\\'", ['L', 'ab%']],
+    ['prefix search', String.raw`SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\'`, ['L', 'ab%']],
     ['starred items', 'SELECT item_id FROM stars WHERE user_id = ? AND item_type = ? ORDER BY starred_at DESC', ['u', 'song']],
     ['play counts', 'SELECT song_id, play_count FROM play_counts WHERE user_id = ?', ['u']],
     ['auth failures in window', 'SELECT COALESCE(SUM(failures), 0) AS cnt FROM auth_failures WHERE identity = ? AND bucket >= ? AND bucket <= ?', ['x', 1, 2]],
@@ -308,7 +310,7 @@ describe('every hot lookup uses an index', () => {
     // rows rather than of every library. FTS5 is the named fix, in the migration.
     // Which of the two candidate indexes the planner picks is its business; what
     // matters is that it picks one, so the scan is bounded to this library.
-    const plan = queryPlan(handle, "SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\\'", ['L', '%ab%']);
+    const plan = queryPlan(handle, String.raw`SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\'`, ['L', '%ab%']);
     expect(plan).toMatch(/SEARCH songs USING (?:COVERING )?INDEX idx_songs_(title_ci|album_title_ci)/);
     expect(plan).not.toMatch(/SCAN songs/);
   });
@@ -340,12 +342,62 @@ describe('DAO round-trips', () => {
     expect(row?.genre_ci).toBe('indie');
   });
 
+  it('invalidates the derived values when a file changes, and keeps them when it does not', async () => {
+    // The silent one. A rescan that updates `mtime_ms` but leaves `duration` alone
+    // produces a row whose length is wrong, which no error anywhere reports and which
+    // `EnrichmentService` then refuses to fix, because it short-circuits on
+    // `enriched_at`. The two cases are asserted together so the reset cannot be
+    // "fixed" by simply always clearing — that would re-read every file on every scan.
+    const userId = await seedUser('MtimeChange');
+    const libraryId = await seedLibrary(userId, 'LMT');
+    const songs = new SongDAO(handle.db);
+    const id = songId(libraryId, 'A/01.flac');
+    const facts = (mtimeMs: number, size: number) => ({
+      id,
+      libraryId,
+      path: 'A/01.flac',
+      dirPath: 'A',
+      name: '01.flac',
+      size,
+      mtimeMs,
+      contentType: 'audio/flac',
+      suffix: 'flac',
+    });
+
+    await songs.upsertFileFacts([facts(1000, 100)]);
+    await songs.applyMetadata(id, { title: 'Holocene', artist: 'Bon Iver', duration: 251, bitrate: 900, sampleRate: 44_100, channels: 2 });
+
+    // The same bytes seen again: the scan runs on every pass, and a rescan must not
+    // throw away a duration it would then have to re-read from the origin.
+    await songs.upsertFileFacts([facts(1000, 100)]);
+    const unchanged = await songs.findById(id);
+    expect(unchanged?.duration).toBe(251);
+    expect(unchanged?.enriched_at).not.toBeNull();
+
+    // Different bytes: the length and the format facts are gone, so the next read
+    // re-fetches them. The text tags stay, because `getArtists` groups by them and a
+    // cleared artist would drop the track out of every group.
+    await songs.upsertFileFacts([facts(2000, 150)]);
+    const changed = await songs.findById(id);
+    expect(changed?.mtime_ms).toBe(2000);
+    expect(changed?.size).toBe(150);
+    expect(changed?.duration).toBe(0);
+    expect(changed?.bitrate).toBe(0);
+    expect(changed?.sample_rate).toBeNull();
+    expect(changed?.channels).toBeNull();
+    // `enriched_at` is the flag that makes `enrich` re-read, so clearing it is what
+    // turns the fix from cosmetic into effective.
+    expect(changed?.enriched_at).toBeNull();
+    expect(changed?.title).toBe('Holocene');
+  });
+
   it('removes playlist entries by index, highest first', async () => {
     // `songIndexToRemove` addresses positions, and the protocol does not say in which
     // order a client sends multiple removals — so the result must not depend on it.
     const userId = await seedUser('PlaylistIndex');
     const libraryId = await seedLibrary(userId, 'LPI');
-    const songs = new SongDAO(handle.db);
+    // Sequential on purpose: each `seedSong` awaits D1, and the D1 subrequest budget is
+    // the scarce resource. `Promise.all` here would be faster and wrong.
     const ids: string[] = [];
     for (const stem of ['a', 'b', 'c', 'd']) {
       ids.push(await seedSong(libraryId, `A/${stem}.flac`, 'A', { title: stem }));

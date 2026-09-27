@@ -8,7 +8,7 @@ import { Container } from '@edge-sonic/backend-runtime/di';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
-import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
@@ -64,6 +64,7 @@ function createRequestScope(env: RequestScopeEnv): Container {
   scope.bindValue(Tokens.LibraryDAO, async () => new LibraryDAO(db));
   scope.bindValue(Tokens.NodeDAO, async () => new NodeDAO(db));
   scope.bindValue(Tokens.SongDAO, async () => new SongDAO(db));
+  scope.bindValue(Tokens.SongIndexDAO, async () => new SongIndexDAO(db));
   scope.bindValue(Tokens.PlaylistDAO, async () => new PlaylistDAO(db));
   scope.bindValue(Tokens.AnnotationDAO, async () => new AnnotationDAO(db));
   scope.bindValue(Tokens.AuthThrottleDAO, async () => new AuthThrottleDAO(db));
@@ -188,4 +189,6 @@ function createRequestScope(env: RequestScopeEnv): Container {
 }
 
 export { createRequestScope };
-export type { RequestScopeEnv };
+
+
+export {type RequestScopeEnv} from './serviceFactory';

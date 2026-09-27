@@ -12,21 +12,37 @@
  * Protocol error codes, verbatim from the Subsonic API reference.
  */
 const ErrorCode = {
-  /** A generic error. */
+  /**
+  A generic error.
+  */
   Generic: 0,
-  /** Required parameter is missing. */
+  /**
+  Required parameter is missing.
+  */
   MissingParameter: 10,
-  /** Incompatible REST protocol version. Client must upgrade. */
+  /**
+  Incompatible REST protocol version. Client must upgrade.
+  */
   ClientTooOld: 20,
-  /** Incompatible REST protocol version. Server must upgrade. */
+  /**
+  Incompatible REST protocol version. Server must upgrade.
+  */
   ServerTooOld: 30,
-  /** Wrong username or password. */
+  /**
+  Wrong username or password.
+  */
   WrongCredentials: 40,
-  /** Token authentication is not supported for this user. */
+  /**
+  Token authentication is not supported for this user.
+  */
   TokenAuthUnsupported: 41,
-  /** User is not authorized for the given operation. */
+  /**
+  User is not authorized for the given operation.
+  */
   NotAuthorized: 50,
-  /** The requested data was not found. */
+  /**
+  The requested data was not found.
+  */
   NotFound: 70,
 } as const;
 
@@ -70,7 +86,9 @@ class SubsonicError extends Error {
     this.detail = detail;
   }
 
-  /** The message without the generic prefix, when one was supplied. */
+  /**
+  The message without the generic prefix, when one was supplied.
+  */
   public get detailMessage(): string | undefined {
     return this.detail;
   }
@@ -94,11 +112,12 @@ class SubsonicError extends Error {
  */
 function httpStatusForErrorCode(code: ErrorCodeValue, throttled = false): number {
   if (throttled) return 429;
-  if (code === ErrorCode.WrongCredentials) return 401;
-  return 200;
+  return code === ErrorCode.WrongCredentials ? 401 : 200;
 }
 
-/** True when a thrown value is a Subsonic protocol failure. */
+/**
+True when a thrown value is a Subsonic protocol failure.
+*/
 function isSubsonicError(value: unknown): value is SubsonicError {
   return value instanceof SubsonicError;
 }

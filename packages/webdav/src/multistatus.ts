@@ -8,7 +8,9 @@
 import { childText, findDescendants, firstChild, localName, parseXml } from './xml';
 import type { XmlElement } from './xml';
 
-/** The properties the indexer asks for. */
+/**
+The properties the indexer asks for.
+*/
 const INDEX_PROPS = ['getcontentlength', 'getcontenttype', 'getlastmodified', 'getetag', 'displayname', 'resourcetype'] as const;
 
 /**
@@ -20,14 +22,20 @@ const INDEX_PROPS = ['getcontentlength', 'getcontenttype', 'getlastmodified', 'g
  * any descendant named `collection`.
  */
 interface DavResource {
-  /** The `DAV:href` exactly as the server sent it, still percent-encoded. */
+  /**
+  The `DAV:href` exactly as the server sent it, still percent-encoded.
+  */
   readonly href: string;
-  /** `href` percent-decoded. This is what is stored in `nodes.path`/`songs.path`. */
+  /**
+  `href` percent-decoded. This is what is stored in `nodes.path`/`songs.path`.
+  */
   readonly path: string;
   readonly isCollection: boolean;
   readonly contentLength: number | null;
   readonly contentType: string | null;
-  /** Epoch milliseconds, or `null` when the server sent no usable value. */
+  /**
+  Epoch milliseconds, or `null` when the server sent no usable value.
+  */
   readonly lastModifiedMs: number | null;
   readonly etag: string | null;
   readonly displayName: string | null;
@@ -47,7 +55,9 @@ function parseLength(value: string | null): number | null {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-/** Percent-decode a `DAV:href`, preserving a literal `+` in the path. */
+/**
+Percent-decode a `DAV:href`, preserving a literal `+` in the path.
+*/
 function decodeHrefPath(href: string): string {
   const withoutFragment = href.split('#', 1)[0] ?? '';
   const withoutQuery = withoutFragment.split('?', 1)[0] ?? withoutFragment;
@@ -62,7 +72,9 @@ function decodeHrefPath(href: string): string {
   }
 }
 
-/** Text of the first prop element with this local name. */
+/**
+Text of the first prop element with this local name.
+*/
 /**
  * Map a `DAV:href` to a library-relative path.
  *
@@ -82,14 +94,12 @@ function toLibraryPath(hrefPath: string, rootPath: string): string | null {
   const normalizedRoot = rootPath.replace(/^\/+/, '').replace(/\/+$/, '');
   if (normalizedRoot.length === 0) return normalizedHref.length === 0 ? '' : normalizedHref;
   if (normalizedHref === normalizedRoot) return '';
-  if (normalizedHref.startsWith(`${normalizedRoot}/`)) return normalizedHref.slice(normalizedRoot.length + 1);
-  return null;
+  return normalizedHref.startsWith(`${normalizedRoot}/`) ? normalizedHref.slice(normalizedRoot.length + 1) : null;
 }
 
 function propText(props: readonly XmlElement[], name: string): string | null {
   const prop = props.find((candidate) => localName(candidate.name) === name);
-  if (!prop) return null;
-  return prop.text.trim();
+  return prop ? prop.text.trim() : null;
 }
 
 /**

@@ -9,7 +9,9 @@
 import { describe, expect, it } from 'vitest';
 import { md5Bytes, md5Hex } from '@edge-sonic/subsonic';
 
-/** RFC 1321 appendix A.5. */
+/**
+RFC 1321 appendix A.5.
+*/
 const RFC_VECTORS: ReadonlyArray<readonly [string, string]> = [
   ['', 'd41d8cd98f00b204e9800998ecf8427e'],
   ['a', '0cc175b9c0f1b6a831c399e269772661'],

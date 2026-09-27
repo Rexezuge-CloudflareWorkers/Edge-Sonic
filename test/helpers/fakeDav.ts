@@ -12,22 +12,34 @@
  */
 import type { DavResource } from '@edge-sonic/webdav';
 
-interface FakeDavOptions {
-  /** HTTP status to answer with instead of a `207`. */
+export interface FakeDavOptions {
+  /**
+  HTTP status to answer with instead of a `207`.
+  */
   status?: number;
-  /** Reject every request, modelling an unreachable origin. */
+  /**
+  Reject every request, modelling an unreachable origin.
+  */
   failAll?: boolean;
-  /** Per-call failure, so a test can fail the second request only. */
+  /**
+  Per-call failure, so a test can fail the second request only.
+  */
   failOnCall?: number;
 }
 
-interface FakeDav {
+export interface FakeDav {
   readonly fetch: typeof fetch;
-  /** `PROPFIND` paths requested, in order. */
+  /**
+  `PROPFIND` paths requested, in order.
+  */
   readonly propfinds: string[];
-  /** `GET` paths requested, in order. */
+  /**
+  `GET` paths requested, in order.
+  */
   readonly gets: Array<{ path: string; range: string | null }>;
-  /** Basic credentials seen, so a test can assert the client sent the right ones. */
+  /**
+  Basic credentials seen, so a test can assert the client sent the right ones.
+  */
   readonly credentials: string[];
   /**
    * Replace the library the origin serves.
@@ -40,34 +52,56 @@ interface FakeDav {
   reset(): void;
 }
 
-/** One entry in a fake library. */
-interface DavEntry {
+/**
+One entry in a fake library.
+*/
+export interface DavEntry {
   readonly path: string;
   readonly collection?: boolean;
   readonly size?: number;
   readonly contentType?: string;
-  /** Epoch milliseconds. */
+  /**
+  Epoch milliseconds.
+  */
   readonly mtime?: number;
   readonly etag?: string;
-  /** Exclude one property from the `200` propstat, modelling a partial server. */
+  /**
+   * The bytes the server actually returns.
+   *
+   * Optional, and shorter than `size` is the interesting case: it is how a real origin
+   * answers a prefix read of a large file, and how a test models a container whose
+   * header is not at the front. Without it the fake hands back a zero buffer of
+   * `size` bytes, which is 30 MB of allocation for a fixture and a file that no
+   * decoder can read.
+   */
+  readonly body?: Uint8Array;
+  /**
+  Exclude one property from the `200` propstat, modelling a partial server.
+  */
   readonly omit?: 'getcontentlength' | 'getcontenttype' | 'getlastmodified' | 'getetag' | 'displayname';
 }
 
 function propValue(entry: DavEntry, property: string): string | null {
   if (entry.omit === property) return null;
   switch (property) {
-    case 'getcontentlength':
+    case 'getcontentlength': {
       return entry.collection ? null : String(entry.size ?? 0);
-    case 'getcontenttype':
+    }
+    case 'getcontenttype': {
       return entry.contentType ?? null;
-    case 'getlastmodified':
+    }
+    case 'getlastmodified': {
       return entry.mtime === undefined ? null : new Date(entry.mtime).toUTCString();
-    case 'getetag':
+    }
+    case 'getetag': {
       return entry.etag ?? null;
-    case 'displayname':
-      return entry.path.split('/').filter(Boolean).pop() ?? entry.path;
-    default:
+    }
+    case 'displayname': {
+      return entry.path.split('/').findLast(Boolean) ?? entry.path;
+    }
+    default: {
       return null;
+    }
   }
 }
 
@@ -107,6 +141,71 @@ function multistatus(entries: readonly DavEntry[], options: { prefix?: string; h
   });
 
   return `<?xml version="1.0" encoding="utf-8"?><${prefix}:multistatus xmlns:${prefix}="DAV:">${responses.join('')}</${prefix}:multistatus>`;
+}
+
+/**
+ * Serve a `GET`, honouring `Range`.
+ *
+ * ### Why the range is actually applied
+ *
+ * This fake used to return the whole file with a `206` and a `Content-Range` header
+ * claiming otherwise. That modelled a server which lies about the range it served, and
+ * it hid the one bug that matters most here: a caller that builds the request and then
+ * ignores the response length. The product promise is that `stream` is a `Range`
+ * passthrough with no transcoding, and that promise is only testable against a fake
+ * that genuinely truncates.
+ *
+ * The unsatisfiable case (`start >= total`) answers `416` with the `Content-Range`
+ * unsatisfied form, because a caller handed a `200` for a beyond-the-end range would
+ * silently read the whole file.
+ */
+/**
+ * A `Response` body from bytes.
+ *
+ * The copy through a fresh `ArrayBuffer` is not incidental: a `Uint8Array` over a
+ * `SharedArrayBuffer` is not a `BodyInit`, and without the copy this only compiles
+ * against a narrower lib than the one the Workers runtime uses.
+ */
+function asBody(bytes: Uint8Array): ArrayBuffer {
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
+}
+
+function serveEntry(entry: DavEntry, range: string | null): Response {
+  const total = entry.size ?? entry.body?.length ?? 0;
+  const contentType = entry.contentType ?? 'application/octet-stream';
+  const body = entry.body;
+
+  if (range === null) {
+    const whole = body ?? new Uint8Array(total);
+    return new Response(asBody(whole), { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': String(whole.length) } });
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (match === null) return new Response('', { status: 416, headers: { 'Content-Range': `bytes */${total}` } });
+
+  const start = match[1] === '' ? 0 : Number(match[1]);
+  const requestedEnd = match[2] === '' ? total - 1 : Number(match[2]);
+  if (!Number.isFinite(start) || start >= total) {
+    return new Response('', { status: 416, headers: { 'Content-Range': `bytes */${total}` } });
+  }
+
+  // Only materialize up to the requested end: a 128 KiB prefix read of a 4 GiB file
+  // must not allocate 4 GiB in a test.
+  const available = body ?? new Uint8Array(Math.min(requestedEnd + 1, total));
+  const end = Math.min(requestedEnd, total - 1, available.length - 1);
+  const slice = available.subarray(start, end + 1);
+
+  return new Response(asBody(slice), {
+    status: 206,
+    headers: {
+      'Content-Type': contentType,
+      'Content-Length': String(slice.length),
+      'Content-Range': `bytes ${start}-${start + slice.length - 1}/${total}`,
+      'Accept-Ranges': 'bytes',
+    },
+  });
 }
 
 /**
@@ -161,15 +260,7 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
       const range = request.headers.get('range');
       gets.push({ path, range });
       const entry = Object.values(tree).flat().find((candidate) => candidate.path === path);
-      if (entry === undefined) return new Response('', { status: 404 });
-      return new Response(new Uint8Array(entry.size ?? 0), {
-        status: range === null ? 200 : 206,
-        headers: {
-          'Content-Type': entry.contentType ?? 'application/octet-stream',
-          'Content-Length': String(entry.size ?? 0),
-          ...(range === null ? {} : { 'Content-Range': `bytes 0-${(entry.size ?? 1) - 1}/${entry.size ?? 1}` }),
-        },
-      });
+      return entry === undefined ? new Response('', { status: 404 }) : serveEntry(entry, range);
     }
 
     return new Response('', { status: 405 });
@@ -192,7 +283,9 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
   };
 }
 
-/** Turn a parsed resource back into the model a test wants to assert on. */
+/**
+Turn a parsed resource back into the model a test wants to assert on.
+*/
 function toResources(entries: readonly DavEntry[]): DavResource[] {
   return entries.map((entry) => ({
     href: entry.path,
@@ -202,9 +295,8 @@ function toResources(entries: readonly DavEntry[]): DavResource[] {
     contentType: entry.contentType ?? null,
     lastModifiedMs: entry.mtime ?? null,
     etag: entry.etag ?? null,
-    displayName: entry.path.split('/').filter(Boolean).pop() ?? entry.path,
+    displayName: entry.path.split('/').findLast(Boolean) ?? entry.path,
   }));
 }
 
 export { fakeDav, multistatus, toResources };
-export type { FakeDav, FakeDavOptions, DavEntry };

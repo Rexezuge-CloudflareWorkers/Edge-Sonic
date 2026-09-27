@@ -34,7 +34,9 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { D1PreparedStatement, D1Queryable, D1Result } from '@edge-sonic/backend-data/utils';
 
-/** Thrown when a statement fails, carrying SQLite's message. */
+/**
+Thrown when a statement fails, carrying SQLite's message.
+*/
 class SqliteError extends Error {
   constructor(message: string) {
     super(message);
@@ -44,9 +46,13 @@ class SqliteError extends Error {
 
 interface SqliteQueryable {
   readonly db: D1Queryable;
-  /** The underlying handle, for `PRAGMA` and `EXPLAIN` a DAO never issues. */
+  /**
+  The underlying handle, for `PRAGMA` and `EXPLAIN` a DAO never issues.
+  */
   readonly raw: DatabaseSync;
-  /** Statements executed, for plan and count assertions. */
+  /**
+  Statements executed, for plan and count assertions.
+  */
   readonly log: string[];
   close(): void;
 }
@@ -59,16 +65,44 @@ interface SqliteQueryable {
  * absent optional becomes `null` — which is what D1's binding of a missing parameter
  * means, and what a `NOT NULL` column should then reject.
  */
-function bindValue(value: unknown): null | string | number | bigint | Uint8Array {
+/**
+What SQLite's driver accepts, narrowed from `unknown` at the boundary.
+*/
+type Bindable = null | string | number | bigint | Uint8Array;
+
+/**
+ * Narrow an arbitrary value to what SQLite's driver accepts.
+ *
+ * The branches are one per accepted type rather than a `switch`, because each needs its
+ * own comment: `boolean` becomes 0/1 because SQLite has no boolean type, an
+ * `ArrayBuffer` becomes a view because the driver wants one, and anything left is JSON
+ * rather than `String(...)` because `String` on an object yields `[object Object]`.
+ */
+// Every branch returns a `Bindable`; the rule does not narrow through the
+// `typeof`/`instanceof` chain.
+// eslint-disable-next-line sonarjs/function-return-type
+function bindValue(value: unknown): Bindable {
   if (value === undefined || value === null) return null;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'bigint') return value;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'bigint') return value;
   if (value instanceof Uint8Array) return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (value instanceof boolean) return value ? 1 : 0;
-  return String(value);
+  // SQLite has no boolean type, so a boolean is bound as 0 or 1 — which is what the
+  // `is_enabled` columns are declared as.
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  // Not `String(value)`: an object would stringify to `[object Object]` and SQLite would
+  // store that silently rather than refusing it. JSON at least fails on a cycle.
+  //
+  // `JSON.stringify` returns `undefined` for a function or a symbol, and binding
+  // `undefined` throws in the driver. `null` is the honest answer — there is no value
+  // to store — and it is what the `undefined` branch above returns for the same reason.
+  return JSON.stringify(value) ?? null;
 }
 
-/** Build a `D1Queryable` over an in-memory SQLite database. */
+/**
+Build a `D1Queryable` over an in-memory SQLite database.
+*/
 function sqliteQueryable(path = ':memory:'): SqliteQueryable {
   const raw = new DatabaseSync(path);
   // Enforced for the lifetime of the handle, so a cascade test observes the same
@@ -144,7 +178,9 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
   return { db, raw, log, close: () => raw.close() };
 }
 
-/** Apply a SQL script, statement by statement. */
+/**
+Apply a SQL script, statement by statement.
+*/
 function execScript(handle: SqliteQueryable, sql: string): void {
   handle.raw.exec(sql);
 }

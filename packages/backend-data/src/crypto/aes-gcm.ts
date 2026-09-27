@@ -24,13 +24,19 @@
  * that a decryption failure.
  */
 
-/** AES-256 key, base64. 32 bytes. */
+/**
+AES-256 key, base64. 32 bytes.
+*/
 type Base64Key = string;
 
-/** GCM nonces must never repeat under one key. 96 bits is the standard choice. */
+/**
+GCM nonces must never repeat under one key. 96 bits is the standard choice.
+*/
 const IV_BYTES = 12;
 
-/** A key of the wrong length fails at `importKey` with an opaque message; check early. */
+/**
+A key of the wrong length fails at `importKey` with an opaque message; check early.
+*/
 const KEY_BYTES = 32;
 
 function keyBytes(keyBase64: string): Uint8Array<ArrayBuffer> {
@@ -42,8 +48,8 @@ function keyBytes(keyBase64: string): Uint8Array<ArrayBuffer> {
 
 function toBase64(bytes: Uint8Array<ArrayBufferLike>): string {
   let binary = '';
-  for (let index = 0; index < bytes.length; index += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  for (let index = 0; index < bytes.length; index += 0x80_00) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x80_00));
   }
   return btoa(binary);
 }
@@ -51,7 +57,7 @@ function toBase64(bytes: Uint8Array<ArrayBufferLike>): string {
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
-  for (let index = 0; index < a.length; index += 1) diff |= a[index]! ^ b[index]!;
+  for (let index = 0; index < a.length; index += 1) diff |= a[index] ^ b[index];
   return diff === 0;
 }
 
@@ -71,16 +77,20 @@ async function importKey(keyBase64: string, usage: 'encrypt' | 'decrypt'): Promi
  * `ArrayBufferLike`.
  */
 function freshIv(): Uint8Array<ArrayBuffer> {
-  return crypto.getRandomValues(new Uint8Array(IV_BYTES)) as Uint8Array<ArrayBuffer>;
+  return crypto.getRandomValues(new Uint8Array(IV_BYTES));
 }
 
-/** Generate a new AES-256 key as base64. Used by `scripts/init-secrets.ts`. */
+/**
+Generate a new AES-256 key as base64. Used by `scripts/init-secrets.ts`.
+*/
 async function generateAesGcmKey(): Promise<string> {
   const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
   return toBase64(new Uint8Array(await crypto.subtle.exportKey('raw', key)));
 }
 
-/** True when a secret is present and is a usable 256-bit base64 key. */
+/**
+True when a secret is present and is a usable 256-bit base64 key.
+*/
 function isUsableKey(keyBase64: string | null | undefined): boolean {
   if (!keyBase64) return false;
   try {

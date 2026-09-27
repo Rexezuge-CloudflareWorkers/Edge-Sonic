@@ -25,14 +25,18 @@
  * **MP4/M4A.** Its `moov` atom — the only place the duration lives — is
  * routinely at the *end* of the file, so a prefix read cannot reach it. Rather
  * than guess, `readAudioTags` returns `null` duration and `container:
- * 'unknown'`, and a TODO marks the tail-read follow-up. A wrong duration is
+ * 'unknown'`, and the tail-read follow-up is recorded below. A wrong duration is
  * worse than a missing one, because a client that trusts a wrong one will seek
  * to the wrong place.
  */
 interface AudioTags {
-  /** Seconds, or `null` when the format is unsupported or the data was short. */
+  /**
+  Seconds, or `null` when the format is unsupported or the data was short.
+  */
   readonly durationSeconds: number | null;
-  /** kbps. `null` when it cannot be derived without the whole file. */
+  /**
+  kbps. `null` when it cannot be derived without the whole file.
+  */
   readonly bitrateKbps: number | null;
   readonly sampleRate: number | null;
   readonly channels: number | null;
@@ -80,11 +84,11 @@ const EMPTY_TAGS: AudioTags = {
  */
 const MPEG_SAMPLE_RATES: ReadonlyArray<ReadonlyArray<number>> = [
   // MPEG-1
-  [44100, 48000, 32000],
+  [44_100, 48_000, 32_000],
   // MPEG-2
-  [22050, 24000, 16000],
+  [22_050, 24_000, 16_000],
   // MPEG-2.5
-  [11025, 12000, 8000],
+  [11_025, 12_000, 8000],
 ];
 
 /**
