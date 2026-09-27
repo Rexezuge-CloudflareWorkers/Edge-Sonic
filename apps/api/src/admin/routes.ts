@@ -4,7 +4,7 @@ import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composi
 import { getRequestScope, asScopedContext } from '@edge-sonic/backend-runtime/di';
 import { toAdminResponse } from '@edge-sonic/backend-services/errors';
 import { UUIDUtil } from '@edge-sonic/shared/utils';
-import { SPA_HTML } from '@/generated/spa-shell';
+import { SPA_HTML } from '../generated/spa-shell';
 
 type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
 type AdminContext = Context<WorkerEnv>;

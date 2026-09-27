@@ -66,7 +66,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
       }
     }
     const annotations = await annotationsFor(context, starredIds);
-    return respond(context, elList(wrapperName, {}, groupAlbums(rows, library, annotations)));
+    return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, annotations)));
   }
 
   const needsRange = type === 'byYear' || type === 'byGenre';
@@ -85,7 +85,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random!,
   });
 
-  return respond(context, elList(wrapperName, {}, groupAlbums(rows, library, EMPTY_ANNOTATIONS)));
+  return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, EMPTY_ANNOTATIONS)));
 }
 
 async function getAlbumList(context: RestContext): Promise<EnvelopeResponse> {
@@ -115,7 +115,7 @@ async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
     ...(toYear !== Number.MAX_SAFE_INTEGER ? { toYear } : {}),
     limit: size,
   });
-  return respond(context, elList('randomSongs', {}, await songNodes(context, library, rows)));
+  return respond(context, elList('randomSongs', 'song', {}, await songNodes(context, library, rows)));
 }
 
 async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> {
@@ -124,7 +124,7 @@ async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> 
   const count = context.pageSize(context.params.int('count', undefined), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
   const rows = await context.songs.listByGenre(library.id, genre.toLowerCase(), count + offset, 0);
-  return respond(context, elList('songsByGenre', {}, await songNodes(context, library, rows.slice(offset, offset + count))));
+  return respond(context, elList('songsByGenre', 'song', {}, await songNodes(context, library, rows.slice(offset, offset + count))));
 }
 
 /**
@@ -148,7 +148,7 @@ async function getGenres(context: RestContext): Promise<EnvelopeResponse> {
     }
   }
   const nodes = [...counts.values()].sort((a, b) => a.value.localeCompare(b.value)).map((entry) => el('genre', { ...entry }));
-  return respond(context, elList('genres', {}, nodes));
+  return respond(context, elList('genres', 'genre', {}, nodes));
 }
 
 /**
@@ -179,7 +179,7 @@ async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'
   }
 
   const annotations = await annotationsFor(context, [...songIds, ...albumIds]);
-  return respond(context, elList(wrapperName, {}, [...groupAlbums(albumRows, library, annotations), ...(await songNodes(context, library, songs))]));
+  return respond(context, elList(wrapperName, ['album', 'song'], {}, [...groupAlbums(albumRows, library, annotations), ...(await songNodes(context, library, songs))]));
 }
 
 async function getStarred(context: RestContext): Promise<EnvelopeResponse> {
@@ -216,7 +216,7 @@ async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
       ],
     });
   }
-  return respond(context, elList('nowPlaying', {}, nodes));
+  return respond(context, elList('nowPlaying', 'entry', {}, nodes));
 }
 
 const listEndpoints = {

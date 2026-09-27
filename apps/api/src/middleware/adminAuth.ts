@@ -10,8 +10,8 @@ import type { Next } from 'hono';
 import { AccessAuthService } from '@edge-sonic/backend-services/auth';
 import type { AccessIdentityContext } from '@edge-sonic/backend-services/auth';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
-import { BaseRoute } from '@/admin/routes';
-import type { AdminContext } from '@/admin/routes';
+import { BaseRoute } from '../admin/routes';
+import type { AdminContext } from '../admin/routes';
 
 async function adminAuthenticationHandler(c: AdminContext, next: Next): Promise<Response | void> {
   try {

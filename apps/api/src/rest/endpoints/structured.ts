@@ -118,9 +118,9 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
 
   const indexes = [...buckets.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, artists]) => elList('index', { name }, artists));
+    .map(([name, artists]) => elList('index', 'artist', { name }, artists));
 
-  return respond(context, elList('artists', { ignoredArticles: 'The El La Los Las Le Les' }, indexes));
+  return respond(context, elList('artists', 'index', { ignoredArticles: 'The El La Los Las Le Les' }, indexes));
 }
 
 /** `getArtist` — an artist's albums. */
@@ -136,7 +136,7 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
 
   const annotations = await annotationsFor(context, [id]);
   const albums = groupAlbums(mine, library, annotations);
-  return respond(context, elList('artist', { id, name: artistName, albumCount: albums.length, starred: undefined }, albums));
+  return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length }, albums));
 }
 
 /**

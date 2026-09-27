@@ -8,14 +8,14 @@
     ".": "./src/index.ts",
     "./auth": "./src/auth/index.ts",
     "./auth/*": "./src/auth/*.ts",
-    "./user": "./src/user/index.ts",
-    "./user/*": "./src/user/*.ts",
     "./composition": "./src/composition/index.ts",
     "./composition/*": "./src/composition/*.ts",
     "./errors": "./src/errors/index.ts",
     "./errors/*": "./src/errors/*.ts",
-    "./router": "./src/router/index.ts",
-    "./router/*": "./src/router/*.ts"
+    "./index": "./src/index/index.ts",
+    "./index/*": "./src/index/*.ts",
+    "./library": "./src/library/index.ts",
+    "./library/*": "./src/library/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -24,8 +24,11 @@
     "@edge-sonic/backend-data": "workspace:*",
     "@edge-sonic/backend-errors": "workspace:*",
     "@edge-sonic/backend-runtime": "workspace:*",
+    "@edge-sonic/media-tags": "workspace:*",
     "@edge-sonic/shared": "workspace:*",
-    "jose": "6.2.12"
+    "@edge-sonic/subsonic": "workspace:*",
+    "@edge-sonic/webdav": "workspace:*",
+    "jose": "6.1.0"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

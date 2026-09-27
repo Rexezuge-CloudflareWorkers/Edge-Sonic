@@ -88,12 +88,14 @@ function buildIndexes(roots: readonly NodeRow[], library: LibraryRow, lastModifi
 
   return elList(
     'indexes',
+    'index',
     { lastModified, ignoredArticles: 'The El La Los Las Le Les' },
     [...buckets.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([letter, nodes]) =>
         elList(
           'index',
+          'shortcut',
           { name: letter },
           nodes.map((node) => el('shortcut', { id: encodeId(IdKind.Directory, library.id, node.path), name: node.name })),
         ),
@@ -176,6 +178,7 @@ async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse
     context,
     elList(
       'directory',
+      'child',
       { id: selfId, parent: parentId, name: path === '' ? libraryName(library) : baseName(path) },
       childNodes,
     ),

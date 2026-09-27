@@ -210,7 +210,7 @@ describe('envelope', () => {
   });
 
   it('wraps JSON under the response element name', async () => {
-    const response = successResponse(elList('indexes', {}, [el('shortcut', { id: 'dir:a', name: 'Blur' })]), { format: 'json' });
+    const response = successResponse(elList('indexes', 'shortcut', {}, [el('shortcut', { id: 'dir:a', name: 'Blur' })]), { format: 'json' });
     const body = (await response.json()) as Record<string, { status: string; indexes: { shortcut: unknown } }>;
     expect(body['subsonic-response']!.status).toBe('ok');
     // `array: true` means one item is still an array. Subsonic's own server emits a
@@ -232,6 +232,23 @@ describe('envelope', () => {
     // round-trips rather than being dropped or truncated.
     const parsed = JSON.parse(body) as { 'subsonic-response': { artist: { name: string } } };
     expect(parsed['subsonic-response'].artist.name).toBe('quote " and \\ backslash');
+  });
+
+  it('renders an empty list as [], not as an absent key', async () => {
+    // Subsonic's own server omits the key entirely when a list is empty, and a client
+    // written against it then does `response.starred2.song.map(...)` and throws. Emitting
+    // `[]` renders an empty screen instead.
+    const body = (await (await successResponse(elList('starred2', 'song', {}, []), { format: 'json' })).json()) as {
+      'subsonic-response': { starred2: { song: unknown[] } };
+    };
+    expect(body['subsonic-response'].starred2.song).toEqual([]);
+  });
+
+  it('renders a one-item list as an array, not as a bare object', async () => {
+    const body = (await (await successResponse(elList('starred2', 'song', {}, [el('song', { id: 's:1' })]), { format: 'json' })).json()) as {
+      'subsonic-response': { starred2: { song: unknown } };
+    };
+    expect(Array.isArray(body['subsonic-response'].starred2.song)).toBe(true);
   });
 
   it('drops null and undefined attributes but keeps zero', async () => {

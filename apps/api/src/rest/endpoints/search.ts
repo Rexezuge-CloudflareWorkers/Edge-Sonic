@@ -72,7 +72,7 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
   const count = context.pageSize(context.params.int('count', undefined), 20);
   const annotations = await annotationsFor(context, songs.map((song) => song.id));
   const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, annotations)));
-  return respond(context, elList('searchResult', {}, nodes));
+  return respond(context, elList('searchResult', 'song', {}, nodes));
 }
 
 /**
@@ -97,6 +97,10 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
     context,
     elList(
       wrapperName,
+      // `searchResult2`/`searchResult3` hold all three kinds, and a client reads
+      // whichever it wants — so all three are declared, or an empty one is `undefined`
+      // rather than `[]`.
+      ['artist', 'album', 'song'],
       {},
       [
         ...artists,

@@ -73,7 +73,7 @@ async function getPlaylists(context: RestContext): Promise<EnvelopeResponse> {
     throw new SubsonicError(ErrorCode.NotAuthorized, "Only an admin may list another user's playlists.");
   }
   const playlists = await context.playlists.listVisible(context.user.id);
-  return respond(context, elList('playlists', {}, playlists.map((playlist) => playlistElement(toPlaylistModel(playlist, context.username)))));
+  return respond(context, elList('playlists', 'playlist', {}, playlists.map((playlist) => playlistElement(toPlaylistModel(playlist, context.username)))));
 }
 
 /**
@@ -84,9 +84,15 @@ async function getPlaylists(context: RestContext): Promise<EnvelopeResponse> {
  * too: a client cannot play an entry it cannot resolve, and reporting a count that
  * includes unplayable rows makes the client's progress bar lie.
  */
-async function getPlaylist(context: RestContext): Promise<EnvelopeResponse> {
-  const id = context.params.require('id');
-  const playlist = await requireVisible(context, id);
+/**
+ * Render a playlist, resolving its songs.
+ *
+ * Split out because `createPlaylist` and `getPlaylist` both need it and neither can
+ * reach the other through the dispatcher: a create request has no `id` parameter, so
+ * re-deriving the playlist from the request answers `code=10` for a call that
+ * succeeded — the client gets a failure for a playlist that was actually written.
+ */
+async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow): Promise<EnvelopeResponse> {
   const library = await resolvePlaylistLibrary(context);
   if (library === null) throw new SubsonicError(ErrorCode.NotFound, 'No library is available for this playlist.');
 
@@ -94,13 +100,25 @@ async function getPlaylist(context: RestContext): Promise<EnvelopeResponse> {
   const rows = joined.filter((song) => song.library_id === library.id);
   const annotations = await annotationsFor(context, rows.map((song) => song.id));
 
+  // The protocol names a playlist's songs `entry`, not `song`. Both spellings appear
+  // in the wild, but `entry` is what the schema specifies and what every client
+  // documents — a client reading `playlist.entry` gets nothing at all from
+  // `playlist.song`, and a client reading `playlist.song` on a one-entry playlist gets
+  // an object rather than an array. So the element is renamed here rather than
+  // duplicating the whole song attribute set in `builders.ts`.
   return respond(
     context,
     {
       ...playlistElement(toPlaylistModel(playlist, context.username)),
-      children: rows.map((song) => songElement(songToModel(song, library, annotations))),
+      children: rows.map((song) => ({ ...songElement(songToModel(song, library, annotations)), name: 'entry', array: true as const })),
+      listKey: 'entry',
     },
   );
+}
+
+async function getPlaylist(context: RestContext): Promise<EnvelopeResponse> {
+  const id = context.params.require('id');
+  return await respondWithPlaylist(context, await requireVisible(context, id));
 }
 
 async function resolvePlaylistLibrary(context: RestContext) {
@@ -145,7 +163,10 @@ async function createPlaylist(context: RestContext): Promise<EnvelopeResponse> {
     requireOwner(context, playlist);
     const resolved = await resolveSongIds(context, songIds);
     await context.playlists.replaceEntries(playlist.id, resolved, await totalDurationOf(context, resolved));
-    return await getPlaylist(context);
+    // Re-read: `replaceEntries` recomputes `song_count` and `duration` in the
+    // database, and the row in hand still carries the pre-update totals. A client
+    // rendering a progress bar from them would show 0 of 12.
+    return await respondWithPlaylist(context, (await context.playlists.findById(playlist.id)) ?? playlist);
   }
 
   if (name === undefined || name.trim().length === 0) {
@@ -160,8 +181,9 @@ async function createPlaylist(context: RestContext): Promise<EnvelopeResponse> {
   if (songIds.length > 0) {
     const resolved = await resolveSongIds(context, songIds);
     await context.playlists.replaceEntries(created.id, resolved, await totalDurationOf(context, resolved));
+    return await respondWithPlaylist(context, (await context.playlists.findById(created.id)) ?? created);
   }
-  return await getPlaylist(context);
+  return await respondWithPlaylist(context, created);
 }
 
 /**
