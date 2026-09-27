@@ -1,41 +1,36 @@
-import { useMatch } from 'react-router-dom';
-import { Header } from './components/layout/Header';
-import { NoticeBar } from './components/layout/NoticeBar';
-import { SpaViewRouter } from './components/layout/SpaViewRouter';
+/**
+ * SPA composition root.
+ *
+ * Deliberately tiny. The reference project this was scaffolded from had a 40-module
+ * front end; the admin surface here is two lists and two forms, so the app is
+ * composed from a notice hook, a router, and the two views. Growing it is fine —
+ * adding a *framework* to it is not.
+ */
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { useNotice } from './hooks/useNotice';
-import { useCurrentUser } from './hooks/useCurrentUser';
-import { useSpaLanguage } from './hooks/useSpaLanguage';
+import { AppHeader } from './components/layout/AppHeader';
+import { NoticeBar } from './components/layout/NoticeBar';
+import { LibrariesView } from './views/LibrariesView';
+import { UsersView } from './views/UsersView';
 
-function TopHeader({ userEmail }: { userEmail: string | null }) {
-  // The marketing/global header is root-only: every other route renders a
-  // contextual `ContextBar` instead, so the top anchor never moves pages.
-  const isRootPage = useMatch('/') !== null;
-  return isRootPage ? <Header userEmail={userEmail} /> : null;
-}
-
-export default function SpaApp() {
-  const { notice, showNotice } = useNotice();
-  const { user, setUser, authorized } = useCurrentUser();
-  const { language, languageStatus, languagePending, handleLanguageChange } = useSpaLanguage({
-    user,
-    showNotice,
-    setUser,
-  });
+function SpaApp() {
+  const { notice, showNotice, clearNotice } = useNotice();
 
   return (
-    <div className="min-h-screen bg-[var(--color-surface-base)] text-[var(--color-text-primary)]">
-      <TopHeader userEmail={user?.email ?? null} />
-      {notice && <NoticeBar notice={notice} />}
-
-      <SpaViewRouter
-        user={user}
-        setUser={setUser}
-        authorized={authorized}
-        showNotice={showNotice}
-        language={languageStatus === 'error' ? 'unknown' : language}
-        onLanguageChange={handleLanguageChange}
-        languageDisabled={languagePending || languageStatus !== 'ready'}
-      />
+    <div className="min-h-screen">
+      <AppHeader />
+      {notice !== null && <NoticeBar notice={notice} onDismiss={clearNotice} />}
+      <main className="mx-auto w-full max-w-5xl px-6 py-8">
+        <Routes>
+          <Route path="/" element={<LibrariesView showNotice={showNotice} />} />
+          <Route path="/libraries" element={<LibrariesView showNotice={showNotice} />} />
+          <Route path="/users" element={<UsersView showNotice={showNotice} />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }
+
+export { SpaApp };
+export default SpaApp;

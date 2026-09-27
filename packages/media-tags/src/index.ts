@@ -35,7 +35,11 @@ function startsWith(bytes: Uint8Array, magic: readonly number[], offset = 0): bo
  * routinely wrong, whereas the magic bytes are not.
  */
 function readAudioTags(bytes: Uint8Array, fileSize: number | null = null): AudioTags {
-  if (bytes.length < 12) return EMPTY_TAGS;
+  // Four bytes is the floor because that is the length of an MPEG frame header, and
+  // it is enough to identify the container and read the sample rate. A higher floor
+  // would silently report "unknown" for a short-but-valid buffer; each reader's own
+  // bounds checks decide what it can actually read.
+  if (bytes.length < 4) return EMPTY_TAGS;
 
   if (hasFlacMagic(bytes)) return readFlac(bytes, fileSize);
   if (hasOggMagic(bytes)) {

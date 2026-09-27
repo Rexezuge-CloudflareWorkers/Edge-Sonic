@@ -1,38 +1,39 @@
 {
-  "extends": "../tsconfig.json",
   "compilerOptions": {
-    // `types` replaces the automatic `@types/*` inclusion rather than adding to
-    // it, so every ambient global this suite relies on has to be listed:
-    // `vitest/globals` for the `describe`/`it`/`expect` globals, `node` for
-    // `Buffer` in the proxy fixtures, and `vite/client` for `import.meta.glob`
-    // in `apps/web/src/i18n.ts`. The Cloudflare runtime globals come from
-    // `worker-configuration.d.ts` below, the same mechanism `apps/api` uses —
-    // not from `@cloudflare/workers-types`, which is deliberately not a
-    // dependency of this project.
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "allowJs": false,
+    "checkJs": false,
+    "noEmit": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "skipLibCheck": true,
     "types": ["vitest/globals", "node", "vite/client"],
-    // `web-danger-confirm.test.tsx` renders JSX.
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["../apps/api/src/*"],
-      "@edge-sonic/backend-data": ["../packages/backend-data/src"],
-      "@edge-sonic/backend-data/*": ["../packages/backend-data/src/*"],
+      "@edge-sonic/shared": ["../packages/shared/src"],
+      "@edge-sonic/shared/*": ["../packages/shared/src/*"],
       "@edge-sonic/backend-errors": ["../packages/backend-errors/src"],
       "@edge-sonic/backend-errors/*": ["../packages/backend-errors/src/*"],
       "@edge-sonic/backend-runtime": ["../packages/backend-runtime/src"],
       "@edge-sonic/backend-runtime/*": ["../packages/backend-runtime/src/*"],
+      "@edge-sonic/backend-data": ["../packages/backend-data/src"],
+      "@edge-sonic/backend-data/*": ["../packages/backend-data/src/*"],
       "@edge-sonic/backend-services": ["../packages/backend-services/src"],
       "@edge-sonic/backend-services/*": ["../packages/backend-services/src/*"],
-      "@edge-sonic/shared": ["../packages/shared/src"],
-      "@edge-sonic/shared/*": ["../packages/shared/src/*"],
+      "@edge-sonic/subsonic": ["../packages/subsonic/src"],
+      "@edge-sonic/subsonic/*": ["../packages/subsonic/src/*"],
+      "@edge-sonic/media-tags": ["../packages/media-tags/src"],
+      "@edge-sonic/media-tags/*": ["../packages/media-tags/src/*"],
       "@edge-sonic/webdav": ["../packages/webdav/src"],
       "@edge-sonic/webdav/*": ["../packages/webdav/src/*"]
     }
   },
-  "//": "The `@edge-sonic/background` entries that used to live here pointed at `../apps/background/src`, an app this repository does not have. They resolved to nothing and would have silently shadowed a real import.",
-  "include": [
-    "../worker-configuration.d.ts",
-    "../packages/backend-runtime/src/env.d.ts",
-    "**/*.ts",
-    "**/*.tsx"
-  ]
+  "include": ["../worker-configuration.d.ts", "../packages/backend-runtime/src/env.d.ts", "**/*.ts", "**/*.tsx"]
 }

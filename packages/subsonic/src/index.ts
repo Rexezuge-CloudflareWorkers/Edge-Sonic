@@ -22,4 +22,4 @@ export * from './params';
 export * from './ids';
 export * from './types';
 export * from './builders';
-export { md5Hex } from './md5';
+export { md5Hex, md5Bytes } from './md5';

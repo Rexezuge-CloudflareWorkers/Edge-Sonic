@@ -45,19 +45,24 @@ function el(
 }
 
 /**
- * Build a list element whose JSON form is always an array.
+ * Build a list element whose repeated children are always JSON arrays.
  *
- * The element itself is the *wrapper* the protocol specifies (`albumList2`
- * containing `album`s, `searchResult3` containing `artist`/`album`/`song`), so
- * the flag belongs on the children, not the wrapper. This helper takes the
- * wrapper's child element name and returns those children already flagged.
+ * The flag goes on the **children**, not the wrapper. `albumList2` is the wrapper
+ * and `album` is the repeated element, and it is `album` whose JSON shape a client
+ * depends on: `{"album": [...]}` versus `{"album": {...}}`. Flagging the wrapper
+ * would say "render `albumList2` as an array", which is not a shape any client
+ * expects.
+ *
+ * So `elList` marks each child element. A child that is not an element (a bare text
+ * node) is left alone, because there is nothing to flag.
  */
 function elList(
   name: string,
   attrs?: Readonly<Record<string, Scalar | null | undefined>>,
   children?: readonly Node[],
 ): ElementNode {
-  return { name, ...(attrs ? { attrs } : {}), ...(children ? { children } : {}), array: true };
+  const flagged = children?.map((child) => (isElementNode(child) ? { ...child, array: true } : child));
+  return { name, ...(attrs ? { attrs } : {}), ...(flagged ? { children: flagged } : {}) };
 }
 
 function isElementNode(node: Node): node is ElementNode {

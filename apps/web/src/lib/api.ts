@@ -1,101 +1,134 @@
-class BackendError extends Error {
-  readonly errorType: string | null;
-  readonly status: number;
+/**
+ * Typed fetch wrappers for the admin API.
+ *
+ * Same-origin only, and no API base URL: the worker serves the SPA and the API from
+ * one origin, so the Cloudflare Access session cookie rides along under the default
+ * `credentials: 'same-origin'`. There is no token in JavaScript, and no place for
+ * one to leak to.
+ *
+ * The error decoder matters more than it looks: an Access login page is HTML, and a
+ * caller that puts an HTML document into a notice bar looks broken. `extractError`
+ * handles the JSON shape, the `Exception` shape the reference project used, and
+ * plain text, and it **truncates** — an unbounded error string from a proxy error
+ * page is a rendering hazard.
+ */
+import type { LibrarySummary, ProbeResult, ScanStateSummary, UserSummary } from '../types';
 
-  constructor(message: string, errorType: string | null, status: number) {
-    super(message);
-    this.name = 'BackendError';
-    this.errorType = errorType;
-    this.status = status;
+const API_BASE = '/admin';
+
+interface ErrorEnvelope {
+  error?: { code?: string; message?: string };
+  /** The reference project's shape, still returned by some Cloudflare-level errors. */
+  Exception?: { Type?: string; Message?: string };
+}
+
+/** Long enough for any real message, short enough that a proxy error page cannot wedge the UI. */
+const MAX_ERROR_LENGTH = 500;
+
+function extractError(payload: unknown, status: number): string {
+  if (typeof payload === 'string') {
+    return payload.trim().slice(0, MAX_ERROR_LENGTH) || `Request failed with status ${status}.`;
   }
+  if (typeof payload === 'object' && payload !== null) {
+    const envelope = payload as ErrorEnvelope;
+    const message = envelope.error?.message ?? envelope.Exception?.Message;
+    if (typeof message === 'string' && message.length > 0) return message.slice(0, MAX_ERROR_LENGTH);
+  }
+  return `Request failed with status ${status}.`;
 }
 
-function getBackendErrorType(error: unknown): string | null {
-  return error instanceof BackendError ? error.errorType : null;
-}
-
-function extractErrorMessage(payloadText: string, status: number): { message: string; type: string | null } {
-  if (!payloadText) return { message: `HTTP ${status}`, type: null };
-  const MAX_MESSAGE_CHARS = 500;
-  const truncate = (s: string): string => (s.length > MAX_MESSAGE_CHARS ? `${s.slice(0, MAX_MESSAGE_CHARS)}…` : s);
+async function readError(response: Response): Promise<string> {
+  let payload: unknown = null;
   try {
-    const data = JSON.parse(payloadText) as {
-      Exception?: { Type?: string; Message?: string };
-      error?: string;
-      message?: string;
-    };
-    const type = typeof data?.Exception?.Type === 'string' && data.Exception.Type.length > 0 ? data.Exception.Type : null;
-    // AWS envelope first, then legacy `{error,message}`, then raw text.
-    const exceptionMessage = data?.Exception?.Message;
-    if (typeof exceptionMessage === 'string' && exceptionMessage.length > 0) return { message: truncate(exceptionMessage), type };
-    const legacy = data?.message ?? data?.error;
-    if (typeof legacy === 'string' && legacy.length > 0) return { message: truncate(legacy), type };
-    if (type) return { message: `${type} (HTTP ${status})`, type };
+    payload = await response.json();
   } catch {
-    // Plain-text body: surface truncated as-is so an Access-login HTML page
-    // cannot become an unbounded error string.
-  }
-  return { message: truncate(payloadText) || `HTTP ${status}`, type: null };
-}
-
-export async function readJson<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    const text = await response.text();
-    const { message, type } = extractErrorMessage(text, response.status);
-    throw new BackendError(message, type, response.status);
-  }
-  return response.json();
-}
-
-export async function readDav(response: Response): Promise<string> {
-  if (!response.ok && response.status !== 207) {
-    const text = await response.text().catch(() => '');
-    const { message, type } = extractErrorMessage(text, response.status);
-    throw new BackendError(message, type, response.status);
-  }
-  return response.text();
-}
-
-function buildQuery(params: Record<string, string | string[] | undefined>): string {
-  const p = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined || value === '') continue;
-    if (Array.isArray(value)) {
-      for (const v of value) p.append(key, v);
-    } else {
-      p.set(key, value);
+    // Not JSON — an Access login page, or a platform-level error page.
+    try {
+      payload = await response.text();
+    } catch {
+      payload = null;
     }
   }
-  return p.toString();
+  return extractError(payload, response.status);
 }
 
-export async function apiGet<T>(path: string, params?: Record<string, string | string[] | undefined>): Promise<T> {
-  const qs = params ? buildQuery(params) : '';
-  return readJson<T>(await fetch(qs ? `${path}?${qs}` : path));
+async function readJson<T>(response: Response): Promise<T> {
+  if (!response.ok) throw new Error(await readError(response));
+  return (await response.json()) as T;
 }
 
-export async function apiPost<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
+function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined) continue;
+    search.set(key, String(value));
+  }
+  const encoded = search.toString();
+  return encoded.length > 0 ? `?${encoded}` : '';
+}
+
+export async function apiGet<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  return readJson<T>(await fetch(`${API_BASE}${path}${params ? buildQuery(params) : ''}`, { headers: { Accept: 'application/json' } }));
+}
+
+export async function apiSend<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
   return readJson<T>(
-    await fetch(path, {
+    await fetch(`${API_BASE}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     }),
   );
 }
 
-export async function apiDelete<T>(path: string): Promise<T> {
-  return readJson<T>(await fetch(path, { method: 'DELETE' }));
-}
+// --- Libraries -------------------------------------------------------------
 
-export async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
-  return apiPost<T>(path, body, 'PATCH');
-}
+export const listLibraries = (): Promise<{ libraries: LibrarySummary[] }> => apiGet('/libraries');
 
-export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
-  return apiPost<T>(path, body, 'PUT');
-}
+export const createLibrary = (body: {
+  slug: string;
+  baseUrl: string;
+  rootPath: string;
+  davUsername: string;
+  davPassword: string;
+  displayName?: string;
+}): Promise<{ id: string; slug: string }> => apiSend('POST', '/libraries', body);
 
-export { buildQuery, extractErrorMessage };
+export const updateLibrary = (
+  id: string,
+  body: { slug: string; baseUrl: string; rootPath: string; davUsername: string; davPassword?: string; displayName?: string },
+): Promise<{ ok: true }> => apiSend('PATCH', `/libraries/${encodeURIComponent(id)}`, body);
 
-export { BackendError, getBackendErrorType };
+export const deleteLibrary = (id: string): Promise<{ ok: true }> =>
+  apiSend('DELETE', `/libraries/${encodeURIComponent(id)}`);
+
+/**
+ * Probe and rescan are POSTs, not query flags on GET.
+ *
+ * Both perform a live outbound request with the *stored* credential, and a `GET`
+ * that can be triggered by a link is a `GET` that can be triggered by a prefetcher.
+ */
+export const probeLibrary = (id: string): Promise<ProbeResult> => apiSend('POST', `/libraries/${encodeURIComponent(id)}/probe`);
+
+export const startLibraryScan = (id: string): Promise<ScanStateSummary> => apiSend('POST', `/libraries/${encodeURIComponent(id)}/scan`);
+
+export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiGet(`/libraries/${encodeURIComponent(id)}/scan`);
+
+// --- Users -----------------------------------------------------------------
+
+export const listUsers = (): Promise<{ users: UserSummary[] }> => apiGet('/users');
+
+export const createUser = (body: { username: string; password: string; email?: string; isAdmin?: boolean }): Promise<{ id: string; username: string }> =>
+  apiSend('POST', '/users', body);
+
+export const setUserEnabled = (id: string, enabled: boolean): Promise<{ ok: true }> =>
+  apiSend('PATCH', `/users/${encodeURIComponent(id)}/enabled${buildQuery({ enabled })}`);
+
+export const setUserLibraries = (id: string, libraryIds: string[]): Promise<{ ok: true }> =>
+  apiSend('PATCH', `/users/${encodeURIComponent(id)}/libraries`, { libraryIds });
+
+export const deleteUser = (id: string): Promise<{ ok: true }> => apiSend('DELETE', `/users/${encodeURIComponent(id)}`);
+
+export const whoami = (): Promise<{ email: string }> => apiGet('/me');
+
+export { MAX_ERROR_LENGTH };

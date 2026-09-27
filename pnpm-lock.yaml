@@ -324,9 +324,15 @@ importers:
       '@edge-sonic/backend-services':
         specifier: workspace:*
         version: link:../packages/backend-services
+      '@edge-sonic/media-tags':
+        specifier: workspace:*
+        version: link:../packages/media-tags
       '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../packages/shared
+      '@edge-sonic/subsonic':
+        specifier: workspace:*
+        version: link:../packages/subsonic
       '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../packages/webdav

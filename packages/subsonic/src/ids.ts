@@ -112,6 +112,11 @@ function fromBase64Url(value: string): Uint8Array {
 function normalizeRelativePath(path: string): string | null {
   if (path.length === 0 || path.length > 1024) return null;
   if (path.includes('\0') || path.includes('\\')) return null;
+  // Control characters are refused for a structural reason, not a cosmetic one: the
+  // payload is split on a newline, so a path containing one would make the
+  // library/path boundary ambiguous to anything that splits it differently. A
+  // filename with a newline in it is pathological, and refusing it is free.
+  if (/[\u0000-\u001f\u007f]/.test(path)) return null;
   if (path.startsWith('/') || path.endsWith('/')) return null;
 
   const segments = path.split('/');
@@ -181,7 +186,15 @@ function decodeId(raw: string, expected?: IdKindValue): DecodedId {
   if (!ALL_ID_KINDS.includes(kind)) fail();
   if (expected !== undefined && kind !== expected) fail();
 
-  const payload = fromBase64Url(raw.slice(colon + 1));
+  // `atob` throws `InvalidCharacterError` on a malformed payload. Letting that
+  // escape would make a forged id produce a 500 with a platform error message
+  // instead of the `code=70` a client can parse.
+  let payload: Uint8Array;
+  try {
+    payload = fromBase64Url(raw.slice(colon + 1));
+  } catch {
+    fail();
+  }
   const separator = payload.indexOf(0x0a);
   if (separator <= 0) fail();
 
@@ -199,6 +212,11 @@ function decodeId(raw: string, expected?: IdKindValue): DecodedId {
 
   const normalized = normalizeRelativePath(path);
   if (normalized === null) fail();
+
+  // `encodeId` stores the path *decoded*, so a percent escape here means the id was
+  // not produced by this server. Refusing it is what keeps a consumer from having to
+  // decide whether `%2e%2e%2f` is a literal filename or an encoded traversal.
+  if (/%[\da-f]{2}/i.test(normalized)) fail();
 
   return { kind: kind as IdKindValue, libraryId, path: normalized };
 }

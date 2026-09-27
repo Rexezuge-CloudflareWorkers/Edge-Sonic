@@ -1,7 +1,7 @@
 @import 'tailwindcss';
 
 @theme {
-  /* Warm dark palette (ported from Edge-Git web shell) */
+  /* Warm dark palette (Edge-Sonic admin shell) */
   --color-surface-base: #100f0d;
   --color-surface-1: #1a1814;
   --color-surface-2: #201e1b;

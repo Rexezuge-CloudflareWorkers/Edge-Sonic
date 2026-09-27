@@ -181,13 +181,21 @@ class NodeDAO extends BaseDAO {
   }
 
   /**
-   * Delete rows under paths that are no longer present.
+   * Delete child rows whose paths are no longer present.
    *
-   * Called only for folders whose mtime moved, so the cost is proportional to
-   * what changed rather than to library size. This is what stops a track deleted
-   * on the WebDAV side from haunting `search3` forever.
+   * Called only for a folder whose mtime moved, so the cost is proportional to what
+   * changed rather than to library size. This is what stops a folder deleted on the
+   * WebDAV side from haunting `search3` forever.
    *
-   * @param parentPath The folder that was re-listed. Its own row is kept.
+   * ### The folder's own row is always kept
+   *
+   * That is not a special case, it is load-bearing. The library root's `path` and
+   * `parent_path` are **both** the empty string — there is no path above the root —
+   * so a query of the form `parent_path = ?` matches the root's own row. Without an
+   * explicit `path <> parentPath` guard, reconciling the root deletes the root, the
+   * next `startScan` probe finds nothing stored, and the library is re-walked in
+   * full on every scan forever. The symptom is a scan that answers correctly and
+   * silently never becomes incremental.
    */
   public async deleteChildrenNotIn(libraryId: string, parentPath: string, keepPaths: readonly string[]): Promise<number> {
     const prefix = parentPath === '' ? '' : `${parentPath}/`;
@@ -200,7 +208,11 @@ class NodeDAO extends BaseDAO {
       'nodes.deleteChildrenNotIn.list',
     );
     const keep = new Set(keepPaths);
-    const doomed = (all.results ?? []).map((row) => row.path).filter((path) => !keep.has(path));
+    const doomed = (all.results ?? [])
+      .map((row) => row.path)
+      // See the method note: for the library root, `path === parentPath`, and that
+      // row is the one being reconciled, not a child.
+      .filter((path) => path !== parentPath && !keep.has(path));
     if (doomed.length === 0) return 0;
 
     const statements = doomed.map((path) => this.database.prepare('DELETE FROM nodes WHERE library_id = ? AND path = ?').bind(libraryId, path));

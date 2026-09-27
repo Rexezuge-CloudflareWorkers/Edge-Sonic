@@ -415,6 +415,32 @@ class SongDAO extends BaseDAO {
     return doomed.length;
   }
 
+  /**
+   * Delete every song in a folder and everything beneath it.
+   *
+   * A one-level prune is not enough. A folder that disappears takes its whole subtree
+   * with it, and its songs carry `dir_path` values *deeper* than the folder, so a
+   * `dir_path = ?` delete leaves them indexed — and an orphaned song row is exactly
+   * what this pruning exists to prevent: it goes on appearing in `search3` and every
+   * album list, pointing at a file that no longer exists.
+   *
+   * The `LIKE` is escaped so a folder literally named `100%` does not match
+   * everything, and the prefix carries a trailing `/` so `Blur` cannot match
+   * `Blurberry`.
+   */
+  public async deleteSubtree(libraryId: string, dirPath: string): Promise<number> {
+    const escaped = `${dirPath.replaceAll(/[%_]/g, (char) => `\\${char}`)}/%`;
+    const result = await this.withRetry(
+      async () =>
+        await this.database
+          .prepare("DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\\')")
+          .bind(libraryId, dirPath, escaped)
+          .run(),
+      'songs.deleteSubtree',
+    );
+    return result.meta?.changes ?? 0;
+  }
+
 }
 
 function chunkArray<T>(items: readonly T[], size: number): T[][] {

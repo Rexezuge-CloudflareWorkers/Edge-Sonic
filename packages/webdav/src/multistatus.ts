@@ -63,6 +63,29 @@ function decodeHrefPath(href: string): string {
 }
 
 /** Text of the first prop element with this local name. */
+/**
+ * Map a `DAV:href` to a library-relative path.
+ *
+ * A server returns absolute hrefs rooted at its own base, which may or may not
+ * include the library's configured `rootPath`. Rather than trying to reconcile the
+ * two, anything that does not sit under the root is **discarded**.
+ *
+ * A `207` for a library root contains only that library's resources, so a stray href
+ * is a sign the server returned something unexpected — and every path that survives
+ * this function becomes a `stream` target.
+ *
+ * The prefix match is on a path *boundary*, not a string prefix: with a root of
+ * `/Music`, an href of `/MusicOld/a.flac` is a different library and must not match.
+ */
+function toLibraryPath(hrefPath: string, rootPath: string): string | null {
+  const normalizedHref = hrefPath.replace(/^\/+/, '').replace(/\/+$/, '');
+  const normalizedRoot = rootPath.replace(/^\/+/, '').replace(/\/+$/, '');
+  if (normalizedRoot.length === 0) return normalizedHref.length === 0 ? '' : normalizedHref;
+  if (normalizedHref === normalizedRoot) return '';
+  if (normalizedHref.startsWith(`${normalizedRoot}/`)) return normalizedHref.slice(normalizedRoot.length + 1);
+  return null;
+}
+
 function propText(props: readonly XmlElement[], name: string): string | null {
   const prop = props.find((candidate) => localName(candidate.name) === name);
   if (!prop) return null;
@@ -111,5 +134,5 @@ function parseMultistatus(xml: string): DavResource[] {
   return resources;
 }
 
-export { INDEX_PROPS, parseMultistatus, decodeHrefPath, propText };
+export { INDEX_PROPS, parseMultistatus, decodeHrefPath, toLibraryPath, propText };
 export type { DavResource };
