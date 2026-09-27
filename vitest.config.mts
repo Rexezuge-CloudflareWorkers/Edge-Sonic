@@ -79,7 +79,32 @@ export default defineConfig({
       { find: '@edge-sonic/media-tags', replacement: srcPath('packages/media-tags/src') },
       { find: '@edge-sonic/webdav', replacement: srcPath('packages/webdav/src') },
       { find: '@edge-sonic/shared', replacement: srcPath('packages/shared/src') },
-      { find: /^@\//, replacement: `${srcPath('apps/api/src')}/` },
+
+      // Subpath exports are listed explicitly rather than relying on a prefix rewrite.
+      // A string alias turns `@edge-sonic/backend-runtime/base` into
+      // `.../src/base`, and whether that then resolves to `index.ts` depends on
+      // `resolve.extensions` — which the Workers pool's own config sets. Naming each
+      // subpath removes that dependency instead of leaving it to a later failure.
+      { find: /^@edge-sonic\/backend-data\/dao$/, replacement: `${srcPath('packages/backend-data/src')}dao/index.ts` },
+      { find: /^@edge-sonic\/backend-data\/crypto$/, replacement: `${srcPath('packages/backend-data/src')}crypto/index.ts` },
+      { find: /^@edge-sonic\/backend-data\/utils$/, replacement: `${srcPath('packages/backend-data/src')}utils/index.ts` },
+      { find: /^@edge-sonic\/backend-runtime\/base$/, replacement: `${srcPath('packages/backend-runtime/src')}base/index.ts` },
+      { find: /^@edge-sonic\/backend-runtime\/config$/, replacement: `${srcPath('packages/backend-runtime/src')}config/index.ts` },
+      { find: /^@edge-sonic\/backend-runtime\/di$/, replacement: `${srcPath('packages/backend-runtime/src')}di/index.ts` },
+      { find: /^@edge-sonic\/backend-runtime\/kv$/, replacement: `${srcPath('packages/backend-runtime/src')}kv/index.ts` },
+      { find: /^@edge-sonic\/backend-runtime\/logger$/, replacement: `${srcPath('packages/backend-runtime/src')}logger.ts` },
+      { find: /^@edge-sonic\/backend-services\/auth$/, replacement: `${srcPath('packages/backend-services/src')}auth/index.ts` },
+      { find: /^@edge-sonic\/backend-services\/composition$/, replacement: `${srcPath('packages/backend-services/src')}composition/index.ts` },
+      { find: /^@edge-sonic\/backend-services\/errors$/, replacement: `${srcPath('packages/backend-services/src')}errors/index.ts` },
+      { find: /^@edge-sonic\/backend-services\/index$/, replacement: `${srcPath('packages/backend-services/src')}index/index.ts` },
+      { find: /^@edge-sonic\/backend-services\/library$/, replacement: `${srcPath('packages/backend-services/src')}library/index.ts` },
+      { find: /^@edge-sonic\/shared\/utils$/, replacement: `${srcPath('packages/shared/src')}utils/index.ts` },
+      { find: /^@edge-sonic\/shared\/i18n$/, replacement: `${srcPath('packages/shared/src')}i18n/index.ts` },
+      { find: /^@edge-sonic\/shared\/constants$/, replacement: `${srcPath('packages/shared/src')}constants/index.ts` },
+      // The `@/` alias is deliberately absent. `apps/api` uses relative imports
+      // because the Workers integration pool bundles the worker with Miniflare,
+      // whose resolver knows nothing about tsconfig `paths` — an alias here would
+      // pass typecheck and Vite, and fail only in `pnpm run test:integration`.
     ],
   },
 });

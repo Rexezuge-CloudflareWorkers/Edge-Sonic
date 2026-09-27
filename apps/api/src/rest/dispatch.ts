@@ -20,9 +20,9 @@ import type { SubsonicError as SubsonicErrorType } from '@edge-sonic/subsonic';
 import { SubsonicParams, decodeLegacyPassword } from '@edge-sonic/subsonic';
 import { toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { BaseRoute } from '@/admin/routes';
+import { BaseRoute } from '../admin/routes';
 import type { RestContext } from './context';
-import type { AdminContext } from '@/admin/routes';
+import type { AdminContext } from '../admin/routes';
 import { ENDPOINTS, ENDPOINT_NAMES } from './endpoints';
 import type { RestHandler } from './endpoints';
 

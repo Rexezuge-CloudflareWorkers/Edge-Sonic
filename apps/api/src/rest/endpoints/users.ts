@@ -30,7 +30,7 @@ async function getUsers(context: RestContext): Promise<EnvelopeResponse> {
     throw new SubsonicError(ErrorCode.NotAuthorized, 'Only an admin may list users.');
   }
   const users = await context.users.list();
-  return respond(context, elList('users', {}, users.map((user) => userElement(toView(user)))));
+  return respond(context, elList('users', 'user', {}, users.map((user) => userElement(toView(user)))));
 }
 
 function toView(user: UserRow) {

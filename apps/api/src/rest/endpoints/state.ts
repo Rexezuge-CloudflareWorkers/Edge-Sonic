@@ -22,7 +22,7 @@ function respond(context: RestContext, payload: ElementNode | null): EnvelopeRes
  */
 async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
   const library = await context.libraries.listForUser(context.user.id);
-  if (library.length === 0) return respond(context, elList('bookmarks', {}));
+  if (library.length === 0) return respond(context, elList('bookmarks', 'bookmark', {}));
 
   const rows = await context.annotations.listBookmarks(context.user.id);
   const annotations = await annotationsFor(context, rows.map((row) => row.song_id));
@@ -37,7 +37,11 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
     const song = await context.songs.findById(row.song_id);
     if (!song) continue;
     nodes.push({
+      // Renamed to `bookmark`: the element name is the JSON key a client reads, so a
+      // `song` element inside a `bookmarks` wrapper produces `bookmarks.song` and leaves
+      // `bookmarks.bookmark` as the empty seed.
       ...songElement(songToModel(song, songLibrary, annotations)),
+      name: 'bookmark',
       children: [
         el('position', {}, [row.position_ms]),
         el('username', {}, [context.username]),
@@ -47,7 +51,7 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
       ],
     });
   }
-  return respond(context, elList('bookmarks', {}, nodes));
+  return respond(context, elList('bookmarks', 'bookmark', {}, nodes));
 }
 
 async function createBookmark(context: RestContext): Promise<EnvelopeResponse> {
@@ -87,7 +91,7 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   if (queue.length === 0) return respond(context, null);
 
   const annotations = await annotationsFor(context, queue.map((song) => song.id));
-  return respond(context, elList('playQueue', {}, queue.map((song) => songElement(songToModel(song, library, annotations)))));
+  return respond(context, elList('playQueue', 'entry', {}, queue.map((song) => songElement(songToModel(song, library, annotations)))));
 }
 
 async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {

@@ -66,7 +66,7 @@ async function getLicense(context: RestContext): Promise<EnvelopeResponse> {
  */
 async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await context.libraries.listForUser(context.user.id);
-  return respond(context, elList('musicFolders', {}, libraries.map((library) => el('musicFolder', { id: library.id, name: libraryName(library) }))));
+  return respond(context, elList('musicFolders', 'musicFolder', {}, libraries.map((library) => el('musicFolder', { id: library.id, name: libraryName(library) }))));
 }
 
 /**

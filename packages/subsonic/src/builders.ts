@@ -110,9 +110,12 @@ function artistElement(artist: Artist): ElementNode {
 }
 
 function directoryElement(directory: Directory): ElementNode {
-  return elList('directory', { id: directory.id, parent: directory.parent, name: directory.name, starred: directory.starred, playable: directory.playable }, [
-    ...directory.children.map((child) => el('child', childAttrs(child))),
-  ]);
+  return elList(
+    'directory',
+    'child',
+    { id: directory.id, parent: directory.parent, name: directory.name, starred: directory.starred, playable: directory.playable },
+    directory.children.map((child) => el('child', childAttrs(child))),
+  );
 }
 
 function musicFolderElement(folder: MusicFolder): ElementNode {

@@ -19,7 +19,7 @@
  *   `{error:{code,message}}` with conventional statuses, because an SPA does read
  *   the status.
  */
-import { DatabaseError, ServiceError } from '@edge-sonic/backend-errors';
+import { ConflictError, DatabaseError, NotFoundError, ServiceError, UnauthorizedError } from '@edge-sonic/backend-errors';
 import { getBackendStrings } from '@edge-sonic/shared/i18n';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
 import { ErrorCode, isSubsonicError, SubsonicError } from '@edge-sonic/subsonic';
@@ -46,6 +46,18 @@ function toSubsonicError(error: unknown): SubsonicError {
     return new SubsonicError(ErrorCode.Generic);
   }
   if (error instanceof ServiceError) {
+    // The 4xx service errors have a direct protocol counterpart, and collapsing them
+    // all to `code=0` loses the one distinction a client acts on: "this does not
+    // exist" and "you may not have this" are different answers, and a client that
+    // cannot tell them apart retries forever or gives up immediately.
+    //
+    // `UnauthorizedError` is deliberately **not** mapped to `code=40`. That code means
+    // "wrong Subsonic credential", and a service-level authorization failure is a
+    // different thing — a request authenticated fine and was then refused. Reporting it
+    // as 40 sends a user with valid credentials to re-enter their password.
+    if (error instanceof NotFoundError) return new SubsonicError(ErrorCode.NotFound, error.getErrorMessage());
+    if (error instanceof UnauthorizedError) return new SubsonicError(ErrorCode.NotAuthorized, error.getErrorMessage());
+    if (error instanceof ConflictError) return new SubsonicError(ErrorCode.Generic, error.getErrorMessage());
     if (error.getErrorCode() < 500) {
       return new SubsonicError(ErrorCode.Generic, error.getErrorMessage());
     }

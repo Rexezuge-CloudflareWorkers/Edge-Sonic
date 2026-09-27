@@ -101,12 +101,39 @@ function childName(node: Node): string {
   return isElementNode(node) ? node.name : '#text';
 }
 
+/** The declared list keys, normalized to an array. */
+function listKeysOf(node: ElementNode): readonly string[] {
+  if (node.listKey === undefined) return [];
+  return typeof node.listKey === 'string' ? [node.listKey] : node.listKey;
+}
+
 function childToJsonValue(node: ElementNode): unknown {
   const children = (node.children ?? []).filter((child) => child !== null && child !== undefined && child !== false);
+  const attributeEntries = Object.entries(node.attrs ?? {}).filter(([, value]) => isPresent(value));
+
+  // An element with no attributes and exactly one **scalar** child is that scalar.
+  //
+  // Subsonic uses text content for values — `<position>42000</position>`,
+  // `<username>ann</username>`, `<minutesAgo>3</minutesAgo>` — and a JSON client reads
+  // `bookmark.position` as a number. Flattening the child into a key instead produces
+  // `{"position": {"#text": 42000}}`, which is a number nested under a magic string
+  // that appears in no schema. The condition is deliberately narrow: an element with
+  // attributes is a record, and an element with element children is a record.
+  if (attributeEntries.length === 0 && children.length === 1) {
+    const only = children[0]!;
+    if (!isElementNode(only)) return only;
+  }
+
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node.attrs ?? {})) {
     if (isPresent(value)) result[key] = value;
   }
+  // A list wrapper with a declared key always carries that key, even with no children:
+  // `{"starred2": {}}` makes a client reading `.song.map(...)` throw, where
+  // `{"starred2": {"song": []}}` renders an empty screen. The values are seeded *before*
+  // the children are merged over them, so a non-empty list still wins — and a child
+  // whose name is not declared replaces its seed rather than adding a second key.
+  for (const key of listKeysOf(node)) result[key] = [];
   // An element with attributes and no children is a leaf whose value lives in
   // the attributes; merging children over attributes cannot collide because
   // Subsonic never uses the same name for both.
