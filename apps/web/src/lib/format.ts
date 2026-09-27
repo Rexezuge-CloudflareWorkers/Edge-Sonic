@@ -1,32 +1,40 @@
-import { normalizeLanguage } from '../i18n';
+/**
+ * Display formatters.
+ *
+ * English-only on purpose. The reference project had a localization gap here while
+ * everything around it was translated, which is worse than being consistently
+ * English: a user gets a translated error and an untranslated `3.4 MB`.
+ */
 
-export function resolveLocale(lng?: string | null): string {
-  return normalizeLanguage(lng ?? undefined);
-}
+const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'] as const;
 
-export function formatExpiryTimestamp(timestampSeconds: number | null | undefined, lng?: string | null): string {
-  if (timestampSeconds === null || timestampSeconds === undefined) return 'Never';
-  const date = new Date(timestampSeconds * 1000);
-  const now = new Date();
-  const diffMs = date.getTime() - now.getTime();
-  const diffMins = Math.floor(diffMs / 60_000);
-  if (diffMins < 1) return 'Expires soon';
-  if (diffMins < 60) return `Expires in ${diffMins}m`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `Expires in ${diffHours}h`;
-  const diffDays = Math.floor(diffHours / 24);
-  return diffDays < 30 ? `Expires in ${diffDays}d` : `Expires ${date.toLocaleDateString(resolveLocale(lng))}`;
-}
-
-export function formatBytes(bytes: number | null | undefined): string {
-  if (bytes === null || bytes === undefined) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB'];
-  let value = bytes / 1024;
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${Math.round(bytes)} ${UNITS[0]}`;
+  let value = bytes;
   let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
+  while (value >= 1024 && unit < UNITS.length - 1) {
     value /= 1024;
     unit += 1;
   }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+  // One decimal below 10, none above: `9.4 MB` is informative, `847.3 MB` is noise.
+  return `${unit < 2 || value >= 10 ? Math.round(value) : value.toFixed(1)} ${UNITS[unit]}`;
 }
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—';
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`
+    : `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+
+function formatEpochSeconds(epochSeconds: number): string {
+  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return '—';
+  return new Date(epochSeconds * 1000).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+export { formatBytes, formatDuration, formatEpochSeconds };

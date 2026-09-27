@@ -6,15 +6,15 @@ export const SUPPORTED_LANGUAGES = ['en'] as const;
 
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
-export const LANGUAGE_STORAGE_KEY = 'edge-sonic-lng';
+export const LANGUAGE_STORAGE_KEY = 'edge-sonic-admin-lng';
 
 const baseResources = {
   en: { translation: en },
 } as const;
 
 function canonicalizeTag(tag: string): string {
-  // Same BCP 47-ish normalization as `../Git` (web ships with 0
-  // `@edge-sonic/*` runtime deps, so the body is intentionally local).
+  // The SPA ships zero `@edge-sonic/*` runtime dependencies, so this is
+  // intentionally local rather than shared with a package.
   const normalized = tag.trim().replaceAll('_', '-');
   const parts = normalized.split('-').filter(Boolean);
   if (parts.length === 0) return 'en';

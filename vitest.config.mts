@@ -1,13 +1,14 @@
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 
-const apiSrcPath = fileURLToPath(new URL('apps/api/src', import.meta.url));
-const backendDataSrcPath = fileURLToPath(new URL('packages/backend-data/src', import.meta.url));
-const backendErrorsSrcPath = fileURLToPath(new URL('packages/backend-errors/src', import.meta.url));
-const backendRuntimeSrcPath = fileURLToPath(new URL('packages/backend-runtime/src', import.meta.url));
-const webdavSrcPath = fileURLToPath(new URL('packages/webdav/src', import.meta.url));
-const sharedSrcPath = fileURLToPath(new URL('packages/shared/src', import.meta.url));
-const backendServicesSrcPath = fileURLToPath(new URL('packages/backend-services/src', import.meta.url));
+/**
+ * Absolute path to a package's `src` directory, **with a trailing slash**.
+ *
+ * `fileURLToPath(new URL('packages/x/src', base))` has no trailing slash, so
+ * `${path}index.ts` silently becomes `srcindex.ts` and every aliased import fails
+ * to resolve with a confusing "cannot find package" error.
+ */
+const srcPath = (pkg: string) => `${fileURLToPath(new URL(pkg, import.meta.url))}/`;
 
 export default defineConfig({
   test: {
@@ -17,82 +18,68 @@ export default defineConfig({
     // A custom `exclude` replaces Vitest's defaults, so `node_modules` must be
     // re-listed: `test` is a workspace project and therefore has its own. Without
     // this, `test/**/*.test.ts` reaches into `test/node_modules` and tries to run
-    // other packages' own suites (which import `bun:test` and `@jest/globals`).
+    // other packages' own suites.
     exclude: ['**/node_modules/**', '**/dist/**', 'test/integration/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
       reportsDirectory: './coverage',
-      // `apps/web` was previously absent from this list, on a comment claiming
-      // it was "measured by its own config in `apps/web`". No such config ever
-      // existed — `apps/web` has no vitest config and no `test` script — so the
-      // entire SPA, including the bucket browser's href parser and its request
-      // URL builder, was invisible to the coverage gate. It is measured here now.
-      include: ['apps/api/src/**/*.ts', 'apps/web/src/**/*.{ts,tsx}', 'packages/**/src/**/*.ts'],
+      include: ['apps/api/src/**/*.ts', 'packages/**/src/**/*.ts'],
       exclude: [
         '**/*.test.ts',
+        '**/*.test.tsx',
         '**/*.d.ts',
         '**/index.ts',
         '**/types.d.ts',
         '**/model/**',
-        // Generated at build time from the Vite bundle: a one-line HTML blob
-        // with no logic to exercise.
+        // Generated at build time from the Vite bundle: a one-line HTML blob with
+        // no logic to exercise.
         'apps/api/src/generated/**',
         // Type-only modules: no runtime code to cover.
         '**/D1Types.ts',
         '**/ServiceEnv.ts',
         '**/env.d.ts',
-        // Re-export barrels carry no logic of their own.
-        '**/dao/identity.ts',
-        '**/dao/router.ts',
       ],
       thresholds: {
-        // `apps/web` joined `include` in this change, and it is the whole reason
-        // the floor moved. The previous 80/75/80/80 was measured against
-        // `apps/api` + `packages` only; the SPA sat outside the gate entirely
-        // (on a comment claiming a config in `apps/web` that never existed), so
-        // that number was never a statement about this repository as a whole.
+        // Thresholds are a MEASURED floor, not an aspiration. Lower one to make CI
+        // green and the gate stops saying anything.
         //
-        // What is measured and covered today: `apps/web/src/lib` (94%) and
-        // `apps/web/src/services` (94%) — the href parser, the request-URL
-        // builder, and every API wrapper including the `?backend=` selector
-        // that four files each implement differently. That is the logic with
-        // real failure modes, and it is where the bug this change fixes lived.
+        // `apps/web` is deliberately NOT in `include` for v1. The reference project
+        // added it on a comment claiming a vitest config in `apps/web` that never
+        // existed; the entire SPA was then invisible, and the floor quietly dropped
+        // from 80 to 64 with 44 presentational modules at 0%. Publishing a number
+        // that is mostly untested UI is worse than saying "not measured yet" — so
+        // it is excluded here, visibly, and re-including it is meant to be a
+        // deliberate act once the components have tests.
         //
-        // What is measured but uncovered: 44 presentational modules under
-        // `components/` and the `views/` tree, at 0%. They need jsdom,
-        // testing-library and react-router harnesses. They are listed rather
-        // than excluded so the gap is visible in the report instead of hidden.
-        //
-        // This floor is the honest measurement of the surface now in `include`,
-        // set slightly below it. Raise it as the SPA gains tests. Never lower
-        // it to excuse a regression in code that is already covered.
-        //
-        // Follow-up: split the SPA into its own Vitest project with its own
-        // floor, so component tests can ratchet up independently instead of
-        // moving a global number shared with the worker and the packages.
-        statements: 64,
-        branches: 62,
-        functions: 63,
-        lines: 65,
+        // Raise these as coverage grows. Never lower them to excuse a regression in
+        // code that is already covered.
+        statements: 70,
+        branches: 65,
+        functions: 70,
+        lines: 70,
       },
     },
   },
   resolve: {
     alias: [
-      { find: /^@edge-sonic\/backend-data$/, replacement: `${backendDataSrcPath}/index.ts` },
-      { find: /^@edge-sonic\/backend-errors$/, replacement: `${backendErrorsSrcPath}/index.ts` },
-      { find: /^@edge-sonic\/backend-runtime$/, replacement: `${backendRuntimeSrcPath}/index.ts` },
-      { find: /^@edge-sonic\/backend-services$/, replacement: `${backendServicesSrcPath}/index.ts` },
-      { find: /^@edge-sonic\/webdav$/, replacement: `${webdavSrcPath}/index.ts` },
-      { find: /^@edge-sonic\/shared$/, replacement: `${sharedSrcPath}/index.ts` },
-      { find: '@edge-sonic/backend-data', replacement: backendDataSrcPath },
-      { find: '@edge-sonic/backend-errors', replacement: backendErrorsSrcPath },
-      { find: '@edge-sonic/backend-runtime', replacement: backendRuntimeSrcPath },
-      { find: '@edge-sonic/backend-services', replacement: backendServicesSrcPath },
-      { find: '@edge-sonic/webdav', replacement: webdavSrcPath },
-      { find: '@edge-sonic/shared', replacement: sharedSrcPath },
-      { find: /^@\//, replacement: `${apiSrcPath}/` },
+      { find: /^@edge-sonic\/backend-data$/, replacement: `${srcPath('packages/backend-data/src')}index.ts` },
+      { find: /^@edge-sonic\/backend-errors$/, replacement: `${srcPath('packages/backend-errors/src')}index.ts` },
+      { find: /^@edge-sonic\/backend-runtime$/, replacement: `${srcPath('packages/backend-runtime/src')}index.ts` },
+      { find: /^@edge-sonic\/backend-services$/, replacement: `${srcPath('packages/backend-services/src')}index.ts` },
+      { find: /^@edge-sonic\/subsonic$/, replacement: `${srcPath('packages/subsonic/src')}index.ts` },
+      { find: /^@edge-sonic\/media-tags$/, replacement: `${srcPath('packages/media-tags/src')}index.ts` },
+      { find: /^@edge-sonic\/webdav$/, replacement: `${srcPath('packages/webdav/src')}index.ts` },
+      { find: /^@edge-sonic\/shared$/, replacement: `${srcPath('packages/shared/src')}index.ts` },
+      { find: '@edge-sonic/backend-data', replacement: srcPath('packages/backend-data/src') },
+      { find: '@edge-sonic/backend-errors', replacement: srcPath('packages/backend-errors/src') },
+      { find: '@edge-sonic/backend-runtime', replacement: srcPath('packages/backend-runtime/src') },
+      { find: '@edge-sonic/backend-services', replacement: srcPath('packages/backend-services/src') },
+      { find: '@edge-sonic/subsonic', replacement: srcPath('packages/subsonic/src') },
+      { find: '@edge-sonic/media-tags', replacement: srcPath('packages/media-tags/src') },
+      { find: '@edge-sonic/webdav', replacement: srcPath('packages/webdav/src') },
+      { find: '@edge-sonic/shared', replacement: srcPath('packages/shared/src') },
+      { find: /^@\//, replacement: `${srcPath('apps/api/src')}/` },
     ],
   },
 });

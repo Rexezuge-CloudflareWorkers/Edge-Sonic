@@ -6,13 +6,15 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "//": "This directory is a workspace project so `pnpm -r typecheck` and `pnpm run lint` actually reach it. It sat outside the workspace while holding roughly 200 KB of test code, so a type error or lint violation in a test only surfaced when that test happened to run — and `eslint.config.mjs` ignored `test/**` outright, so it was never linted at all.",
+  "//": "This directory is a workspace project so `pnpm -r typecheck` and `pnpm run lint` actually reach it. It sat outside the workspace in the reference project while holding roughly 200 KB of test code, so a type error in a test only surfaced when that test happened to run.",
   "dependencies": {
     "@edge-sonic/backend-data": "workspace:*",
     "@edge-sonic/backend-errors": "workspace:*",
     "@edge-sonic/backend-runtime": "workspace:*",
     "@edge-sonic/backend-services": "workspace:*",
+    "@edge-sonic/media-tags": "workspace:*",
     "@edge-sonic/shared": "workspace:*",
+    "@edge-sonic/subsonic": "workspace:*",
     "@edge-sonic/webdav": "workspace:*",
     "vitest": "4.1.11"
   },

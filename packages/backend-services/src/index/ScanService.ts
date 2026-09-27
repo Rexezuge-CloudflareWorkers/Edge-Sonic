@@ -40,8 +40,9 @@
  */
 import type { LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import { encodeId, IdKind } from '@edge-sonic/subsonic';
+import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
-import { basename, isAudioFile, suffixOf, toLibraryPath } from './TreeService';
+import { basename, isAudioFile, suffixOf } from './TreeService';
 
 /**
  * A node row to write.
@@ -88,6 +89,7 @@ interface NodeStore {
 interface SongStore {
   upsertFileFacts(inputs: readonly SongInput[]): Promise<number>;
   deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<number>;
+  deleteSubtree(libraryId: string, dirPath: string): Promise<number>;
   countByLibrary(libraryId: string): Promise<number>;
 }
 
@@ -331,6 +333,12 @@ class ScanService {
    *   a row to rewrite values that are already correct.
    */
   private async absorb(library: LibraryRow, folder: NodeRow, resources: readonly DavResource[]): Promise<number> {
+    // The folder's own entry, straight from this listing. Its mtime is the *fresh*
+    // one and is what gets written back — writing the frontier row's stored value
+    // instead would leave the index permanently one version behind, so the next
+    // `startScan` would see a mismatch and re-walk the whole library every time.
+    const self = resources.find((resource) => toLibraryPath(resource.path, library.root_path) === folder.path);
+
     // One query for the folder's existing children; every comparison below is then
     // in-memory. A `find` per child is 2N round trips for a 500-track album.
     const existing = new Map((await this.deps.nodes.listChildren(library.id, folder.path)).map((node) => [node.path, node]));
@@ -383,15 +391,17 @@ class ScanService {
     }
 
     let writes = 0;
-    // The folder itself leaves the frontier, together with its new mtime.
+    // The folder itself leaves the frontier, carrying the mtime this listing
+    // reported. That value is what the next `startScan`'s root probe compares
+    // against, so it has to be the fresh one.
     writes += await this.deps.nodes.upsertMany([
       {
         libraryId: library.id,
         path: folder.path,
         parentPath: folder.parent_path,
         name: folder.name,
-        mtimeMs: folder.mtime_ms,
-        etag: folder.etag,
+        mtimeMs: self?.lastModifiedMs ?? folder.mtime_ms,
+        etag: self?.etag ?? folder.etag,
         depth: folder.depth,
         isScanned: true,
       },
@@ -399,10 +409,27 @@ class ScanService {
     ]);
     if (songInputs.length > 0) writes += await this.deps.songs.upsertFileFacts(songInputs);
 
-    // Prune. Both calls are no-ops when nothing vanished, and `deleteChildrenNotIn`
-    // returns 0 without issuing a statement in that case.
-    writes += await this.deps.nodes.deleteChildrenNotIn(library.id, folder.path, childPaths);
-    if (songPaths.length > 0) writes += await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, songPaths);
+    // Prune. Unconditional, and both calls return 0 without issuing a statement when
+    // nothing vanished.
+    //
+    // The song prune must NOT be guarded on `songPaths.length > 0`: that guard skips
+    // the prune exactly when a folder has lost *every* track, which is the case that
+    // matters most — an album deleted on the WebDAV side would keep all of its rows
+    // and go on appearing in `search3` forever.
+    const keptPaths = new Set(childPaths);
+    const vanished = (await this.deps.nodes.listChildren(library.id, folder.path))
+      .map((node) => node.path)
+      .filter((path) => path !== folder.path && !keptPaths.has(path));
+
+    writes += await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, songPaths);
+    for (const path of vanished) {
+      // A vanished *folder* takes its subtree with it, on both planes. A one-level
+      // delete would leave the folder's own songs behind, and their `dir_path` is
+      // deeper than the folder — so they would stay indexed, pointing at files that
+      // no longer exist, which is the entire failure this prune exists to prevent.
+      writes += await this.deps.nodes.deleteSubtree(library.id, path);
+      writes += await this.deps.songs.deleteSubtree(library.id, path);
+    }
 
     return writes;
   }

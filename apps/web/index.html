@@ -3,14 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Durable-DAV-Router</title>
+    <title>Edge-Sonic</title>
     <!--
-      The favicon is inlined as a data URI rather than linked as
-      `/favicon.svg` on purpose: the API worker has no assets binding, so a
-      path-based icon 404s on the worker host, while a data URI resolves on both
-      the worker and the Pages host. There is deliberately no
-      `apps/web/public/favicon.svg` to drift out of sync with this copy - the
-      markup below is the single source of truth. Edit it and re-run
+      The favicon is inlined as a data URI so there is exactly one copy of it:
+      a path-based icon would 404 on a host with no assets binding, and a second
+      file in `public/` would drift out of sync with this one. Edit it and re-run
       `pnpm run build`, or the worker keeps serving the previous bundle.
     -->
     <link

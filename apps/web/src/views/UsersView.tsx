@@ -1,0 +1,171 @@
+import { useCallback, useEffect, useState } from 'react';
+import { t } from 'i18next';
+import { Plus, RefreshCw, UserPlus } from 'lucide-react';
+import { Button, Input, Label } from '../components/ui/controls';
+import { Badge, Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
+import { createUser, deleteUser, listLibraries, listUsers, setUserEnabled, setUserLibraries } from '../lib/api';
+import type { LibrarySummary, Notice, UserSummary } from '../types';
+
+/**
+ * Subsonic accounts.
+ *
+ * The password is write-only: it is sent once and the API never returns it, so
+ * there is no field here to display and no reason to store one. The copy says so
+ * explicitly, because "the field is blank" otherwise reads as a bug.
+ */
+function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
+  const [users, setUsers] = useState<UserSummary[] | null>(null);
+  const [libraries, setLibraries] = useState<LibrarySummary[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState({ username: '', password: '', email: '' });
+
+  const reload = useCallback(async () => {
+    try {
+      const [userList, libraryList] = await Promise.all([listUsers(), listLibraries()]);
+      setUsers(userList.users);
+      setLibraries(libraryList.libraries);
+    } catch (error) {
+      setUsers([]);
+      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    }
+  }, [showNotice]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  const submit = async () => {
+    setBusy('create');
+    try {
+      await createUser({
+        username: draft.username,
+        password: draft.password,
+        ...(draft.email.length > 0 ? { email: draft.email } : {}),
+      });
+      setDraft({ username: '', password: '', email: '' });
+      setCreating(false);
+      showNotice({ type: 'success', text: t('users.created', 'User created.') });
+      await reload();
+    } catch (error) {
+      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleLibrary = async (user: UserSummary, libraryId: string) => {
+    const next = user.libraryIds.includes(libraryId) ? user.libraryIds.filter((id) => id !== libraryId) : [...user.libraryIds, libraryId];
+    await setUserLibraries(user.id, next);
+    await reload();
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('users.title', 'Subsonic users')}</CardTitle>
+        <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => void reload()} aria-label={t('users.refresh', 'Refresh')}>
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+          </Button>
+          <Button size="sm" variant="primary" onClick={() => setCreating((open) => !open)}>
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('users.add', 'Add user')}
+          </Button>
+        </div>
+      </CardHeader>
+
+      <p className="mb-4 text-xs text-[var(--color-text-muted)]">
+        {t('users.hint', 'Point a Subsonic client at this server and sign in with one of these usernames. Passwords are stored encrypted and are never shown again.')}
+      </p>
+
+      {creating && (
+        <form
+          className="mb-4 grid gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 sm:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <div>
+            <Label htmlFor="username">{t('users.field.username', 'Username')}</Label>
+            <Input id="username" required value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} autoComplete="off" />
+          </div>
+          <div>
+            <Label htmlFor="email">{t('users.field.email', 'Email (optional)')}</Label>
+            <Input id="email" type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} autoComplete="off" />
+          </div>
+          <div>
+            <Label htmlFor="password">{t('users.field.password', 'Password')}</Label>
+            <Input id="password" required type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" />
+          </div>
+          <div className="flex items-end gap-2">
+            <Button type="submit" variant="primary" loading={busy === 'create'}>
+              {t('users.save', 'Save')}
+            </Button>
+            <Button onClick={() => setCreating(false)}>{t('users.cancel', 'Cancel')}</Button>
+          </div>
+        </form>
+      )}
+
+      {users === null ? (
+        <LoadingSpinner label={t('users.loading', 'Loading users')} />
+      ) : users.length === 0 ? (
+        <PageState
+          icon={<UserPlus className="h-6 w-6 text-[var(--color-text-muted)]" aria-hidden="true" />}
+          title={t('users.empty', 'No users yet')}
+          description={t('users.emptyHint', 'Create an account, then sign in to this server from any Subsonic client.')}
+        />
+      ) : (
+        <ul className="space-y-2">
+          {users.map((user) => (
+            <li key={user.id} className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-[var(--color-text-primary)]">{user.username}</span>
+                {user.isAdmin ? <Badge variant="info">{t('users.admin', 'admin')}</Badge> : null}
+                {user.isEnabled ? null : <Badge variant="warning">{t('users.disabled', 'disabled')}</Badge>}
+              </div>
+              {user.email !== null && <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">{user.email}</p>}
+
+              <fieldset className="mt-3">
+                <legend className="mb-1 text-xs font-medium text-[var(--color-text-muted)]">{t('users.libraries', 'Libraries')}</legend>
+                <div className="flex flex-wrap gap-2">
+                  {libraries.length === 0 ? (
+                    <span className="text-xs text-[var(--color-text-muted)]">{t('users.noLibraries', 'No libraries registered yet.')}</span>
+                  ) : (
+                    libraries.map((library) => {
+                      const granted = user.libraryIds.includes(library.id);
+                      return (
+                        <Button
+                          key={library.id}
+                          size="sm"
+                          variant={granted ? 'primary' : 'secondary'}
+                          onClick={() => void toggleLibrary(user, library.id)}
+                          aria-pressed={granted}
+                        >
+                          {library.displayName ?? library.slug}
+                        </Button>
+                      );
+                    })
+                  )}
+                </div>
+              </fieldset>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => void setUserEnabled(user.id, !user.isEnabled).then(reload)}>
+                  {user.isEnabled ? t('users.disable', 'Disable') : t('users.enable', 'Enable')}
+                </Button>
+                <Button size="sm" variant="danger" onClick={() => void deleteUser(user.id).then(reload)}>
+                  {t('users.delete', 'Delete')}
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+export { UsersView };
+export default UsersView;

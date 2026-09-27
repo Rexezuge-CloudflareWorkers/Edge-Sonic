@@ -21,6 +21,7 @@
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
 import type { LibraryRow, NodeRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { encodeId, IdKind } from '@edge-sonic/subsonic';
+import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
 
 interface NodeStore {
@@ -114,25 +115,6 @@ function depthOf(path: string): number {
 function basename(path: string): string {
   const slash = path.lastIndexOf('/');
   return slash === -1 ? path : path.slice(slash + 1);
-}
-
-/**
- * Convert a `PROPFIND` href to a library-relative path.
- *
- * The server returns absolute hrefs rooted at its own base, which may or may not
- * include the library's `rootPath`. Rather than trying to reconcile the two,
- * anything that does not start with the configured root is **discarded** — a
- * `207` for a library root contains only that library's resources, so a stray
- * href is a sign the server returned something unexpected and indexing it would
- * put an unowned path in the tree.
- */
-function toLibraryPath(hrefPath: string, rootPath: string): string | null {
-  const normalizedHref = hrefPath.replace(/^\/+/, '').replace(/\/+$/, '');
-  const normalizedRoot = rootPath.replace(/^\/+/, '').replace(/\/+$/, '');
-  if (normalizedRoot.length === 0) return normalizedHref.length === 0 ? '' : normalizedHref;
-  if (normalizedHref === normalizedRoot) return '';
-  if (normalizedHref.startsWith(`${normalizedRoot}/`)) return normalizedHref.slice(normalizedRoot.length + 1);
-  return null;
 }
 
 interface MaterializedFolder {
