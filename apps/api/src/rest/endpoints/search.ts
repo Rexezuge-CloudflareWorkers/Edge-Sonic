@@ -23,7 +23,7 @@ import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { songToModel } from '../mappers';
 import { resolveLibrary } from './browse';
-import { albumKeyOf, albumNameOf, annotationsFor, artistNameOf, groupAlbums } from './structured';
+import { albumKeyOf,  annotationsFor, artistNameOf, groupAlbums } from './structured';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
@@ -53,23 +53,24 @@ function readSpec(context: RestContext): SearchSpec {
   const artist = context.params.get('artist');
   if (artist !== undefined) return { term: artist, field: 'artist' };
   const album = context.params.get('album');
-  if (album !== undefined) return { term: album, field: 'album' };
-  return { term: context.params.require('query'), field: 'any' };
+  return album === undefined ? { term: context.params.require('query'), field: 'any' } : { term: album, field: 'album' };
 }
 
 async function runSearch(context: RestContext, library: LibraryRow): Promise<{ songs: SongRow[]; spec: SearchSpec }> {
   const spec = readSpec(context);
-  const limit = context.pageSize(context.params.int('songCount', undefined), 20);
+  const limit = context.pageSize(context.params.optionalInt('songCount'), 20);
   const offset = context.params.int('songOffset', 0, { min: 0 });
   const songs = await context.songs.search(library.id, spec.term, { limit: limit + offset, offset: 0, field: spec.field });
   return { songs: songs.slice(offset, offset + limit), spec };
 }
 
-/** `search` — the legacy single-group envelope. */
+/**
+`search` — the legacy single-group envelope.
+*/
 async function search(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
   const { songs } = await runSearch(context, library);
-  const count = context.pageSize(context.params.int('count', undefined), 20);
+  const count = context.pageSize(context.params.optionalInt('count'), 20);
   const annotations = await annotationsFor(context, songs.map((song) => song.id));
   const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, annotations)));
   return respond(context, elList('searchResult', 'song', {}, nodes));
@@ -87,10 +88,10 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
   const { songs } = await runSearch(context, library);
   const annotations = await annotationsFor(context, songs.map((song) => song.id));
 
-  const artists = groupArtists(songs, library, context.pageSize(context.params.int('artistCount', undefined), 20), context.params.int('artistOffset', 0, { min: 0 }));
+  const artists = groupArtists(songs, library, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
   const albums = groupAlbums(songs, library, EMPTY).slice(
     context.params.int('albumOffset', 0, { min: 0 }),
-    context.params.int('albumOffset', 0, { min: 0 }) + context.pageSize(context.params.int('albumCount', undefined), 20),
+    context.params.int('albumOffset', 0, { min: 0 }) + context.pageSize(context.params.optionalInt('albumCount'), 20),
   );
 
   return respond(
@@ -111,7 +112,9 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
   );
 }
 
-/** Distinct artists across the result set, as `artist` elements. */
+/**
+Distinct artists across the result set, as `artist` elements.
+*/
 function groupArtists(rows: readonly SongRow[], library: LibraryRow, limit: number, offset: number): ElementNode[] {
   const counts = new Map<string, { name: string; albums: Set<string> }>();
   for (const row of rows) {
@@ -141,4 +144,6 @@ async function search3(context: RestContext): Promise<EnvelopeResponse> {
 const searchEndpoints = { search, search2, search3 };
 
 export { searchEndpoints, search, search2, search3, readSpec, groupArtists };
-export { albumNameOf };
+
+
+export {albumNameOf} from './structured';

@@ -17,7 +17,9 @@ import { BaseDAO } from './BaseDAO';
 import type { LibraryRow, UserRow } from './rows';
 import { UUIDUtil } from '@edge-sonic/shared/utils';
 
-/** Epoch seconds. Every timestamp column in this schema is seconds. */
+/**
+Epoch seconds. Every timestamp column in this schema is seconds.
+*/
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -125,7 +127,9 @@ class UserDAO extends BaseDAO {
     await this.withRetry(async () => await this.database.prepare('DELETE FROM users WHERE id = ?').bind(id).run(), 'users.delete');
   }
 
-  /** Library ids this user may see. Empty means "none", never "all". */
+  /**
+  Library ids this user may see. Empty means "none", never "all".
+  */
   public async listLibraryIds(userId: string): Promise<string[]> {
     const result = await this.withRetry(
       async () =>

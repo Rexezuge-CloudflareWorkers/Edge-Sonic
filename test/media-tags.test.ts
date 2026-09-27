@@ -16,7 +16,9 @@ import { readAudioTags } from '@edge-sonic/media-tags';
 
 const encoder = new TextEncoder();
 
-/** ID3v2 sizes are syncsafe: 7 bits per byte. */
+/**
+ID3v2 sizes are syncsafe: 7 bits per byte.
+*/
 function syncsafe(value: number): number[] {
   return [(value >> 21) & 0x7f, (value >> 14) & 0x7f, (value >> 7) & 0x7f, value & 0x7f];
 }
@@ -52,7 +54,7 @@ interface Mp3Options {
 }
 
 function buildMp3(options: Mp3Options = {}): Uint8Array {
-  const { majorVersion = 3, bitrateIndex = 9, sampleRateIndex = 0, layerBits = 0b01, fileSize, frames = {} } = options;
+  const { majorVersion = 3, bitrateIndex = 9, sampleRateIndex = 0, frames = {} } = options;
   const frameBytes: number[] = [];
   for (const [id, text] of Object.entries(frames)) frameBytes.push(...utf8TextFrame(id, text));
 
@@ -65,7 +67,9 @@ function buildMp3(options: Mp3Options = {}): Uint8Array {
   return new Uint8Array(out);
 }
 
-/** Expected size of the audio payload for a CBR file, so the estimate can be checked. */
+/**
+Expected size of the audio payload for a CBR file, so the estimate can be checked.
+*/
 function mp3FileSize(tagBytes: number, bitrateKbps: number, seconds: number): number {
   return Math.round((bitrateKbps * 1000 * seconds) / 8) + tagBytes + 128;
 }
@@ -80,14 +84,22 @@ interface FlacOptions {
 }
 
 function buildFlac(options: FlacOptions = {}): Uint8Array {
-  const { sampleRate = 44100, channels = 2, bitDepth = 16, totalSamples = 44100 * 180, fileSize, comments = {} } = options;
+  const { sampleRate = 44_100, channels = 2, bitDepth = 16, totalSamples = 44_100 * 180, fileSize, comments = {} } = options;
 
-  // STREAMINFO is 34 bytes: 16 min/max blocksize, 24 min/max framesize, then one
-  // 64-bit run packing 20/3/5/36 bits.
+  // STREAMINFO is 34 bytes: min block size u16, max block size u16, min frame size
+  // u24, max frame size u24, then one 64-bit run packing 20/3/5/36 bits, then a
+  // 128-bit MD5. The run therefore starts at byte **10**, after 16+16+24+24 = 80 bits.
+  //
+  // This fixture used to write the run at byte 8, which matched a reader that also read
+  // it at byte 8 — so the pair agreed and every FLAC duration was wrong by roughly a
+  // factor of 2^16 without a single test failing. That is the failure mode this project
+  // keeps a test double honest against: when a fixture and a reader share a wrong
+  // assumption, only the spec can break the tie, so the offsets are spelled out here.
   const streamInfo = new Uint8Array(34);
   const view = new DataView(streamInfo.buffer);
-  view.setUint16(0, 4096);
-  view.setUint16(2, 4096);
+  view.setUint16(0, 4096); // min block size
+  view.setUint16(2, 4096); // max block size
+  // min/max frame size left at 0, which the format defines as "unknown".
 
   const bits: number[] = [];
   const push = (value: number, width: number): void => {
@@ -98,7 +110,7 @@ function buildFlac(options: FlacOptions = {}): Uint8Array {
   push(bitDepth - 1, 5);
   push(totalSamples, 36);
   for (let index = 0; index < 64; index += 1) {
-    if (bits[index]) streamInfo[8 + (index >> 3)]! |= 1 << (7 - (index & 7));
+    if (bits[index]) streamInfo[10 + (index >> 3)]! |= 1 << (7 - (index & 7));
   }
 
   // Vorbis comment block: vendor string, count, then length-prefixed pairs.
@@ -129,7 +141,7 @@ function buildFlac(options: FlacOptions = {}): Uint8Array {
   out[6] = 0;
   out[7] = 34;
   out.set(streamInfo, 8);
-  let at = 8 + 34;
+  const at = 8 + 34;
   out[at] = 0x84; // VORBIS_COMMENT, last block
   out[at + 1] = (comment.length >> 16) & 0xff;
   out[at + 2] = (comment.length >> 8) & 0xff;
@@ -141,10 +153,10 @@ function buildFlac(options: FlacOptions = {}): Uint8Array {
 
 describe('FLAC', () => {
   it('reads an exact duration from STREAMINFO', () => {
-    const tags = readAudioTags(buildFlac({ totalSamples: 44100 * 180 }), 30_000_000);
+    const tags = readAudioTags(buildFlac({ totalSamples: 44_100 * 180 }), 30_000_000);
     expect(tags.container).toBe('flac');
     expect(tags.durationSeconds).toBe(180);
-    expect(tags.sampleRate).toBe(44100);
+    expect(tags.sampleRate).toBe(44_100);
     expect(tags.channels).toBe(2);
     expect(tags.bitDepth).toBe(16);
   });
@@ -152,7 +164,7 @@ describe('FLAC', () => {
   it('derives a bitrate from the total size, not the prefix length', () => {
     // A prefix read knows the header but not the length; the bitrate is only
     // computable as size x 8 / duration.
-    const tags = readAudioTags(buildFlac({ totalSamples: 44100 * 180 }), 30_000_000);
+    const tags = readAudioTags(buildFlac({ totalSamples: 44_100 * 180 }), 30_000_000);
     expect(tags.bitrateKbps).toBe(1333);
   });
 
@@ -191,8 +203,8 @@ describe('FLAC', () => {
   });
 
   it('handles a 48 kHz 24-bit file without shifting the packed fields', () => {
-    const tags = readAudioTags(buildFlac({ sampleRate: 48000, channels: 1, bitDepth: 24, totalSamples: 48000 * 60 }), 20_000_000);
-    expect(tags.sampleRate).toBe(48000);
+    const tags = readAudioTags(buildFlac({ sampleRate: 48_000, channels: 1, bitDepth: 24, totalSamples: 48_000 * 60 }), 20_000_000);
+    expect(tags.sampleRate).toBe(48_000);
     expect(tags.channels).toBe(1);
     expect(tags.bitDepth).toBe(24);
     expect(tags.durationSeconds).toBe(60);
@@ -240,7 +252,7 @@ describe('MP3', () => {
     //   - the sample rate depends on the MPEG *version* only, never on the layer
     const result = readAudioTags(buildMp3({ bitrateIndex: 9, sampleRateIndex: 0, frames: tags }), mp3FileSize(200, 128, 200));
     expect(result.bitrateKbps).toBe(128);
-    expect(result.sampleRate).toBe(44100);
+    expect(result.sampleRate).toBe(44_100);
     expect(result.channels).toBe(2);
   });
 
@@ -251,8 +263,8 @@ describe('MP3', () => {
   });
 
   it('maps 48 kHz and 32 kHz sample-rate indices', () => {
-    expect(readAudioTags(buildMp3({ sampleRateIndex: 1 }), 1000).sampleRate).toBe(48000);
-    expect(readAudioTags(buildMp3({ sampleRateIndex: 2 }), 1000).sampleRate).toBe(32000);
+    expect(readAudioTags(buildMp3({ sampleRateIndex: 1 }), 1000).sampleRate).toBe(48_000);
+    expect(readAudioTags(buildMp3({ sampleRateIndex: 2 }), 1000).sampleRate).toBe(32_000);
   });
 
   it('reads a v2.4 tag, whose frame sizes are syncsafe', () => {
@@ -283,7 +295,7 @@ describe('MP3', () => {
     const bare = new Uint8Array([0xff, 0xfb, 0x90, 0x00, 0x00, 0x00]);
     const result = readAudioTags(bare, 1000);
     expect(result.container).toBe('mp3');
-    expect(result.sampleRate).toBe(44100);
+    expect(result.sampleRate).toBe(44_100);
   });
 });
 

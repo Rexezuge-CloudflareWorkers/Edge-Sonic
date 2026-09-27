@@ -14,16 +14,19 @@
  *   folder).
  */
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { encodeId, IdKind, decodeId } from '@edge-sonic/subsonic';
-import type { Album, Artist, Child, Song } from '@edge-sonic/subsonic';
+import { encodeId, IdKind } from '@edge-sonic/subsonic';
+import type { Child, Song } from '@edge-sonic/subsonic';
 
-/** Epoch seconds → the ISO-8601 form the protocol uses for `created`. */
+/**
+Epoch seconds → the ISO-8601 form the protocol uses for `created`.
+*/
 function toIso(epochSeconds: number | null | undefined): string | undefined {
-  if (epochSeconds === null || epochSeconds === undefined || epochSeconds <= 0) return undefined;
-  return new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return epochSeconds === null || epochSeconds === undefined || epochSeconds <= 0 ? undefined : new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-/** `2024-03-01T00:00:00.000Z` → epoch seconds, for the reverse direction. */
+/**
+`2024-03-01T00:00:00.000Z` → epoch seconds, for the reverse direction.
+*/
 function fromIso(iso: string | null | undefined): number {
   if (!iso) return 0;
   const parsed = Date.parse(iso);
@@ -35,7 +38,9 @@ function suffixOfPath(path: string): string {
   return dot <= 0 ? '' : path.slice(dot + 1);
 }
 
-/** A title for a row the scan has not enriched: the filename without its suffix. */
+/**
+A title for a row the scan has not enriched: the filename without its suffix.
+*/
 function titleFromPath(song: SongRow): string {
   if (song.title) return song.title;
   const dot = song.name.lastIndexOf('.');
@@ -77,10 +82,13 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
     contentType: song.content_type ?? guessContentType(song.suffix),
     suffix: song.suffix || suffixOfPath(song.path),
     created: toIso(song.created_at),
-    ...(albumDir.length > 0 ? { coverArt: albumId } : {}),
-    ...(annotations?.stars.has(song.id) ? { starred: toIso(song.mtime_ms) } : {}),
-    ...(annotations?.ratings.has(song.id) ? { userRating: annotations.ratings.get(song.id) } : {}),
-    ...(annotations?.playCounts.has(song.id) ? { playCount: annotations.playCounts.get(song.id) } : {}),
+    ...((albumDir.length > 0) && { coverArt: albumId }),
+    ...(annotations?.stars.has(song.id) && { starred: toIso(song.mtime_ms) }),
+    ...(annotations?.ratings.has(song.id) && { userRating: annotations.ratings.get(song.id) }),
+    // Always a number, defaulting to 0. Omitting it leaves a client doing
+    // `playCount + 1` rendering `NaN`, and `playCount` is a value every client displays
+    // rather than an annotation that is either present or absent.
+    playCount: annotations?.playCounts.get(song.id) ?? 0,
   };
 }
 
@@ -141,9 +149,12 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
     bitRate: song.bitrate,
     created: toIso(song.created_at),
     mediaType: 'song',
-    ...(annotations?.stars.has(song.id) ? { starred: toIso(song.mtime_ms) } : {}),
-    ...(annotations?.ratings.has(song.id) ? { userRating: annotations.ratings.get(song.id) } : {}),
-    ...(annotations?.playCounts.has(song.id) ? { playCount: annotations.playCounts.get(song.id) } : {}),
+    ...(annotations?.stars.has(song.id) && { starred: toIso(song.mtime_ms) }),
+    ...(annotations?.ratings.has(song.id) && { userRating: annotations.ratings.get(song.id) }),
+    // Always a number, defaulting to 0. Omitting it leaves a client doing
+    // `playCount + 1` rendering `NaN`, and `playCount` is a value every client displays
+    // rather than an annotation that is either present or absent.
+    playCount: annotations?.playCounts.get(song.id) ?? 0,
   };
 }
 

@@ -1,15 +1,17 @@
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
-import { BadRequestError, ConflictError } from '@edge-sonic/backend-errors';
+import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
 import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composition';
 import { getRequestScope, asScopedContext } from '@edge-sonic/backend-runtime/di';
 import { toAdminResponse } from '@edge-sonic/backend-services/errors';
 import { UUIDUtil } from '@edge-sonic/shared/utils';
-import { SPA_HTML } from '../generated/spa-shell';
 
 type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
 type AdminContext = Context<WorkerEnv>;
 
-/** Admin JSON body cap. Small by design — no admin call carries media. */
+/**
+Admin JSON body cap. Small by design — no admin call carries media.
+*/
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 
 abstract class BaseRoute {
@@ -29,15 +31,34 @@ abstract class BaseRoute {
    * caller looking in the wrong place. Oversized bodies are rejected before they are
    * buffered.
    */
-  public static async readJson<T>(c: AdminContext): Promise<{ malformed: boolean; oversized: boolean; body: T }> {
+  public static async readJson<T>(c: C): Promise<{ malformed: boolean; oversized: boolean; body: T }> {
+    // The declared length is a *fast path only*. A chunked request carries no
+    // `content-length`, and a client that omits or lies about one is not unusual — so
+    // trusting the header alone means the cap is enforced for well-behaved callers and
+    // not for anyone else, which is the wrong way round for a limit that exists to
+    // bound memory.
     const raw = c.req.header('content-length');
-    const declared = raw === undefined ? Number.NaN : Number(raw);
+    const declared = raw === undefined ? NaN : Number(raw);
     if (Number.isFinite(declared) && declared > MAX_JSON_BODY_BYTES) {
       return { malformed: false, oversized: true, body: {} as T };
     }
+
+    let text: string;
     try {
-      const body = (await c.req.json()) as T;
-      return { malformed: false, oversized: false, body };
+      text = await c.req.text();
+    } catch {
+      return { malformed: true, oversized: false, body: {} as T };
+    }
+    // The authoritative check, on what was actually received. Measured in bytes rather
+    // than `String.length`, which counts UTF-16 code units and so undercounts a body
+    // of multi-byte characters by up to a factor of three.
+    if (new TextEncoder().encode(text).byteLength > MAX_JSON_BODY_BYTES) {
+      return { malformed: false, oversized: true, body: {} as T };
+    }
+    if (text.trim().length === 0) return { malformed: false, oversized: false, body: {} as T };
+
+    try {
+      return { malformed: false, oversized: false, body: JSON.parse(text) as T };
     } catch {
       return { malformed: true, oversized: false, body: {} as T };
     }
@@ -66,13 +87,26 @@ abstract class BaseRoute {
     return value;
   }
 
-  /** The error path for the admin API, which does read HTTP statuses. */
-  public static toErrorResponse(c: AdminContext, error: unknown): Response {
+  /**
+  The error path for the admin API, which does read HTTP statuses.
+  */
+  public static toErrorResponse(c: C, error: unknown): Response {
     const mapped = toAdminResponse(error, c.req.header('accept-language'));
-    return c.json(mapped.body, mapped.status as 400);
+    // The cast is where the allow-list meets the type system: `toAdminResponse` returns
+    // a plain `number` because `ADMIN_STATUSES` lives in a Layer 3 package that must not
+    // know Hono's status union, and the set it filters through is exactly the set of
+    // statuses that union allows.
+    return c.json(mapped.body, mapped.status as ContentfulStatusCode);
   }
 }
 
+/**
+ * The request context, with the admin identity attached.
+ *
+ * Short, because every handler below takes one and the full name repeated on each
+ * signature is noise. `sonarjs/redundant-type-aliases` objects; it is switched off with
+ * that reason recorded in `eslint.config.mjs`.
+ */
 type C = AdminContext;
 
 function json(c: C, body: unknown, status: 200 | 201 = 200): Response {
@@ -172,8 +206,7 @@ async function probeLibrary(c: C): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
-  if (!library) return c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
-  return json(c, await service.probe(library));
+  return library ? json(c, await service.probe(library)) : c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
 }
 
 async function startScan(c: C): Promise<Response> {
@@ -181,8 +214,7 @@ async function startScan(c: C): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
-  if (!library) return c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
-  return json(c, await scope.get(Tokens.ScanService).start(library));
+  return library ? json(c, await scope.get(Tokens.ScanService).start(library)) : c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
 }
 
 async function scanStatus(c: C): Promise<Response> {
@@ -274,6 +306,17 @@ async function setUserLibraries(c: C): Promise<Response> {
   if (raw.length > config.getMaxLibraries()) {
     throw new ConflictError(`A user may be granted at most ${config.getMaxLibraries()} libraries.`);
   }
+
+  // Every id is checked before any write. Without this the insert fails on a foreign
+  // key, which surfaces as a 500 — an answer that says the *server* is broken when the
+  // request was simply wrong, and one that names neither the user nor the library.
+  const libraries = await scope.get(Tokens.LibraryService).listAll();
+  const known = new Set(libraries.map((library) => library.id));
+  const unknown = (raw as string[]).filter((libraryId) => !known.has(libraryId));
+  if (unknown.length > 0) {
+    throw new NotFoundError(`Unknown librar${unknown.length === 1 ? 'y' : 'ies'}: ${unknown.join(', ')}`);
+  }
+
   await (await scope.get(Tokens.UserDAO)()).setLibraryGrants(id, raw as string[]);
   return json(c, { ok: true });
 }

@@ -17,9 +17,13 @@
 
 interface Song {
   readonly id: string;
-  /** Album ID, when the library index can resolve one. */
+  /**
+  Album ID, when the library index can resolve one.
+  */
   readonly albumId?: string;
-  /** Artist ID, when the library index can resolve one. */
+  /**
+  Artist ID, when the library index can resolve one.
+  */
   readonly artistId?: string;
   readonly title: string;
   readonly album?: string;
@@ -28,14 +32,20 @@ interface Song {
   readonly discNumber?: number;
   readonly year?: number;
   readonly genre?: string;
-  /** 0 when the tag has not been read yet. See `media-tags`. */
+  /**
+  0 when the tag has not been read yet. See `media-tags`.
+  */
   readonly duration: number;
-  /** kbps. 0 when unknown. */
+  /**
+  kbps. 0 when unknown.
+  */
   readonly bitRate: number;
   readonly size: number;
   readonly contentType: string;
   readonly suffix: string;
-  /** Library-relative path. Not emitted: it leaks the storage layout. */
+  /**
+  Library-relative path. Not emitted: it leaks the storage layout.
+  */
   readonly created?: string;
   readonly starred?: string;
   readonly playCount?: number;
@@ -51,7 +61,9 @@ interface Album {
   readonly artist?: string;
   readonly artistId?: string;
   readonly songCount: number;
-  /** Total seconds. */
+  /**
+  Total seconds.
+  */
   readonly duration: number;
   readonly year?: number;
   readonly genre?: string;
@@ -70,7 +82,9 @@ interface Artist {
   readonly starred?: string;
 }
 
-/** A child of a music directory. Either a subfolder or a playable file. */
+/**
+A child of a music directory. Either a subfolder or a playable file.
+*/
 interface Child {
   readonly id: string;
   readonly parent?: string;
@@ -124,7 +138,9 @@ interface Playlist {
   readonly coverArt?: string;
 }
 
-/** The `user` element returned by `getUser`/`getUsers`. */
+/**
+The `user` element returned by `getUser`/`getUsers`.
+*/
 interface SubsonicUserView {
   readonly username: string;
   readonly email?: string;

@@ -55,12 +55,16 @@ interface EnrichmentDeps {
   clientFor: (row: LibraryRow) => Promise<WebDavClient>;
   kv: KvCache;
   resolveKey: () => Promise<string>;
-  /** Bytes read from the head of a file. */
+  /**
+  Bytes read from the head of a file.
+  */
   readBytes: number;
   timeoutMs: number;
 }
 
-/** Cached enrichment, keyed by song id and validated by the file's mtime. */
+/**
+Cached enrichment, keyed by song id and validated by the file's mtime.
+*/
 interface CachedEnrichment {
   readonly mtimeMs: number;
   readonly durationSeconds: number | null;
@@ -84,8 +88,7 @@ interface CachedEnrichment {
  * - mtime unchanged and `enriched_at` is null → never scanned, read once.
  */
 function shouldEnrich(song: SongRow): boolean {
-  if (song.enriched_at !== null) return false;
-  return true;
+  return song.enriched_at === null;
 }
 
 class EnrichmentService {
@@ -166,20 +169,18 @@ class EnrichmentService {
       // 0 rather than null.
       duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
       bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
-      ...(sampleRate === null ? {} : { sampleRate }),
-      ...(channels === null ? {} : { channels }),
-      ...(tags
-        ? {
-            ...(tags.title ? { title: tags.title } : {}),
-            ...(tags.artist ? { artist: tags.artist } : {}),
-            ...(tags.album ? { album: tags.album } : {}),
-            ...(tags.albumArtist ? { albumArtist: tags.albumArtist } : {}),
-            ...(tags.genre ? { genre: tags.genre } : {}),
-            ...(tags.track === null ? {} : { track: tags.track }),
-            ...(tags.disc === null ? {} : { disc: tags.disc }),
-            ...(tags.year === null ? {} : { year: tags.year }),
-          }
-        : {}),
+      ...(sampleRate !== null && { sampleRate }),
+      ...(channels !== null && { channels }),
+      ...(tags && {
+            ...(tags.title && { title: tags.title }),
+            ...(tags.artist && { artist: tags.artist }),
+            ...(tags.album && { album: tags.album }),
+            ...(tags.albumArtist && { albumArtist: tags.albumArtist }),
+            ...(tags.genre && { genre: tags.genre }),
+            ...(tags.track !== null && { track: tags.track }),
+            ...(tags.disc !== null && { disc: tags.disc }),
+            ...(tags.year !== null && { year: tags.year }),
+          }),
     });
   }
 
@@ -205,7 +206,9 @@ class EnrichmentService {
     }
   }
 
-  /** Decrypt a library's WebDAV password. Exposed for the admin probe path. */
+  /**
+  Decrypt a library's WebDAV password. Exposed for the admin probe path.
+  */
   public static async decryptLibraryPassword(row: LibraryRow, key: string): Promise<string> {
     return await decryptData(row.password_ciphertext, row.password_iv, key);
   }

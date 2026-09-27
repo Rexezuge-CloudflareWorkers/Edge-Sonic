@@ -138,3 +138,13 @@ export type {
   CountRow,
   IndexVersionRow,
 };
+
+/**
+ * What a star or a rating can point at.
+ *
+ * The ids are the same reversible ids every other response uses, so a star on an album is
+ * stored against the album's own id and resolves back through the same `groupAlbums` path
+ * a listing would take. The type lives with the row shapes because that is what it
+ * describes.
+ */
+export type StarItemType = 'song' | 'album' | 'artist';

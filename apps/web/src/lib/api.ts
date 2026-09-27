@@ -18,11 +18,15 @@ const API_BASE = '/admin';
 
 interface ErrorEnvelope {
   error?: { code?: string; message?: string };
-  /** The reference project's shape, still returned by some Cloudflare-level errors. */
+  /**
+  The reference project's shape, still returned by some Cloudflare-level errors.
+  */
   Exception?: { Type?: string; Message?: string };
 }
 
-/** Long enough for any real message, short enough that a proxy error page cannot wedge the UI. */
+/**
+Long enough for any real message, short enough that a proxy error page cannot wedge the UI.
+*/
 const MAX_ERROR_LENGTH = 500;
 
 function extractError(payload: unknown, status: number): string {
@@ -54,7 +58,7 @@ async function readError(response: Response): Promise<string> {
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(await readError(response));
-  return (await response.json()) as T;
+  return (await response.json());
 }
 
 function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
@@ -76,7 +80,7 @@ export async function apiSend<T>(method: 'POST' | 'PATCH' | 'DELETE', path: stri
     await fetch(`${API_BASE}${path}`, {
       method,
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      ...(body !== undefined && { body: JSON.stringify(body) }),
     }),
   );
 }

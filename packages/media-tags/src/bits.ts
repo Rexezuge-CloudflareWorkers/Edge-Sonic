@@ -16,17 +16,19 @@ function readUintBE(bytes: Uint8Array, offset: number, length: number): number |
   if (offset < 0 || length < 0 || offset + length > bytes.length) return null;
   let value = 0;
   for (let index = 0; index < length; index += 1) {
-    value = value * 256 + bytes[offset + index]!;
+    value = value * 256 + bytes[offset + index];
   }
   return value;
 }
 
-/** Little-endian variant. */
+/**
+Little-endian variant.
+*/
 function readUintLE(bytes: Uint8Array, offset: number, length: number): number | null {
   if (offset < 0 || length < 0 || offset + length > bytes.length) return null;
   let value = 0;
   for (let index = length - 1; index >= 0; index -= 1) {
-    value = value * 256 + bytes[offset + index]!;
+    value = value * 256 + bytes[offset + index];
   }
   return value;
 }
@@ -40,13 +42,15 @@ function readBitsBE(bytes: Uint8Array, bitOffset: number, bitCount: number): num
   let value = 0;
   for (let index = 0; index < bitCount; index += 1) {
     const bit = bitOffset + index;
-    const set = (bytes[bit >> 3]! >> (7 - (bit & 7))) & 1;
+    const set = (bytes[bit >> 3] >> (7 - (bit & 7))) & 1;
     value = value * 2 + set;
   }
   return value;
 }
 
-/** Split a Vorbis comment key such as `ALBUMARTIST` into a comparable form. */
+/**
+Split a Vorbis comment key such as `ALBUMARTIST` into a comparable form.
+*/
 function normalizeCommentKey(key: string): string {
   return key.toUpperCase().replaceAll(/[^A-Z0-9]/g, '');
 }
@@ -62,19 +66,23 @@ interface CommentFields {
   disc: number | null;
 }
 
-/** `3/12` → 3. Track and disc numbers are routinely written as `n/total`. */
+/**
+`3/12` → 3. Track and disc numbers are routinely written as `n/total`.
+*/
 function parseIndex(value: string): number | null {
-  const head = value.split('/')[0]?.trim() ?? '';
+  const head = value.split('/', 1)[0]?.trim() ?? '';
   if (!/^\d+$/.test(head)) return null;
   const parsed = Number.parseInt(head, 10);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** A four-digit year, tolerating the `1994-06-01` form some taggers write. */
+/**
+A four-digit year, tolerating the `1994-06-01` form some taggers write.
+*/
 function parseYear(value: string): number | null {
   const match = /(\d{4})/.exec(value);
   if (!match) return null;
-  const parsed = Number.parseInt(match[1]!, 10);
+  const parsed = Number.parseInt(match[1], 10);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
@@ -127,35 +135,44 @@ function parseVorbisComments(bytes: Uint8Array, offset: number): CommentFields {
     if (value.length === 0) continue;
 
     switch (key) {
-      case 'TITLE':
+      case 'TITLE': {
         fields.title ??= value;
         break;
-      case 'ARTIST':
+      }
+      case 'ARTIST': {
         fields.artist ??= value;
         break;
-      case 'ALBUM':
+      }
+      case 'ALBUM': {
         fields.album ??= value;
         break;
+      }
       case 'ALBUMARTIST':
-      case 'ALBUMARTISTSORT':
+      case 'ALBUMARTISTSORT': {
         fields.albumArtist ??= value;
         break;
-      case 'GENRE':
+      }
+      case 'GENRE': {
         fields.genre ??= value;
         break;
+      }
       case 'DATE':
       case 'YEAR':
-      case 'ORIGINALDATE':
+      case 'ORIGINALDATE': {
         fields.year ??= parseYear(value);
         break;
-      case 'TRACKNUMBER':
+      }
+      case 'TRACKNUMBER': {
         fields.track ??= parseIndex(value);
         break;
-      case 'DISCNUMBER':
+      }
+      case 'DISCNUMBER': {
         fields.disc ??= parseIndex(value);
         break;
-      default:
+      }
+      default: {
         break;
+      }
     }
   }
 

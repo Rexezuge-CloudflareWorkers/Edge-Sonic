@@ -71,7 +71,9 @@ class ScanLimits {
 class RequestLimits {
   constructor(private readonly env: unknown) {}
 
-  /** Protocol maximum. A client asking for more is clamped, not refused. */
+  /**
+  Protocol maximum. A client asking for more is clamped, not refused.
+  */
   public getMaxPageSize(): number {
     return EnvParser.positiveInt(this.env, 'MAX_PAGE_SIZE', DEFAULT_MAX_PAGE_SIZE);
   }

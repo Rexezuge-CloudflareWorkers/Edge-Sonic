@@ -12,7 +12,9 @@ interface LibrarySummary {
   readonly displayName: string | null;
   readonly baseUrl: string;
   readonly rootPath: string;
-  /** The WebDAV account name. The password is never returned by the API. */
+  /**
+  The WebDAV account name. The password is never returned by the API.
+  */
   readonly davUsername: string;
   readonly isEnabled: boolean;
   readonly createdAt: number;
@@ -24,7 +26,9 @@ interface ProbeResult {
   readonly error: string | null;
 }
 
-/** Mirrors `scan_state`. `status` is the raw value so the UI can show a failure. */
+/**
+Mirrors `scan_state`. `status` is the raw value so the UI can show a failure.
+*/
 interface ScanStateSummary {
   readonly status: 'idle' | 'scanning' | 'failed';
   readonly scanned: number;

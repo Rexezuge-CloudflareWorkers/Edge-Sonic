@@ -41,8 +41,9 @@
 import type { LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import { encodeId, IdKind } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
-import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
+import type { DavResource } from '@edge-sonic/webdav';
 import { basename, isAudioFile, suffixOf } from './TreeService';
+import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
 
 /**
  * A node row to write.
@@ -51,67 +52,6 @@ import { basename, isAudioFile, suffixOf } from './TreeService';
  * because that indirection is circular here: the interface's parameter would
  * reference the alias, which references the interface.
  */
-interface NodeInput {
-  libraryId: string;
-  path: string;
-  parentPath: string;
-  name: string;
-  mtimeMs: number | null;
-  etag: string | null;
-  depth: number;
-  isScanned?: boolean;
-}
-
-interface SongInput {
-  id: string;
-  libraryId: string;
-  path: string;
-  dirPath: string;
-  name: string;
-  size: number;
-  mtimeMs: number;
-  contentType: string | null;
-  suffix: string;
-}
-
-interface NodeStore {
-  find(libraryId: string, path: string): Promise<NodeRow | null>;
-  listChildren(libraryId: string, parentPath: string): Promise<NodeRow[]>;
-  listRoots(libraryId: string): Promise<NodeRow[]>;
-  listFrontier(libraryId: string, limit: number): Promise<NodeRow[]>;
-  upsertMany(inputs: readonly NodeInput[]): Promise<number>;
-  patch(libraryId: string, path: string, patch: { mtimeMs?: number | null; etag?: string | null; isScanned?: boolean }): Promise<void>;
-  deleteChildrenNotIn(libraryId: string, parentPath: string, keepPaths: readonly string[]): Promise<number>;
-  deleteSubtree(libraryId: string, path: string): Promise<number>;
-  countByLibrary(libraryId: string): Promise<number>;
-}
-
-interface SongStore {
-  upsertFileFacts(inputs: readonly SongInput[]): Promise<number>;
-  deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<number>;
-  deleteSubtree(libraryId: string, dirPath: string): Promise<number>;
-  countByLibrary(libraryId: string): Promise<number>;
-}
-
-interface ScanStore {
-  find(libraryId: string): Promise<ScanStateRow | null>;
-  ensure(libraryId: string): Promise<ScanStateRow>;
-  markScanning(libraryId: string, totalCount: number): Promise<void>;
-  saveProgress(libraryId: string, scannedCount: number, cursorPath: string | null): Promise<void>;
-  complete(libraryId: string, scannedCount: number): Promise<number>;
-  fail(libraryId: string, error: string): Promise<void>;
-}
-
-interface ScanDeps {
-  nodes: NodeStore;
-  songs: SongStore;
-  scanState: ScanStore;
-  clientFor: (row: LibraryRow) => Promise<WebDavClient>;
-  timeoutMs: number;
-  /** Folders descended into per chunk. Sized against the 1,000-subrequest limit. */
-  chunkFolders: number;
-}
-
 type ScanStatus = 'idle' | 'scanning' | 'failed';
 
 interface ChunkResult {
@@ -119,7 +59,9 @@ interface ChunkResult {
   readonly scanned: number;
   readonly total: number;
   readonly indexVersion: number;
-  /** Instrumented so the write/subrequest budget is testable, not just asserted. */
+  /**
+  Instrumented so the write/subrequest budget is testable, not just asserted.
+  */
   readonly foldersVisited: number;
   readonly webdavRequests: number;
   readonly rowsWritten: number;
@@ -343,8 +285,8 @@ class ScanService {
     // in-memory. A `find` per child is 2N round trips for a 500-track album.
     const existing = new Map((await this.deps.nodes.listChildren(library.id, folder.path)).map((node) => [node.path, node]));
 
-    const nodeInputs: NodeInput[] = [];
-    const songInputs: SongInput[] = [];
+    const nodeInputs: ScanNodeInput[] = [];
+    const songInputs: ScanSongInput[] = [];
     const childPaths: string[] = [];
     const songPaths: string[] = [];
 
@@ -436,4 +378,6 @@ class ScanService {
 }
 
 export { ScanService };
-export type { ScanDeps, ChunkResult, ScanStatus };
+export type {  ChunkResult, ScanStatus };
+
+export {type ScanDeps} from './scanTypes';

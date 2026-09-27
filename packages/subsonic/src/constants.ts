@@ -7,13 +7,19 @@
  * simple equality check even though the version string looks like one.
  */
 
-/** REST API version implemented by this server. */
+/**
+REST API version implemented by this server.
+*/
 const API_VERSION = '1.16.1';
 
-/** Server software version reported as `serverVersion` in every response. */
+/**
+Server software version reported as `serverVersion` in every response.
+*/
 const SERVER_VERSION = '0.1.0';
 
-/** `type` attribute — identifies the server implementation to clients. */
+/**
+`type` attribute — identifies the server implementation to clients.
+*/
 const SERVER_TYPE = 'edge-sonic';
 
 /**
@@ -27,13 +33,19 @@ const SERVER_TYPE = 'edge-sonic';
  */
 const OPEN_SUBSONIC = true;
 
-/** XML namespace every `subsonic-response` document is rooted in. */
-const XML_NAMESPACE = 'http://subsonic.org/restapi';
+/**
+XML namespace every `subsonic-response` document is rooted in.
+*/
+const XML_NAMESPACE = 'https://subsonic.org/restapi';
 
-/** Path prefix the whole Subsonic surface lives under. */
+/**
+Path prefix the whole Subsonic surface lives under.
+*/
 const API_BASE_PATH = '/rest';
 
-/** `f` parameter values. */
+/**
+`f` parameter values.
+*/
 type ResponseFormat = 'xml' | 'json' | 'jsonp';
 
 const DEFAULT_FORMAT: ResponseFormat = 'xml';
@@ -64,8 +76,7 @@ const PROTOCOL_ERROR_HTTP_STATUS = 200;
  */
 function isClientVersionSupported(major: number, minor: number): boolean {
   const [serverMajor, serverMinor] = API_VERSION.split('.').map(Number) as [number, number];
-  if (major !== serverMajor) return false;
-  return minor <= serverMinor;
+  return major === serverMajor ? minor <= serverMinor : false;
 }
 
 export {

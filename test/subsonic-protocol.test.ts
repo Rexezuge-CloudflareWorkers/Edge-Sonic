@@ -226,12 +226,12 @@ describe('envelope', () => {
   });
 
   it('escapes untrusted values in JSON', async () => {
-    const response = successResponse(el('artist', { name: 'quote " and \\ backslash' }), { format: 'json' });
+    const response = successResponse(el('artist', { name: String.raw`quote " and \ backslash` }), { format: 'json' });
     const body = await response.text();
     // `JSON.stringify` handles the escaping; the assertion is that the value
     // round-trips rather than being dropped or truncated.
     const parsed = JSON.parse(body) as { 'subsonic-response': { artist: { name: string } } };
-    expect(parsed['subsonic-response'].artist.name).toBe('quote " and \\ backslash');
+    expect(parsed['subsonic-response'].artist.name).toBe(String.raw`quote " and \ backslash`);
   });
 
   it('renders an empty list as [], not as an absent key', async () => {
@@ -344,7 +344,9 @@ describe('Subsonic ids', () => {
   });
 
   describe('rejects a forged id', () => {
-    /** Craft the payload an attacker would send, bypassing `encodeId`. */
+    /**
+    Craft the payload an attacker would send, bypassing `encodeId`.
+    */
     function forge(kind: string, library: string, rawPath: string): string {
       const bytes = new TextEncoder().encode(`${library}\n${rawPath}`);
       let binary = '';
@@ -388,8 +390,8 @@ describe('Subsonic ids', () => {
     });
 
     it('refuses a NUL byte and a backslash', () => {
-      expect(() => decodeId(forge('s', libraryId, 'a\u0000b.flac'), IdKind.Song)).toThrow(SubsonicError);
-      expect(() => decodeId(forge('s', libraryId, 'a\\b.flac'), IdKind.Song)).toThrow(SubsonicError);
+      expect(() => decodeId(forge('s', libraryId, 'a\u{0}b.flac'), IdKind.Song)).toThrow(SubsonicError);
+      expect(() => decodeId(forge('s', libraryId, String.raw`a\b.flac`), IdKind.Song)).toThrow(SubsonicError);
     });
 
     it('reports a rejection as not-found, not as forbidden', () => {

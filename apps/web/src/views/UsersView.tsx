@@ -20,20 +20,37 @@ function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ username: '', password: '', email: '' });
 
-  const reload = useCallback(async () => {
+  // Both lists are fetched together because neither is meaningful without the other: a
+  // user row shows the libraries it is granted, and a grant picker needs the libraries.
+  const load = useCallback(async (): Promise<{ users: UserSummary[]; libraries: LibrarySummary[] }> => {
     try {
       const [userList, libraryList] = await Promise.all([listUsers(), listLibraries()]);
-      setUsers(userList.users);
-      setLibraries(libraryList.libraries);
+      return { users: userList.users, libraries: libraryList.libraries };
     } catch (error) {
-      setUsers([]);
       showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      return { users: [], libraries: [] };
     }
   }, [showNotice]);
 
+  const reload = useCallback(async () => {
+    const { users: loadedUsers, libraries: loadedLibraries } = await load();
+    setUsers(loadedUsers);
+    setLibraries(loadedLibraries);
+  }, [load]);
+
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    // See the note in `LibrariesView`: the effect owns the "am I still mounted" check,
+    // because only the effect knows when the component goes away.
+    let cancelled = false;
+    void load().then((loaded) => {
+      if (cancelled) return;
+      setUsers(loaded.users);
+      setLibraries(loaded.libraries);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
 
   const submit = async () => {
     setBusy('create');
@@ -41,7 +58,7 @@ function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
       await createUser({
         username: draft.username,
         password: draft.password,
-        ...(draft.email.length > 0 ? { email: draft.email } : {}),
+        ...((draft.email.length > 0) && { email: draft.email }),
       });
       setDraft({ username: '', password: '', email: '' });
       setCreating(false);

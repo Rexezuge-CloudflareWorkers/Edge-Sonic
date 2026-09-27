@@ -10,9 +10,13 @@ export type { SetAssignment, SetClause } from './UpdateClause';
 export { UserDAO, LibraryDAO, nowSeconds } from './identity';
 export { NodeDAO } from './NodeDAO';
 export type { NodeInput, NodePatch } from './NodeDAO';
-export { SongDAO, chunkArray } from './SongDAO';
+export { SongDAO } from './SongDAO';
+export { chunkArray } from './chunking';
 export type { SongUpsertInput } from './SongDAO';
-export { PlaylistDAO, AnnotationDAO, AuthThrottleDAO, ScanStateDAO } from './UserStateDAO';
+export { SongIndexDAO } from './songIndex';
+export type { GenreCountRow } from './songIndex';
+export { AnnotationDAO, AuthThrottleDAO, ScanStateDAO } from './UserStateDAO';
+export { PlaylistDAO } from './playlists';
 export type { StarItemType } from './UserStateDAO';
 export type {
   UserRow,

@@ -33,8 +33,7 @@ function formatDuration(seconds: number): string {
 }
 
 function formatEpochSeconds(epochSeconds: number): string {
-  if (!Number.isFinite(epochSeconds) || epochSeconds <= 0) return '—';
-  return new Date(epochSeconds * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  return !Number.isFinite(epochSeconds) || epochSeconds <= 0 ? '—' : new Date(epochSeconds * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
 export { formatBytes, formatDuration, formatEpochSeconds };

@@ -203,7 +203,9 @@ class AppConfiguration {
   }
 }
 
-/** `TEAM_DOMAIN` feeds the JWKS URL, so a scheme-less value throws inside `jose`. */
+/**
+`TEAM_DOMAIN` feeds the JWKS URL, so a scheme-less value throws inside `jose`.
+*/
 function isParsableTeamDomain(value: string): boolean {
   try {
     const url = new URL(value.includes('://') ? value : `https://${value}`);

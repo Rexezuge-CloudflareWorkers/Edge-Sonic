@@ -8,7 +8,9 @@
  * which is wrong.
  */
 
-/** Refuse to build a URL longer than this. */
+/**
+Refuse to build a URL longer than this.
+*/
 const MAX_URL_LENGTH = 4096;
 
 /**

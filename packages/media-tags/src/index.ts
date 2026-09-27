@@ -12,12 +12,13 @@ import { detectOggCodec, hasOggMagic, readOpus, readVorbis } from './ogg';
 import { EMPTY_TAGS } from './types';
 import type { AudioTags } from './types';
 
-/** How much of a file to read for enrichment. */
+/**
+How much of a file to read for enrichment.
+*/
 const DEFAULT_PREFIX_BYTES = 128 * 1024;
 
 function startsWith(bytes: Uint8Array, magic: readonly number[], offset = 0): boolean {
-  if (offset + magic.length > bytes.length) return false;
-  return magic.every((byte, index) => bytes[offset + index] === byte);
+  return offset + magic.length > bytes.length ? false : magic.every((byte, index) => bytes[offset + index] === byte);
 }
 
 /**
@@ -48,17 +49,17 @@ function readAudioTags(bytes: Uint8Array, fileSize: number | null = null): Audio
   if (hasId3Magic(bytes)) {
     // The audio starts after the tag, and the tag length is inside the first
     // 10 bytes, so the frame search is positioned rather than blind.
-    const tagSize = ((bytes[6]! & 0x7f) << 21) | ((bytes[7]! & 0x7f) << 14) | ((bytes[8]! & 0x7f) << 7) | (bytes[9]! & 0x7f);
+    const tagSize = ((bytes[6] & 0x7f) << 21) | ((bytes[7] & 0x7f) << 14) | ((bytes[8] & 0x7f) << 7) | (bytes[9] & 0x7f);
     return readId3v2(bytes, fileSize, 10 + tagSize);
   }
   // A raw MPEG frame with no ID3 tag at all is common in stripped rips.
-  if (startsWith(bytes, [0xff, 0xfb]) || startsWith(bytes, [0xff, 0xf3]) || startsWith(bytes, [0xff, 0xf2])) {
-    return readId3v2(bytes, fileSize, 0);
-  }
-
-  return EMPTY_TAGS;
+  return startsWith(bytes, [0xff, 0xfb]) || startsWith(bytes, [0xff, 0xf3]) || startsWith(bytes, [0xff, 0xf2]) ? readId3v2(bytes, fileSize, 0) : EMPTY_TAGS;
 }
 
 export * from './types';
-export { readAudioTags, readFlac, readOpus, readVorbis, readId3v2, hasFlacMagic, hasOggMagic, hasId3Magic, DEFAULT_PREFIX_BYTES };
+export { readAudioTags,        DEFAULT_PREFIX_BYTES };
 export { parseVorbisComments, readUintBE, readUintLE, readBitsBE } from './bits';
+
+export {readFlac, hasFlacMagic} from './flac';
+export {readOpus, readVorbis, hasOggMagic} from './ogg';
+export {readId3v2, hasId3Magic} from './mp3';

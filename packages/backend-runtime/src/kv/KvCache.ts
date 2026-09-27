@@ -31,11 +31,15 @@ import type { KvDomainName } from './KvDomains';
 
 const logger = createLogger('KvCache');
 
-/** Consecutive failures before the breaker opens. */
+/**
+Consecutive failures before the breaker opens.
+*/
 const FAILURE_THRESHOLD = 3;
 
-/** How long the breaker stays open before a half-open probe. */
-const COOLDOWN_MS = 5_000;
+/**
+How long the breaker stays open before a half-open probe.
+*/
+const COOLDOWN_MS = 5000;
 
 interface KvListPage {
   keys: Array<{ name: string }>;
@@ -68,13 +72,17 @@ const PURGE_MAX_PAGES = 10;
 let consecutiveFailures = 0;
 let breakerOpenedAt = 0;
 
-/** Test seam: force the breaker closed and forget the failure count. */
+/**
+Test seam: force the breaker closed and forget the failure count.
+*/
 function resetBreakerForTests(): void {
   consecutiveFailures = 0;
   breakerOpenedAt = 0;
 }
 
-/** True while the breaker is open, i.e. calls should be skipped entirely. */
+/**
+True while the breaker is open, i.e. calls should be skipped entirely.
+*/
 function isCircuitOpen(now: number): boolean {
   if (breakerOpenedAt === 0) return false;
   if (now - breakerOpenedAt < COOLDOWN_MS) return true;
@@ -91,10 +99,12 @@ function recordSuccess(): void {
 
 function recordFailure(): void {
   consecutiveFailures += 1;
-  if (consecutiveFailures >= FAILURE_THRESHOLD && breakerOpenedAt === 0) {
-    breakerOpenedAt = Date.now();
-    logger.warn(`KV circuit opened after ${FAILURE_THRESHOLD} consecutive failures; serving from D1 until it recovers.`);
+  if (!(consecutiveFailures >= FAILURE_THRESHOLD && breakerOpenedAt === 0)) {
+    return;
   }
+
+  breakerOpenedAt = Date.now();
+  logger.warn(`KV circuit opened after ${FAILURE_THRESHOLD} consecutive failures; serving from D1 until it recovers.`);
 }
 
 class KvCache {

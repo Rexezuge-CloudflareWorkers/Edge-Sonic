@@ -14,7 +14,7 @@ import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { songToModel } from '../mappers';
 import { resolveLibrary } from './browse';
-import { albumKeyOf, albumNameOf, annotationsFor, groupAlbums } from './structured';
+import {   annotationsFor, groupAlbums } from './structured';
 import type { AnnotationLookup } from '../mappers';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
@@ -23,7 +23,9 @@ function respond(context: RestContext, payload: ElementNode | null): EnvelopeRes
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
 }
 
-/** How each album-list type maps onto a `songs` query. */
+/**
+How each album-list type maps onto a `songs` query.
+*/
 const ALBUM_ORDER_BY: Readonly<Record<string, string>> = {
   random: 'RANDOM()',
   newest: 'mtime_ms DESC',
@@ -38,7 +40,9 @@ const ALBUM_ORDER_BY: Readonly<Record<string, string>> = {
 
 const EMPTY_ANNOTATIONS: AnnotationLookup = { stars: new Set(), ratings: new Map(), playCounts: new Map() };
 
-/** Decode an id, or `null` when it is not of this kind or is malformed. */
+/**
+Decode an id, or `null` when it is not of this kind or is malformed.
+*/
 function safeDecodeId(id: string, kind: string): ReturnType<typeof decodeId> | null {
   try {
     return decodeId(id, kind as never);
@@ -53,7 +57,7 @@ function safeDecodeId(id: string, kind: string): ReturnType<typeof decodeId> | n
 async function albumList(context: RestContext, wrapperName: 'albumList' | 'albumList2'): Promise<EnvelopeResponse> {
   const type = context.params.getOr('type', 'random');
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
-  const size = context.pageSize(context.params.int('size', undefined), 10);
+  const size = context.pageSize(context.params.optionalInt('size'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
 
   if (type === 'starred') {
@@ -77,12 +81,12 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   const toYear = needsRange ? Math.max(rawFrom, rawTo) : Number.MAX_SAFE_INTEGER;
   const genre = type === 'byGenre' ? context.params.get('genre') : undefined;
 
-  const rows = await context.songs.listAlbums(library.id, {
+  const rows = await context.songIndex.listAlbums(library.id, {
     genreCi: genre ? genre.toLowerCase() : null,
-    ...(needsRange ? { fromYear, toYear } : {}),
+    ...(needsRange && { fromYear, toYear }),
     limit: size,
     offset,
-    orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random!,
+    orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random,
   });
 
   return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, EMPTY_ANNOTATIONS)));
@@ -96,7 +100,9 @@ async function getAlbumList2(context: RestContext): Promise<EnvelopeResponse> {
   return await albumList(context, 'albumList2');
 }
 
-/** Wrap rows as song elements with one set of annotation lookups for the page. */
+/**
+Wrap rows as song elements with one set of annotation lookups for the page.
+*/
 async function songNodes(context: RestContext, library: LibraryRow, rows: readonly SongRow[]): Promise<ElementNode[]> {
   const ids = rows.map((row) => row.id);
   const annotations = await annotationsFor(context, ids);
@@ -105,14 +111,14 @@ async function songNodes(context: RestContext, library: LibraryRow, rows: readon
 
 async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
-  const size = context.pageSize(context.params.int('size', undefined), 10);
+  const size = context.pageSize(context.params.optionalInt('size'), 10);
   const genre = context.params.get('genre');
   const fromYear = context.params.int('fromYear', Number.MIN_SAFE_INTEGER);
   const toYear = context.params.int('toYear', Number.MAX_SAFE_INTEGER);
   const rows = await context.songs.listRandom(library.id, {
     genreCi: genre ? genre.toLowerCase() : null,
-    ...(fromYear !== Number.MIN_SAFE_INTEGER ? { fromYear } : {}),
-    ...(toYear !== Number.MAX_SAFE_INTEGER ? { toYear } : {}),
+    ...((fromYear !== Number.MIN_SAFE_INTEGER) && { fromYear }),
+    ...((toYear !== Number.MAX_SAFE_INTEGER) && { toYear }),
     limit: size,
   });
   return respond(context, elList('randomSongs', 'song', {}, await songNodes(context, library, rows)));
@@ -121,33 +127,27 @@ async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
 async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
   const genre = context.params.require('genre');
-  const count = context.pageSize(context.params.int('count', undefined), 10);
+  const count = context.pageSize(context.params.optionalInt('count'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
   const rows = await context.songs.listByGenre(library.id, genre.toLowerCase(), count + offset, 0);
   return respond(context, elList('songsByGenre', 'song', {}, await songNodes(context, library, rows.slice(offset, offset + count))));
 }
 
 /**
- * `getGenres` — the distinct genres, with a song count each.
+ * `getGenres` — the library's genres, with real song and album counts.
  *
- * The count comes from the grouped query rather than a second pass: `listGenres`
- * already returns one row per genre group, and the group's size is the count.
+ * The counts come from the aggregate in `listGenres` rather than from counting rows
+ * here. That used to be the implementation, over a `GROUP BY genre_ci` result whose
+ * rows are one track each — so every genre reported `songCount: 1`, and a client using
+ * the count to decide whether to offer a genre filter was reading a number that had
+ * nothing to do with the library.
  */
 async function getGenres(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
-  const rows = await context.songs.listGenres(library.id);
-  const counts = new Map<string, { value: string; songCount: number }>();
-  for (const row of rows) {
-    if (!row.genre) continue;
-    const key = row.genre.toLowerCase();
-    const existing = counts.get(key);
-    if (existing) {
-      existing.songCount += 1;
-    } else {
-      counts.set(key, { value: row.genre, songCount: 1 });
-    }
-  }
-  const nodes = [...counts.values()].sort((a, b) => a.value.localeCompare(b.value)).map((entry) => el('genre', { ...entry }));
+  const rows = await context.songIndex.listGenres(library.id);
+  const nodes = rows
+    .filter((row) => row.value.trim().length > 0)
+    .map((row) => el('genre', { value: row.value, songCount: row.song_count, albumCount: row.album_count }));
   return respond(context, elList('genres', 'genre', {}, nodes));
 }
 
@@ -202,12 +202,16 @@ async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
   const entries = await context.annotations.listNowPlaying();
   const nodes: ElementNode[] = [];
   for (const entry of entries) {
-    if (!entry.song_id) continue;
-    if (safeDecodeId(entry.song_id, IdKind.Song)?.libraryId !== library.id) continue;
+    if (!entry.song_id || (safeDecodeId(entry.song_id, IdKind.Song)?.libraryId !== library.id)) continue;
     const song = await context.songs.findById(entry.song_id);
     if (!song) continue;
     nodes.push({
       ...songElement(songToModel(song, library)),
+      // The wrapper declares `entry` as its list key, and the element name is the JSON
+      // key a client reads. Leaving this as `song` puts the payload under
+      // `nowPlaying.song` and leaves `nowPlaying.entry` as its empty seed, so a client
+      // following the schema sees nobody playing forever.
+      name: 'entry',
       children: [
         el('username', {}, [entry.username]),
         el('minutesAgo', {}, [entry.minutes_ago]),
@@ -231,4 +235,6 @@ const listEndpoints = {
 };
 
 export { listEndpoints, getAlbumList, getAlbumList2, getRandomSongs, getSongsByGenre, getGenres, getStarred, getStarred2, getNowPlaying, ALBUM_ORDER_BY };
-export { albumKeyOf, albumNameOf };
+
+
+export {albumKeyOf, albumNameOf} from './structured';

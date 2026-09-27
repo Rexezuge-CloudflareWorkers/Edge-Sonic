@@ -13,11 +13,11 @@
  * multiple `songIndexToRemove` parameters. So the DAO removes **highest index
  * first**, which makes the result identical regardless of the order received.
  */
-import { decodeId, el, elList, ErrorCode, IdKind, playlistElement, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { elList, ErrorCode, playlistElement, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { PlaylistRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
-import { fromIso, songToModel } from '../mappers';
+import { songToModel } from '../mappers';
 import { annotationsFor } from './structured';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
@@ -59,7 +59,9 @@ async function requireVisible(context: RestContext, id: string): Promise<Playlis
   return playlist;
 }
 
-/** Only the owner may mutate a playlist. `code=50` here is correct and safe. */
+/**
+Only the owner may mutate a playlist. `code=50` here is correct and safe.
+*/
 function requireOwner(context: RestContext, playlist: PlaylistRow): void {
   if (playlist.owner_user_id !== context.user.id) {
     throw new SubsonicError(ErrorCode.NotAuthorized, 'Only the owner may modify this playlist.');
@@ -123,10 +125,12 @@ async function getPlaylist(context: RestContext): Promise<EnvelopeResponse> {
 
 async function resolvePlaylistLibrary(context: RestContext) {
   const libraries = await context.libraries.listForUser(context.user.id);
-  return libraries.length > 0 ? libraries[0]! : null;
+  return libraries.length > 0 ? libraries[0] : null;
 }
 
-/** Resolve the song ids a client asked for, filtered to the caller's library. */
+/**
+Resolve the song ids a client asked for, filtered to the caller's library.
+*/
 async function resolveSongIds(context: RestContext, ids: readonly string[]): Promise<string[]> {
   if (ids.length === 0) return [];
   const library = await resolvePlaylistLibrary(context);
@@ -203,9 +207,9 @@ async function updatePlaylist(context: RestContext): Promise<EnvelopeResponse> {
   const isPublic = context.params.has('public') ? context.params.bool('public', false) : undefined;
   if (name !== undefined || comment !== undefined || isPublic !== undefined) {
     await context.playlists.updateMeta(playlist.id, {
-      ...(name !== undefined ? { name: name.trim() } : {}),
-      ...(comment !== undefined ? { comment } : {}),
-      ...(isPublic !== undefined ? { isPublic } : {}),
+      ...((name !== undefined) && { name: name.trim() }),
+      ...((comment !== undefined) && { comment }),
+      ...((isPublic !== undefined) && { isPublic }),
     });
   }
 

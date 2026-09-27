@@ -50,17 +50,19 @@ interface MpegHeader {
   offset: number;
 }
 
-/** Locate and decode the first MPEG audio frame header. */
+/**
+Locate and decode the first MPEG audio frame header.
+*/
 function findFrameHeader(bytes: Uint8Array, from: number): MpegHeader | null {
   // A frame header is 4 bytes with 11 sync bits. Real files carry up to a few
   // bytes of junk before the first frame, so a short window is scanned; beyond
   // that a "frame" is more likely a false positive inside a tag.
   const limit = Math.min(bytes.length - 4, from + 4096);
   for (let offset = from; offset <= limit; offset += 1) {
-    if (bytes[offset]! !== 0xff || (bytes[offset + 1]! & 0xe0) !== MPEG_FRAME_SYNC) continue;
+    if (bytes[offset] !== 0xff || (bytes[offset + 1] & 0xe0) !== MPEG_FRAME_SYNC) continue;
 
-    const versionBits = (bytes[offset + 1]! >> 3) & 0x03;
-    const layerBits = (bytes[offset + 1]! >> 1) & 0x03;
+    const versionBits = (bytes[offset + 1] >> 3) & 0x03;
+    const layerBits = (bytes[offset + 1] >> 1) & 0x03;
     // `versionBits === 1` is reserved, and `layerBits === 0` is reserved.
     if (versionBits === 1 || layerBits === 0) continue;
 
@@ -70,8 +72,8 @@ function findFrameHeader(bytes: Uint8Array, from: number): MpegHeader | null {
     // rate out of the layer I row and reports 11025 Hz for a 44100 Hz track.
     const versionIndex = (versionBits === 3 ? 0 : 1) as 0 | 1 | 2;
     const layerIndex = (layerBits - 1) as 0 | 1 | 2;
-    const bitrateIndex = (bytes[offset + 2]! >> 4) & 0x0f;
-    const sampleRateIndex = (bytes[offset + 2]! >> 2) & 0x03;
+    const bitrateIndex = (bytes[offset + 2] >> 4) & 0x0f;
+    const sampleRateIndex = (bytes[offset + 2] >> 2) & 0x03;
     // Both 0 and 15 are "free"/"bad" bitrates, and 3 is a reserved sample rate.
     if (bitrateIndex === 0 || bitrateIndex === 15 || sampleRateIndex === 3) continue;
 
@@ -85,7 +87,7 @@ function findFrameHeader(bytes: Uint8Array, from: number): MpegHeader | null {
     if (bitrateKbps === 0 || sampleRate === 0 || samplesPerFrame === 0) continue;
 
     // Channel mode: 11 is mono, everything else is two channels.
-    const mode = (bytes[offset + 3]! >> 6) & 0x03;
+    const mode = (bytes[offset + 3] >> 6) & 0x03;
 
     return {
       versionIndex,
@@ -94,22 +96,25 @@ function findFrameHeader(bytes: Uint8Array, from: number): MpegHeader | null {
       sampleRate,
       samplesPerFrame,
       channels: mode === 3 ? 1 : 2,
-      padding: ((bytes[offset + 2]! >> 1) & 0x01) === 1,
+      padding: ((bytes[offset + 2] >> 1) & 0x01) === 1,
       offset,
     };
   }
   return null;
 }
 
-/** ID3v2 sizes are "syncsafe": 7 bits per byte, so a tag cannot exceed 256 MB. */
+/**
+ID3v2 sizes are "syncsafe": 7 bits per byte, so a tag cannot exceed 256 MB.
+*/
 function readSyncsafe(bytes: Uint8Array, offset: number): number {
-  return ((bytes[offset]! & 0x7f) << 21) | ((bytes[offset + 1]! & 0x7f) << 14) | ((bytes[offset + 2]! & 0x7f) << 7) | (bytes[offset + 3]! & 0x7f);
+  return ((bytes[offset] & 0x7f) << 21) | ((bytes[offset + 1] & 0x7f) << 14) | ((bytes[offset + 2] & 0x7f) << 7) | (bytes[offset + 3] & 0x7f);
 }
 
-/** ID3v2.3 frame sizes are plain 32-bit; v2.4 made them syncsafe. */
+/**
+ID3v2.3 frame sizes are plain 32-bit; v2.4 made them syncsafe.
+*/
 function readFrameSize(bytes: Uint8Array, offset: number, majorVersion: number): number {
-  if (majorVersion >= 4) return readSyncsafe(bytes, offset);
-  return readUintBE(bytes, offset, 4) ?? 0;
+  return majorVersion >= 4 ? readSyncsafe(bytes, offset) : readUintBE(bytes, offset, 4) ?? 0;
 }
 
 /**
@@ -121,45 +126,58 @@ function readFrameSize(bytes: Uint8Array, offset: number, majorVersion: number):
  */
 function decodeTextFrame(bytes: Uint8Array, start: number, length: number): string | null {
   if (length < 1) return null;
-  const encoding = bytes[start]!;
+  const encoding = bytes[start];
   const body = bytes.subarray(start + 1, start + length);
 
   let decoded: string;
-  if (encoding === 0) {
+  switch (encoding) {
+  case 0: {
     // Latin-1: each byte is a code point, unlike every other encoding here.
     let latin = '';
     for (const byte of body) latin += String.fromCharCode(byte);
     decoded = latin;
-  } else if (encoding === 1) {
+  
+  break;
+  }
+  case 1: {
     if (body.length < 2) return null;
     const littleEndian = body[0] === 0xff && body[1] === 0xfe;
     const bigEndian = body[0] === 0xfe && body[1] === 0xff;
     const payload = littleEndian || bigEndian ? body.subarray(2) : body;
     decoded = new TextDecoder(littleEndian ? 'utf-16le' : bigEndian ? 'utf-16be' : 'utf-16le').decode(payload);
-  } else if (encoding === 2) {
+  
+  break;
+  }
+  case 2: {
     decoded = new TextDecoder('utf-16be').decode(body);
-  } else {
+  
+  break;
+  }
+  default: {
     decoded = new TextDecoder('utf-8').decode(body);
+  }
   }
 
   // Text frames are null-terminated, and multi-value frames are
   // null-separated — the first value is the one to show.
-  const [first = ''] = decoded.split('\0');
+  const [first = ''] = decoded.split('\0', 1);
   const cleaned = first.replaceAll(/\s+/g, ' ').trim();
   return cleaned.length > 0 ? cleaned : null;
 }
 
-/** `3/12` or `3` → 3. */
+/**
+`3/12` or `3` → 3.
+*/
 function parseIndex(value: string | null): number | null {
   if (value === null) return null;
-  const head = value.split('/')[0]?.trim() ?? '';
+  const head = value.split('/', 1)[0]?.trim() ?? '';
   return /^\d+$/.test(head) ? Number.parseInt(head, 10) : null;
 }
 
 function parseYear(value: string | null): number | null {
   if (value === null) return null;
   const match = /(\d{4})/.exec(value);
-  return match ? Number.parseInt(match[1]!, 10) : null;
+  return match ? Number.parseInt(match[1], 10) : null;
 }
 
 function readId3v2(bytes: Uint8Array, fileSize: number | null, audioStart: number): AudioTags {
@@ -224,11 +242,14 @@ function readId3v2(bytes: Uint8Array, fileSize: number | null, audioStart: numbe
     // 0x58 = 'X' (VBR), 0x49 = 'I' (info/CBR). After the 4-byte tag come flags,
     // then the frame count only when the corresponding flag bit is set.
     const flags = readUintBE(bytes, xingOffset + 4, 4) ?? 0;
-    if ((flags & 0x0001) !== 0) {
+    if ((flags & 0x00_01) !== 0) {
       frameCount = readUintBE(bytes, xingOffset + 8, 4);
     }
   }
 
+  // A `let` rather than a ternary: the condition is a compound (`frameCount !== null`
+  // *and* `> 0`), and spelling it out keeps the "no frame count means no duration" rule
+  // visible where it is decided.
   let duration: number | null = null;
   if (frameCount !== null && frameCount > 0) {
     duration = (frameCount * header.samplesPerFrame) / header.sampleRate;
@@ -259,14 +280,14 @@ function readId3v2(bytes: Uint8Array, fileSize: number | null, audioStart: numbe
     bitrateKbps: bitrate > 0 ? bitrate : null,
     sampleRate: header.sampleRate,
     channels: header.channels,
-    ...(title !== null ? { title } : {}),
-    ...(artist !== null ? { artist } : {}),
-    ...(album !== null ? { album } : {}),
-    ...(albumArtist !== null ? { albumArtist } : {}),
-    ...(genre !== null ? { genre } : {}),
-    ...(year !== null ? { year } : {}),
-    ...(track !== null ? { track } : {}),
-    ...(disc !== null ? { disc } : {}),
+    ...((title !== null) && { title }),
+    ...((artist !== null) && { artist }),
+    ...((album !== null) && { album }),
+    ...((albumArtist !== null) && { albumArtist }),
+    ...((genre !== null) && { genre }),
+    ...((year !== null) && { year }),
+    ...((track !== null) && { track }),
+    ...((disc !== null) && { disc }),
   };
 }
 

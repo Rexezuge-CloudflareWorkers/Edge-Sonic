@@ -43,13 +43,15 @@ interface ElementNode {
 
 type Node = ElementNode | Scalar | null | undefined | false;
 
-/** Build an element node. */
+/**
+Build an element node.
+*/
 function el(
   name: string,
   attrs?: Readonly<Record<string, Scalar | null | undefined>>,
   children?: readonly Node[],
 ): ElementNode {
-  return { name, ...(attrs ? { attrs } : {}), ...(children ? { children } : {}) };
+  return { name, ...(attrs && { attrs }), ...(children && { children }) };
 }
 
 /**
@@ -82,15 +84,21 @@ function elList(
   attrs?: Readonly<Record<string, Scalar | null | undefined>>,
   children?: readonly Node[],
 ): ElementNode {
-  // Each child is flagged so a single one still serializes as an array: Subsonic's
-  // own server emits a bare object there, and clients written against it have to
-  // accept all three shapes, so arrays are the safe choice.
-  const flagged = children?.map((child) => (isElementNode(child) ? { ...child, array: true } : child));
+  // The child **named by `listKey`** is flagged, so a single one still serializes as an
+  // array: Subsonic's own server emits a bare object there, and clients written against
+  // it have to accept all three shapes, so arrays are the safe choice.
+  //
+  // Only that child. `playQueue` and `bookmarks` both mix a repeated element with
+  // scalar siblings — `current`, `position`, `username` — and flagging those turned
+  // `playQueue.current` into a one-element array, so a client reading the current track
+  // got an array where the schema says a song id.
+  const keys = new Set(listKey === undefined ? [] : typeof listKey === 'string' ? [listKey] : [...listKey]);
+  const flagged = children?.map((child) => (isElementNode(child) && keys.has(child.name) ? { ...child, array: true } : child));
   return {
     name,
-    ...(attrs ? { attrs } : {}),
-    ...(flagged ? { children: flagged } : {}),
-    ...(listKey === undefined ? {} : { listKey }),
+    ...(attrs && { attrs }),
+    ...(flagged && { children: flagged }),
+    ...(listKey !== undefined && { listKey }),
   };
 }
 

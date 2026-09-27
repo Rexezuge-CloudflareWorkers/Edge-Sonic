@@ -14,7 +14,9 @@ const FLAC_MAGIC = [0x66, 0x4c, 0x61, 0x43]; // "fLaC"
 const STREAMINFO_BLOCK_TYPE = 0;
 const VORBIS_COMMENT_BLOCK_TYPE = 4;
 
-/** Block type 6 is a picture; skipping it needs its length even though the data is unused. */
+/**
+Block type 6 is a picture; skipping it needs its length even though the data is unused.
+*/
 function blockLength(bytes: Uint8Array, offset: number): number | null {
   return readUintBE(bytes, offset + 1, 3);
 }
@@ -37,12 +39,17 @@ function readFlac(bytes: Uint8Array, fileSize: number | null): AudioTags {
     const body = cursor + 4;
 
     if (type === STREAMINFO_BLOCK_TYPE && length >= 18 && streamInfo === null) {
-      // `STREAMINFO` packs the last four fields into one 64-bit big-endian run
-      // starting at byte 8 of the block: 20 bits sample rate, 3 bits
-      // (channels - 1), 5 bits (bits per sample - 1), 36 bits total samples.
-      // Reading these as plain integers is the classic way to get FLAC
-      // durations wrong, so the bit offsets are spelled out here.
-      const packed = (body + 8) * 8;
+      // `STREAMINFO` is: min block size u16, max block size u16, min frame size u24,
+      // max frame size u24, then one 64-bit big-endian run — 20 bits sample rate,
+      // 3 bits (channels - 1), 5 bits (bits per sample - 1), 36 bits total samples —
+      // then a 128-bit MD5.
+      //
+      // The run therefore starts at byte **10**, after 16+16+24+24 = 80 bits. Reading
+      // it at byte 8 lands in the middle of the frame-size fields: the sample rate
+      // comes out as a plausible large number, the channel count as another, and the
+      // duration as a large positive value rather than an error — so every FLAC file
+      // reports a wrong length and nothing anywhere looks broken.
+      const packed = (body + 10) * 8;
       const sampleRate = readBitsBE(bytes, packed, 20);
       const channelBits = readBitsBE(bytes, packed + 20, 3);
       const depthBits = readBitsBE(bytes, packed + 23, 5);
@@ -76,7 +83,7 @@ function readFlac(bytes: Uint8Array, fileSize: number | null): AudioTags {
     sampleRate: streamInfo.sampleRate,
     channels: streamInfo.channels,
     bitDepth: streamInfo.bitDepth,
-    ...(comments ?? {}),
+    ...comments,
   };
 }
 

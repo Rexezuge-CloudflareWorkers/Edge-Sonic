@@ -8,7 +8,6 @@
  * the escaping below exists for *values* (artist names, filenames, comments),
  * which absolutely are untrusted.
  */
-import { XML_NAMESPACE } from './constants';
 import type { ElementNode, Node, Scalar } from './nodes';
 import { isElementNode } from './nodes';
 
@@ -20,7 +19,9 @@ const XML_ESCAPES: Record<string, string> = {
   "'": '&apos;',
 };
 
-/** Escape a value for an XML text node or attribute value. */
+/**
+Escape a value for an XML text node or attribute value.
+*/
 function escapeXml(value: string): string {
   return value.replaceAll(/[&<>"']/g, (char) => XML_ESCAPES[char] ?? char);
 }
@@ -101,7 +102,9 @@ function childName(node: Node): string {
   return isElementNode(node) ? node.name : '#text';
 }
 
-/** The declared list keys, normalized to an array. */
+/**
+The declared list keys, normalized to an array.
+*/
 function listKeysOf(node: ElementNode): readonly string[] {
   if (node.listKey === undefined) return [];
   return typeof node.listKey === 'string' ? [node.listKey] : node.listKey;
@@ -120,7 +123,7 @@ function childToJsonValue(node: ElementNode): unknown {
   // that appears in no schema. The condition is deliberately narrow: an element with
   // attributes is a record, and an element with element children is a record.
   if (attributeEntries.length === 0 && children.length === 1) {
-    const only = children[0]!;
+    const only = children[0];
     if (!isElementNode(only)) return only;
   }
 
@@ -165,7 +168,7 @@ function serializeJson(root: ElementNode): string {
  * plain JSON rather than failing the call: a broken client gets usable data,
  * and no client gets script execution.
  */
-const JSONP_CALLBACK_PATTERN = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
+const JSONP_CALLBACK_PATTERN = /^[A-Z_$][\w$]*(?:\.[A-Z_$][\w$]*)*$/i;
 
 function isValidJsonpCallback(callback: string): boolean {
   // Bounded because the name is spliced into the response verbatim; the

@@ -21,10 +21,14 @@
  * targets.
  */
 
-/** Refuse beyond this nesting depth. A real `207` is 4 levels deep. */
+/**
+Refuse beyond this nesting depth. A real `207` is 4 levels deep.
+*/
 const MAX_DEPTH = 32;
 
-/** Refuse beyond this document size, to bound a hostile response. */
+/**
+Refuse beyond this document size, to bound a hostile response.
+*/
 const MAX_XML_BYTES = 8 * 1024 * 1024;
 
 const PREDEFINED_ENTITIES: Record<string, string> = {
@@ -47,17 +51,19 @@ function decodeEntities(value: string): string {
   return value.replaceAll(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, body: string) => {
     if (body.startsWith('#x') || body.startsWith('#X')) {
       const code = Number.parseInt(body.slice(2), 16);
-      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+      return Number.isFinite(code) && code >= 0 && code <= 0x10_ff_ff ? String.fromCodePoint(code) : match;
     }
     if (body.startsWith('#')) {
       const code = Number.parseInt(body.slice(1), 10);
-      return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
+      return Number.isFinite(code) && code >= 0 && code <= 0x10_ff_ff ? String.fromCodePoint(code) : match;
     }
     return PREDEFINED_ENTITIES[body.toLowerCase()] ?? match;
   });
 }
 
-/** Drop a namespace prefix, leaving the local name. */
+/**
+Drop a namespace prefix, leaving the local name.
+*/
 function localName(name: string): string {
   const colon = name.indexOf(':');
   return colon === -1 ? name : name.slice(colon + 1);
@@ -77,8 +83,8 @@ class XmlParseError extends Error {
   }
 }
 
-const NAME_START = /[A-Za-z_:]/;
-const NAME_CHAR = /[-A-Za-z0-9_.:]/;
+const NAME_START = /[A-Z_:]/i;
+const NAME_CHAR = /[-\w.:]/i;
 
 /**
  * Parse an XML document into a shallow tree.
@@ -102,12 +108,12 @@ function parseXml(source: string): XmlElement {
     const open = source.indexOf('<', index);
 
     if (open === -1) {
-      appendText(stack[stack.length - 1]!, decodeEntities(source.slice(index)));
+      appendText(stack.at(-1)!, decodeEntities(source.slice(index)));
       break;
     }
 
     if (open > index) {
-      appendText(stack[stack.length - 1]!, decodeEntities(source.slice(index, open)));
+      appendText(stack.at(-1)!, decodeEntities(source.slice(index, open)));
     }
 
     // A DOCTYPE can declare entities, and is the entry point for every entity
@@ -125,7 +131,7 @@ function parseXml(source: string): XmlElement {
       const end = source.indexOf(']]>', open + 9);
       if (end === -1) fail('Unterminated CDATA section.');
       // CDATA is verbatim by definition — no entity decoding, no escaping.
-      appendText(stack[stack.length - 1]!, source.slice(open + 9, end));
+      appendText(stack.at(-1)!, source.slice(open + 9, end));
       index = end + 3;
       continue;
     }
@@ -145,7 +151,7 @@ function parseXml(source: string): XmlElement {
     if (cursor >= source.length || !NAME_START.test(source[cursor] ?? '')) fail('Malformed tag name.');
 
     let nameEnd = cursor;
-    while (nameEnd < source.length && NAME_CHAR.test(source[nameEnd]!)) nameEnd += 1;
+    while (nameEnd < source.length && NAME_CHAR.test(source[nameEnd])) nameEnd += 1;
     const name = source.slice(cursor, nameEnd);
     cursor = nameEnd;
 
@@ -153,7 +159,7 @@ function parseXml(source: string): XmlElement {
     let selfClosing = false;
 
     for (;;) {
-      while (cursor < source.length && /\s/.test(source[cursor]!)) cursor += 1;
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
       if (cursor >= source.length) fail('Unterminated tag.');
 
       if (source[cursor] === '>') {
@@ -168,17 +174,17 @@ function parseXml(source: string): XmlElement {
       if (closing) fail('Unexpected content in a closing tag.');
 
       const attrStart = cursor;
-      while (cursor < source.length && NAME_CHAR.test(source[cursor]!)) cursor += 1;
+      while (cursor < source.length && NAME_CHAR.test(source[cursor])) cursor += 1;
       if (cursor === attrStart) fail('Malformed attribute name.');
       const attrName = source.slice(attrStart, cursor);
       if (attrName === 'xmlns' || attrName.startsWith('xmlns:')) {
         // Namespace declarations are accepted and ignored: the reader matches on
         // local names precisely so that a server choosing `D:` or `d:` cannot
         // change the result.
-        while (cursor < source.length && /\s/.test(source[cursor]!)) cursor += 1;
+        while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
         if (source[cursor] !== '=') fail('Malformed namespace declaration.');
         cursor += 1;
-        while (cursor < source.length && /\s/.test(source[cursor]!)) cursor += 1;
+        while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
         const quote = source[cursor];
         if (quote !== '"' && quote !== "'") fail('Unquoted attribute value.');
         const end = source.indexOf(quote, cursor + 1);
@@ -187,10 +193,10 @@ function parseXml(source: string): XmlElement {
         continue;
       }
 
-      while (cursor < source.length && /\s/.test(source[cursor]!)) cursor += 1;
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
       if (source[cursor] !== '=') fail('Malformed attribute.');
       cursor += 1;
-      while (cursor < source.length && /\s/.test(source[cursor]!)) cursor += 1;
+      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
 
       const quote = source[cursor];
       if (quote !== '"' && quote !== "'") fail('Unquoted attribute value.');
@@ -208,7 +214,7 @@ function parseXml(source: string): XmlElement {
     }
 
     const element: XmlElement = { name, attrs, children: [], text: '' };
-    stack[stack.length - 1]!.children.push(element);
+    stack.at(-1)!.children.push(element);
     if (!selfClosing) {
       if (stack.length >= MAX_DEPTH) fail(`XML nesting deeper than ${MAX_DEPTH}.`);
       stack.push(element);

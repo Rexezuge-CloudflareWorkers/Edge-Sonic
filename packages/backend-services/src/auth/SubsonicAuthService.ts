@@ -25,10 +25,10 @@
  *   D1 write allowance,
  * - cleared on success, so one typo does not lock a user out.
  */
-import { DatabaseError, UnauthorizedError } from '@edge-sonic/backend-errors';
+import { DatabaseError,  } from '@edge-sonic/backend-errors';
 import { decryptData, timingSafeEqualStrings } from '@edge-sonic/backend-data/crypto';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
-import { decodeLegacyPassword, ErrorCode, md5Hex, SubsonicError } from '@edge-sonic/subsonic';
+import {  ErrorCode, md5Hex, SubsonicError } from '@edge-sonic/subsonic';
 
 interface AuthThrottle {
   countRecentFailures(identity: string, oldestBucket: number, currentBucket: number): Promise<number>;
@@ -42,13 +42,17 @@ interface UserLookup {
 }
 
 interface AuthDeps {
-  /** Returns the base64 key. Throws when the binding is missing or unusable. */
+  /**
+  Returns the base64 key. Throws when the binding is missing or unusable.
+  */
   resolveKey: () => Promise<string>;
   users: UserLookup;
   throttle: AuthThrottle;
   failureLimit: number;
   windowSeconds: number;
-  /** Epoch seconds. Injected so the bucket arithmetic is testable. */
+  /**
+  Epoch seconds. Injected so the bucket arithmetic is testable.
+  */
   now?: () => number;
 }
 
@@ -164,14 +168,12 @@ class SubsonicAuthService {
       return timingSafeEqualStrings(expected.toLowerCase(), token.toLowerCase());
     }
 
-    if (legacyPassword !== null && legacyPassword.length > 0) {
-      return timingSafeEqualStrings(password, legacyPassword);
-    }
-
-    return false;
+    return legacyPassword !== null && legacyPassword.length > 0 ? timingSafeEqualStrings(password, legacyPassword) : false;
   }
 
-  /** Convenience for the admin API, which sets a password rather than checking one. */
+  /**
+  Convenience for the admin API, which sets a password rather than checking one.
+  */
   public static async encryptPassword(plaintext: string, key: string): Promise<{ ciphertext: string; iv: string }> {
     const { encryptData } = await import('@edge-sonic/backend-data/crypto');
     return await encryptData(plaintext, key);
@@ -198,12 +200,15 @@ function throttleIdentity(username: string, clientIp: string): string {
   }
   // 64 bits from two independent 32-bit rounds: an attacker's username space is
   // unbounded, so a 32-bit table key is birthday-bound at ~77k rows.
-  let hash2 = 0xc2b2_ae35;
+  let hash2 = 0xc2_b2_ae_35;
   for (let index = material.length - 1; index >= 0; index -= 1) {
     hash2 ^= material.charCodeAt(index);
-    hash2 = Math.imul(hash2, 0x85eb_ca6b);
+    hash2 = Math.imul(hash2, 0x85_eb_ca_6b);
   }
   return `${(hash >>> 0).toString(16).padStart(8, '0')}${(hash2 >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-export { SubsonicAuthService, throttleIdentity, decodeLegacyPassword, UnauthorizedError };
+export { SubsonicAuthService, throttleIdentity,   };
+
+export {UnauthorizedError} from '@edge-sonic/backend-errors';
+export {decodeLegacyPassword} from '@edge-sonic/subsonic';

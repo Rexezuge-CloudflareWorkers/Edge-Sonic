@@ -52,32 +52,38 @@ class SubsonicParams {
    */
   static async fromRequest(request: Request): Promise<SubsonicParams> {
     const url = new URL(request.url);
-    const entries: [string, string][] = [...url.searchParams.entries()];
+    const entries: [string, string][] = [...url.searchParams];
 
     const method = request.method.toUpperCase();
     const contentType = request.headers.get('content-type') ?? '';
     if ((method === 'POST' || method === 'PUT') && contentType.toLowerCase().includes('application/x-www-form-urlencoded')) {
       const body = await request.text();
       if (body.length > 0) {
-        entries.push(...new URLSearchParams(body).entries());
+        entries.push(...new URLSearchParams(body));
       }
     }
 
     return new SubsonicParams(entries);
   }
 
-  /** First raw occurrence of a parameter. */
+  /**
+  First raw occurrence of a parameter.
+  */
   public get(name: string): string | undefined {
     return this.values.get(name)?.[0];
   }
 
-  /** First occurrence, or a fallback. */
+  /**
+  First occurrence, or a fallback.
+  */
   public getOr(name: string, fallback: string): string {
     const value = this.get(name);
     return value === undefined || value.length === 0 ? fallback : value;
   }
 
-  /** Every raw occurrence, in request order. */
+  /**
+  Every raw occurrence, in request order.
+  */
   public getAll(name: string): string[] {
     return this.values.get(name) ?? [];
   }
@@ -86,7 +92,9 @@ class SubsonicParams {
     return this.values.has(name);
   }
 
-  /** First occurrence, or a `code=10` failure naming the parameter. */
+  /**
+  First occurrence, or a `code=10` failure naming the parameter.
+  */
   public require(name: string): string {
     const value = this.get(name);
     if (value === undefined || value.length === 0) {
@@ -130,12 +138,42 @@ class SubsonicParams {
     return Math.min(Math.max(parsed, min), max);
   }
 
-  /** Boolean parameter. Only the literal `true`/`false` (any case) are truthy. */
+  /**
+   * An integer parameter, or `undefined` when the client did not send it.
+   *
+   * Distinct from `int` because the two are used in opposite ways, and the difference
+   * is invisible until a client omits the parameter.
+   *
+   * `int('count', undefined)` returns `0` — a number — so a caller that then does
+   * `pageSize(params.int('count', undefined), 10)` gets `0`, not `10`: `0` is not
+   * nullish, so the fallback never applies, and `pageSize`'s floor of 1 turns it into
+   * exactly one. `getSongsByGenre` did this, so every client that did not send an
+   * explicit `count` got a single track from a genre, silently, with no error anywhere.
+   *
+   * `int` keeps its `0` because for a numeric parameter whose value is genuinely
+   * arithmetic — an offset, a position — `0` is the right answer to "not supplied".
+   * This method is for "was it supplied at all".
+   */
+  public optionalInt(name: string, bounds?: { min?: number; max?: number }): number | undefined {
+    const raw = this.get(name);
+    if (raw === undefined || raw.trim().length === 0) return undefined;
+    const parsed = Number.parseInt(raw.trim(), 10);
+    // A non-numeric value is treated as absent rather than as 0: "count=abc" is a
+    // client bug, and answering it with one item is a worse failure than answering with
+    // the default page.
+    if (!Number.isFinite(parsed)) return undefined;
+    const min = bounds?.min ?? Number.MIN_SAFE_INTEGER;
+    const max = bounds?.max ?? Number.MAX_SAFE_INTEGER;
+    return Math.min(Math.max(parsed, min), max);
+  }
+
+  /**
+  Boolean parameter. Only the literal `true`/`false` (any case) are truthy.
+  */
   public bool(name: string, fallback: boolean): boolean {
     const raw = this.get(name)?.trim().toLowerCase();
     if (raw === 'true') return true;
-    if (raw === 'false') return false;
-    return fallback;
+    return raw === 'false' ? false : fallback;
   }
 }
 

@@ -39,6 +39,17 @@ export default defineConfig({
         '**/D1Types.ts',
         '**/ServiceEnv.ts',
         '**/env.d.ts',
+        // `packages/backend-errors` is a pure taxonomy: an abstract base plus one
+        // subclass per HTTP status, each of which only returns a constant code, a
+        // constant type name, and the message it was constructed with. There is no
+        // branching to exercise, so a 0% here measures the file count, not the risk.
+        //
+        // What is actually load-bearing about these classes — that a 5xx is masked and
+        // a 4xx is not, that a `NotFoundError` becomes Subsonic `code=70` and an
+        // `UnauthorizedError` never becomes `code=40` — is the *mapping out of* them,
+        // and that is tested in `test/enrichment-config.test.ts`. Re-include this
+        // package if any of these classes ever grows a decision.
+        'packages/backend-errors/**',
       ],
       thresholds: {
         // Thresholds are a MEASURED floor, not an aspiration. Lower one to make CI
@@ -54,10 +65,15 @@ export default defineConfig({
         //
         // Raise these as coverage grows. Never lower them to excuse a regression in
         // code that is already covered.
-        statements: 70,
+        //
+        // Set from a measurement of 79/66/81/82 (statements/branches/functions/lines).
+        // The branch floor is the closest to its measured value because branch coverage
+        // is the one that moves most when code is added, and a floor that a routine PR
+        // trips is a floor people learn to ignore.
+        statements: 78,
         branches: 65,
-        functions: 70,
-        lines: 70,
+        functions: 79,
+        lines: 80,
       },
     },
   },

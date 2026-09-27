@@ -6,14 +6,18 @@ import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 
-/** Every handler here returns a finished envelope. */
+/**
+Every handler here returns a finished envelope.
+*/
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
 function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
 }
 
-/** Display name, falling back to the slug. */
+/**
+Display name, falling back to the slug.
+*/
 function libraryName(library: LibraryRow): string {
   const name = library.display_name?.trim();
   return name && name.length > 0 ? name : library.slug;
@@ -30,7 +34,7 @@ function libraryName(library: LibraryRow): string {
  */
 async function resolveSingleLibrary(context: RestContext): Promise<LibraryRow | null> {
   const libraries = await context.libraries.listForUser(context.user.id);
-  return libraries.length > 0 ? libraries[0]! : null;
+  return libraries.length > 0 ? libraries[0] : null;
 }
 
 /**
@@ -87,7 +91,9 @@ async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
   return respond(context, scanStatusElement({ scanning: result.status === 'scanning', count: result.scanned }));
 }
 
-/** `startScan` — probes the root and seeds the frontier. The work happens on later polls. */
+/**
+`startScan` — probes the root and seeds the frontier. The work happens on later polls.
+*/
 async function startScan(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));

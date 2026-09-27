@@ -60,8 +60,10 @@ interface LibraryDeps {
   allowPrivateHosts: () => boolean;
 }
 
-/** RFC 3986 unreserved set, minus `.` which is handled by the slug rule below. */
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+/**
+RFC 3986 unreserved set, minus `.` which is handled by the slug rule below.
+*/
+const SLUG_PATTERN = /^[a-z0-9][\w-]{0,63}$/i;
 
 /**
  * Validate and canonicalize a WebDAV origin.
@@ -117,7 +119,9 @@ function isLoopbackOrPrivate(hostname: string): boolean {
   return host === 'localhost' || host.endsWith('.localhost') || isPrivateOrInternalHost(host);
 }
 
-/** Canonicalize the in-origin path prefix. Always starts with `/`, never ends with one. */
+/**
+Canonicalize the in-origin path prefix. Always starts with `/`, never ends with one.
+*/
 function normalizeRootPath(raw: string): string {
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (value.length === 0) return '/';
@@ -144,7 +148,9 @@ function normalizeSlug(raw: string): string {
   return value;
 }
 
-/** An authorized library, with the decrypted credential already resolved. */
+/**
+An authorized library, with the decrypted credential already resolved.
+*/
 interface ResolvedLibrary {
   readonly row: LibraryRow;
   readonly name: string;
@@ -189,7 +195,9 @@ class LibraryService {
     return allowed.find((library) => library.id === libraryId) ?? null;
   }
 
-  /** Display name, falling back to the slug. */
+  /**
+  Display name, falling back to the slug.
+  */
   public static displayName(row: LibraryRow): string {
     const name = row.display_name?.trim();
     return name && name.length > 0 ? name : row.slug;
@@ -296,10 +304,7 @@ class LibraryService {
       await client.propfind('', { depth: 0, timeoutMs: this.deps.timeoutMs });
       return { ok: true, status: 207, error: null };
     } catch (error) {
-      if (error instanceof WebDavError) {
-        return { ok: false, status: error.status, error: describeWebDavStatus(error.status) };
-      }
-      return { ok: false, status: null, error: 'Library is unreachable.' };
+      return error instanceof WebDavError ? { ok: false, status: error.status, error: describeWebDavStatus(error.status) } : { ok: false, status: null, error: 'Library is unreachable.' };
     }
   }
 }
@@ -309,8 +314,7 @@ function describeWebDavStatus(status: number): string {
   if (status === 403) return 'The WebDAV account may not read that path.';
   if (status === 404) return 'The library root path does not exist on the WebDAV server.';
   if (status === 429) return 'The WebDAV server is rate limiting this worker.';
-  if (status >= 500) return 'The WebDAV server returned a server error.';
-  return `The WebDAV server responded ${status}.`;
+  return status >= 500 ? 'The WebDAV server returned a server error.' : `The WebDAV server responded ${status}.`;
 }
 
 export { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug, describeWebDavStatus };

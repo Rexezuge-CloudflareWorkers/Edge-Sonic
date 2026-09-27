@@ -24,7 +24,9 @@ import { getBackendStrings } from '@edge-sonic/shared/i18n';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
 import { ErrorCode, isSubsonicError, SubsonicError } from '@edge-sonic/subsonic';
 
-/** HTTP statuses the admin API is allowed to return. */
+/**
+HTTP statuses the admin API is allowed to return.
+*/
 const ADMIN_STATUSES = new Set([400, 401, 403, 404, 409, 413, 429, 502, 503]);
 
 interface AdminErrorBody {
@@ -68,7 +70,9 @@ function toSubsonicError(error: unknown): SubsonicError {
   return new SubsonicError(ErrorCode.Generic);
 }
 
-/** A service-error code mapped onto the closest Subsonic protocol code. */
+/**
+A service-error code mapped onto the closest Subsonic protocol code.
+*/
 function toAdminResponse(error: unknown, locale?: string | null): { status: number; body: AdminErrorBody } {
   const strings = getBackendStrings(locale).common;
 

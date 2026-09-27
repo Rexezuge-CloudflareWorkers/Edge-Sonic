@@ -20,19 +20,39 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState({ slug: '', baseUrl: '', rootPath: '/', davUsername: '', davPassword: '', displayName: '' });
 
-  const reload = useCallback(async () => {
+  // The fetch, separate from the effect that runs it, so the same code serves the
+  // initial load and every refresh button without the effect having to reach into
+  // component state.
+  const load = useCallback(async (): Promise<LibrarySummary[]> => {
     try {
       const { libraries: loaded } = await listLibraries();
-      setLibraries(loaded);
+      return loaded;
     } catch (error) {
-      setLibraries([]);
       showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      // An unreachable admin API is shown as an empty list plus the notice, rather than
+      // an error screen: the operator can still read what is cached in the page and the
+      // notice says what went wrong.
+      return [];
     }
   }, [showNotice]);
 
+  const reload = useCallback(async () => {
+    setLibraries(await load());
+  }, [load]);
+
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    // `cancelled` is what the effect actually needs and `reload` could not provide: a
+    // component unmounted mid-fetch must not set state, and React 18 turns that into a
+    // silent leak rather than a warning. It also stops a slow first response from
+    // overwriting a faster refresh the user triggered in the meantime.
+    let cancelled = false;
+    void load().then((loaded) => {
+      if (!cancelled) setLibraries(loaded);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [load]);
 
   const run = async (id: string, action: () => Promise<unknown>, success: string) => {
     setBusy(id);
@@ -56,7 +76,7 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
         rootPath: draft.rootPath,
         davUsername: draft.davUsername,
         davPassword: draft.davPassword,
-        ...(draft.displayName.length > 0 ? { displayName: draft.displayName } : {}),
+        ...((draft.displayName.length > 0) && { displayName: draft.displayName }),
       });
       // The password is dropped from component state as soon as it is accepted, so
       // it does not linger in a React tree or in a devtools inspector.

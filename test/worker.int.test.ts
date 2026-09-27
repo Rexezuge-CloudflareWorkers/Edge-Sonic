@@ -1,190 +1,23 @@
-/**
- * The Worker, driven end to end.
- *
- * ### What this covers that the rest of the suite cannot
- *
- * Everything else in `test/` exercises a class in isolation. This drives the actual
- * worker's `fetch` with a real request, a real D1 (backed by `node:sqlite`), and a real
- * KV double, so it observes the things that only exist in the composition:
- *
- * - the **route order** in `EdgeSonicWorker`, which decides whether `/rest` sits behind
- *   the rate limiter, behind the Access middleware, or behind neither;
- * - the **envelope**, which is the only thing a Subsonic client reads;
- * - the **HTTP status**, which HTTP-level tooling reads and a unit test never produces.
- *
- * ### Why it does not use the Workers integration pool
- *
- * `@cloudflare/vitest-pool-workers` builds the worker with Miniflare, whose module
- * locator resolves a bare specifier in its *entry* file and not one reached through a
- * relative import. A monorepo worker and a monorepo's tests therefore both fail to load
- * with "Cannot find package" for packages that resolve fine under `tsc`, under Vite, and
- * under `esbuild`. The workarounds available — a pre-bundled entry, an alias table
- * derived from the manifests, a second `wrangler` config at the repo root — each fix the
- * symptom for one half of the problem and none of them survives a package being added.
- *
- * Driving `fetch` directly needs none of that: Hono, `jose`, `WebCrypto`, `Request`,
- * `Response` and `URLSearchParams` all exist in Node 24, and `node:sqlite` is the same
- * engine D1 is. What is genuinely lost is workerd-specific behaviour — `executionCtx`
- * timing, worker's own `Response` quirks, KV's eventual consistency — and that is stated
- * here rather than papered over.
- *
- * ### The one thing to be careful about
- *
- * The seed writes through the DAOs and the worker reads through its own, so a bug in the
- * DAO's SQL cannot hide behind shared in-memory state. `getIndexes` and
- * `getMusicDirectory` are asserted to make **no** WebDAV request, which is only true
- * because the index is warm from the seed; a cold-index path needs a WebDAV double and
- * is covered in `test/scan-incremental.test.ts`.
- */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { EdgeSonicWorker } from '../apps/api/src/workers/EdgeSonicWorker';
-import { encryptData } from '@edge-sonic/backend-data/crypto';
-import { NodeDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
-import { sqliteQueryable } from './helpers/sqlite';
-import type { SqliteQueryable } from './helpers/sqlite';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createHarness, LIBRARY_ID, PASSWORD, SALT, USERNAME, EXPECTED_TOKEN, ORIGIN, subsonicId, ALBUM_DIR } from './helpers/harness';
+import type { Harness } from './helpers/harness';
 import { fakeKv } from './helpers/fakeKv';
-import type { FakeKv } from './helpers/fakeKv';
 
-const MIGRATION = readFileSync(fileURLToPath(new URL('../migrations/0001_edge_sonic_init.sql', import.meta.url)), 'utf8');
 
-/** 32 ASCII zeros, base64. The same placeholder the deployment template documents. */
-const TEST_KEY = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=';
+let harness: Harness;
 
-const PASSWORD = 'sesame';
-const SALT = 'c19b2d';
-const USERNAME = 'ann';
-/** The Subsonic API reference's own worked example: md5('sesame' + 'c19b2d'). */
-const EXPECTED_TOKEN = '26719a1196d2a940705a59634eb18eab';
-
-const ORIGIN = 'https://edge-sonic.test';
-const LIBRARY_ID = 'L1';
-const ALBUM_DIR = 'Bon Iver/For Emma';
-
-function nowSeconds(): number {
-  return Math.floor(Date.now() / 1000);
-}
-
-function base64(bytes: Uint8Array): string {
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-}
-
-/** Mint an id the way the product does: `kind:base64url(libraryId \n path)`. */
-function id(kind: 's' | 'al' | 'dir' | 'ar', path: string, libraryId = LIBRARY_ID): string {
-  return `${kind}:${base64(new TextEncoder().encode(`${libraryId}\n${path}`))}`;
-}
-
-const SKINNY_LOVE = id('s', `${ALBUM_DIR}/01.flac`);
-const HOLOCENE = id('s', `${ALBUM_DIR}/02.flac`);
-
-/** A minimal `ExecutionContext`. Nothing in the request path calls `waitUntil`. */
+/**
+A minimal `ExecutionContext`. Nothing in the request path calls `waitUntil`.
+*/
 const executionContext = {
   waitUntil: () => undefined,
   passThroughOnException: () => undefined,
 };
 
-let handle: SqliteQueryable;
-let cache: FakeKv;
-let worker: EdgeSonicWorker;
-
-/** The env the worker sees. Rebuilt per test so no state leaks between them. */
-function env(): Record<string, unknown> {
-  return {
-    DB: handle.db,
-    CACHE: cache.ns,
-    // Raw keys rather than Secrets Store bindings: there is no Secrets Store here, and
-    // `resolveKey` treats a raw var as a test-only escape hatch that must never mask a
-    // production binding.
-    SUBSONIC_USER_ENCRYPTION_KEY: TEST_KEY,
-    WEBDAV_ENCRYPTION_KEY: TEST_KEY,
-    ENVIRONMENT: 'development',
-    DEV_AUTH_EMAIL: 'operator@example.com',
-    TEAM_DOMAIN: 'example.cloudflareaccess.com',
-    POLICY_AUD: 'test-audience',
-  };
-}
-
-async function seed(): Promise<void> {
-  const userSecret = await encryptData(PASSWORD, TEST_KEY);
-  const userId = (
-    await new UserDAO(handle.db).create({
-      username: USERNAME,
-      passwordCiphertext: userSecret.ciphertext,
-      passwordIv: userSecret.iv,
-      email: 'ann@example.com',
-      isAdmin: true,
-    })
-  ).id;
-
-  const davSecret = await encryptData('dav-password', TEST_KEY);
-  const timestamp = nowSeconds();
-  await handle.db
-    .prepare(
-      `INSERT INTO libraries (id, slug, slug_ci, base_url, root_path, dav_username, password_ciphertext, password_iv, key_version, display_name, is_enabled, created_at, updated_at)
-       VALUES (?, 'home', 'home', 'https://dav.example.com', '/remote.php/dav/files/alice/Music', 'alice', ?, ?, 1, 'Home', 1, ?, ?)`,
-    )
-    .bind(LIBRARY_ID, davSecret.ciphertext, davSecret.iv, timestamp, timestamp)
-    .run();
-  await handle.db.prepare('INSERT INTO user_libraries (user_id, library_id, created_at) VALUES (?, ?, ?)').bind(userId, LIBRARY_ID, timestamp).run();
-
-  const nodes = new NodeDAO(handle.db);
-  // A node row per entry, files included: `getMusicDirectory` lists `nodes`, and a
-  // seed with only the folders would make the endpoint look broken when it is not.
-  await nodes.upsertMany([
-    { libraryId: LIBRARY_ID, path: 'Bon Iver', parentPath: '', name: 'Bon Iver', mtimeMs: 1000, etag: '"a"', depth: 1, isScanned: true },
-    { libraryId: LIBRARY_ID, path: ALBUM_DIR, parentPath: 'Bon Iver', name: 'For Emma', mtimeMs: 1000, etag: '"b"', depth: 2, isScanned: true },
-    { libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/01.flac`, parentPath: ALBUM_DIR, name: '01.flac', mtimeMs: 1000, etag: '"c"', depth: 3, isScanned: true },
-    { libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/02.flac`, parentPath: ALBUM_DIR, name: '02.flac', mtimeMs: 1000, etag: '"d"', depth: 3, isScanned: true },
-  ]);
-
-  const songs = new SongDAO(handle.db);
-  await songs.upsertFileFacts([
-    { id: SKINNY_LOVE, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/01.flac`, dirPath: ALBUM_DIR, name: '01.flac', size: 4096, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
-    { id: HOLOCENE, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/02.flac`, dirPath: ALBUM_DIR, name: '02.flac', size: 8192, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
-  ]);
-  await songs.applyMetadata(SKINNY_LOVE, {
-    title: 'Skinny Love',
-    artist: 'Bon Iver',
-    album: 'For Emma, Forever Ago',
-    albumArtist: 'Bon Iver',
-    track: 4,
-    disc: 1,
-    year: 2007,
-    genre: 'Indie',
-    duration: 251,
-    bitrate: 900,
-  });
-  await songs.applyMetadata(HOLOCENE, {
-    title: 'Holocene',
-    artist: 'Bon Iver',
-    album: 'For Emma, Forever Ago',
-    albumArtist: 'Bon Iver',
-    track: 5,
-    disc: 1,
-    year: 2007,
-    genre: 'Indie',
-    duration: 336,
-    bitrate: 900,
-  });
-}
-
-/** An authenticated `/rest` request. */
-function restUrl(endpoint: string, extra: Record<string, string> = {}): string {
-  const search = new URLSearchParams({ u: USERNAME, t: EXPECTED_TOKEN, s: SALT, v: '1.16.1', c: 'edge-sonic-test', f: 'json', ...extra });
-  return `${ORIGIN}/rest/${endpoint}.view?${search}`;
-}
-
-async function get(url: string): Promise<Response> {
-  return await worker.fetch(new Request(url), env() as never, executionContext);
-}
-
-async function rest(endpoint: string, extra: Record<string, string> = {}): Promise<{ status: number; response: Response; body: SubsonicBody }> {
-  const response = await get(restUrl(endpoint, extra));
-  return { status: response.status, response, body: (await response.json()) as SubsonicBody };
-}
+let env: (overrides?: Record<string, unknown>) => Record<string, unknown>;
+let restUrl: (endpoint: string, extra?: Record<string, string>) => string;
+let get: (url: string, overrides?: Record<string, unknown>, init?: RequestInit) => Promise<Response>;
+let rest: (endpoint: string, extra?: Record<string, string>) => Promise<{ status: number; response: Response; body: SubsonicBody }>;
 
 interface SubsonicBody {
   'subsonic-response': {
@@ -197,17 +30,20 @@ interface SubsonicBody {
   };
 }
 
-beforeAll(() => {
-  worker = new EdgeSonicWorker();
+beforeEach(async () => {
+  harness?.close();
+  harness = await createHarness();
+  env = harness.env;
+  restUrl = harness.restUrl;
+  get = harness.fetch;
+  rest = harness.rest;
 });
 
-beforeEach(async () => {
-  handle?.close();
-  handle = sqliteQueryable();
-  handle.raw.exec(MIGRATION);
-  cache = fakeKv();
-  await seed();
-});
+/**
+The seeded ids, kept in local names so the assertions read as music rather than as base64.
+*/
+const SKINNY_LOVE = subsonicId('s', `${ALBUM_DIR}/01.flac`);
+const HOLOCENE = subsonicId('s', `${ALBUM_DIR}/02.flac`);
 
 describe('the Subsonic envelope', () => {
   it('answers ping with an empty ok envelope', async () => {
@@ -222,7 +58,7 @@ describe('the Subsonic envelope', () => {
   });
 
   it('honours f=xml and escapes untrusted values', async () => {
-    const response = await get(`${ORIGIN}/rest/getMusicDirectory.view?${new URLSearchParams({ u: USERNAME, t: EXPECTED_TOKEN, s: SALT, v: '1.16.1', f: 'xml', id: id('dir', ALBUM_DIR) })}`);
+    const response = await get(`${ORIGIN}/rest/getMusicDirectory.view?${new URLSearchParams({ u: USERNAME, t: EXPECTED_TOKEN, s: SALT, v: '1.16.1', f: 'xml', id: subsonicId('dir', ALBUM_DIR) })}`);
     expect(response.headers.get('content-type')).toContain('text/xml');
     const xml = await response.text();
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
@@ -312,7 +148,7 @@ describe('route order', () => {
     // open the admin API.
     // Asserted in `production`, where no dev bypass applies — the other test covers the
     // allow-list itself.
-    const withPassword = await worker.fetch(
+    const withPassword = await harness.worker.fetch(
       new Request(`${ORIGIN}/admin/libraries`),
       { ...env(), ENVIRONMENT: 'production' } as never,
       executionContext,
@@ -324,12 +160,12 @@ describe('route order', () => {
     // Both directions are asserted, because a test that only checks the bypass passes
     // even if the allow-list stopped working altogether — which is the failure that
     // matters, since it authenticates every unauthenticated request as a fixed user.
-    const inDevelopment = await worker.fetch(new Request(`${ORIGIN}/admin/me`), env() as never, executionContext);
+    const inDevelopment = await harness.worker.fetch(new Request(`${ORIGIN}/admin/me`), env() as never, executionContext);
     expect(inDevelopment.status).toBe(200);
 
     // The bypass is gated on an allow-list, not on `!== 'production'`: a deny-list
     // would enable it for `staging`, for `Preview`, and for a misspelled `prodcution`.
-    const inProduction = await worker.fetch(
+    const inProduction = await harness.worker.fetch(
       new Request(`${ORIGIN}/admin/me`),
       { ...env(), ENVIRONMENT: 'production' } as never,
       executionContext,
@@ -337,7 +173,7 @@ describe('route order', () => {
     expect(inProduction.status).toBe(401);
 
     // And a name that is *not* on the list, however it is spelled.
-    const elsewhere = await worker.fetch(
+    const elsewhere = await harness.worker.fetch(
       new Request(`${ORIGIN}/admin/me`),
       { ...env(), ENVIRONMENT: 'Preview' } as never,
       executionContext,
@@ -349,7 +185,7 @@ describe('route order', () => {
     // A Fetch-spec preflight carries no credentials by design. Requiring auth for one
     // can only break clients, and a browser never issues the real request after a
     // failed preflight.
-    const response = await worker.fetch(
+    const response = await harness.worker.fetch(
       new Request(`${ORIGIN}/rest/ping.view`, { method: 'OPTIONS', headers: { origin: 'https://app.example', 'access-control-request-method': 'GET' } }),
       env() as never,
       executionContext,
@@ -388,7 +224,7 @@ describe('browsing', () => {
   });
 
   it('serves getMusicDirectory with files as children and no WebDAV request', async () => {
-    const { body } = await rest('getMusicDirectory', { id: id('dir', ALBUM_DIR) });
+    const { body } = await rest('getMusicDirectory', { id: subsonicId('dir', ALBUM_DIR) });
     const directory = body['subsonic-response'].directory as { name: string; child: Array<{ title: string; isDir: boolean; duration: number }> };
     expect(directory.name).toBe('For Emma');
     const skinnyLove = directory.child.find((child) => child.title === 'Skinny Love');
@@ -412,7 +248,7 @@ describe('browsing', () => {
   });
 
   it('derives the album id from the directory, so it survives a rename', async () => {
-    const { body } = await rest('getAlbum', { id: id('al', ALBUM_DIR) });
+    const { body } = await rest('getAlbum', { id: subsonicId('al', ALBUM_DIR) });
     const album = body['subsonic-response'].album as { songCount: number; duration: number };
     expect(album.songCount).toBe(2);
     expect(album.duration).toBe(587);
@@ -433,21 +269,21 @@ describe('browsing', () => {
 
 describe('ids are unforgeable in effect', () => {
   it('refuses a path that escapes the library root', async () => {
-    const { body } = await rest('stream', { id: id('s', '../../../etc/passwd') });
+    const { body } = await rest('stream', { id: subsonicId('s', '../../../etc/passwd') });
     // code=70, not 50: `code=50` would confirm the id is real, turning the endpoint into
     // an oracle for which paths exist.
     expect(body['subsonic-response'].error?.code).toBe(70);
   });
 
   it('refuses a library this user was not granted', async () => {
-    const { body } = await rest('getSong', { id: id('s', `${ALBUM_DIR}/01.flac`, 'L-other') });
+    const { body } = await rest('getSong', { id: subsonicId('s', `${ALBUM_DIR}/01.flac`, 'L-other') });
     expect(body['subsonic-response'].error?.code).toBe(70);
   });
 
   it('refuses an album id where a song id is required', async () => {
     // Accepting it would resolve to the same path and work, hiding a client bug until
     // it became a different bug.
-    const { body } = await rest('getSong', { id: id('al', ALBUM_DIR) });
+    const { body } = await rest('getSong', { id: subsonicId('al', ALBUM_DIR) });
     expect(body['subsonic-response'].error?.code).toBe(70);
   });
 });
@@ -461,8 +297,8 @@ describe('the cache is never load-bearing', () => {
 
     // A wrong value under the right key, and a genuinely corrupt one. Both must degrade
     // to a recompute from D1.
-    await cache.ns.put(`songMeta:v1:${SKINNY_LOVE}`, JSON.stringify({ mtimeMs: 1000, durationSeconds: 9999, bitrateKbps: 1 }));
-    await cache.ns.put('libIndex:v1:nonsense:artists', 'not json at all');
+    await harness.cache.ns.put(`songMeta:v1:${SKINNY_LOVE}`, JSON.stringify({ mtimeMs: 1000, durationSeconds: 9999, bitrateKbps: 1 }));
+    await harness.cache.ns.put('libIndex:v1:nonsense:artists', 'not json at all');
     const poisoned = await (await get(restUrl('getSong', { id: SKINNY_LOVE }))).text();
 
     expect(poisoned).toBe(cold);
@@ -475,16 +311,16 @@ describe('the cache is never load-bearing', () => {
     // constructed in the composition root whenever `env.CACHE` is absent.
     const withoutCache = async (): Promise<string> =>
       await (
-        await worker.fetch(
-          new Request(restUrl('getMusicDirectory', { id: id('dir', ALBUM_DIR) })),
+        await harness.worker.fetch(
+          new Request(restUrl('getMusicDirectory', { id: subsonicId('dir', ALBUM_DIR) })),
           { ...env(), CACHE: undefined } as never,
           executionContext,
         )
       ).text();
 
     const withCache = await (
-      await worker.fetch(
-        new Request(restUrl('getMusicDirectory', { id: id('dir', ALBUM_DIR) })),
+      await harness.worker.fetch(
+        new Request(restUrl('getMusicDirectory', { id: subsonicId('dir', ALBUM_DIR) })),
         env() as never,
         executionContext,
       )
@@ -496,7 +332,7 @@ describe('the cache is never load-bearing', () => {
   it('answers identically when every cache operation throws', async () => {
     const failing = fakeKv({}, { failAll: true });
     const withDeadCache = await (
-      await worker.fetch(new Request(restUrl('getSong', { id: SKINNY_LOVE })), { ...env(), CACHE: failing.ns } as never, executionContext)
+      await harness.worker.fetch(new Request(restUrl('getSong', { id: SKINNY_LOVE })), { ...env(), CACHE: failing.ns } as never, executionContext)
     ).text();
     const healthy = await (await get(restUrl('getSong', { id: SKINNY_LOVE }))).text();
 
@@ -538,7 +374,7 @@ describe('the error surface', () => {
   it('never leaks a database error message into a response', async () => {
     // A schema or constraint error carries table and column names. The cause is logged;
     // the client gets a generic message.
-    const { body } = await rest('getSong', { id: id('s', 'does/not/exist.flac') });
+    const { body } = await rest('getSong', { id: subsonicId('s', 'does/not/exist.flac') });
     const message = body['subsonic-response'].error?.message.toLowerCase() ?? '';
     expect(message).not.toContain('select');
     expect(message).not.toContain('songs');
@@ -581,6 +417,6 @@ describe('user state', () => {
     await rest('createBookmark', { id: SKINNY_LOVE, position: '42000' });
     const { body } = await rest('getBookmarks');
     const bookmarks = body['subsonic-response'].bookmarks as { bookmark: Array<{ id: string; position: number }> };
-    expect(bookmarks.bookmark.find((bookmark) => bookmark.id === SKINNY_LOVE)?.position).toBe(42000);
+    expect(bookmarks.bookmark.find((bookmark) => bookmark.id === SKINNY_LOVE)?.position).toBe(42_000);
   });
 });

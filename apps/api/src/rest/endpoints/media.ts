@@ -21,22 +21,19 @@
  * `Content-Range` intact. This is the one endpoint where "don't be clever" is the
  * entire implementation.
  */
-import { decodeId, encodeId, ErrorCode, IdKind, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { decodeId, encodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
 import type { IdKindValue } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { guessContentType } from '../mappers';
 
-type EnvelopeResponse = ReturnType<typeof successResponse>;
 type PassthroughResponse = { response: Response };
 
-/** Response headers forwarded from the origin. Everything else is dropped. */
+/**
+Response headers forwarded from the origin. Everything else is dropped.
+*/
 const PASSTHROUGH_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified'] as const;
-
-function respond(context: RestContext, payload: null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 /**
  * Rebuild a response with only the allowlisted headers.
@@ -55,7 +52,7 @@ function passthrough(upstream: Response): Response {
   }
   // The origin's own `Content-Type` wins when it is a real media type; otherwise
   // the indexed suffix decides. See the module note on not lying.
-  if (headers.get('content-type') === null || headers.get('content-type') === 'application/octet-stream') {
+  if (!headers.has('content-type') || headers.get('content-type') === 'application/octet-stream') {
     headers.delete('content-type');
   }
   return new Response(upstream.body, { status: upstream.status, statusText: upstream.statusText, headers });
@@ -104,12 +101,12 @@ async function stream(context: RestContext): Promise<PassthroughResponse> {
   const range = context.params.get('range') ?? headerRange(context);
 
   const upstream = await client.get(decoded.path, {
-    ...(range !== null && range.length > 0 ? { range } : {}),
+    ...(range !== null && range.length > 0 && { range }),
     timeoutMs: context.streamTimeoutMs,
   });
 
   const response = passthrough(upstream);
-  if (response.headers.get('content-type') === null) {
+  if (!response.headers.has('content-type')) {
     response.headers.set('content-type', song.content_type ?? guessContentType(song.suffix));
   }
   return { response };
@@ -128,12 +125,23 @@ async function download(context: RestContext): Promise<PassthroughResponse> {
   const upstream = await client.get(decoded.path, { timeoutMs: context.streamTimeoutMs });
 
   const response = passthrough(upstream);
-  if (response.headers.get('content-type') === null) {
+  if (!response.headers.has('content-type')) {
     response.headers.set('content-type', song.content_type ?? guessContentType(song.suffix));
   }
-  // RFC 6266. The filename is quoted and escaped, because a track called
-  // `a";b.flac` would otherwise break out of the quoted-string.
-  const safeName = song.name.replaceAll(/[\\"\r\n]/g, '_');
+  // RFC 6266, and the escaping matters because the name is a **WebDAV filename**: it is
+  // whatever anybody with write access to the library chose, and it reaches a browser.
+  //
+  // Three separate problems, three separate replacements:
+  //
+  // - `"` would break out of the quoted-string.
+  // - CR and LF would split the header.
+  // - `/` and `\\` would put a **path** in the filename. `a";b/../../evil.flac` is a
+  //   legal WebDAV entry name, and quoting it does nothing: some browsers and download
+  //   managers resolve the separators, so the file lands outside the download directory.
+  //   The separators are replaced rather than the whole name rejected, because a
+  //   directory that happens to contain a slash in a display name should still download.
+  // eslint-disable-next-line no-control-regex -- the control characters ARE the check.
+  const safeName = song.name.replaceAll(/[\\/:*?"<>|\u0000-\u001F\u007F]/g, '_');
   response.headers.set('content-disposition', `attachment; filename="${safeName}"`);
   return { response };
 }
@@ -193,18 +201,21 @@ const IMAGE_CONTENT_TYPES: Record<string, string> = {
   gif: 'image/gif',
 };
 
-/** A 1×1 transparent PNG, for "this album has no cover". */
+/**
+A 1×1 transparent PNG, for "this album has no cover".
+*/
 const PLACEHOLDER_PNG = Uint8Array.from(
   atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='),
   (char) => char.charCodeAt(0),
 );
 
-/** The folder to look for a cover in, for any accepted id kind. */
+/**
+The folder to look for a cover in, for any accepted id kind.
+*/
 async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<string | null> {
   if (kind === IdKind.Song) {
     const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
-    if (!song) return null;
-    return await findCoverIn(library, song.dir_path, context);
+    return song ? (await findCoverIn(library, song.dir_path, context)) : null;
   }
   if (kind === IdKind.Album) return await findCoverIn(library, path, context);
   if (kind === IdKind.Directory) return await findCoverIn(library, path, context);
@@ -212,7 +223,7 @@ async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: 
     // An artist id carries the artist *name*, not a path, so the folder has to be
     // found. Albums are searched first, because that is where the cover lives, and
     // the artist directory is the fallback for a library that keeps one.
-    const rows = await context.songs.listArtists(library.id, 500, 0);
+    const rows = await context.songIndex.listArtists(library.id, 500, 0);
     for (const row of rows) {
       if ((row.artist ?? row.album_artist ?? '').toLowerCase() !== path.toLowerCase()) continue;
       const found = await findCoverIn(library, row.dir_path, context);

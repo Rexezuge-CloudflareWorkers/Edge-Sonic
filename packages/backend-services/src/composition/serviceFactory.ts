@@ -26,8 +26,8 @@
  * rejecting is a broken production configuration and the var fallback must not
  * paper over it.
  */
-import { KvCache } from '@edge-sonic/backend-runtime/kv';
-import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
+
+
 import { isUsableKey } from '@edge-sonic/backend-data/crypto';
 
 interface SecretsStoreSecret {
@@ -39,13 +39,19 @@ interface RequestScopeEnv {
   CACHE?: unknown;
   SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   WEBDAV_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
-  /** Test-only. Never declared in the production template. */
+  /**
+  Test-only. Never declared in the production template.
+  */
   SUBSONIC_USER_ENCRYPTION_KEY?: string;
-  /** Test-only. Never declared in the production template. */
+  /**
+  Test-only. Never declared in the production template.
+  */
   WEBDAV_ENCRYPTION_KEY?: string;
 }
 
-/** A memoized key provider. Throws on use when unconfigured. */
+/**
+A memoized key provider. Throws on use when unconfigured.
+*/
 type KeyProvider = () => Promise<string>;
 
 function resolveKey(binding: SecretsStoreSecret | undefined, rawVar: string | undefined, bindingName: string, varName: string): KeyProvider {
@@ -83,5 +89,7 @@ function resolveKey(binding: SecretsStoreSecret | undefined, rawVar: string | un
   };
 }
 
-export { resolveKey, KvCache };
-export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider, KvNamespaceLike };
+export { resolveKey,  };
+export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider,  };
+
+export {KvCache, type KvNamespaceLike} from '@edge-sonic/backend-runtime/kv';

@@ -8,7 +8,7 @@
  * systems are deliberately not connected: an operator's Access identity must not be
  * usable as a streaming credential.
  */
-import { decodeId, el, elList, ErrorCode, IdKind, SubsonicError, successResponse, userElement } from '@edge-sonic/subsonic';
+import { ErrorCode,  SubsonicError,   elList, successResponse, userElement, userFolderElements } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -52,7 +52,7 @@ function toView(user: UserRow) {
 async function getUser(context: RestContext): Promise<EnvelopeResponse> {
   const requested = context.params.get('username');
   if (requested === undefined || requested.toLowerCase() === context.username.toLowerCase()) {
-    return respond(context, { ...userElement(toView(context.user)), children: [] });
+    return await respondWithUser(context, context.user);
   }
   if (context.user.is_admin !== 1) {
     throw new SubsonicError(ErrorCode.NotAuthorized, 'Only an admin may read another user.');
@@ -60,10 +60,31 @@ async function getUser(context: RestContext): Promise<EnvelopeResponse> {
   const users = await context.users.list();
   const found = users.find((user) => user.username.toLowerCase() === requested.toLowerCase());
   if (!found) throw new SubsonicError(ErrorCode.NotFound, 'User not found.');
-  return respond(context, { ...userElement(toView(found)), children: [] });
+  return await respondWithUser(context, found);
+}
+
+/**
+ * Render a `user` element, with the folder list every `musicFolderId` indexes into.
+ *
+ * The folders are the libraries the **named** user may see, not the caller's: an admin
+ * reading another account needs that account's own view of the world, or a client
+ * renders folder ids that resolve to the admin's libraries.
+ */
+async function respondWithUser(context: RestContext, user: UserRow): Promise<EnvelopeResponse> {
+  const libraries = await context.libraries.listForUser(user.id);
+  return respond(context, {
+    ...userElement(toView(user)),
+    // `listKey` so `folder` is present as an array even with no grants: a client doing
+    // `user.folder.map(...)` throws on an absent key, and "no libraries" is the state a
+    // brand-new account is in.
+    listKey: 'folder',
+    children: userFolderElements(libraries.map((library) => library.id)),
+  });
 }
 
 const userEndpoints = { getUsers, getUser };
 
 export { userEndpoints, getUsers, getUser, toView };
-export { decodeId, IdKind, el };
+
+
+export {IdKind, decodeId, el} from '@edge-sonic/subsonic';
