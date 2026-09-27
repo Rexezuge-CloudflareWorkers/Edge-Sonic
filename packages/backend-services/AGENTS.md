@@ -1,21 +1,99 @@
-# Durable-DAV-Router — Backend Services
+# Edge-Sonic — Backend Services
 
-Scope: `packages/backend-services/**`. Parent index: `../../AGENTS.md`. Layer 3 (may use layers 0–2 only, never apps).
+Scope: `packages/backend-services/**`. Parent index: `../../AGENTS.md`.
 
-- Domain map:
-  - `src/auth/AccessAuthService.ts` — `/user/*` identity: `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT (`cf-access-jwt-assertion` vs `TEAM_DOMAIN`/`POLICY_AUD`) → `ctx.access.getIdentity()` fallback. Never trust `Cf-Access-Authenticated-User-Email`. The first two strategies are gated by `AppConfiguration.isBypassAllowed()`, an **allow-list** of {development, dev, local, test}.
-  - `src/router/BackendService.ts` — per-user backend registry. `normalizeSlug`/`normalizeBaseUrl`/`normalizeDisplayName` validate input; `normalizeBaseUrl` returns a bare origin and **rejects private, loopback, and link-local hosts** (the router fetches this URL with the caller's credentials attached, so it is an SSRF surface). `ALLOW_PRIVATE_BACKEND_HOSTS` opts a self-hosted deployment back in; unset follows the environment. `create/get/list/update/delete` + `findBackendById` + `recordProbe` + `recordBackendUsername`/`listByBackendUsername`. Reads wrap D1 faults in `DatabaseError` via `d1Read` — only `isMissingSchemaError` degrades to a fallback, because a blanket `.catch(() => null)` turns an outage into a 404, skips the quota check, and reports zero backends.
-  - `src/router/BackendProxyService.ts` — pure reverse-proxy helpers (no D1): `joinBackendUrl`, `buildProxiedHeaders` (allowlisted request headers + `Destination` rewrite), `buildProbeHeaders`, `filterProxiedResponseHeaders`, `resolveBackend`, `fetchWithTimeout`/`getProxyTimeoutMs`, `stripBackendSelector` (byte-preserving, so signed query strings survive), `classifyProbeStatus`, `probeCandidateBackends`.
-  - `src/router/BackendSelection.ts` — `selectBackend` throws the typed 404/409 the shared mapper renders, instead of each route hand-building the envelope; `explicitBackendSlug` reads `?backend=` then `X-Backend`.
-  - `src/router/RouteCacheService.ts` — KV `davRoute` lookaside (fail-soft, D1 authoritative): per-isolate L1 + `get/put/invalidate/invalidateIfPresent/purge`, credential-free keys, probe-`single`-only caching, `sameRoute` as the write-decision predicate, `parseDestinationVolume` for `MOVE`/`COPY` invalidation. **The free plan allots 1,000 writes + 1,000 deletes per day against 100,000 reads, so every write here is budgeted, not incidental**: a re-resolution naming the backend already cached writes nothing, a replacement is one `put` (upsert, never `delete`-then-`put`), a lone backend is not cached at all (`resolveBackend` short-circuits it without probing), and `invalidateCachedRouteIfPresent` reads before deleting because a `Destination` purge usually names a key that was never stored. A 404 loop on the delete/re-put path once exhausted the daily budget in ~40 minutes while every response stayed correct. `parseDestinationVolume` assumes `/:owner/:volume` and therefore **mis-parses a root-anchored `Destination`** from a backend using `href_prefix_mode: root`, purging one fabricated cache key; that is documented and deliberate on the function — the base is absent from such a URL so no router-side rule recovers it, and the blast radius is a single re-probe.
-  - `src/user/UserService.ts` — email-only identity: `upsertUser` + `getProfileByEmail`. Both normalize with the same trim+lowercase; they must agree or a user is written under one key and read under another.
-- `src/errors/ErrorMapper.ts` — the single place a thrown value becomes a status plus a body. **Every 5xx body is masked** and the cause logged: `DatabaseError` carries D1 table/column/constraint text, so echoing it discloses the schema.
-- `src/composition/` — `Tokens` registry + `createRequestScope(env)` (`requestScope.ts`; DAO tables in `daoBindings.ts`, service wiring in `serviceBindings.ts` + `serviceBindings/coreServices.ts`, shared env/factory in `serviceFactory.ts`): per-request `Container`, table-driven lazy+memoized DAO factories, fail-soft `KvCache` from `env.CACHE`. Handlers resolve `scope.get(Tokens.X)`.
-- Constructor injection: every service takes `(env, deps?)` with `() => Promise<DAO>` factories defaulting to real DAOs — tests override with fakes, no module mocks needed.
-- Errors via `@edge-sonic/backend-errors`; time/ids via `@edge-sonic/shared/utils`.
+Layer 3: layers 0–2, and never `apps/*`.
 
-## Security invariants worth preserving
+## Auth: two systems, on purpose
 
-**Probes must never carry the caller's credentials.** The owner-routing candidate set comes from `backend_username`, which is cached from whatever a backend's `/user/me` reports — so any account can register a backend claiming a victim handle and land in the victim's candidate set. `buildProbeHeaders` strips `Authorization`/`Cookie`/`Cf-Access-Jwt-Assertion` and substitutes a synthetic `router-probe:` credential, and `probeCandidateBackends` caps the fan-out at `MAX_PROBE_CANDIDATES` so one unauthenticated request cannot force unbounded egress.
+- `auth/SubsonicAuthService` authenticates `/rest/*` against the `users` table, because a
+  Subsonic client can only speak `u` + `t` + `s` and has no way to present an Access
+  cookie. `t` is `md5(password + salt)` and is compared in constant time; `p` (the legacy
+  cleartext password) is accepted as a fallback because the protocol allows it; an empty
+  salt is **refused**, because computing `md5(password + "")` would accept a token the
+  caller chose by supplying nothing. Bumping `token_epoch` on a password change is what
+  revokes an already-issued token.
+- `auth/AccessAuthService` authenticates `/admin/*` behind Cloudflare Access. The bypass
+  chain is `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT → the `ctx.access` binding, and the first
+  two are gated on an **environment allow-list**. A deny-list would enable the bypass for
+  `staging`, `Preview`, and a misspelled `prodcution`.
 
-**A redirect is not proof a volume exists.** A Cloudflare Access login redirect comes from a perfectly real backend; `classifyProbeStatus` returns `unknown` for 3xx so a route is not pinned to the wrong origin for the whole cache TTL.
+Keeping them separate is a security property, not a convenience: an operator's Access
+identity must not work as a streaming credential, and a Subsonic password must not open
+the admin API.
+
+**`Cf-Access-Authenticated-User-Email` is never trusted.** Cloudflare documents it as a
+*response* header it sets; read back as a *request* header, any caller can name
+themselves. Asserted in `test/admin-auth.test.ts` with a forged header, and again with a
+forged `Cookie` beside it.
+
+An unverified identity **inside** the trusted binding still does not authenticate — both
+`emailVerified: false` and `email_verified: false` are refused. Cloudflare has used both
+spellings, and accepting one is a fail-open that only shows up in production. Every JWT
+failure collapses to one message: "signature verification failed" versus "expired" tells an
+unauthenticated caller which part of the token they got right.
+
+## Library
+
+`library/LibraryService.ts` owns registration, the SSRF gate, and credential decryption.
+`base_url` is stored as a **bare origin** — no path, query, fragment, or embedded
+credential — because the root path is a separate field and an embedded credential would be
+stored, returned by the admin API, and written to logs.
+
+The gate refuses private, loopback, and link-local addresses unless
+`ALLOW_PRIVATE_WEBDAV_HOSTS` opts in, because the Worker fetches `base_url` with the
+library's **stored DAV password**: without the gate, an operator registration form is a
+way to send that credential to `169.254.169.254` or to an internal service. Plaintext
+`http` is allowed only for loopback.
+
+## Scanning
+
+`index/ScanService.ts` is a state machine advanced by `getScanStatus`. No cron, no Durable
+Object, no trigger.
+
+- A **`Depth: 0` root probe** settles "is anything new" in one subrequest: if the root
+  mtime matches the stored one, the scan is over — 1 subrequest, 0 rows.
+- Otherwise only folders whose mtime moved are descended. The `is_scanned` flag is written
+  by the node upsert, so the frontier is the database's, not memory's.
+- The chunk size is sized against the **1,000-subrequest limit**, not against
+  convenience. A cold scan of 1,000 folders / 5,000 tracks is roughly 6,100 row writes
+  against a 5,000/day allowance — survivable because the scan is chunked and resumable,
+  and because every later scan writes zero rows.
+- A failure leaves the frontier where it was, so the next poll resumes.
+
+`index/TreeService.ts` does the read-through materialization: `getMusicDirectory` on an
+uncached folder issues a live `PROPFIND` **and persists** what it found, so the second
+client to ask is answered from D1.
+
+## Enrichment
+
+`index/EnrichmentService.ts` reads a **bounded prefix** of a file's bytes — never the whole
+file — and derives duration, bitrate, sample rate, and channels from the container header.
+
+- It short-circuits on `enriched_at`, which is why the scan must clear that column when a
+  file's bytes change.
+- A `WEBDAV` failure or an unreadable container resolves to "no enrichment" and is
+  **recorded as an attempt**, so a format this server cannot read is not retried on every
+  play. A transient error is deliberately *not* recorded, so a recovered origin is
+  retried.
+- It is best-effort about the cache and authoritative about D1: a dead `CACHE` costs
+  latency and nothing else.
+
+## Errors
+
+`errors/ErrorMapper.ts` has two dialects, and conflating them is the mistake:
+
+- `toSubsonicError` → the protocol envelope, HTTP 200, except `code=40` which is 401.
+  `NotFoundError` becomes `70`; `UnauthorizedError` becomes `50` and **never** `40`,
+  because a request that authenticated fine and was then refused is a different thing, and
+  reporting it as 40 sends a user with valid credentials to re-enter their password. A
+  5xx is masked completely: the cause is logged, and a D1 error names tables and columns.
+- `toAdminResponse` → a JSON body with the status the SPA reads. A 4xx keeps its message;
+  a 5xx is masked to the generic one.
+
+## Composition
+
+`composition/requestScope.ts` (`createRequestScope`) is the composition root: table-driven
+lazy DAO wiring plus the service bindings, one scope per request. `composition/tokens.ts`
+is the token set. `resolveKey` is the whole per-feature key policy and it **fails closed** —
+see `docs/agents/runtime/AGENTS.md`.

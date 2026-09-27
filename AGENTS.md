@@ -1,110 +1,135 @@
-# AGENTS.md
+# Edge-Sonic — Index
 
-Durable-DAV-Router: Cloudflare Workers reverse-proxy router to backend Durable-DAV instances (`@edge-sonic/monorepo`, `pnpm@11.2.2`).
+Scope: the whole repository. Per-area guides are in the table at the bottom.
 
-- **WebDAV proxy**: `packages/webdav` (RFC 4918 protocol surface only: `SUPPORT_METHODS`/`DAV_CLASS` + CORS helpers; zero runtime deps) — no path/XML/lock/props helpers, because the router forwards DAV bodies unparsed. No local file storage, no DO SQLite, no `dav-store`.
-- **Backend href prefix mode**: a backend may anchor its `DAV:href` at `/` instead of `/owner/volume` (RFC 4918 §8.3 is the default) via its per-bucket `href_prefix_mode`. The router contributes **nothing** to this and must keep contributing nothing: 207 bodies are forwarded verbatim, `rewriteDestinationForBackend` swaps only the origin so a root-anchored `Destination` keeps its path, and `/user/volumes*` is proxied unreshaped so the field rides through in both directions. The one place it cannot be correct is `parseDestinationVolume` — see the reasoning there before "fixing" it.
-- **Registry**: D1 `migrations/0001_router_init.sql` baseline, `0002_router_drop_username.sql` (email-only `users`, drop `namespaces`, add the `backend_username` per-backend owner cache), `0003_router_backend_owner_email_nocase.sql` (`COLLATE NOCASE` on `owner_email`). **Never rebuild a parent table** — the `ON DELETE CASCADE` fires and D1 cannot disable FKs. `router_backends` stores a `base_url` origin only, no secrets.
-- **Auth**: `/user/*` Cloudflare Access (`AccessAuthService`: DEMO→DEV→JWT→`ctx.access` fallback; never trust `Cf-Access-Authenticated-User-Email`); the DEMO/DEV bypasses are gated by an **allow-list** of dev environments, and `DEV_AUTH_EMAIL` is not in the production template. Email-only login (usernames live per-backend, same email may own different handles). Backend fan-out forwards `Cf-Access-Jwt-Assertion`/`Authorization`/`Cookie` verbatim (pure passthrough, router stores no credentials); WebDAV `/:owner/:volume/*` proxies bucket Basic verbatim, backend enforces visibility.
-- **API**: `apps/api` Hono+Chanfana `DurableDavRouterWorker` (`/user/backends` CRUD with quota + liveness probe + `GET /user/backends/:slug/me` per-backend identity proxy + `GET /user/volumes` fan-out aggregated `{volumes, backends}` + `POST /user/volumes?backend=` create proxy + `GET|PATCH|DELETE /user/volumes/:owner/:volume?backend=` + `/user/volumes/:owner/:volume/*` browser/credential subpath proxy + `ALL /:owner/:volume/*` WebDAV proxy with `?backend=`/`X-Backend` disambiguation (`409` when multiples match, `405`+`Allow` for a non-DAV method) + `/user/me` (email-only) + `/health`, `/docs`). Rate limits and an unauthenticated `OPTIONS *` preflight are registered in the worker constructor.
-- **Web**: `apps/web` Vite SPA (build embeds `dist/index.html` → `apps/api/src/generated/spa-shell.ts`); `GET /`, `/new`, `/backends/new`, `/settings` serve the shell, `GET /:owner/:volume` content-negotiates (`Accept: text/html` → SPA `VolumeView` with `?backend=` + `?path=` subpaths + `?tab=settings`, else WebDAV proxy); `/new` auto-loads owner from selected backend (`GET /user/backends/:slug/me`, read-only input); Dashboard groups buckets by backend with health badges. Per-bucket settings tab: General description, **Link Prefix** (`base` | `root` href anchoring, backend-owned — `HrefPrefixModeCard`), credentials, Danger Zone. The bucket browser is indifferent to the href mode: `davXml.parseMultistatus` strips the volume prefix when present and copes without it, and `davClient` builds browser-base URLs regardless.
-- **Composition**: single scope per request via `scopeMiddleware` (`BaseRoute.getScope(c).get(Tokens.X)`; `createRequestScope(env)` is the composition root, table-driven DAO wiring + service bindings); `Container` + `AppConfiguration` in `@edge-sonic/backend-runtime/di+config` are the DI foundation.
-- **i18n**: backend strings in `packages/shared/src/i18n` (12 locales, `common` namespace only — the router has no repos/tokens/issues/namespaces).
+**Edge-Sonic** serves the Subsonic REST API v1.16.1 from a WebDAV library. WebDAV is
+the only data source, D1 is the authoritative index, and KV is a cache the server is
+built to work without.
+
+- **Protocol**: `packages/subsonic` — reversible ids (`kind:base64url(libraryId \n path)`),
+  one node model with three serializers (XML/JSON/JSONP), the error codes, MD5.
+- **Origin**: `packages/webdav` — a strict 207 reader and a client that sets the stored
+  credential in exactly one place and forwards `Range` verbatim.
+- **Tags**: `packages/media-tags` — MP3, FLAC, Ogg Vorbis/Opus. Read from a *bounded
+  prefix*, never the whole file.
+- **Index**: D1 `nodes` (the folder tree, one row per entry) and `songs` (one row per
+  track). No `albums` table: an album is a group, and grouping in SQL is how the counts
+  went wrong.
+- **Scan**: client-driven and chunked. `getScanStatus` advances one chunk; nothing runs
+  on a schedule.
+- **Admin**: `apps/api/src/admin` + `apps/web`. Guarded by Cloudflare Access, never by a
+  Subsonic credential.
+- **Keys**: two Secrets Store secrets, one per feature. Never merged.
 
 ## Hardening invariants
 
-Violating any of these reintroduces a fixed vulnerability; the test suite asserts each one.
+Violating any of these reintroduces a fixed defect. The suite asserts each one.
 
-- **D1 predicates**: lowercase the _parameter_, never the column. `lower(col)` cannot use an index, so the authenticated hot path becomes a full table scan. `test/integration/api/RouterApi.int.test.ts` checks `EXPLAIN QUERY PLAN` — a wrong predicate and a right one return identical rows, so the plan is the only observable difference.
-- **Probes never carry caller credentials.** The owner-routing candidate set is attacker-influenced (`backend_username` is cached from whatever a backend reports), so `buildProbeHeaders` substitutes a synthetic credential and the fan-out is capped.
-- **`baseUrl` host validation.** The router fetches it with the caller's credentials and can read a response snippet back, so private/loopback/link-local hosts are rejected unless `ALLOW_PRIVATE_BACKEND_HOSTS` opts in.
-- **No blanket `.catch(() => null)` on D1 reads.** Only `isMissingSchemaError` may degrade; everything else becomes a `DatabaseError`, or an outage reads as "not found".
-- **5xx bodies are masked.** `ErrorMapper` logs the cause and returns a localized generic message; raw D1 text discloses the schema.
-- **CORS origins are not reflected.** An allow-list is required, plus `Vary: Origin`.
-- **Never replay a mutating request.** A stale cached route revalidates against D1 first; replay is restricted to idempotent methods so a consumed body is not re-sent.
-- **Never evict-then-restore a route cache entry.** The KV free plan allots 1,000 writes + 1,000 deletes per day against 100,000 reads, and a `404` is only a *hint*: a client asking for inner paths that do not exist made every request spend a delete plus a put of the identical value, exhausting the daily budget in ~40 minutes while answering every request correctly. A stale entry is compared against the re-resolution (`sameRoute`) and written only when the value actually changes; a lone backend is never cached at all. Tests assert operation **counts**, not just statuses.
+- **D1 predicates: lowercase the _parameter_, never the column.** `lower(col)` cannot
+  use an index, so the authenticated hot path becomes a full table scan. Every writer
+  stores a lowercased twin, so this changes no matching semantics. Paths are the
+  exception and are exact: a WebDAV origin on Linux is case-sensitive, and lowercasing a
+  path merges two real folders.
+- **The album/artist/genre queries page over groups, then fetch every row of the groups
+  on the page.** A SQL `GROUP BY` returns one *representative row* per group, so the
+  counts computed from it are 1 for a real discography. This shipped once: every album in
+  the product reported `songCount: 1` and its first track's duration.
+- **A changed file invalidates its own enrichment, in the same statement.** The upsert
+  compares `mtime_ms` and clears `duration`/`bitrate`/`sample_rate`/`channels`/
+  `enriched_at` together, so there is no window where a row claims a new mtime with the
+  old duration — and `enrich`, which short-circuits on `enriched_at`, re-reads it.
+- **`await` the authorization check.** A `void`ed `requireForUser` starts the check and
+  discards the rejection, so the write it was guarding proceeds. It shipped: a play
+  queue accepted an id for a library the caller could not see.
+- **An ordered id list stays ordered.** `id IN (...)` returns rows in index-scan order, so
+  `listIdsIn` re-orders to the caller's list. A play queue that reshuffles between polls
+  is worse than no queue.
+- **The cache is never load-bearing.** D1 answers everything; KV only avoids a repeat.
+  `KvCache` fails soft, and its circuit breaker is module-level so one outage opens it
+  for the whole isolate rather than per request scope.
+- **Cache keys carry `scan_state.index_version`.** A superseded entry becomes
+  structurally unreachable, so invalidation costs zero writes — the free plan allots
+  1,000 writes a day against 100,000 reads.
+- **5xx bodies are masked.** `toSubsonicError` logs the cause and returns a localized
+  generic message; a D1 error names tables and columns.
+- **An absent value is a value.** An empty Subsonic list serializes as `[]`, and an
+  element's name is the JSON key its wrapper declares. A client doing
+  `response.starred2.song.map(...)` throws on an absent key and renders an empty screen
+  on `[]`.
+- **`params.int(name, undefined)` is not `undefined`.** It returns the number `0`, which
+  is not nullish, so a `pageSize(params.int('count', undefined), 10)` fallback never
+  applies and the floor turns it into one. Use `optionalInt` for "was it sent".
+- **Untrusted names never reach a header unescaped.** `Content-Disposition` escapes
+  quotes, control characters, **and path separators** — a WebDAV entry named
+  `a";b/../../evil.flac` is a legal name and quoting it does nothing.
+- **A dev bypass is gated on an allow-list of environments.** A deny-list enables it for
+  `staging`, `Preview`, and a misspelled `prodcution`.
+- **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
+  so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
+  `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.
+
+## Test doubles must model the platform
+
+A double that shares a wrong assumption with the code it tests makes both look right. Two
+from this repository's own history:
+
+- The reference project carried `lower(owner_email) = lower(?)` through a full green
+  suite because its D1 double lowercased both sides in JavaScript. The rows were
+  identical; only the query plan differed. **D1 is SQLite, so the DAOs run against
+  `node:sqlite`** — the real engine, with a real planner, so `EXPLAIN QUERY PLAN` is an
+  assertion rather than a hope.
+- The FLAC fixture and the FLAC reader shared a wrong byte offset, so every duration was
+  wrong by 2^16 and nothing failed. When a fixture and a reader can both be wrong the
+  same way, **the fixture is written from the spec** and the offsets are spelled out.
+- `fakeDav` used to answer any `Range` with the whole file and a `Content-Range` header
+  claiming a prefix. That models a server lying about what it served, and it hid the one
+  bug this product exists to avoid. It truncates now, and answers `416` past the end.
 
 ## Commands
 
 ```bash
 pnpm install --ignore-scripts
-pnpm run checks        # typecheck + lint + god-files
+pnpm run checks        # pnpm -r typecheck + lint + god-files + SPA shell
 pnpm -r typecheck
-pnpm run lint
+pnpm run lint          # eslint --fix
 pnpm run test
-pnpm run test:integration
-pnpm run test:coverage
-pnpm run validate:locales
-pnpm run typegen
-pnpm exec wrangler dev --config ./wrangler.jsonc
+pnpm run test:coverage # with the coverage gate
+pnpm run build         # apps/web -> apps/api/src/generated/spa-shell.ts
+pnpm run typegen       # wrangler types from the template
+pnpm exec wrangler dev
 ```
 
-No committed `wrangler.jsonc` secrets. God-file guard 300/400 warn-only.
-`test` is a workspace project (`test/package.json`), so `pnpm -r typecheck` and `pnpm run lint` both reach it — it sat outside the workspace while holding ~200 KB of test code, and `eslint.config.mjs` ignored `test/**` outright.
-`pnpm run build` is the **only** build (just `apps/web`); re-run it after any `apps/web` change and before `wrangler deploy`. The worker serves the last local build via the gitignored `apps/api/src/generated/spa-shell.ts`, so a frontend fix is inert until the bundle is regenerated. `scripts/verify-spa-shell.mjs` runs in `checks` and rejects a missing, stubbed, or half-refreshed artifact.
-Coverage floor is **64/62/63/65** (measured 65/63/64/66) — raise it, never lower it to make CI pass. It was 80/75/80/80 until `apps/web` joined the coverage `include` list, on a comment claiming a config in `apps/web` that never existed; the SPA is 44 presentational modules at ~0% needing jsdom/testing-library harnesses. Margins are ~1pp, so **new SPA code needs a test in the same change** or the gate fails. Reasoning lives in `vitest.config.mts`.
+The committed `wrangler.jsonc` is **local development only** and is the one config that
+carries a `DEV_AUTH_EMAIL` bypass and the two raw 32-zero placeholder keys;
+`apps/api/wrangler.template.jsonc` is what a deployment starts from, and it omits both.
+`worker-configuration.d.ts` is generated and gitignored. The god-file guard is 300 warn /
+400 error, and `test/` is a workspace project so both `pnpm -r typecheck` and `pnpm run
+lint` reach it.
+
+Coverage floors are a **measured** floor (78/65/79/80 against 79/66/81/82), not an
+aspiration — lower one to make CI green and the gate stops saying anything.
+`packages/backend-errors` is excluded, and says why in the config: it is a pure taxonomy
+whose *mapping out* is tested.
 
 ## Layers
 
 ```
-shared, backend-errors, webdav → 0 deps
-backend-runtime → 0 only
-backend-data → 0 only
-backend-services → 0-2 (not apps)
-api → 0-3 + webdav (NOT backend-data values; type-only allowed)
-```
-
-## Import Direction
-
-```
-Layer 0: shared, backend-errors, webdav   — zero @edge-sonic/* deps
-Layer 1: backend-runtime                 → layer 0 only
-Layer 2: backend-data                    → layer 0 only
-Layer 3: backend-services                → layers 0–2 (not apps)
-Layer 5: apps/api                        → layers 0–3 + webdav (NOT backend-data values; type-only allowed)
+shared, backend-errors, subsonic, media-tags, webdav -> 0 deps
+backend-runtime   -> layer 0 only
+backend-data      -> layer 0 only
+backend-services  -> layers 0-2 (not apps)
+apps/api          -> layers 0-3 + webdav (NOT backend-data values; type-only allowed)
 ```
 
 Enforced by ESLint `no-restricted-imports` in `eslint.config.mjs`.
 
-## Test doubles must model the platform
-
-A D1 double that lowercases both sides of a comparison in JS makes a wrong
-predicate look right, which is how `lower(owner_email) = lower(?)` survived a full
-suite — in the double it was correct, and only the query plan was wrong. Match
-the platform's semantics (exact, case-sensitive) and assert `EXPLAIN QUERY PLAN`
-where the difference would otherwise be invisible.
-
 ## Index
 
-| Area                             | Guide                             |
-| -------------------------------- | --------------------------------- |
-| API worker, auth, routes         | `apps/api/AGENTS.md`              |
-| WebDAV proxy notes               | `packages/webdav/README.md`       |
-| D1/DAO layer                     | `packages/backend-data/AGENTS.md` |
-| Bindings, wrangler, env vars, DI | `docs/agents/runtime/AGENTS.md`   |
-| Tests, thresholds, mock patterns | `docs/agents/testing/AGENTS.md`   |
-
-````
-
-## Commit Policy
-
-Always commit changes after completing work unless explicitly told not to.
-
-## Git Commit Messages
-
-Format: `<TYPE>[optional scope]: <description>`
-
-- Type in UPPERCASE: `FIX`, `FEAT`, `DOCS`, `STYLE`, `REFACTOR`, `TEST`, `BUILD`, `CHORE`, `CI`, `PERF`.
-- Scope in lowercase: `FEAT(runtime): Add Scheduled Job State`.
-- Description: Title Case words — `DOCS: Latest Agents Context Reflection`.
-- When committing from `main`, first create a branch: `type/description` or `type/scope/description` in kebab-case (e.g. `feat/bootstrap/bootstrap-jqanywhere-v0.1-framework`).
-- Always include a Markdown body separated from the subject by a blank line.
-- Breaking changes: `!` after type/scope, or `BREAKING CHANGE: <description>` footer.
-
-```text
-<TYPE>[optional scope]: <description>
-
-[Markdown body]
-
-[optional footers]
-````
+| Area                          | Guide                                        |
+| ----------------------------- | -------------------------------------------- |
+| API worker, routes, `/rest`   | `apps/api/AGENTS.md`                          |
+| Admin SPA                     | `apps/web/AGENTS.md`                          |
+| DAOs, schema, D1 rules        | `packages/backend-data/AGENTS.md`             |
+| Services, auth, composition   | `packages/backend-services/AGENTS.md`         |
+| Bindings, wrangler, secrets   | `docs/agents/runtime/AGENTS.md`               |
+| Tests, thresholds, doubles    | `docs/agents/testing/AGENTS.md`               |
