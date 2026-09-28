@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createHarness, LIBRARY_ID, PASSWORD, SALT, USERNAME, EXPECTED_TOKEN, ORIGIN, subsonicId, ALBUM_DIR } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { fakeKv } from './helpers/fakeKv';
+import { SPA_HTML } from '../apps/api/src/generated/spa-shell';
 
 
 let harness: Harness;
@@ -194,10 +195,15 @@ describe('route order', () => {
   });
 
   it('serves the admin SPA shell for its own routes', async () => {
+    // Compares against the imported shell constant instead of a hardcoded marker:
+    // `spa-shell.ts` is gitignored and generated, so CI runs against the empty
+    // postinstall stub while a local checkout may hold a built shell. What this
+    // locks is the ROUTE TABLE (shell vs 404 vs API envelope), not the build
+    // artifact body — `scripts/verify-spa-shell.mjs` owns the artifact.
     const response = await get(`${ORIGIN}/libraries`);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
-    expect(await response.text()).toContain('<!doctype html>');
+    expect(await response.text()).toBe(SPA_HTML);
   });
 
   it('does not return HTML for an API path', async () => {
