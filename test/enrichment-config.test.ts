@@ -15,7 +15,7 @@
  *   property is that it fails closed.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { readAudioTags, readOpus, readVorbis } from '@edge-sonic/media-tags';
+import { readAudioTags, readOpus, readVorbis, READER_VERSION } from '@edge-sonic/media-tags';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { resetBreakerForTests, KvCache } from '@edge-sonic/backend-runtime/kv';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
@@ -289,6 +289,9 @@ function makeSong(seed: Partial<Record<string, unknown>> = {}): Record<string, u
     sample_rate: null,
     channels: null,
     enriched_at: null,
+    // The current reader, so a row built by `makeSong` is not automatically stale. The
+    // tests that are *about* staleness set it explicitly.
+    reader_version: READER_VERSION,
     ...seed,
   };
 }
@@ -502,116 +505,124 @@ describe('EnrichmentService', () => {
  * the caller's job and that was never written: the reader took the last granule it
  * happened to see, so a 240.61 s track was served as 3 s and 15329 kbps instead of 191,
  * and every client seeks by that number.
+ *
+ * The fixture and its harness are at module scope, because the staleness suite below
+ * needs the same file — it is the same bytes, read by a reader that could not read them.
  */
-describe('an Ogg duration, which the prefix read cannot supply', () => {
-  const PRESKIP = 312;
-  const DURATION_SECONDS = 240;
+const PRESKIP = 312;
+const DURATION_SECONDS = 240;
 
-  /**
-  A real Opus stream: headers and a big tag block first, EOS page last.
-  */
-  function opusFile(): Uint8Array {
-    const chunks: number[] = [];
-    const le = (value: number, width: number): number[] => {
-      const out: number[] = [];
-      let remaining = value;
-      for (let index = 0; index < width; index += 1) {
-        out.push(remaining % 256);
-        remaining = Math.floor(remaining / 256);
-      }
-      return out;
-    };
-    const page = (segments: number[], body: number[], flags: number, granule: number, seq: number): number[] => [
-      0x4f, 0x67, 0x67, 0x53,
-      0x00,
-      flags,
-      ...le(granule, 8),
-      ...le(1, 4),
-      ...le(seq, 4),
-      ...le(0, 4),
-      segments.length,
-      ...segments,
-      ...body,
-    ];
+/**
+A real Opus stream: headers and a big tag block first, EOS page last.
+*/
+function opusFile(): Uint8Array {
+  const chunks: number[] = [];
+  const le = (value: number, width: number): number[] => {
+    const out: number[] = [];
+    let remaining = value;
+    for (let index = 0; index < width; index += 1) {
+      out.push(remaining % 256);
+      remaining = Math.floor(remaining / 256);
+    }
+    return out;
+  };
+  const page = (segments: number[], body: number[], flags: number, granule: number, seq: number): number[] => [
+    0x4f, 0x67, 0x67, 0x53,
+    0x00,
+    flags,
+    ...le(granule, 8),
+    ...le(1, 4),
+    ...le(seq, 4),
+    ...le(0, 4),
+    segments.length,
+    ...segments,
+    ...body,
+  ];
 
-    const vendor = encoder.encode('edge-sonic-test');
-    // A long entry so the comment packet is genuinely longer than one lacing entry, which
-    // is what makes it a cross-page packet. A real one is an embedded cover image: the
-    // live file's `METADATA_BLOCK_PICTURE` runs to 89,931 bytes.
-    const entries = [
-      ['ARTIST', 'Bon Iver'],
-      ['ALBUM', 'For Emma'],
-      ['METADATA_BLOCK_PICTURE', 'A'.repeat(200)],
-    ].map(([key, value]) => encoder.encode(`${key}=${value}`));
-    const comments: number[] = [...encoder.encode('OpusTags'), ...le(vendor.length, 4), ...vendor, ...le(entries.length, 4)];
-    for (const entry of entries) comments.push(...le(entry.length, 4), ...entry);
-    // Split at a lacing boundary, with the remainder under 255 so page 1 terminates it.
-    expect(comments.length).toBeGreaterThan(255);
-    expect(comments.length - 255).toBeLessThan(255);
+  const vendor = encoder.encode('edge-sonic-test');
+  // A long entry so the comment packet is genuinely longer than one lacing entry, which
+  // is what makes it a cross-page packet. A real one is an embedded cover image: the
+  // live file's `METADATA_BLOCK_PICTURE` runs to 89,931 bytes.
+  const entries = [
+    ['ARTIST', 'Bon Iver'],
+    ['ALBUM', 'For Emma'],
+    ['METADATA_BLOCK_PICTURE', 'A'.repeat(200)],
+  ].map(([key, value]) => encoder.encode(`${key}=${value}`));
+  const comments: number[] = [...encoder.encode('OpusTags'), ...le(vendor.length, 4), ...vendor, ...le(entries.length, 4)];
+  for (const entry of entries) comments.push(...le(entry.length, 4), ...entry);
+  // Split at a lacing boundary, with the remainder under 255 so page 1 terminates it.
+  expect(comments.length).toBeGreaterThan(255);
+  expect(comments.length - 255).toBeLessThan(255);
 
-    // Page 0: the 19-byte identification header, then the comment packet continued on
-    // page 1 — the layout that defeated a page-oriented reader.
-    chunks.push(
-      ...page([19, 255], [...encoder.encode('OpusHead'), 0x01, 0x02, ...le(PRESKIP, 2), ...le(48_000, 4), ...le(0, 2), 0x00, ...comments.slice(0, 255)], 0x02, 0, 0),
-      ...page([comments.length - 255], comments.slice(255), 0x01, 0, 1),
-      // The final page, carrying the end-of-stream flag and the file's length.
-      ...page([64], [...new Uint8Array(64)], 0x04, 48_000 * DURATION_SECONDS + PRESKIP, 2),
-    );
-    return new Uint8Array(chunks);
-  }
+  // Page 0: the 19-byte identification header, then the comment packet continued on
+  // page 1 — the layout that defeated a page-oriented reader.
+  chunks.push(
+    ...page([19, 255], [...encoder.encode('OpusHead'), 0x01, 0x02, ...le(PRESKIP, 2), ...le(48_000, 4), ...le(0, 2), 0x00, ...comments.slice(0, 255)], 0x02, 0, 0),
+    ...page([comments.length - 255], comments.slice(255), 0x01, 0, 1),
+    // The final page, carrying the end-of-stream flag and the file's length.
+    ...page([64], [...new Uint8Array(64)], 0x04, 48_000 * DURATION_SECONDS + PRESKIP, 2),
+  );
+  return new Uint8Array(chunks);
+}
 
-  function makeOggEnrichment(
-    file: Uint8Array,
-    // `readTailBytes: 0` is how a test disables the tail read, so the option does not
-    // need to distinguish "absent" from "zero" — the default is only the value.
-    options: { readBytes?: number; readTailBytes?: number } = {},
-  ): {
-    service: EnrichmentService;
-    applied: Array<{ id: string; metadata: Record<string, unknown> }>;
-    library: Parameters<EnrichmentService['enrich']>[0];
-  } {
-    const applied: Array<{ id: string; metadata: Record<string, unknown> }> = [];
-    const dav = fakeDav({ '/dav/A/01.opus': [{ path: '/dav/A/01.opus', size: file.length, contentType: 'audio/ogg', body: file }] });
-    const library = {
-      id: 'L1',
-      slug: 'home',
-      slug_ci: 'home',
-      base_url: 'https://dav.example.com',
-      root_path: '/dav',
-      dav_username: 'ann',
-      password_ciphertext: '',
-      password_iv: '',
-      key_version: 1,
-      display_name: 'Home',
-      is_enabled: 1,
-      created_at: 0,
-      updated_at: 0,
-    } as never;
-    const service = new EnrichmentService({
-      songs: {
-        findById: async () => null,
-        applyMetadata: async (id, metadata) => {
-          applied.push({ id, metadata: metadata as Record<string, unknown> });
-        },
+/**
+An `EnrichmentService` over one Opus file, recording what it wrote to D1.
+*/
+function makeOggEnrichment(
+  file: Uint8Array,
+  // `readTailBytes: 0` is how a test disables the tail read, so the option does not
+  // need to distinguish "absent" from "zero" — the default is only the value.
+  options: { readBytes?: number; readTailBytes?: number } = {},
+): {
+  service: EnrichmentService;
+  applied: Array<{ id: string; metadata: Record<string, unknown> }>;
+  library: Parameters<EnrichmentService['enrich']>[0];
+  cache: FakeKv;
+} {
+  const applied: Array<{ id: string; metadata: Record<string, unknown> }> = [];
+  const cache = fakeKv();
+  const dav = fakeDav({ '/dav/A/01.opus': [{ path: '/dav/A/01.opus', size: file.length, contentType: 'audio/ogg', body: file }] });
+  const library = {
+    id: 'L1',
+    slug: 'home',
+    slug_ci: 'home',
+    base_url: 'https://dav.example.com',
+    root_path: '/dav',
+    dav_username: 'ann',
+    password_ciphertext: '',
+    password_iv: '',
+    key_version: 1,
+    display_name: 'Home',
+    is_enabled: 1,
+    created_at: 0,
+    updated_at: 0,
+  } as never;
+  const service = new EnrichmentService({
+    songs: {
+      findById: async () => null,
+      applyMetadata: async (id, metadata) => {
+        applied.push({ id, metadata: metadata as Record<string, unknown> });
       },
-      clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
-      kv: new KvCache(fakeKv().ns),
-      resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
-      // 400 covers the two header pages (303 + 69) and stops inside the final page, so
-      // the prefix read genuinely cannot see the file's length. That is the condition
-      // the whole tail read exists for, and a fixture smaller than the prefix would not
-      // reproduce it — the prefix would simply be the whole file.
-      readBytes: options.readBytes ?? 400,
-      readTailBytes: options.readTailBytes ?? 65_536,
-      timeoutMs: 1000,
-    });
-    return { service, applied, library };
-  }
+    },
+    clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
+    kv: new KvCache(cache.ns),
+    resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
+    // 400 covers the two header pages (303 + 69) and stops inside the final page, so
+    // the prefix read genuinely cannot see the file's length. That is the condition
+    // the whole tail read exists for, and a fixture smaller than the prefix would not
+    // reproduce it — the prefix would simply be the whole file.
+    readBytes: options.readBytes ?? 400,
+    readTailBytes: options.readTailBytes ?? 65_536,
+    timeoutMs: 1000,
+  });
+  return { service, applied, library, cache };
+}
 
-  function opusSong(size: number): Record<string, unknown> {
-    return { ...makeSong({ id: 's1', path: 'A/01.opus', size, enriched_at: null, duration: 0 }) };
-  }
+function opusSong(size: number): Record<string, unknown> {
+  return { ...makeSong({ id: 's1', path: 'A/01.opus', size, enriched_at: null, duration: 0 }) };
+}
 
+describe('an Ogg duration, which the prefix read cannot supply', () => {
   it('resolves the real duration from the tail, and the bitrate from it', async () => {
     const file = opusFile();
     const { service, applied, library } = makeOggEnrichment(file);
@@ -678,6 +689,104 @@ describe('an Ogg duration, which the prefix read cannot supply', () => {
 // -------------------------------------------------------------------------------------
 // Configuration
 // -------------------------------------------------------------------------------------
+
+/**
+ * A row written by a *different version of the reader* must be re-read, whatever its
+ * mtime says.
+ *
+ * This is the defect the deploy of the Ogg fix actually shipped. The reader was corrected
+ * to read Opus comment blocks that share a page with their identification header, and to
+ * take a duration from the end-of-stream page rather than a truncated one — and a live
+ * library kept reporting a 240.61 s track as 3 s at 15329 kbps with no artist, album,
+ * genre, track or year. Not a `getSong`, not a full rescan, and not a re-index changed
+ * it, because the file's bytes genuinely had not moved: `mtime_ms` matched, the row had
+ * an `enriched_at` and a non-zero `duration`, and every part of the incrementality logic
+ * was right. Staleness is a function of the bytes *and* the reader, and only the first
+ * was recorded.
+ */
+describe('a row enriched by an older reader', () => {
+  /**
+   * The values the superseded reader wrote for the track the live instance was serving:
+   * a duration taken from a page the prefix buffer cut in half, and no text tags.
+   *
+   * `size` is the fixture's own length, because it is what the tail read anchors its
+   * range to — the real 5,736,100 would ask a file this size for bytes past its end.
+   */
+  function staleSong(size: number): Record<string, unknown> {
+    return makeSong({
+      id: 's1',
+      path: 'A/01.opus',
+      suffix: 'opus',
+      size,
+      mtime_ms: 1000,
+      // Every condition the old short-circuit checked, all satisfied: enriched, and a
+      // duration greater than zero so `duration = 0` is not what spared it.
+      enriched_at: 1_700_000_000,
+      duration: 3,
+      bitrate: 15_329,
+      artist: null,
+      album: null,
+      // And the one condition it did not check, which is the whole point.
+      reader_version: READER_VERSION - 1,
+    });
+  }
+
+  it('is re-read even though the file has not changed', async () => {
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file);
+
+    await service.enrich(library, staleSong(file.length) as never);
+
+    // 3 -> the real length. If this still said 3, the row would be wrong for ever.
+    expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+    // And the tags the superseded reader could not see at all.
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+  });
+
+  it('stamps the current reader, so it is not stale again on the next call', async () => {
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file);
+
+    await service.enrich(library, staleSong(file.length) as never);
+
+    // Written with the values, in the same statement. A row whose `enriched_at` moved
+    // without its `reader_version` is one nothing can ever re-read again.
+    expect(applied[0]?.metadata.readerVersion).toBe(READER_VERSION);
+  });
+
+  it('is left alone when it does carry the current reader version', async () => {
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file);
+
+    await service.enrich(library, { ...staleSong(file.length), reader_version: READER_VERSION } as never);
+
+    // The incrementality the whole design is built on: a current row costs no read.
+    expect(applied).toEqual([]);
+  });
+
+  it('re-reads a row whose cached entry was written by the older reader', async () => {
+    // The KV entry carries the version too, because `enrich` consults it before it
+    // consults the row. A cache entry that matched on mtime alone would short-circuit
+    // the read and reproduce the bug through the cache rather than the row.
+    const file = opusFile();
+    const { service, applied, library, cache } = makeOggEnrichment(file);
+    // Written through `KvCache` rather than by hand, so the test does not encode the key
+    // layout — a hard-coded key would break when `KV_KEY_VERSION` moved, quietly.
+    await new KvCache(cache.ns).putJson('songMeta', ['s1'], {
+      mtimeMs: 1000,
+      readerVersion: READER_VERSION - 1,
+      durationSeconds: 3,
+      bitrateKbps: 15_329,
+      sampleRate: 48_000,
+      channels: 2,
+      container: 'ogg-opus',
+    });
+
+    await service.enrich(library, staleSong(file.length) as never);
+
+    expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+  });
+});
 
 describe('AppConfiguration.validate', () => {
   it('is silent for a valid production environment', () => {

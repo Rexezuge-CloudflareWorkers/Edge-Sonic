@@ -17,6 +17,38 @@ How much of a file to read for enrichment.
 */
 const DEFAULT_PREFIX_BYTES = 128 * 1024;
 
+/**
+ * Which version of this reader a row's enrichment came from.
+ *
+ * ### Why a row has to carry this
+ *
+ * What a prefix read can extract is a property of the *reader*, not only of the file. A
+ * reader that learns to read something it previously could not leaves every row it
+ * already wrote looking current: the file's bytes have not changed, so `mtime_ms` still
+ * matches, so anything that skips a read on a matching mtime correctly declines to read
+ * it — and the previously-wrong value is served for ever.
+ *
+ * It shipped. A reader that had been treating an Ogg page as a packet, and a page's
+ * granule as the file's length, produced a 240.61 s track reported as 3 s at 15329 kbps
+ * with no artist, album, genre, track or year. A deploy carrying the corrected reader
+ * changed nothing: not a `getSong`, not a rescan, not a re-index. The rows were correct
+ * by every test the incrementality logic had — the bytes really had not moved — and
+ * wrong all the same, because the *other* half of the staleness condition was not
+ * recorded anywhere.
+ *
+ * So this counter is bumped whenever a change makes a previously-written value wrong, and
+ * a row whose `reader_version` differs from it is re-read. The same shape as the
+ * `key_version` on the credential rows, and for the same reason: a superseded value is
+ * better made **structurally unreachable** than left to be detected.
+ *
+ * ### When to bump it
+ *
+ * Any change to what `readAudioTags` or `readOggTailDuration` can extract from the same
+ * bytes — a fixed packet walk, a corrected granule rule, a newly supported container.
+ * Bumping it costs one re-read per track, so it is not a thing to do for a refactor.
+ */
+const READER_VERSION = 1;
+
 function startsWith(bytes: Uint8Array, magic: readonly number[], offset = 0): boolean {
   return offset + magic.length > bytes.length ? false : magic.every((byte, index) => bytes[offset + index] === byte);
 }
@@ -57,7 +89,7 @@ function readAudioTags(bytes: Uint8Array, fileSize: number | null = null): Audio
 }
 
 export * from './types';
-export { readAudioTags,        DEFAULT_PREFIX_BYTES };
+export { readAudioTags,        DEFAULT_PREFIX_BYTES, READER_VERSION };
 export { parseVorbisComments, readUintBE, readUintLE, readBitsBE } from './bits';
 
 export {readFlac, hasFlacMagic} from './flac';

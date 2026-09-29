@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createHarness, LIBRARY_ID, PASSWORD, SALT, USERNAME, EXPECTED_TOKEN, ORIGIN, subsonicId, ALBUM_DIR } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { fakeKv } from './helpers/fakeKv';
+import { READER_VERSION } from '@edge-sonic/media-tags';
 import { SPA_HTML } from '../apps/api/src/generated/spa-shell';
 import { getRateLimitBucketCountForTests, resetRateLimitForTests } from '../apps/api/src/middleware/rateLimit';
 
@@ -354,7 +355,15 @@ describe('the cache is never load-bearing', () => {
 
     // A wrong value under the right key, and a genuinely corrupt one. Both must degrade
     // to a recompute from D1.
-    await harness.cache.ns.put(`songMeta:v1:${SKINNY_LOVE}`, JSON.stringify({ mtimeMs: 1000, durationSeconds: 9999, bitrateKbps: 1 }));
+    //
+    // The poisoned entry carries the **current** `readerVersion` and the row's real
+    // `mtime_ms`, so it is a cache entry a real deployment would consider valid: every
+    // check `enrich` makes passes and only the value is wrong. An entry that fails an
+    // earlier check would be ignored for that reason, and would prove less.
+    await harness.cache.ns.put(
+      `songMeta:v1:${SKINNY_LOVE}`,
+      JSON.stringify({ mtimeMs: 1000, readerVersion: READER_VERSION, durationSeconds: 9999, bitrateKbps: 1, sampleRate: 44_100, channels: 2, container: 'flac' }),
+    );
     await harness.cache.ns.put('libIndex:v1:nonsense:artists', 'not json at all');
     const poisoned = await (await get(restUrl('getSong', { id: SKINNY_LOVE }))).text();
 

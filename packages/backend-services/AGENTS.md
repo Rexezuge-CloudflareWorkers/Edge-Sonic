@@ -132,8 +132,15 @@ reads over one file, not two parses: the sample rate, channels and pre-skip come
 prefix read and the tail reuses them. Without the tail read the duration is `null` rather
 than wrong, because a client seeks by it.
 
-- It short-circuits on `enriched_at`, which is why the scan must clear that column when a
-  file's bytes change.
+- It short-circuits on `enriched_at` **and** `reader_version`, which is why the scan must
+  clear both when a file's bytes change. `shouldEnrich` is a pair, not one predicate, and
+  the second half is not optional bookkeeping: keying on `enriched_at` alone makes this
+  whole file inert on an existing library, because a corrected reader cannot reach a row an
+  older one wrote. It shipped — the reader was fixed, deployed, and every existing row
+  kept its wrong duration, bitrate and missing tags through a `getSong`, a rescan and a
+  re-index. `enrichFacts` takes an `EnrichFacts` (id, path, size, mtimeMs) rather than a
+  `SongRow`, so the scan does not fabricate one; a fabricated row is a copy of the schema
+  that rots silently when a column is added.
 - A `WEBDAV` failure or an unreadable container resolves to "no enrichment" and is
   **recorded as an attempt**, so a format this server cannot read is not retried on every
   play. A transient error is deliberately *not* recorded, so a recovered origin is

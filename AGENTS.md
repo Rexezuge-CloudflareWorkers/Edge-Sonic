@@ -36,8 +36,25 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the product reported `songCount: 1` and its first track's duration.
 - **A changed file invalidates its own enrichment, in the same statement.** The upsert
   compares `mtime_ms` and clears `duration`/`bitrate`/`sample_rate`/`channels`/
-  `enriched_at` together, so there is no window where a row claims a new mtime with the
-  old duration — and `enrich`, which short-circuits on `enriched_at`, re-reads it.
+  `enriched_at`/`reader_version` together, so there is no window where a row claims a new
+  mtime with the old duration — and `enrich`, which short-circuits on `enriched_at`,
+  re-reads it.
+- **Staleness has two inputs, and only recording one makes a fix inert.** What a row
+  holds is a function of the file's bytes *and* of the reader that extracted them.
+  Keying invalidation on `mtime_ms` alone is correct for the bytes and blind to the
+  reader, so a corrected reader leaves every row it already wrote looking current: the
+  file genuinely has not moved, so the short-circuit is right and the wrong value is
+  served for ever. It shipped. A deploy carrying a fixed Ogg reader left a live library
+  reporting a 240.61 s track as 3 s at 15329 kbps with no artist, album, genre, track or
+  year, and neither a `getSong`, a rescan, nor a re-index changed it — every part of the
+  incrementality logic was working. `songs.reader_version` is the other input, written in
+  the same statement as the values, bumped when a change makes a prior extraction wrong;
+  the KV entry carries it too, because `enrich` consults the cache before the row. The
+  same rule the index already follows for `scan_state.index_version` and `key_version`: a
+  superseded value is made **structurally unreachable**, not left to be detected. Asserted
+  in `test/enrichment-config.test.ts`, including the paired case proving the guard
+  re-reads a stale row rather than only stamping one — a test that only checks the stamp
+  would pass with the short-circuit still in place.
 - **`await` the authorization check.** A `void`ed `requireForUser` starts the check and
   discards the rejection, so the write it was guarding proceeds. It shipped: a play
   queue accepted an id for a library the caller could not see.

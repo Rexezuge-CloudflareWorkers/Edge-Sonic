@@ -27,6 +27,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { NodeDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { READER_VERSION } from '@edge-sonic/media-tags';
 import { EdgeSonicWorker } from '../../apps/api/src/workers/EdgeSonicWorker';
 import { sqliteQueryable } from './sqlite';
 import { fakeKv } from './fakeKv';
@@ -184,6 +185,12 @@ export async function createHarness(tree?: Record<string, DavEntry[]>): Promise<
     { id: ids.skinnyLove, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/01.flac`, dirPath: ALBUM_DIR, name: '01.flac', size: 4096, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
     { id: ids.holocene, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/02.flac`, dirPath: ALBUM_DIR, name: '02.flac', size: 8192, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
   ]);
+  // These two rows claim to be *enriched*, so they have to say which reader enriched
+  // them. Seeding `duration` and `bitrate` without a `readerVersion` says "these came
+  // from some reader, possibly not the one running", and the service then correctly
+  // treats the row as stale and re-reads the file — which this harness's `fakeDav` body
+  // cannot answer, so every enriched-metadata assertion went to 0. A double that does not
+  // model the product's own staleness rule hides a real guard.
   await songs.applyMetadata(ids.skinnyLove, {
     title: 'Skinny Love',
     artist: 'Bon Iver',
@@ -195,6 +202,7 @@ export async function createHarness(tree?: Record<string, DavEntry[]>): Promise<
     genre: 'Indie',
     duration: 251,
     bitrate: 900,
+    readerVersion: READER_VERSION,
   });
   await songs.applyMetadata(ids.holocene, {
     title: 'Holocene',
@@ -207,6 +215,7 @@ export async function createHarness(tree?: Record<string, DavEntry[]>): Promise<
     genre: 'Indie',
     duration: 336,
     bitrate: 900,
+    readerVersion: READER_VERSION,
   });
 
   const worker = new EdgeSonicWorker();

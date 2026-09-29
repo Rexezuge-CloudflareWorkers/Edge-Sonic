@@ -20,6 +20,7 @@ import type { CountRow, SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { chunkArray } from './chunking';
 import { UPSERT_FILE_FACTS } from './songSql';
+import type { SongMetadataInput } from './songSql';
 
 interface SongUpsertInput {
   id: string;
@@ -125,23 +126,7 @@ class SongDAO extends BaseDAO {
    * calls the first for every file it sees, while this is called at most once per
    * song a client actually opens.
    */
-  public async applyMetadata(
-    id: string,
-    metadata: {
-      title?: string | null;
-      artist?: string | null;
-      album?: string | null;
-      albumArtist?: string | null;
-      track?: number | null;
-      disc?: number | null;
-      year?: number | null;
-      genre?: string | null;
-      duration?: number | null;
-      bitrate?: number | null;
-      sampleRate?: number | null;
-      channels?: number | null;
-    },
-  ): Promise<void> {
+  public async applyMetadata(id: string, metadata: SongMetadataInput): Promise<void> {
     const assignments: string[] = [];
     const values: unknown[] = [];
     const push = (column: string, value: string | number | null | undefined): void => {
@@ -172,6 +157,12 @@ class SongDAO extends BaseDAO {
     push('bitrate', metadata.bitrate);
     push('sample_rate', metadata.sampleRate);
     push('channels', metadata.channels);
+    // Stamped with the same statement that writes the values, because a row whose
+    // `enriched_at` moved without its `reader_version` is a row nothing can re-read:
+    // the next reader compares the version, finds a match against whatever wrote last,
+    // and concludes the file has not been read since. The two are written together and
+    // read together for the same reason `mtime_ms` and `enriched_at` are.
+    if (metadata.readerVersion !== undefined) push('reader_version', metadata.readerVersion);
     if (assignments.length === 0) return;
 
     assignments.push('enriched_at = ?', 'updated_at = ?');
