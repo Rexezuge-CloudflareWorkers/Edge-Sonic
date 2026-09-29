@@ -202,6 +202,23 @@ Neither bound is visible in the `scanStatus` element, which carries only `scanni
 `POST /user/libraries/:id/scan/step` — a `POST` for the same reason `probe` is, since it
 performs live outbound requests with the stored credential.
 
+### `scanning` means "poll me again", which is not what it answered
+
+`scanStatus` carries only `scanning` and `count`, so `scanning` has exactly one job: tell
+the client whether another poll buys anything. It answered "did *this* call do work"
+instead, and every client reads `scanning: false` as **stop polling** — which is precisely
+what stopped a library being scanned. A failed chunk *is* retried, from the frontier in D1,
+so it reports `true`; only `stalled`, which has spent its retry budget and will not be
+retried without an explicit `startScan`, reports `false`. The distinction is the whole fix,
+and the reason `stalled` is a status rather than a flavour of `failed`.
+
+`isAdvancing` lives in `backend-services` beside the state machine it describes, because
+the two are one decision: `step` used to answer both inline, and the tangle is what shipped.
+
+The *reason* a scan failed is not on this surface at all. A reason here would be a
+non-standard attribute some strict clients reject, and `scanStatus` has nowhere to put one.
+It is on `scan_state.last_error`, read through the operator API.
+
 ## Stream and download
 
 A `Range` is forwarded verbatim and the upstream `Response` is returned as it arrived —

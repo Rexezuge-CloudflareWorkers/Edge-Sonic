@@ -13,9 +13,12 @@ export type { NodeInput, NodePatch } from './NodeDAO';
 export { SongDAO } from './SongDAO';
 export { chunkArray } from './chunking';
 export type { SongUpsertInput } from './SongDAO';
+export { deriveFromPath, DERIVED_MARKER } from './pathConvention';
+export type { DerivedNames } from './pathConvention';
 export { SongIndexDAO } from './songIndex';
 export type { GenreCountRow } from './songIndex';
-export { AnnotationDAO, AuthThrottleDAO, ScanStateDAO } from './UserStateDAO';
+export { AnnotationDAO, AuthThrottleDAO } from './UserStateDAO';
+export { ScanStateDAO } from './ScanStateDAO';
 export { PlaylistDAO } from './playlists';
 export type { StarItemType } from './UserStateDAO';
 export type {

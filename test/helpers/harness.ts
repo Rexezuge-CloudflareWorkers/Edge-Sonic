@@ -23,8 +23,6 @@
  * worker's own `Response` quirks, KV eventual consistency — and that is stated here
  * rather than papered over.
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { NodeDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import { READER_VERSION } from '@edge-sonic/media-tags';
@@ -32,11 +30,21 @@ import { EdgeSonicWorker } from '../../apps/api/src/workers/EdgeSonicWorker';
 import { sqliteQueryable } from './sqlite';
 import { fakeKv } from './fakeKv';
 import { fakeDav } from './fakeDav';
+import { migrationSql } from './migrations';
 import type { SqliteQueryable } from './sqlite';
 import type { FakeKv } from './fakeKv';
 import type { DavEntry, FakeDav } from './fakeDav';
 
-export const MIGRATION = readFileSync(fileURLToPath(new URL('../../migrations/0001_edge_sonic_init.sql', import.meta.url)), 'utf8');
+/**
+ * The whole schema, every migration, in Wrangler's order.
+ *
+ * This used to read `0001_edge_sonic_init.sql` by name, which is a schema no real
+ * database has: `0002` adds `songs.reader_version`, and the harness's own `upsertFileFacts`
+ * names that column — so every seeded song raised `no such column: songs.reader_version`
+ * the moment the column moved to its own migration. Reading the directory is what keeps
+ * the double modelling the platform; see `helpers/migrations.ts`.
+ */
+export const MIGRATION = migrationSql();
 
 /**
 32 ASCII zeros, base64. The same placeholder the deployment template documents.

@@ -77,7 +77,14 @@ interface ScanStateStore {
   markScanning(libraryId: string, totalCount: number): Promise<void>;
   saveProgress(libraryId: string, scannedCount: number, cursorPath: string | null): Promise<void>;
   complete(libraryId: string, scannedCount: number): Promise<number>;
-  fail(libraryId: string, error: string): Promise<void>;
+  /**
+   * Record a failure and report how many consecutive failures there have now.
+   *
+   * The count is the return value rather than a second read, because the bound it
+   * feeds is the answer to "may this scan try again?" and a read after the write
+   * could observe a different writer's increment.
+   */
+  fail(libraryId: string, error: string): Promise<number>;
 }
 
 interface ScanDeps {
@@ -153,7 +160,28 @@ interface ScanDeps {
  * field added to the result without a fake that produces it is a field nothing
  * exercises.
  */
-type ScanStatus = 'idle' | 'scanning' | 'failed';
+/**
+ * A scan's state, as the service reports it.
+ *
+ * `stalled` is separated from `failed` because the two mean opposite things about
+ * what happens next: `failed` is retried by the following poll, `stalled` has spent
+ * its retry budget and will not be. Collapsing them is what let a wedged scan report
+ * as finished — `getScanStatus` derives `scanning` from this value, and both `failed`
+ * and a completed scan serialize as `scanning: false`.
+ */
+type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled';
+
+/**
+ * How many consecutive failed chunks a scan may spend before it is declared stalled.
+ *
+ * A bound, not a policy of one. An origin that 500s once must not end a scan, so a
+ * single failure is not terminal; a library whose credential is revoked must not be
+ * re-attempted on every poll for ever, spending the operator's WebDAV requests to
+ * reach the same conclusion each time. Three is the smallest number that separates
+ * "flaked" from "broken" without a flag day, and `startScan` resets it — the
+ * operator's escape hatch, needing no surface of its own.
+ */
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 interface ChunkResult {
   readonly status: ScanStatus;
@@ -215,6 +243,6 @@ for every writer, the service's is what the operator is shown.
 const LAST_ERROR_MAX = 500;
 
 export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult, ScanEnrichFacts,  };
-export { LAST_ERROR_MAX };
+export { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES };
 
 export {type ChunkStopReason} from './scanBudget';

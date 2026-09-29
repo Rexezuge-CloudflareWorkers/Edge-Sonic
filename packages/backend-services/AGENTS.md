@@ -125,7 +125,22 @@ Object, no trigger.
   clicking "Rescan" started a scan that only progressed while some *Subsonic client*
   happened to be polling. That route is also the only place `stoppedBy` is readable,
   because the Subsonic `scanStatus` element carries just `scanning` and `count`.
-- A failure leaves the frontier where it was, so the next poll resumes.
+- A failure leaves the frontier where it was, and the next poll **resumes** — bounded.
+  `step` re-enters a `failed` scan rather than treating the status as terminal, because it
+  used to, and that made one bad chunk permanent: the frontier sat intact in D1 and
+  nothing read it again, so 80 albums stayed at one scanned folder for the life of the
+  deployment. It was invisible because `getScanStatus` derived `scanning` from the status,
+  which is what a client reads as *stop polling* — so the client stopped too. Bounded by
+  `scan_state.consecutive_failures` (`MAX_CONSECUTIVE_FAILURES`), because unbounded is the
+  opposite defect: a revoked credential re-attempted on every poll for ever, spending the
+  operator's subrequest budget to reach the same conclusion each time. `stalled` is a
+  separate status from `failed` because the two mean **opposite things about what happens
+  next**; `startScan` clears the counter, so the operator's escape hatch needs no surface
+  of its own. `scanRetry.ts` owns the decision and the `scanning` mapping — `step` used to
+  answer both inline, and the tangle is what shipped.
+  The counter lives in D1 rather than in a module variable because it must survive the
+  isolate: a counter that resets when a different isolate serves the next poll is not a
+  bound.
 
 `ChunkResult` is declared in `index/scanTypes.ts` beside the service's inputs, because
 it is a contract a test writes against — and a field added to the result with no fake
@@ -159,6 +174,17 @@ than wrong, because a client seeks by it.
   re-index. `enrichFacts` takes an `EnrichFacts` (id, path, size, mtimeMs) rather than a
   `SongRow`, so the scan does not fabricate one; a fabricated row is a copy of the schema
   that rots silently when a column is added.
+- **Enrichment is not what makes a library browsable, and treating it as though it were
+  is why it shipped broken.** The aggregates filter on the `_ci` columns in SQL, so a
+  track this module has not read is *absent* from `getArtists`, `getAlbumList2` and
+  `search3` — not shown with a blank name. Since the read is one ranged request per track
+  and is bounded twice over, most rows of a real library are unenriched for a long time,
+  and the whole tag-organized half of the protocol answers `[]` while `getRandomSongs`,
+  which does not group, returns rows happily. So the artist and album the WebDAV *path*
+  already carries are derived at index time instead (`pathConvention.ts` in
+  `backend-data`), and this module's real tags overwrite that fallback when it runs.
+  The two are the same fact read by two means, and the path is always available while the
+  ranged read is not.
 - A `WEBDAV` failure or an unreadable container resolves to "no enrichment" and is
   **recorded as an attempt**, so a format this server cannot read is not retried on every
   play. A transient error is deliberately *not* recorded, so a recovered origin is

@@ -1,0 +1,46 @@
+-- Migration 0002: `songs.reader_version`, in its own file.
+--
+-- **Why this is not an edit to 0001.** D1 records applied migrations by *filename*
+-- in `d1_migrations`, so a migration that has already run is skipped on every later
+-- `wrangler d1 migrations apply` — silently, and with no warning. `0001` was applied
+-- to the live database, and `reader_version` was added to it afterwards. The
+-- column therefore never reached the database, and every statement naming it failed
+-- against a schema without it:
+--
+--   - `SongDAO.applyMetadata` emits `UPDATE songs SET ... reader_version = ?`, so
+--     every `getSong` answered a masked 500 and every enrichment wrote nothing.
+--   - `UPSERT_FILE_FACTS`' `ON CONFLICT` clause also names it, so the scan's
+--     `upsertFileFacts` threw, `reconcileFolder` threw, and the scan wedged in
+--     `failed` — which `getScanStatus` reports identically to a finished one.
+--
+-- The symptom was a client that authenticated, browsed a tree of 80 albums, and saw
+-- empty artists, albums, genres and search: `songs` rows existed with every derived
+-- column NULL, and the aggregates filter on exactly those columns.
+--
+-- So: an applied migration is immutable. A schema change is a new file, and
+-- `migrations/applied.lock.json` records the hash of everything already applied so
+-- an edit to a shipped migration fails the suite rather than the deployment.
+-- `test/schema.int.test.ts` reads the directory and applies every file in order,
+-- because a test that hardcodes one filename cannot tell a new migration from an
+-- edit to an old one.
+--
+-- `NOT NULL` is legal on `ADD COLUMN` because a non-null default is supplied, and
+-- SQLite rewrites no rows to do it.
+ALTER TABLE songs ADD COLUMN reader_version INTEGER NOT NULL DEFAULT 0;
+
+-- Which version of the *tag reader* produced `enriched_at`.
+--
+-- The staleness of a row is a function of two things, and only one of them used to be
+-- recorded: the file's bytes, via `mtime_ms`, and the reader that extracted from them. A
+-- reader that learns to read something it previously could not — an Opus comment block
+-- sharing a page with its identification header, a granule that is only a duration on
+-- the last page — leaves every row it already wrote looking current. The file has not
+-- changed, so mtime matches, so `enrich` short-circuits and the wrong value is served
+-- for ever. It shipped: a deploy carrying the corrected reader left a library reporting
+-- a 240.61 s track as 3 s at 15329 kbps, with no artist, album, genre, track or year,
+-- and a full rescan did not repair it.
+--
+-- So the value is 0 until a read happens, and `enrich` re-reads any row whose
+-- `reader_version` is not the one it implements. The same `key_version` shape the
+-- credential rows use: a counter whose only job is to make a superseded value
+-- structurally unreachable rather than merely stale.

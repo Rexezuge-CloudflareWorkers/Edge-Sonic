@@ -25,7 +25,7 @@
  * `test/scan-budget.test.ts`; this file is about the walk.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ScanService } from '@edge-sonic/backend-services/index';
+import { ScanService, MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
@@ -49,6 +49,7 @@ function createIndex() {
     index_version: 1,
     last_error: null,
     started_at: null,
+    consecutive_failures: 0,
     updated_at: 0,
   };
   const writes = { nodes: 0, songs: 0, state: 0 };
@@ -216,24 +217,29 @@ function createIndex() {
       scanState: {
         find: async () => state,
         ensure: async () => state,
+        // `consecutive_failures` is cleared on both, matching the DAO: a scan that has
+        // been explicitly started, and a chunk that made progress, have both
+        // demonstrated they are not stuck — and a double that kept the count would make
+        // the retry bound unobservable here.
         markScanning: async (_libraryId: string, total: number) => {
-          state = { ...state, status: 'scanning', total_count: total, scanned_count: 0, cursor_path: null, last_error: null };
+          state = { ...state, status: 'scanning', total_count: total, scanned_count: 0, cursor_path: null, last_error: null, consecutive_failures: 0 };
           writes.state += 1;
         },
         saveProgress: async (_libraryId: string, scanned: number, cursor: string | null) => {
-          state = { ...state, status: 'scanning', scanned_count: scanned, cursor_path: cursor };
+          state = { ...state, status: 'scanning', scanned_count: scanned, cursor_path: cursor, consecutive_failures: 0 };
           writes.state += 1;
         },
         complete: async (_libraryId: string, scanned: number) => {
           // The bump is what invalidates every cached aggregate for this library, by
           // making the old keys unreachable rather than by deleting them.
-          state = { ...state, status: 'idle', scanned_count: scanned, index_version: state.index_version + 1 };
+          state = { ...state, status: 'idle', scanned_count: scanned, index_version: state.index_version + 1, consecutive_failures: 0 };
           writes.state += 1;
           return state.index_version;
         },
         fail: async (_libraryId: string, error: string) => {
-          state = { ...state, status: 'failed', last_error: error };
+          state = { ...state, status: 'failed', last_error: error, consecutive_failures: state.consecutive_failures + 1 };
           writes.state += 1;
+          return state.consecutive_failures;
         },
       },
     },
@@ -660,6 +666,133 @@ describe('ScanService', () => {
     expect(result.status).toBe('failed');
     expect(index.state().last_error).toBeTruthy();
     expect(index.songs.size).toBe(songs);
+  });
+
+  /**
+   * A failed scan is retried, bounded, and never reported as finished.
+   *
+   * ### The defect
+   *
+   * `step` short-circuited on any status other than `scanning`, and `fail` sets
+   * `failed` — so one bad chunk ended a scan **permanently**, with the frontier sitting
+   * intact and unread in D1. The module header claimed "a failure leaves the frontier
+   * where it was, so the next poll resumes", and the claim was true of the frontier and
+   * false of the code that reads it.
+   *
+   * It was invisible because `getScanStatus` derived `scanning` from the status: `failed`
+   * and a completed scan both serialize as `scanning: false`, which every client reads
+   * as *stop polling*. A library of 80 albums sat at one scanned folder, reporting
+   * `{"scanning": false, "count": 1}` indefinitely, and the reason was in
+   * `scan_state.last_error` where only the operator API could reach it.
+   */
+  describe('a failed scan', () => {
+    /**
+     * A second service over the same `index`, whose origin fails with `status`.
+     *
+     * Deliberately a *separate* service rather than a mutable flag on the shared one:
+     * `start` seeds the frontier, so a scan that fails in its own root probe has nothing
+     * to resume from, and the retry path is only exercised by a scan that got past the
+     * seed first. Sharing the index is what makes "it resumed" observable — the state
+     * that persists across the failure is the one in `deps`.
+     */
+    function serviceFailingWith(status: number): ScanService {
+      const failing = fakeDav(sampleTree(), { status });
+      return new ScanService({
+        ...index.deps,
+        clientFor: async (_library, onRequest) =>
+          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch, onRequest),
+        timeoutMs: 1000,
+        ...UNBOUNDED_CHUNK,
+        enrichMaxPerFolder: 0,
+      });
+    }
+
+    /**
+    Poll to completion, so a test can assert on the end state rather than a step.
+    */
+    async function drain(service: ScanService): Promise<string> {
+      let status = (await service.step(row)).status;
+      let guard = 0;
+      while (status === 'scanning' && guard < 50) {
+        status = (await service.step(row)).status;
+        guard += 1;
+      }
+      return status;
+    }
+
+    it('resumes on the next poll instead of staying wedged', async () => {
+      // The load-bearing assertion. A single transient fault — an origin that 500s once
+      // — must not end a scan. The proof is that the scan reaches the end, which is only
+      // possible if the next poll re-entered the frontier the failure left behind.
+      dav.setTree(sampleTree());
+      expect((await service.start(row)).status).toBe('scanning');
+
+      const broken = serviceFailingWith(500);
+      expect((await broken.step(row)).status).toBe('failed');
+
+      // The origin recovers. The next poll must do the interrupted work — so the scan
+      // ends *complete*, with every track in it. Asserting on the song count and not
+      // merely on a status is what makes this a resumption test: a scan that reported
+      // `idle` without walking the frontier would satisfy a status-only assertion.
+      dav.setTree(sampleTree());
+      expect(await drain(service)).toBe('idle');
+      expect([...index.songs.values()].map((song) => song.path).sort()).toEqual(['Blur/01.flac', 'Blur/02.flac', 'For Emma/01.flac', 'For Emma/02.flac', 'Holocene/01.flac', 'Holocene/02.flac'].map((leaf) => `Blur/${leaf}`).sort());
+    });
+
+    it('gives up after a bounded number of retries, and says so', async () => {
+      // The other half of the same rule. Without a bound, a permanently broken library
+      // is re-attempted on every poll for ever, spending the operator's WebDAV requests
+      // to reach the same conclusion each time.
+      dav.setTree(sampleTree());
+      await service.start(row);
+
+      const broken = serviceFailingWith(503);
+      const statuses: string[] = [];
+      for (let attempt = 0; attempt < MAX_CONSECUTIVE_FAILURES + 2; attempt += 1) {
+        statuses.push((await broken.step(row)).status);
+      }
+
+      // `failed` while the budget lasts, `stalled` once it is spent — and `stalled` is
+      // the state that does *not* get retried, so a client polling to decide whether to
+      // keep going is not told to keep going.
+      expect(statuses).toEqual([...Array.from({ length: MAX_CONSECUTIVE_FAILURES - 1 }, () => 'failed'), ...Array.from({ length: 3 }, () => 'stalled')]);
+
+      // And it stops touching the network, which is the point of the bound. The
+      // counter is the observable: a poll that re-attempted the request would raise it
+      // again, so "the same number afterwards" is "no request was issued".
+      const spent = index.state().consecutive_failures;
+      expect((await broken.step(row)).status).toBe('stalled');
+      expect(index.state().consecutive_failures).toBe(spent);
+    });
+
+    it('resets the retry budget on an explicit startScan, which is the operator escape hatch', async () => {
+      // A credential is fixed out of band, so the client's own poll cannot be what
+      // un-wedges a stalled scan — `startScan` is, and it needs no surface of its own.
+      dav.setTree(sampleTree());
+      await service.start(row);
+      const broken = serviceFailingWith(500);
+      for (let attempt = 0; attempt < MAX_CONSECUTIVE_FAILURES; attempt += 1) {
+        await broken.step(row);
+      }
+      expect(index.state().consecutive_failures).toBeGreaterThanOrEqual(MAX_CONSECUTIVE_FAILURES);
+
+      dav.setTree(sampleTree());
+      await service.start(row);
+      expect(index.state().consecutive_failures).toBe(0);
+      expect(await drain(service)).toBe('idle');
+    });
+
+    it('does not report `idle` for a scan whose very first chunk failed', async () => {
+      // `start` seeds the frontier with the library root, so a failure in the root probe
+      // leaves *nothing* to retry. Completing there would answer `idle` for a scan that
+      // never indexed a folder — the client-is-told-it-finished symptom, reached by the
+      // new retry path rather than around it.
+      const broken = serviceFailingWith(500);
+      await broken.start(row);
+      const result = await broken.step(row);
+      expect(result.status).toBe('failed');
+      expect(result.lastError).toBeTruthy();
+    });
   });
 
   it('survives a poll with no scan running without touching the network', async () => {
