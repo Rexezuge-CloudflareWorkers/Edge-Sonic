@@ -10,8 +10,21 @@
  *
  * Reading it from every file during the scan is not affordable: one ranged read
  * per track, and a 5,000-track library is 5,000 subrequests against a 1,000 limit.
- * Reading it on `getSong` costs **one subrequest per song the client actually
- * opens**, which is a handful per listening session rather than thousands.
+ * So it is read from two places, and both are bounded — the scan, for the tracks it
+ * changed (see `scanEnrichment.ts`), and `getSong`, for the rest, at the cost of
+ * one subrequest per song the client actually opens.
+ *
+ * ### The second read
+ *
+ * A container whose length is recorded at the *end* of the file cannot be read from a
+ * prefix. Ogg is the case: its granule position is in the final page's header. So a
+ * prefix read reports no duration, and one tail-anchored read resolves it — reusing the
+ * sample rate, channels and pre-skip the prefix read already established, so it is a
+ * second range over the same file rather than a second parse of it.
+ *
+ * A deployment that does not configure `readTailBytes` gets no Ogg duration. That is the
+ * intended trade: `null` is a value, and a wrong one is worse, because a client seeks by
+ * it.
  *
  * ### What it writes, and what it does not
  *
@@ -24,7 +37,7 @@
  */
 import { decryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { readAudioTags } from '@edge-sonic/media-tags';
+import { readAudioTags, readOggTailDuration } from '@edge-sonic/media-tags';
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { WebDavClient } from '@edge-sonic/webdav';
@@ -59,7 +72,29 @@ interface EnrichmentDeps {
   Bytes read from the head of a file.
   */
   readBytes: number;
+  /**
+  Bytes read from the end of a file, for the duration of a container whose length is
+  only recorded there.
+
+  Optional, and defaulted: a deployment that leaves it unset gets no duration for Ogg
+  rather than a wrong one, which is the same trade `readOggTailDuration` makes.
+  */
+  readTailBytes?: number;
   timeoutMs: number;
+}
+
+/**
+ * What a range read needs, and nothing else.
+ *
+ * Deliberately not a `SongRow`: a caller without a row in hand — the scan, holding the
+ * facts it just upserted — passes these four fields instead of fabricating a row to
+ * satisfy a signature.
+ */
+interface EnrichFacts {
+  readonly id: string;
+  readonly path: string;
+  readonly size: number;
+  readonly mtimeMs: number;
 }
 
 /**
@@ -116,36 +151,127 @@ class EnrichmentService {
 
     if (!shouldEnrich(song)) return null;
 
+    return await this.readAndPersist(library, song, { id: song.id, path: song.path, size: song.size, mtimeMs: song.mtime_ms });
+  }
+
+  /**
+   * Enrich a track from its file facts, without a `songs` row in hand.
+   *
+   * The scan calls this. It exists so the scan does not have to fabricate a `SongRow` to
+   * satisfy a signature — a fabricated row is a copy of the schema that silently rots
+   * when a column is added, and the failure is a wrong answer rather than a type error.
+   * Both entry points share `readAndPersist`, so a track enriched by a scan and a track
+   * enriched on first play are enriched identically.
+   */
+  public async enrichFacts(library: LibraryRow, facts: EnrichFacts): Promise<AudioTags | null> {
+    const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [facts.id]);
+    if (cached && cached.mtimeMs === facts.mtimeMs) return null;
+    return await this.readAndPersist(library, null, facts);
+  }
+
+  /**
+   * The one read path: a prefix read, an optional tail read, then D1 and KV.
+   *
+   * `row` is `null` when the caller has no row to write metadata through — the scan
+   * writes by id, which is all a freshly upserted row needs.
+   */
+  private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts): Promise<AudioTags | null> {
+    const write = async (
+      duration: number | null,
+      bitrate: number | null,
+      sampleRate: number | null,
+      channels: number | null,
+      tags: AudioTags | null,
+    ): Promise<void> => {
+      if (row !== null) {
+        await this.persist(row, duration, bitrate, sampleRate, channels, tags);
+        return;
+      }
+      await this.deps.songs.applyMetadata(facts.id, {
+        duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
+        bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
+        ...(sampleRate !== null && { sampleRate }),
+        ...(channels !== null && { channels }),
+        ...(tags && {
+          ...(tags.title && { title: tags.title }),
+          ...(tags.artist && { artist: tags.artist }),
+          ...(tags.album && { album: tags.album }),
+          ...(tags.albumArtist && { albumArtist: tags.albumArtist }),
+          ...(tags.genre && { genre: tags.genre }),
+          ...(tags.track !== null && { track: tags.track }),
+          ...(tags.disc !== null && { disc: tags.disc }),
+          ...(tags.year !== null && { year: tags.year }),
+        }),
+      });
+    };
+
     let tags: AudioTags | null = null;
     try {
       const client = await this.deps.clientFor(library);
-      const bytes = await client.readPrefix(song.path, this.deps.readBytes, this.deps.timeoutMs);
-      tags = readAudioTags(bytes, song.size);
+      const bytes = await client.readPrefix(facts.path, this.deps.readBytes, this.deps.timeoutMs);
+      tags = readAudioTags(bytes, facts.size);
     } catch {
       // Recorded as an attempt so the next call does not retry a format this
       // server cannot read.
-      await this.persist(song, null, null, null, null, null);
+      await write(null, null, null, null, null);
       return null;
     }
 
     if (tags === null || tags.container === 'unknown') {
-      await this.persist(song, null, null, null, null, null);
+      await write(null, null, null, null, null);
       return null;
     }
 
+    // The prefix read cannot see the final page of an Ogg stream, so `durationSeconds`
+    // is null there by design rather than by failure. One tail-anchored read resolves
+    // it, reusing the sample rate and pre-skip the prefix read already established.
+    const duration = tags.durationSeconds ?? (await this.resolveTailDuration(library, facts, tags));
+
     const entry: CachedEnrichment = {
-      mtimeMs: song.mtime_ms,
-      durationSeconds: tags.durationSeconds,
-      bitrateKbps: tags.bitrateKbps,
+      mtimeMs: facts.mtimeMs,
+      durationSeconds: duration,
+      // The bitrate of a variable-bitrate file is `size × 8 ÷ duration`, so it needs the
+      // duration first: computed here rather than in the reader, which was handed a
+      // duration it then refused to use.
+      bitrateKbps: duration !== null && duration > 0 && facts.size > 0 ? Math.round((facts.size * 8) / duration / 1000) : tags.bitrateKbps,
       sampleRate: tags.sampleRate,
       channels: tags.channels,
       container: tags.container,
     };
     // A cache write is best-effort and must not fail the call: D1 already holds
     // the result, which is what the outage requirement depends on.
-    await this.deps.kv.putJson('songMeta', [song.id], entry);
-    await this.persist(song, entry.durationSeconds, entry.bitrateKbps, entry.sampleRate, entry.channels, tags);
+    await this.deps.kv.putJson('songMeta', [facts.id], entry);
+    await write(entry.durationSeconds, entry.bitrateKbps, entry.sampleRate, entry.channels, tags);
     return tags;
+  }
+
+  /**
+   * The duration of a container whose length is recorded at the **end** of the file.
+   *
+   * Best effort, and `null` is a real answer: a WebDAV error, a missing binding, or a
+   * tail that does not contain the final page all leave the duration unknown, and the
+   * row is written as `0`. That is the honest value — the alternative is a confident
+   * wrong one, and a client seeks by it. A 240.61 s track was served as 3 s and
+   * 15329 kbps instead of 191 because the prefix read's truncated page was taken for the
+   * file's last.
+   */
+  private async resolveTailDuration(library: LibraryRow, facts: EnrichFacts, tags: AudioTags): Promise<number | null> {
+    const tailBytes = this.deps.readTailBytes ?? 0;
+    if ((tailBytes <= 0) || tags.sampleRate === null || facts.size === 0) return null;
+    // Only Ogg records its length this way. MP4 puts `moov` at the end and needs a
+    // different parse, so this does not pretend to cover it.
+    if (tags.container !== 'ogg-opus' && tags.container !== 'ogg-vorbis') return null;
+
+    try {
+      const client = await this.deps.clientFor(library);
+      const bytes = await client.readTail(facts.path, tailBytes, facts.size, this.deps.timeoutMs);
+      // The granule includes the pre-skip and the duration must not, and the pre-skip is
+      // in the identification header at the *front* of the file — which the prefix read
+      // already read, and which is why it is carried on `AudioTags` rather than re-read.
+      return readOggTailDuration(bytes, tags.sampleRate, tags.preskip ?? 0);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -215,4 +341,4 @@ class EnrichmentService {
 }
 
 export { EnrichmentService, shouldEnrich };
-export type { EnrichmentDeps, CachedEnrichment };
+export type { EnrichmentDeps, CachedEnrichment, EnrichFacts };

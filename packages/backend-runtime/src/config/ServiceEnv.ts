@@ -33,6 +33,8 @@ interface ServiceEnv {
   WEBDAV_TIMEOUT_MS?: string;
   SCAN_CHUNK_FOLDERS?: string;
   TAG_READ_BYTES?: string;
+  TAG_READ_TAIL_BYTES?: string;
+  SCAN_ENRICH_MAX_PER_FOLDER?: string;
   MAX_PAGE_SIZE?: string;
   DEFAULT_PAGE_SIZE?: string;
   STREAM_RATE_LIMIT?: string;

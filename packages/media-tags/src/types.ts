@@ -50,6 +50,16 @@ interface AudioTags {
   readonly track: number | null;
   readonly disc: number | null;
   readonly container: AudioContainer;
+  /**
+   * Opus pre-skip, in samples at the stream's own rate.
+   *
+   * The granule position of an Opus stream *includes* the pre-skip, so a duration read
+   * from one has to subtract it. It is carried here rather than re-derived from the tail
+   * because the pre-skip lives in the identification header at the *front* of the file,
+   * and the tail read is issued precisely because the front and the end are read
+   * separately. `null` for every other container.
+   */
+  readonly preskip: number | null;
 }
 
 type AudioContainer = 'mp3' | 'flac' | 'ogg-vorbis' | 'ogg-opus' | 'unknown';
@@ -69,6 +79,7 @@ const EMPTY_TAGS: AudioTags = {
   track: null,
   disc: null,
   container: 'unknown',
+  preskip: null,
 };
 
 /**

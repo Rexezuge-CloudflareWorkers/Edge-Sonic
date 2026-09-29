@@ -126,6 +126,11 @@ client to ask is answered from D1.
 
 `index/EnrichmentService.ts` reads a **bounded prefix** of a file's bytes — never the whole
 file — and derives duration, bitrate, sample rate, and channels from the container header.
+For Ogg it then reads a bounded **tail** (`readTail`, `TAG_READ_TAIL_BYTES`), because the
+granule position that carries the file's length is in the *last* page's header. Two range
+reads over one file, not two parses: the sample rate, channels and pre-skip come from the
+prefix read and the tail reuses them. Without the tail read the duration is `null` rather
+than wrong, because a client seeks by it.
 
 - It short-circuits on `enriched_at`, which is why the scan must clear that column when a
   file's bytes change.
@@ -135,6 +140,24 @@ file — and derives duration, bitrate, sample rate, and channels from the conta
   retried.
 - It is best-effort about the cache and authoritative about D1: a dead `CACHE` costs
   latency and nothing else.
+
+### The scan enriches what it changed
+
+Enrichment is reachable from two places, and they share one read path (`readAndPersist`)
+so a row enriched by a scan and a row enriched on first play are identical: `getSong`, and
+`index/scanEnrichment.ts` from the scan. Without the second caller, a browsing client saw
+`duration: 0` and no artist on every track until it happened to open one — and the
+aggregates were empty because there was nothing to group.
+
+The scan passes a four-field `EnrichFacts` rather than a `SongRow`. It has no row in hand,
+and a fabricated one is a copy of the schema that rots silently when a column is added:
+the failure is a wrong answer, not a type error.
+
+Per-folder enrichment is capped by `SCAN_ENRICH_MAX_PER_FOLDER` because a cold scan of
+5,000 tracks is 5,000 subrequests against a 1,000 limit. What does not fit keeps
+`enriched_at = null` and is enriched on first play — a degraded answer rather than a chunk
+that fails. Failures are swallowed for the same reason: the scan's rows are already
+written, and one unavailable origin must not discard them.
 
 ## Errors
 

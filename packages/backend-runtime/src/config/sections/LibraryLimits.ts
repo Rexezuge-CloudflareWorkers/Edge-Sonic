@@ -6,9 +6,11 @@ import {
   DEFAULT_MAX_PAGE_SIZE,
   DEFAULT_PAGE_SIZE,
   DEFAULT_SCAN_CHUNK_FOLDERS,
+  DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER,
   DEFAULT_STREAM_RATE_LIMIT,
   DEFAULT_STREAM_TIMEOUT_MS,
   DEFAULT_TAG_READ_BYTES,
+  DEFAULT_TAG_READ_TAIL_BYTES,
   DEFAULT_WEBDAV_TIMEOUT_MS,
 } from '../ConfigurationDefaults';
 
@@ -65,6 +67,36 @@ class ScanLimits {
 
   public getTagReadBytes(): number {
     return EnvParser.positiveInt(this.env, 'TAG_READ_BYTES', DEFAULT_TAG_READ_BYTES);
+  }
+
+  /**
+   * Bytes read from the **end** of a file, for the duration of a container that records
+   * its length there — Ogg, whose granule position is in the final page's header.
+   *
+   * A prefix read cannot see it, so without this variable an Ogg track reports no
+   * duration at all. `0` disables the second read, which is a supported configuration and
+   * not a degraded one: a missing duration is a value, a wrong one is not, because a
+   * client seeks by it.
+   *
+   * The default is one whole Ogg page plus its header — 255 segments of 255 bytes is the
+   * largest a conforming page body can be — so a tail of this size is guaranteed to
+   * contain the final page's header wherever the file's size puts it.
+   */
+  public getTagReadTailBytes(): number {
+    return EnvParser.positiveInt(this.env, 'TAG_READ_TAIL_BYTES', DEFAULT_TAG_READ_TAIL_BYTES);
+  }
+
+  /**
+   * Tracks the scan enriches per folder, per chunk.
+   *
+   * Sized against the 1,000-subrequest limit rather than against taste. An Ogg track
+   * costs a prefix read and a tail read, so this is the number that decides whether a
+   * chunk's enrichment fits alongside its `PROPFIND` calls. Whatever exceeds it keeps
+   * `enriched_at = null` and is enriched on first play, which is the path that was
+   * already carrying the whole feature.
+   */
+  public getScanEnrichMaxPerFolder(): number {
+    return EnvParser.positiveInt(this.env, 'SCAN_ENRICH_MAX_PER_FOLDER', DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER);
   }
 }
 

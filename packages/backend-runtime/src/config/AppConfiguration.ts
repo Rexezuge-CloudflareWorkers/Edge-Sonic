@@ -76,6 +76,14 @@ class AppConfiguration {
     return this.scan.getTagReadBytes();
   }
 
+  public getTagReadTailBytes(): number {
+    return this.scan.getTagReadTailBytes();
+  }
+
+  public getScanEnrichMaxPerFolder(): number {
+    return this.scan.getScanEnrichMaxPerFolder();
+  }
+
   public getMaxPageSize(): number {
     return this.requests.getMaxPageSize();
   }

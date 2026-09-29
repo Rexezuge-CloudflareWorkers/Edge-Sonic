@@ -253,6 +253,27 @@ class WebDavClient {
     const buffer = await this.readBounded(response, Math.min(bytes, MAX_MEDIA_CHUNK_BYTES) + 1024);
     return new Uint8Array(buffer);
   }
+
+  /**
+   * Read the *trailing* bytes of a file, for the Ogg duration.
+   *
+   * An Ogg file's length lives in the granule position on its final page, at the end of
+   * the file, so the prefix read above cannot see it and the reader is right to report no
+   * duration. This is the second read that closes the gap — and the duration is what a
+   * client seeks by, so guessing it is not an option.
+   *
+   * An explicit `bytes=<start>-<end>` rather than the `bytes=-N` suffix form, because
+   * the size is known here and suffix ranges are refused by some WebDAV servers. The
+   * range is clamped so a `totalSize` of 0 cannot produce a negative start.
+   */
+  public async readTail(relativePath: string, bytes: number, totalSize: number, timeoutMs?: number): Promise<Uint8Array> {
+    if (totalSize <= 0) return new Uint8Array(0);
+    const end = totalSize - 1;
+    const start = Math.max(0, end - Math.max(0, bytes - 1));
+    const response = await this.get(relativePath, { range: `bytes=${start}-${end}`, ...(timeoutMs && { timeoutMs }) });
+    const buffer = await this.readBounded(response, Math.min(bytes, MAX_MEDIA_CHUNK_BYTES) + 1024);
+    return new Uint8Array(buffer);
+  }
 }
 
 export { WebDavClient, WebDavError, basicAuthHeader, DEFAULT_TIMEOUT_MS, MAX_METADATA_BYTES, MAX_MEDIA_CHUNK_BYTES };

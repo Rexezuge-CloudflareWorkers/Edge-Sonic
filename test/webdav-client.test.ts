@@ -285,6 +285,71 @@ describe('WebDavClient failure classification', () => {
  * stopped checking receivers would make the first pass forever, which is exactly
  * how the original defect survived a green suite.
  */
+/**
+ * `readTail`, and the range it asks for.
+ *
+ * An Ogg file's length lives in the granule position on its *last* page, so the prefix
+ * read cannot see it and a second read from the other end is the only way to get a
+ * duration. A 240.61 s track was served as 3 s because that read did not exist.
+ */
+describe('readTail', () => {
+  /**
+   * Records the `Range` header the client sent, and answers the bytes it asked for.
+   */
+  function recordingDav(body: Uint8Array) {
+    const ranges: (string | null)[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const header = new Headers(init?.headers).get('Range');
+      ranges.push(header);
+      const match = /^bytes=(\d+)-(\d+)$/.exec(header ?? '');
+      const start = match === null ? 0 : Number(match[1]);
+      const end = match === null ? body.length - 1 : Number(match[2]);
+      const slice = body.subarray(start, end + 1);
+      // `BodyInit` is narrower than `Uint8Array<ArrayBufferLike>` under these lib types,
+      // so the view is copied rather than cast — a cast here would be asserting the one
+      // thing this double is supposed to model honestly.
+      return new Response(slice.slice().buffer, { status: match === null ? 200 : 206 });
+    }) as unknown as typeof fetch;
+    return { ranges, fetchImpl };
+  }
+
+  it('asks for the last N bytes as an explicit range, not a suffix range', async () => {
+    // An explicit `bytes=<start>-<end>` rather than `bytes=-N`, because the size is known
+    // here and suffix ranges are refused by some WebDAV servers. A refused range is a
+    // missing duration, which is the thing this whole path exists to avoid.
+    const body = new Uint8Array(1000).fill(0x42);
+    const dav = recordingDav(body);
+    const client = new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetchImpl);
+
+    const tail = await client.readTail('track.opus', 100, 1000);
+
+    expect(dav.ranges).toEqual(['bytes=900-999']);
+    expect(tail).toHaveLength(100);
+    expect(tail[0]).toBe(0x42);
+  });
+
+  it('asks for the whole file when the tail is longer than it', async () => {
+    const dav = recordingDav(new Uint8Array(50));
+    const client = new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetchImpl);
+
+    const tail = await client.readTail('track.opus', 4096, 50);
+
+    // Clamped, not `bytes=-4046-49`, which is not a range and would be rejected outright.
+    expect(dav.ranges).toEqual(['bytes=0-49']);
+    expect(tail).toHaveLength(50);
+  });
+
+  it('reads nothing for a file of unknown length rather than building a bad range', async () => {
+    const dav = recordingDav(new Uint8Array(50));
+    const client = new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetchImpl);
+
+    // A size of 0 would otherwise produce `bytes=--1`, and a `PROPFIND` that omitted
+    // `getcontentlength` is exactly how a size of 0 arrives.
+    expect(await client.readTail('track.opus', 100, 0)).toHaveLength(0);
+    expect(dav.ranges).toEqual([]);
+  });
+});
+
 describe('the receiver of an injected fetch', () => {
   it('reaches the origin without the platform global being called as a method', async () => {
     // Keyed by the full request path, as `fakeDav` documents: the client builds
