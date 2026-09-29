@@ -8,20 +8,26 @@
  *
  * The error decoder matters more than it looks: an Access login page is HTML, and a
  * caller that puts an HTML document into a notice bar looks broken. `extractError`
- * handles the JSON shape, the `Exception` shape the reference project used, and
- * plain text, and it **truncates** — an unbounded error string from a proxy error
- * page is a rendering hazard.
+ * handles the server's `Exception` shape, plain text, and the pre-unification shape an
+ * older Worker build may still return, and it **truncates** — an unbounded error string
+ * from a proxy error page is a rendering hazard.
  */
 import type { LibrarySummary, ProbeResult, ScanStateSummary, UserSummary } from '../types';
 
 const API_BASE = '/admin';
 
 interface ErrorEnvelope {
-  error?: { code?: string; message?: string };
   /**
-  The reference project's shape, still returned by some Cloudflare-level errors.
+  What the server sends. `BaseRoute.toErrorBody` and `toAdminResponse` both produce it,
+  including the rate limiter's 429, so one decoder covers the whole admin surface.
   */
   Exception?: { Type?: string; Message?: string };
+  /**
+  The shape this server sent before the two dialects were unified, still accepted during
+  a rolling deploy while an older Worker build is serving. Remove once no deployment can
+  be running the previous build.
+  */
+  error?: { code?: string; message?: string };
 }
 
 /**
@@ -35,7 +41,7 @@ function extractError(payload: unknown, status: number): string {
   }
   if (typeof payload === 'object' && payload !== null) {
     const envelope = payload as ErrorEnvelope;
-    const message = envelope.error?.message ?? envelope.Exception?.Message;
+    const message = envelope.Exception?.Message ?? envelope.error?.message;
     if (typeof message === 'string' && message.length > 0) return message.slice(0, MAX_ERROR_LENGTH);
   }
   return `Request failed with status ${status}.`;

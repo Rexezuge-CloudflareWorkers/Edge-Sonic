@@ -1,7 +1,9 @@
-import type { Context, Next } from 'hono';
+import type { Next } from 'hono';
 import { RateLimitedError } from '@edge-sonic/backend-errors';
+import { BaseRoute } from '../endpoints/BaseRoute';
+import type { AdminContext } from '../endpoints/BaseRoute';
 
-type RateLimitContext = Context<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
+type RateLimitContext = AdminContext;
 
 interface Bucket {
   count: number;
@@ -10,14 +12,22 @@ interface Bucket {
 
 const buckets = new Map<string, Bucket>();
 
-function clientIp(c: RateLimitContext): string {
-  // Trust order is deliberate: Cloudflare sets CF-Connecting-IP and it cannot
-  // be spoofed by clients. X-Forwarded-For is NOT trusted by default because
-  // it is client-controlled and lets attackers rotate buckets at will.
-  // Local dev without CF headers shares the `unknown` bucket (fail-closed
-  // grouping rather than per-spoofed-IP isolation).
-  const cfIp = c.req.header('CF-Connecting-IP')?.trim();
-  return cfIp || 'unknown';
+/**
+ * The one trusted client address in this app.
+ *
+ * Trust order is deliberately a single entry: Cloudflare sets `CF-Connecting-IP` and
+ * it cannot be spoofed by a client. `X-Forwarded-For`, `x-real-ip`, and every other
+ * forwarding header are **not** consulted, because they are client-controlled and let
+ * an attacker rotate buckets — or, on the `/rest` path, rotate the identity keying a
+ * D1-backed *fail-closed* credential throttle at will. Local dev without CF headers
+ * shares the `unknown` bucket, which is fail-closed grouping rather than
+ * per-spoofed-header isolation.
+ *
+ * Takes a header reader rather than a Hono context so the `/rest` dispatcher, which
+ * has a bare `Request` rather than a context, uses the same derivation.
+ */
+function clientIp(header: (name: string) => string | undefined): string {
+  return header('CF-Connecting-IP')?.trim() || 'unknown';
 }
 
 function getRateLimitBucketCountForTests(): number {
@@ -96,11 +106,16 @@ function rateLimit(opts: {
     try {
       const now = Date.now();
       cleanup(now);
+      // `AdminEmail` is the resolved Cloudflare Access identity, so a bucket is per
+      // operator rather than per address. It is only set when this middleware runs
+      // *after* `adminAuthentication`, which is why that ordering is load-bearing: a
+      // limiter registered before the identity exists silently degrades to `ip:…`, and
+      // every operator behind one NAT shares a budget.
       let identity = 'anon';
       try {
-        identity = c.get('AuthenticatedUserEmailAddress') ?? `ip:${clientIp(c)}`;
+        identity = c.get('AdminEmail') ?? `ip:${clientIp((name) => c.req.header(name))}`;
       } catch {
-        identity = `ip:${clientIp(c)}`;
+        identity = `ip:${clientIp((name) => c.req.header(name))}`;
       }
       const key = `${opts.keyPrefix}:${identity}`;
       const existing = buckets.get(key);
@@ -111,11 +126,13 @@ function rateLimit(opts: {
       }
       if (existing.count >= opts.max) {
         const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
-        // Reuse the error type so the wire envelope cannot drift from the
-        // canonical mapping: hand-building the JSON here is how this response
-        // ended up bypassing `BaseRoute.toErrorResponse` entirely.
+        // The canonical error type, so the wire envelope cannot drift from the mapping
+        // every other admin error goes through. Hand-building the JSON here is how this
+        // response came to be the one admin error in a second dialect.
         const limited = new RateLimitedError();
-        return c.json({ Exception: { Type: limited.getErrorType(), Message: limited.getErrorMessage() } }, 429, {
+        return c.json(BaseRoute.toErrorBody(limited.getErrorCode(), limited.getErrorMessage()), limited.getErrorCode() as 429, {
+          // A client that is told "slow down" without being told how long to wait
+          // either retries immediately or gives up on the surface.
           'Retry-After': String(retryAfter),
         });
       }

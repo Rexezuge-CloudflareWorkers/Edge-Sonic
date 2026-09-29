@@ -14,25 +14,33 @@
  * is a well-formed envelope whether the endpoint exists, threw, or declined to
  * implement.
  */
-import { errorResponse,  notFound, resolveFormat,  } from '@edge-sonic/subsonic';
+import { errorResponse, notFound, resolveFormat } from '@edge-sonic/subsonic';
 import { ErrorCode, isClientVersionSupported, SubsonicError } from '@edge-sonic/subsonic';
 
 import { SubsonicParams, decodeLegacyPassword } from '@edge-sonic/subsonic';
 import { toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { BaseRoute } from '../admin/routes';
+import { BaseRoute } from '../endpoints/BaseRoute';
+import type { AdminContext } from '../endpoints/BaseRoute';
+import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
-import type { AdminContext } from '../admin/routes';
-import { ENDPOINTS,  } from './endpoints';
+import { ENDPOINTS } from './endpoints';
 import type { RestHandler } from './endpoints';
 
 type RestOutcome = Response | { response: Response };
 
 /**
 The trusted client IP, used only to key the auth throttle.
+
+Delegates to the middleware's own `clientIp`, so there is one derivation of the
+trusted address in the app. That function trusts `CF-Connecting-IP` and nothing else:
+the previous fallback chain also accepted `x-real-ip`, which is client-controlled, so
+an attacker could rotate it per attempt and the D1-backed **fail-closed** failure
+counter would never increment. The sibling file in the same layer documents exactly
+why a non-`CF-Connecting-IP` header must not be trusted for this purpose.
 */
 function clientIpOf(request: Request): string {
-  return request.headers.get('cf-connecting-ip') ?? request.headers.get('x-real-ip') ?? '0.0.0.0';
+  return clientIp((name) => request.headers.get(name) ?? undefined);
 }
 
 /**

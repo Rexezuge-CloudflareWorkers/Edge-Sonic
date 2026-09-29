@@ -40,6 +40,15 @@ interface RequestScopeEnv {
   SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   WEBDAV_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   /**
+  The platform-provisioned Cloudflare Access binding.
+
+  Declared here so it survives the trip from `c.env` into the request scope and on
+  to `AccessAuthService`. It is not a wrangler declaration, so `wrangler types`
+  never emits it — hence this hand-written structural shape, which a Layer 3
+  package needs in any case.
+  */
+  ACCESS?: { getIdentity(): Promise<{ email?: string | null } | undefined> };
+  /**
   Test-only. Never declared in the production template.
   */
   SUBSONIC_USER_ENCRYPTION_KEY?: string;

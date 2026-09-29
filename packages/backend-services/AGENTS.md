@@ -14,9 +14,29 @@ Layer 3: layers 0–2, and never `apps/*`.
   caller chose by supplying nothing. Bumping `token_epoch` on a password change is what
   revokes an already-issued token.
 - `auth/AccessAuthService` authenticates `/admin/*` behind Cloudflare Access. The bypass
-  chain is `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT → the `ctx.access` binding, and the first
+  chain is `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT → the **`ACCESS` binding**, and the first
   two are gated on an **environment allow-list**. A deny-list would enable the bypass for
   `staging`, `Preview`, and a misspelled `prodcution`.
+
+  It is a token (`Tokens.AccessAuthService`), resolved from the request scope like every
+  other service. It was previously a `new` at the call site, which is the one construction
+  in the app outside the composition root — and it re-derived an `AppConfiguration` per
+  request. The constructor now takes the scope's config, so the whole request shares one.
+
+  ### The binding is `env.ACCESS`, not `ctx.access`
+
+  `getIdentity` lives on a **binding**, and Cloudflare provisions it for a Worker behind
+  an Access application, so it **cannot be declared in a wrangler config** — `wrangler types`
+  never emits it and `worker-configuration.d.ts` has no `ACCESS`. The shape is therefore
+  hand-declared in `AccessAuthEnv` (and on `RequestScopeEnv`, so it survives the trip from
+  `c.env` through the scope). `RequestScopeEnv` has no index signature, so the hand-written
+  shape is load-bearing rather than decorative.
+
+  This service used to read the identity off a cast `c.executionCtx`, which has only
+  `waitUntil` and `passThroughOnException`. The branch could never execute: the fallback was
+  documented in two `AGENTS.md` files and "tested" by six tests, none of which reflected the
+  deployed path. `getIdentity` resolves **`undefined`**, not `null`, when no Access
+  application is in front of the request, and the tests now assert that value.
 
 Keeping them separate is a security property, not a convenience: an operator's Access
 identity must not work as a streaming credential, and a Subsonic password must not open
@@ -81,15 +101,23 @@ file — and derives duration, bitrate, sample rate, and channels from the conta
 
 ## Errors
 
-`errors/ErrorMapper.ts` has two dialects, and conflating them is the mistake:
+`errors/ErrorMapper.ts` has two dialects, and the split is **by surface, not by
+convenience**:
 
 - `toSubsonicError` → the protocol envelope, HTTP 200, except `code=40` which is 401.
   `NotFoundError` becomes `70`; `UnauthorizedError` becomes `50` and **never** `40`,
   because a request that authenticated fine and was then refused is a different thing, and
   reporting it as 40 sends a user with valid credentials to re-enter their password. A
   5xx is masked completely: the cause is logged, and a D1 error names tables and columns.
-- `toAdminResponse` → a JSON body with the status the SPA reads. A 4xx keeps its message;
-  a 5xx is masked to the generic one.
+- `toAdminResponse` → `{Exception:{Type,Message}}` with the status the SPA reads. A 4xx
+  keeps its message; a 5xx is masked to the generic one.
+
+**The reference project's argument against `Exception` applies to `/rest` only.** A
+Subsonic client branches on the envelope, so a 401 with an unrecognized body renders as
+"server error" instead of "wrong password". An SPA reads the HTTP status, so the same
+shape is correct on `/admin` — and matching it is what removed a split-brain where the
+rate limiter's 429 emitted `Exception` while every other admin error emitted
+`{error:{code,message}}`. One surface, one dialect, one decoder.
 
 ## Composition
 

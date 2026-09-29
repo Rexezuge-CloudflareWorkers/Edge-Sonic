@@ -19,7 +19,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AccessAuthService, DEMO_USER_EMAIL } from '@edge-sonic/backend-services/auth';
-import type { AccessIdentityContext } from '@edge-sonic/backend-services/auth';
+import type { AccessBinding, AccessIdentity } from '@edge-sonic/backend-services/auth';
 import { UnauthorizedError } from '@edge-sonic/backend-errors';
 
 const ORIGIN = 'https://edge-sonic.test';
@@ -29,18 +29,19 @@ function adminRequest(headers: Record<string, string> = {}): Request {
 }
 
 /**
-An identity from the Access binding, as the runtime provides it.
+The `ACCESS` binding, as the platform provides it.
+
+`getIdentity` resolves **`undefined`** — not `null` — when no Access application is in
+front of the request, and that is the value the tests below lean on. The previous
+version of this helper hung the identity off an `access` property of a cast
+`ExecutionContext`, which no real Hono context has: the branch could never execute, so
+these tests asserted a path the deployed worker never took.
 */
-function accessCtx(
-  identity: { email?: string | null; emailVerified?: boolean | null; email_verified?: boolean | null } | null,
-  throws = false,
-): AccessIdentityContext {
+function accessBinding(identity: AccessIdentity | undefined, throws = false): AccessBinding {
   return {
-    access: {
-      getIdentity: async () => {
-        if (throws) throw new Error('binding unavailable');
-        return identity;
-      },
+    getIdentity: async () => {
+      if (throws) throw new Error('binding unavailable');
+      return identity;
     },
   };
 }
@@ -104,37 +105,38 @@ describe('the header Access sets is not a credential', () => {
 
 describe('the Access binding', () => {
   it('accepts a verified identity, lowercased and trimmed', async () => {
-    const service = new AccessAuthService(PRODUCTION);
-    const email = await service.getAuthenticatedUserEmail(adminRequest(), accessCtx({ email: '  Ann@Example.com ', emailVerified: true }));
+    const service = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding({ email: '  Ann@Example.com ', emailVerified: true }) });
+    const email = await service.getAuthenticatedUserEmail(adminRequest());
     expect(email).toBe('ann@example.com');
   });
 
   it('refuses an identity that is explicitly unverified', async () => {
     // The binding is trusted; what it contains is not, until it says so. A
     // false-negative here is an unauthenticated admin API.
-    const service = new AccessAuthService(PRODUCTION);
-    await expect(service.getAuthenticatedUserEmail(adminRequest(), accessCtx({ email: 'ann@example.com', emailVerified: false }))).rejects.toThrow(
-      UnauthorizedError,
-    );
+    const service = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding({ email: 'ann@example.com', emailVerified: false }) });
+    await expect(service.getAuthenticatedUserEmail(adminRequest())).rejects.toThrow(UnauthorizedError);
   });
 
   it('refuses the snake_case spelling of unverified too', async () => {
     // Cloudflare has used both spellings. Accepting one and not the other is a
     // fail-open that only shows up in production.
-    const service = new AccessAuthService(PRODUCTION);
-    const ctx: AccessIdentityContext = { access: { getIdentity: async () => ({ email: 'ann@example.com', email_verified: false }) } };
-    await expect(service.getAuthenticatedUserEmail(adminRequest(), ctx)).rejects.toThrow(UnauthorizedError);
+    const service = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding({ email: 'ann@example.com', email_verified: false }) });
+    await expect(service.getAuthenticatedUserEmail(adminRequest())).rejects.toThrow(UnauthorizedError);
   });
 
   it('refuses when the binding itself throws, rather than falling through to nobody', async () => {
-    const service = new AccessAuthService(PRODUCTION);
-    await expect(service.getAuthenticatedUserEmail(adminRequest(), accessCtx(null, true))).rejects.toThrow(UnauthorizedError);
+    const service = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding(undefined, true) });
+    await expect(service.getAuthenticatedUserEmail(adminRequest())).rejects.toThrow(UnauthorizedError);
   });
 
-  it('refuses a null identity and an identity with no address', async () => {
-    const service = new AccessAuthService(PRODUCTION);
-    await expect(service.getAuthenticatedUserEmail(adminRequest(), accessCtx(null))).rejects.toThrow(UnauthorizedError);
-    await expect(service.getAuthenticatedUserEmail(adminRequest(), accessCtx({ email: ' '.repeat(3) }))).rejects.toThrow(UnauthorizedError);
+  it('refuses an undefined identity and an identity with no address', async () => {
+    // `undefined` is what the platform resolves when no Access application is in front
+    // of the request. It is the value a real deployment returns most often, so it must
+    // be the value under test rather than a `null` nothing produces.
+    const empty = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding(undefined) });
+    await expect(empty.getAuthenticatedUserEmail(adminRequest())).rejects.toThrow(UnauthorizedError);
+    const blank = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding({ email: ' '.repeat(3) }) });
+    await expect(blank.getAuthenticatedUserEmail(adminRequest())).rejects.toThrow(UnauthorizedError);
   });
 
   it('refuses when there is no binding at all', async () => {
@@ -143,6 +145,32 @@ describe('the Access binding', () => {
     // that they are not authenticated.
     const service = new AccessAuthService(PRODUCTION);
     await expect(service.getAuthenticatedUserEmail(adminRequest())).rejects.toThrow(/authentication failed/i);
+  });
+
+  it('stays reachable after the JWT path fails soft', async () => {
+    // The chain order is invisible until it is wrong. The JWT path must fail *soft* so
+    // this fallback remains reachable: if it threw, an unconfigured audience or a
+    // signature failure would lock out every deployment that relies on the binding, and
+    // the `describe` block above would be testing a branch nothing can enter.
+    const service = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding({ email: 'ann@example.com' }) });
+    const request = adminRequest({
+      // eslint-disable-next-line sonarjs/no-hardcoded-secrets -- a deliberately invalid assertion.
+      'cf-access-jwt-assertion': 'eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6ImFubkBleGFtcGxlLmNvbSJ9.not-a-signature',
+    });
+    expect(await service.getAuthenticatedUserEmail(request)).toBe('ann@example.com');
+  });
+
+  it('refuses a bad assertion when the binding reports no identity either', async () => {
+    // The two paths are tried in order, not or-ed. A request that presents an assertion
+    // this server cannot verify, on a deployment whose binding has no identity, is
+    // unauthenticated — the failed assertion must not be treated as a reason to stop
+    // looking, and its absence must not be treated as a reason to answer.
+    const service = new AccessAuthService({ ...PRODUCTION, ACCESS: accessBinding(undefined) });
+    const request = adminRequest({
+      // eslint-disable-next-line sonarjs/no-hardcoded-secrets -- a deliberately invalid assertion.
+      'cf-access-jwt-assertion': 'eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6ImFubkBleGFtcGxlLmNvbSJ9.not-a-signature',
+    });
+    await expect(service.getAuthenticatedUserEmail(request)).rejects.toThrow(UnauthorizedError);
   });
 });
 

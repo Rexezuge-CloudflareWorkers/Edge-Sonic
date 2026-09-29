@@ -31,7 +31,12 @@ afterEach(() => harness.close());
 interface AdminBody {
   libraries?: Array<Record<string, unknown>>;
   users?: Array<Record<string, unknown>>;
-  error?: { code: string; message: string };
+  /**
+   * The one error dialect this surface emits. A direct validation failure, a thrown
+   * service error, and a 429 from the rate limiter all produce this shape, so a client
+   * needs one decoder rather than two.
+   */
+  Exception?: { Type: string; Message: string };
   [key: string]: unknown;
 }
 
@@ -118,7 +123,7 @@ describe('libraries', () => {
       expect(status, baseUrl).toBe(400);
       // The message names the way out, because an operator who hit this on a genuine
       // local server needs to know the escape hatch exists.
-      expect(body.error?.message, baseUrl).toContain('ALLOW_PRIVATE_WEBDAV_HOSTS');
+      expect(body.Exception?.Message, baseUrl).toContain('ALLOW_PRIVATE_WEBDAV_HOSTS');
     }
   });
 
@@ -131,7 +136,7 @@ describe('libraries', () => {
       body: JSON.stringify({ slug: 'x', baseUrl: 'http://dav.example.com', davUsername: 'u', davPassword: 'p' }),
     });
     expect(status).toBe(400);
-    expect(body.error?.message).toMatch(/https/);
+    expect(body.Exception?.Message).toMatch(/https/);
   });
 
   it('refuses a URL with an embedded credential, which would be stored and logged', async () => {
@@ -141,7 +146,7 @@ describe('libraries', () => {
       body: JSON.stringify({ slug: 'x', baseUrl: 'https://alice:hunter2@dav.example.com', davUsername: 'u', davPassword: 'p' }),
     });
     expect(status).toBe(400);
-    expect(body.error?.message).toMatch(/credential/i);
+    expect(body.Exception?.Message).toMatch(/credential/i);
   });
 
   it('refuses a URL with a path, a query, or a fragment, because the root path is a separate field', async () => {
@@ -188,13 +193,13 @@ describe('libraries', () => {
     // A library row with no credential is a library that 401s on every scan. Failing at
     // registration is the only point where the operator is still watching.
     expect(status).toBe(400);
-    expect(body.error?.message).toMatch(/davUsername|davPassword/);
+    expect(body.Exception?.Message).toMatch(/davUsername|davPassword/);
   });
 
   it('rejects a malformed body as a 400, not as a 500', async () => {
     const { status, body } = await call('/admin/libraries', { method: 'POST', headers: JSON_HEADERS, body: '{not json' });
     expect(status).toBe(400);
-    expect(body.error?.code).toBe('BadRequest');
+    expect(body.Exception?.Type).toBe('BadRequest');
   });
 
   it('rejects an oversized body with 413, before parsing it', async () => {
@@ -204,7 +209,7 @@ describe('libraries', () => {
       body: JSON.stringify({ slug: 'x', baseUrl: 'https://dav.example.org', davUsername: 'u', davPassword: 'p', displayName: 'y'.repeat(3_000_000) }),
     });
     expect(status).toBe(413);
-    expect(body.error?.code).toBe('PayloadTooLarge');
+    expect(body.Exception?.Type).toBe('PayloadTooLarge');
   });
 
   it('refuses a duplicate slug rather than shadowing an existing library', async () => {
@@ -214,7 +219,7 @@ describe('libraries', () => {
       body: JSON.stringify({ slug: 'home', baseUrl: 'https://dav.example.org', davUsername: 'u', davPassword: 'p' }),
     });
     expect(status).toBe(409);
-    expect(body.error?.code).toBe('Conflict');
+    expect(body.Exception?.Type).toBe('Conflict');
   });
 
   it('updates a library without disturbing the credential it already stores', async () => {
@@ -294,7 +299,7 @@ describe('users', () => {
     // client, or the second registration silently shadows the first.
     const { status, body } = await call('/admin/users', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ username: 'ANN', password: 'x' }) });
     expect(status).toBe(409);
-    expect(body.error?.message).toMatch(/already exists/i);
+    expect(body.Exception?.Message).toMatch(/already exists/i);
   });
 
   it('lists users without any credential material', async () => {
@@ -352,10 +357,10 @@ describe('users', () => {
       body: JSON.stringify({ libraryIds: ['L-nope'] }),
     });
     expect(status).toBe(404);
-    expect(body.error?.code).toBe('NotFound');
+    expect(body.Exception?.Type).toBe('NotFound');
     // Named, because "a 404 happened" is not something an operator can act on and the
     // library id is the one thing they can check.
-    expect(body.error?.message).toContain('L-nope');
+    expect(body.Exception?.Message).toContain('L-nope');
   });
 
   it('deletes a user and everything that belongs to them', async () => {

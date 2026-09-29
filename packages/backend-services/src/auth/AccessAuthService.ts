@@ -16,8 +16,36 @@
  */
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
+import type { AppConfiguration as AppConfigurationType } from '@edge-sonic/backend-runtime/config';
 import { UnauthorizedError } from '@edge-sonic/backend-errors';
 import { isValidEmailFormat } from '@edge-sonic/shared/utils';
+
+/**
+ * The identity the `ACCESS` binding reports.
+ *
+ * `getIdentity` resolves `undefined` — not `null` — when no Access application is in
+ * front of the request, and Cloudflare has used both spellings of the verification
+ * flag, so both are refused below.
+ */
+interface AccessIdentity {
+  email?: string | null;
+  emailVerified?: boolean | null;
+  email_verified?: boolean | null;
+}
+
+/**
+ * The `ACCESS` binding, as the platform provides it.
+ *
+ * Cloudflare provisions this binding for a Worker sitting behind an Access
+ * application, and it therefore **cannot be declared in a wrangler config** — so
+ * `wrangler types` never emits it and `worker-configuration.d.ts` has no `ACCESS`.
+ * The shape is declared here rather than imported from the generated file, which a
+ * Layer 3 package must not see in any case. Its absence is a supported state: a
+ * deployment with no Access in front of it answers 401, not an open door.
+ */
+interface AccessBinding {
+  getIdentity(): Promise<AccessIdentity | undefined>;
+}
 
 interface AccessAuthEnv {
   TEAM_DOMAIN?: string;
@@ -25,12 +53,10 @@ interface AccessAuthEnv {
   DEV_AUTH_EMAIL?: string;
   DEMO_MODE?: string;
   ENVIRONMENT?: string;
-}
-
-interface AccessIdentityContext {
-  access?: {
-    getIdentity: () => Promise<{ email?: string | null; emailVerified?: boolean | null; email_verified?: boolean | null } | null>;
-  };
+  /**
+   * The platform-provisioned Access binding. Never a wrangler declaration.
+   */
+  ACCESS?: AccessBinding;
 }
 
 const DEMO_USER_EMAIL = 'demo@edge-sonic.invalid';
@@ -69,10 +95,19 @@ class AccessAuthService {
     return created;
   }
 
-  constructor(private readonly env: AccessAuthEnv) {}
+  /**
+   * `config` is injected rather than derived, so the request scope builds one
+   * `AppConfiguration` per request instead of two. It is defaulted so a direct
+   * construction (`new AccessAuthService(env)`) still works — every value is read
+   * through the config either way, never inline off `env`.
+   */
+  constructor(
+    private readonly env: AccessAuthEnv,
+    private readonly config: AppConfigurationType = AppConfiguration.fromEnv(env),
+  ) {}
 
-  public async getAuthenticatedUserEmail(request: Request, accessCtx?: AccessIdentityContext): Promise<string> {
-    const config = AppConfiguration.fromEnv(this.env);
+  public async getAuthenticatedUserEmail(request: Request): Promise<string> {
+    const config = this.config;
     const bypassAllowed = config.isBypassAllowed();
 
     // Bypasses first, and only when the environment allow-list permits them. The
@@ -80,14 +115,16 @@ class AccessAuthService {
     // the bypass for `staging`, `Preview`, and a misspelled `prodcution`.
     if (bypassAllowed) {
       if (config.isDemoMode()) return DEMO_USER_EMAIL;
-      const dev = this.env.DEV_AUTH_EMAIL?.trim() ?? '';
+      // Read through the config, never `env.DEV_AUTH_EMAIL` inline: the config is the
+      // only place that knows how a variable is parsed and defaulted.
+      const dev = config.getDevAuthEmail()?.trim() ?? '';
       if (dev && isValidAuthEmail(dev)) return dev.toLowerCase();
     }
 
     const fromJwt = await this.fromJwt(request, config);
     if (fromJwt !== null) return fromJwt;
 
-    const fromBinding = await this.fromBinding(accessCtx);
+    const fromBinding = await this.fromBinding();
     if (fromBinding !== null) return fromBinding;
 
     // Single throw site: the JWT strategy already attempted verification and
@@ -106,8 +143,16 @@ class AccessAuthService {
     }
   }
 
-  private async fromBinding(accessCtx?: AccessIdentityContext): Promise<string | null> {
-    const identity = await accessCtx?.access?.getIdentity?.().catch(() => null);
+  /**
+   * The `ctx.access` → `env.ACCESS` fallback.
+   *
+   * `undefined` is the platform's "no identity" answer and is handled by the same
+   * optional chain as a throw: a rejected `getIdentity` resolves to `undefined` and
+   * falls through to the single throw site, so a broken binding is a 401 rather than
+   * an unhandled rejection in the auth middleware.
+   */
+  private async fromBinding(): Promise<string | null> {
+    const identity = await this.env.ACCESS?.getIdentity().catch(() => undefined);
     // Fail closed on an unverified identity. The binding is trusted; an
     // unverified identity inside it must still not authenticate.
     if (identity?.emailVerified === false || identity?.email_verified === false) return null;
@@ -144,4 +189,4 @@ class AccessAuthService {
 }
 
 export { AccessAuthService, DEMO_USER_EMAIL };
-export type { AccessAuthEnv, AccessIdentityContext };
+export type { AccessAuthEnv, AccessBinding, AccessIdentity };

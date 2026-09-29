@@ -74,8 +74,12 @@ export function subsonicId(kind: 's' | 'al' | 'ar' | 'dir' | 'vid' | 'mf' | 'dir
 A minimal `ExecutionContext`. Nothing in the request path calls `waitUntil`.
 */
 export const executionContext = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
+  waitUntil: (): void => undefined,
+  passThroughOnException: (): void => undefined,
+  // Required by the runtime type even though nothing reads it. Leaving it out made this
+  // double structurally unlike the platform object every `app.fetch` call requires, so
+  // a test could not pass one to a Hono app without a cast.
+  props: {} as Record<string, unknown>,
 };
 
 export interface SubsonicBody {

@@ -56,6 +56,19 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   element's name is the JSON key its wrapper declares. A client doing
   `response.starred2.song.map(...)` throws on an absent key and renders an empty screen
   on `[]`.
+- **A limit that claims to key on an identity runs after the middleware that sets it.**
+  The rate limiter prefers `c.get('AdminEmail')` over the client address, so registering it
+  before `adminAuthentication` makes it fall back to `ip:…` — silently, and with a comment
+  claiming the opposite. A limiter's key and the order that produces it are one decision.
+- **A `no-store` predicate must name a path the router serves.** `isSensitiveJsonPath`
+  arrived from the reference project as `startsWith('/user/')`, a path this worker does not
+  register, so the branch was unreachable and `/admin/me` and `/admin/users` shipped with no
+  `Cache-Control`. A predicate copied from another router's route table is an unconditional
+  no-op, and nothing else reports it: the Subsonic envelope sets its own `no-store`.
+- **One surface speaks one error dialect.** `/rest` answers in the protocol envelope and
+  everything else in `{Exception:{Type,Message}}`; that split is by surface, not by
+  convenience. A 429 built by hand while the rest of the admin API went through the mapper
+  gave one client two decoders, so both now route through `BaseRoute.toErrorBody`.
 - **`params.int(name, undefined)` is not `undefined`.** It returns the number `0`, which
   is not nullish, so a `pageSize(params.int('count', undefined), 10)` fallback never
   applies and the floor turns it into one. Use `optionalInt` for "was it sent".

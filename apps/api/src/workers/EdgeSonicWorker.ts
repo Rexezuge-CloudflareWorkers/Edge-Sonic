@@ -10,10 +10,26 @@
  * SPA shell                  — browser navigations only
  * scopeMiddleware            — one Container per request
  * OPTIONS *                  — CORS preflight, BEFORE auth (see below)
- * rate limits                — before auth, so they can key on the resolved identity
- * /admin/*                   — Cloudflare Access
- * /rest/*                    — Subsonic credentials
+ * /admin/*  auth             — Cloudflare Access
+ * /admin/*  rate limits      — AFTER auth, so a bucket is per operator
+ * /admin/*  routes
+ * /rest/*                    — Subsonic credentials; limits key on the client address
  * ```
+ *
+ * ### Why the admin rate limits follow auth
+ *
+ * The limiter keys on `c.get('AdminEmail')` so that a budget belongs to an operator
+ * rather than to an address, and several operators can share one behind a NAT. That
+ * only works if the limiter runs *after* the middleware that sets the variable. The
+ * previous order registered the limits first, while a comment claimed the opposite
+ * ("before auth, so they can key on the resolved identity") — so every bucket
+ * silently fell back to `ip:…` and the comment documented a property the code did not
+ * have. A comment asserting an ordering the code does not implement is worse than
+ * either a correct comment or a correct implementation.
+ *
+ * `/rest/*` cannot do this: a Subsonic client authenticates inside the dispatcher from
+ * `u`/`t`/`s` query parameters, so there is no ambient identity to read, and its
+ * limits are installed before the route.
  *
  * ### Why the preflight precedes auth
  *
@@ -29,14 +45,11 @@ import { Hono } from 'hono';
 import { errorResponse, resolveFormat } from '@edge-sonic/subsonic';
 import { toAdminResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { registerAdminRoutes } from '../admin/routes';
-import { registerRateLimits } from '../middleware/rateLimitConfig';
-import { scopeMiddleware } from '../middleware/scopeMiddleware';
-import { securityHeaders } from '../middleware/securityHeaders';
-import { adminAuthentication } from '../middleware/adminAuth';
+import { adminAuthentication, registerAdminRateLimits, registerRestRateLimits, scopeMiddleware, securityHeaders } from '../middleware';
 import { dispatchRest } from '../rest/dispatch';
 import { SPA_HTML } from '../generated/spa-shell';
+import type { WorkerEnv } from '../endpoints/BaseRoute';
 
-type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
 type App = Hono<WorkerEnv>;
 
 /**
@@ -112,11 +125,14 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
       });
     });
 
-    // Before the auth middlewares so a limiter can key on the resolved identity
-    // rather than only on an IP that several users share.
-    registerRateLimits(app);
+    // `/rest/*` has no ambient identity to key on — a Subsonic client authenticates
+    // inside the dispatcher — so its limits are installed before the route.
+    registerRestRateLimits(app);
 
     app.use('/admin/*', adminAuthentication());
+    // After the auth middleware, not before: the bucket is per resolved operator, and
+    // that is only true if `AdminEmail` is set by the time this runs.
+    registerAdminRateLimits(app);
     registerAdminRoutes(app);
 
     // `/rest/*` authenticates itself, inside the dispatcher, because the

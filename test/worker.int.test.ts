@@ -3,7 +3,7 @@ import { createHarness, LIBRARY_ID, PASSWORD, SALT, USERNAME, EXPECTED_TOKEN, OR
 import type { Harness } from './helpers/harness';
 import { fakeKv } from './helpers/fakeKv';
 import { SPA_HTML } from '../apps/api/src/generated/spa-shell';
-
+import { getRateLimitBucketCountForTests, resetRateLimitForTests } from '../apps/api/src/middleware/rateLimit';
 
 let harness: Harness;
 
@@ -11,8 +11,9 @@ let harness: Harness;
 A minimal `ExecutionContext`. Nothing in the request path calls `waitUntil`.
 */
 const executionContext = {
-  waitUntil: () => undefined,
-  passThroughOnException: () => undefined,
+  waitUntil: (): void => undefined,
+  passThroughOnException: (): void => undefined,
+  props: {} as Record<string, unknown>,
 };
 
 let env: (overrides?: Record<string, unknown>) => Record<string, unknown>;
@@ -32,6 +33,9 @@ interface SubsonicBody {
 }
 
 beforeEach(async () => {
+  // The rate limiter's buckets are module-level state that outlives a request, so a
+  // bucket opened by one test would otherwise be counted by the next one's assertion.
+  resetRateLimitForTests();
   harness?.close();
   harness = await createHarness();
   env = harness.env;
@@ -180,6 +184,53 @@ describe('route order', () => {
       executionContext,
     );
     expect(elsewhere.status).toBe(401);
+  });
+
+  it('keys the admin rate limit on the resolved identity, not on the client address', async () => {
+    // The route order in `EdgeSonicWorker` puts `registerAdminRateLimits` *after*
+    // `adminAuthentication`, and this is what that buys. The previous order registered
+    // the limits first, while a comment claimed the opposite ("before auth, so they can
+    // key on the resolved identity") — so every bucket silently fell back to `ip:…`.
+    //
+    // Two requests from one address, as two different operators. The admin budget is
+    // 60/min and cannot be exhausted cheaply here, so this asserts the *identity* is
+    // what the bucket records: two different identities from one address each get their
+    // own key, which is only true if `AdminEmail` was set before the limiter ran.
+    const first = await harness.worker.fetch(
+      new Request(`${ORIGIN}/admin/me`, { headers: { 'cf-connecting-ip': '203.0.113.50' } }),
+      { ...env(), DEV_AUTH_EMAIL: 'ann@example.com' } as never,
+      executionContext,
+    );
+    const second = await harness.worker.fetch(
+      new Request(`${ORIGIN}/admin/me`, { headers: { 'cf-connecting-ip': '203.0.113.50' } }),
+      { ...env(), DEV_AUTH_EMAIL: 'bob@example.com' } as never,
+      executionContext,
+    );
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    // Two identities, so two buckets, so two tracked keys — not one shared by the
+    // address they happened to share.
+    const bob = ((await second.json()) as { email: string }).email;
+    expect(bob).toBe('bob@example.com');
+    expect(getRateLimitBucketCountForTests()).toBeGreaterThanOrEqual(2);
+  });
+
+  it('serves an unauthenticated /admin path in the Exception dialect, not the Subsonic one', async () => {
+    // Two dialects, and the split is by surface. A client parsing `/rest` has no way to
+    // interpret the admin shape, and an SPA has no way to interpret the protocol
+    // envelope — so `onError` and `notFound` both choose by path. This also covers the
+    // 401 from the auth middleware, which is the most common way an operator's browser
+    // first meets this surface.
+    const response = await harness.worker.fetch(
+      new Request(`${ORIGIN}/admin/libraries`),
+      { ...env(), ENVIRONMENT: 'production' } as never,
+      executionContext,
+    );
+    expect(response.status).toBe(401);
+    const body = (await response.json()) as { Exception: { Type: string; Message: string } };
+    // One key, so a client needs a single decoder for the whole admin surface.
+    expect(Object.keys(body)).toEqual(['Exception']);
+    expect(body.Exception.Type).toBe('Unauthorized');
   });
 
   it('answers a CORS preflight without credentials', async () => {
