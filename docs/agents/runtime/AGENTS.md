@@ -12,10 +12,31 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
   `apps/api/src/generated/spa-shell.ts` as `SPA_HTML`.
   `scripts/verify-spa-shell.mjs` runs in `checks` and rejects a missing, stubbed, or
   half-refreshed artifact — so a frontend change is not inert until `pnpm run build`.
-- `apps/api/wrangler.template.jsonc` is the deployment template; `wrangler.jsonc` at the repository root is
-  local only (`ENVIRONMENT=development`). The template sets `ENVIRONMENT=production` and
-  deliberately omits `DEV_AUTH_EMAIL`/`DEMO_MODE`; site values go through the
-  `WRANGLER_VARS_PATCH_JSON` repo variable.
+- `apps/api/wrangler.template.jsonc` is the **Worker** deployment template. The template
+  sets `ENVIRONMENT=production` and deliberately omits `DEV_AUTH_EMAIL`/`DEMO_MODE`; site
+  values go through the `WRANGLER_VARS_PATCH_JSON` repo variable. The `wrangler.jsonc` at
+  the repository root is **local only** (`ENVIRONMENT=development`) and is **gitignored**,
+  so it is a working file rather than a committed artifact.
+- **`apps/web/wrangler.template.jsonc` is the second deployment target, Cloudflare
+  Pages**, and the `deploy-pages` job `cp`s it over the root config before
+  `wrangler pages deploy apps/web/dist`. Two hosts deploy the same SPA:
+  - The **Worker** serves the SPA and the API from one origin, so the client is
+    same-origin with `API_BASE = '/admin'` and no token in JavaScript.
+  - **Pages** serves `dist/` as static files and would 404 every `/admin`, `/rest`, and
+    `/health` call. `functions/[[path]].ts` is what makes that target work: a catch-all
+    that forwards to the `edge-sonic` Worker over the `API_WORKER` service binding. Its
+    presence in the Pages log is `Uploading Functions bundle`; without it the admin UI
+    renders a shell that can never load anything.
+  - The two templates are coupled in exactly one place: `services[].service` here must
+    equal `name` in the Worker template. A typo is a deploy-time failure, not a runtime
+    one.
+- **A placeholder in a template must be the exact sentinel, not a readable stand-in.**
+  `scripts/prepare-wrangler-config.ts` patches a D1 `database_id` only when it equals
+  `DEFAULT_UUID`, a KV `id` and a Secrets Store `store_id` only when they equal
+  `DEFAULT_HEX_ID` (32 zeros) — see `scripts/wrangler-config/types.ts`. A friendlier
+  placeholder such as `REPLACE_WITH_YOUR_SECRETS_STORE_ID` is skipped **silently**, the
+  unpatched value reaches `wrangler deploy`, and it fails there as Cloudflare error
+  10182 rather than at the step that caused it.
 - Bindings: D1 `DB`, KV `CACHE`, and two Secrets Store secrets. **No Durable Objects, no
   cron triggers, no queues, no R2.** The scan is advanced by `getScanStatus`, so nothing
   runs on a schedule.
@@ -78,7 +99,23 @@ without a type error and silently never reach the config layer.
 | `WEBDAV_ENCRYPTION_KEY_SECRET`         | `edge-sonic-webdav-encryption-key`     | `libraries.password_ciphertext` |
 
 Two keys, never one. Merging them would make rotating the WebDAV credential require
-re-entering every user's password, and a compromise of one store would yield both.
+re-entering every user's password, and a compromise of one store would yield both. Both
+live in one store, and `ensureSecretStore()` writes a single resolved id into every entry,
+so rotating one key never has to move the other.
+
+**Who creates what.** `scripts/prepare-wrangler-config.ts` (`provisionWranglerResources`)
+creates the **store** and patches its id into the config. `scripts/init-secrets.ts` then
+reads the patched config and creates each **secret value** in it. Two scripts, one
+pipeline, in that order — a script that claims to do both has silently skipped one.
+
+A secret's value is chosen by its **name shape**: `*-encryption-key` gets a generated
+32-byte AES-GCM key (base64, which is what `isUsableKey` requires on the read side) and
+`*-signing-secret` gets 32 random bytes. This used to be a hardcoded list of known names,
+and adding an entry to `secrets_store_secrets[]` without also editing the list broke
+deployment: `init-secrets.ts` threw `Unknown secret`, and because the rejection was
+swallowed the CD step reported success and the failure surfaced two steps later as a
+10182. **A provisioning script must exit non-zero on failure** — a guard that logs and
+returns 0 is indistinguishable from a guard that passed.
 
 `resolveKey(binding, rawVar, bindingName, varName)` resolves a key, memoizes a success,
 and **fails closed**: no configuration is an error, a binding that throws is an error

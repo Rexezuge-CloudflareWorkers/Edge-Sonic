@@ -61,15 +61,30 @@ pnpm exec wrangler dev
 
 ```jsonc
 "secrets_store_secrets": [
-  { "store_id": "<store id>", "name": "SUBSONIC_USER_ENCRYPTION_KEY_SECRET" },
-  { "store_id": "<store id>", "name": "WEBDAV_ENCRYPTION_KEY_SECRET" }
+  {
+    "binding": "SUBSONIC_USER_ENCRYPTION_KEY_SECRET",
+    "store_id": "00000000000000000000000000000000",
+    "secret_name": "edge-sonic-subsonic-user-encryption-key"
+  },
+  {
+    "binding": "WEBDAV_ENCRYPTION_KEY_SECRET",
+    "store_id": "00000000000000000000000000000000",
+    "secret_name": "edge-sonic-webdav-encryption-key"
+  }
 ]
 ```
 
-`scripts/init-secrets.ts` creates the store and writes both 32-byte keys. Each is
-AES-256-GCM under its own key: user passwords under one, WebDAV credentials under the
-other. The bindings they resolve to are named `edge-sonic-subsonic-user-encryption-key`
-and `edge-sonic-webdav-encryption-key`.
+The 32-zero `store_id` is a **placeholder**: `scripts/prepare-wrangler-config.ts` creates
+the store and patches the real id in, then `scripts/init-secrets.ts` writes both 32-byte
+key values. Use that exact sentinel — the patcher matches it by string equality, and any
+other placeholder is skipped without a word and fails at deploy time as Cloudflare error
+10182. Each value is AES-256-GCM under its own key: user passwords under one, WebDAV
+credentials under the other.
+
+The SPA deploys to **two** targets. The Worker serves the SPA and the API from one
+origin; `apps/web/wrangler.template.jsonc` is the Cloudflare Pages target, and
+`functions/[[path]].ts` forwards `/admin`, `/rest`, and `/health` to the Worker over a
+service binding, because Pages would otherwise 404 them against static assets.
 
 `ENVIRONMENT` is an **allow-list**, not a deny-list: `development` enables the
 `DEV_AUTH_EMAIL` bypass and `production` is the only other value that does anything, so

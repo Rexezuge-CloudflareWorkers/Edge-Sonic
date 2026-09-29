@@ -64,6 +64,19 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `a";b/../../evil.flac` is a legal name and quoting it does nothing.
 - **A dev bypass is gated on an allow-list of environments.** A deny-list enables it for
   `staging`, `Preview`, and a misspelled `prodcution`.
+- **A deployment placeholder is the exact sentinel, never a readable stand-in.**
+  `scripts/prepare-wrangler-config.ts` patches a D1 `database_id` only when it equals
+  `DEFAULT_UUID`, and a KV `id` or Secrets Store `store_id` only when it equals
+  `DEFAULT_HEX_ID` (32 zeros). A friendlier placeholder is skipped silently, the unpatched
+  value reaches `wrangler deploy`, and it fails there as Cloudflare error 10182 rather
+  than at the step that caused it. This shipped: `apps/api/wrangler.template.jsonc` used
+  `REPLACE_WITH_YOUR_SECRETS_STORE_ID`, and every deploy died on the Worker job while the
+  Pages job failed separately on a `wrangler.template.jsonc` that did not exist.
+- **A provisioning script exits non-zero when it fails.** `init-secrets.ts` once ended in
+  `main().catch(console.error)`: it logged `Unknown secret` and returned 0, so the CD step
+  reported success while no key was ever created, and the failure surfaced two steps later
+  on the deploy. Same rule as awaiting an authorization check instead of voiding it — a
+  discarded rejection is not a failed guard, it is no guard.
 - **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
   so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
   `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.

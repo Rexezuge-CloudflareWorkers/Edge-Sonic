@@ -45,11 +45,20 @@
   //                It is an object with a `.get()` method, not a string; typing it as a
   //                string would compile and then resolve to undefined, turning every
   //                credential read into a silent failure.
-  // - `store_id` - the Secrets Store that holds it.
+  // - `store_id` - the Secrets Store that holds it. 32 zeros below is a PLACEHOLDER, and
+  //                it must stay that exact string: `scripts/prepare-wrangler-config.ts`
+  //                patches only a `store_id` equal to `DEFAULT_HEX_ID` (the same sentinel
+  //                the D1 `database_id` and the KV `id` above use). A friendlier
+  //                placeholder - `REPLACE_WITH_YOUR_SECRETS_STORE_ID` - is skipped without
+  //                a word, reaches `wrangler deploy` unpatched, and fails there with
+  //                Cloudflare error 10182 rather than here.
   // - `secret_name` - the key's name *inside* the store. The two are deliberately
   //                different strings (`edge-sonic-subsonic-user-encryption-key` and
   //                `edge-sonic-webdav-encryption-key`), so a binding and a stored value
   //                cannot be confused for each other in a log or a support ticket.
+  //
+  // One store, two secrets: `ensureSecretStore()` resolves a single id and writes it to
+  // every entry, so rotating one key never has to move the other.
   //
   // `scripts/init-secrets.ts` reads this array, creates anything missing, and writes a
   // fresh 32-byte AES-256 key for each.
@@ -63,12 +72,12 @@
   "secrets_store_secrets": [
     {
       "binding": "SUBSONIC_USER_ENCRYPTION_KEY_SECRET",
-      "store_id": "REPLACE_WITH_YOUR_SECRETS_STORE_ID",
+      "store_id": "00000000000000000000000000000000",
       "secret_name": "edge-sonic-subsonic-user-encryption-key",
     },
     {
       "binding": "WEBDAV_ENCRYPTION_KEY_SECRET",
-      "store_id": "REPLACE_WITH_YOUR_SECRETS_STORE_ID",
+      "store_id": "00000000000000000000000000000000",
       "secret_name": "edge-sonic-webdav-encryption-key",
     },
   ],

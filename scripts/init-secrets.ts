@@ -46,6 +46,41 @@ async function generateAESGCMKey(): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(exported)));
 }
 
+function generateSigningSecret(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * A secret's value is chosen by its NAME, not by a list of names this script has heard of.
+ *
+ * The list was the defect. It held the `edge-git-*` names only, so the two
+ * `edge-sonic-*-encryption-key` entries threw `Unknown secret` — and because the
+ * rejection was swallowed, the CD step reported success while the deploy that followed
+ * failed with Cloudflare error 10182. A new entry in `secrets_store_secrets[]` therefore
+ * broke deployment silently, which is the worst shape a config can have.
+ *
+ * So the rule is the shape: `*-encryption-key` gets a 32-byte AES-GCM key (base64, which
+ * is what `isUsableKey` on the read side requires), `*-signing-secret` gets 32 random
+ * bytes. Adding a secret to the template is now a one-line change that needs no matching
+ * edit here, and a name that matches neither is still refused rather than given a guess.
+ */
+async function generateSecretValue(secretName: string): Promise<string> {
+  if (secretName.endsWith('-encryption-key')) {
+    console.log('Generated AES encryption key');
+    return generateAESGCMKey();
+  }
+  if (secretName.endsWith('-signing-secret')) {
+    console.log('Generated signing secret');
+    return generateSigningSecret();
+  }
+  throw new Error(
+    `Unknown secret: ${secretName}. Name it '*-encryption-key' for a generated 32-byte AES-GCM key, ` +
+      `or '*-signing-secret' for 32 random bytes, and teach this script the shape if neither fits.`,
+  );
+}
+
 function createSecret(storeId: string, secretName: string, secretValue: string): void {
   console.log(`Creating secret: ${secretName}`);
   // Why `spawnSync` with piped stdin: the previous
@@ -74,22 +109,7 @@ async function main() {
   if (config.secrets_store_secrets) {
     for (const secret of config.secrets_store_secrets) {
       if (!checkSecret(secret.store_id, secret.secret_name)) {
-        let secretValue: string;
-        if (
-          secret.secret_name === 'edge-git-webhook-encryption-key' ||
-          secret.secret_name === 'edge-git-mirror-encryption-key' ||
-          secret.secret_name === 'edge-git-import-encryption-key' ||
-          secret.secret_name === 'edge-git-aes-encryption-key' ||
-          secret.secret_name === 'edge-git-action-encryption-key'
-        ) {
-          secretValue = await generateAESGCMKey();
-          console.log(`Generated AES encryption key`);
-        } else if (secret.secret_name === 'edge-git-action-signing-secret') {
-          secretValue = crypto.getRandomValues(new Uint8Array(32)).reduce((value, byte) => value + byte.toString(16).padStart(2, '0'), '');
-          console.log(`Generated action signing secret`);
-        } else {
-          throw new Error(`Unknown secret: ${secret.secret_name}`);
-        }
+        const secretValue = await generateSecretValue(secret.secret_name);
         createSecret(secret.store_id, secret.secret_name, secretValue);
         console.log(`Created secret: ${secret.secret_name}`);
       } else {
@@ -100,4 +120,12 @@ async function main() {
   console.log('Secret initialization complete');
 }
 
-main().catch(console.error);
+// The exit code is the point of this line. `main().catch(console.error)` reported success
+// while every secret had gone uncreated, so a broken provisioning step was indistinguishable
+// from a working one and the failure surfaced two steps later as a Cloudflare 10182 on
+// `wrangler deploy`. A rejected guard has to reach the runner as a non-zero exit; this is
+// the same rule as awaiting an authorization check rather than voiding it.
+main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
