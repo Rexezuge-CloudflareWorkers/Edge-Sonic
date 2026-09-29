@@ -18,11 +18,13 @@ import {
   AnnotationDAO,
   AuthThrottleDAO,
   DERIVED_MARKER,
+  DERIVED_VERSION,
   LibraryDAO,
   NodeDAO,
   PlaylistDAO,
   ScanStateDAO,
   SongDAO,
+  SongDerivationDAO,
   SongIndexDAO,
   UserDAO,
   deriveFromPath,
@@ -299,6 +301,11 @@ describe('the migration lock', () => {
       'channels',
       'enriched_at',
       'reader_version',
+      // The derivation's own staleness input. Absent, the backfill's `WHERE
+      // derived_version < ?` would be a query against a column that does not exist, and
+      // the whole repair would fail on every poll — the same shape as the `reader_version`
+      // omission this list was written for.
+      'derived_version',
     ]) {
       expect(columns, `songs.${column} is named by a DAO but created by no migration`).toContain(column);
     }
@@ -522,10 +529,36 @@ describe('every hot lookup uses an index', () => {
     // A leading `%` makes the pattern's start unknown, so no index can serve the term.
     // The leading `library_id = ?` does use one, so the cost is a scan of THIS library's
     // rows rather than of every library. FTS5 is the named fix, in the migration.
-    // Which of the two candidate indexes the planner picks is its business; what
-    // matters is that it picks one, so the scan is bounded to this library.
+    // Which index the planner picks is its business; what matters is that it picks one,
+    // so the scan is bounded to this library.
+    //
+    // The assertion names *any* `songs` index rather than a specific one, because there
+    // are now three and the previous pair was already over-specified against its own
+    // comment. It went green on a name while the property it was written to protect — "not
+    // a bare table scan" — stayed enforced, and it went red the moment a third index
+    // existed and the planner preferred it, which said nothing about cost: for a
+    // leading-`%` pattern the planner visits every row of the library whichever index it
+    // picks, so it picked the *narrowest* one.
     const plan = queryPlan(handle, String.raw`SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\'`, ['L', '%ab%']);
-    expect(plan).toMatch(/SEARCH songs USING (?:COVERING )?INDEX idx_songs_(title_ci|album_title_ci)/);
+    expect(plan).toMatch(/SEARCH songs USING (?:COVERING )?INDEX idx_songs_\w+/);
+    // The load-bearing half, and the one that survives an index being dropped: a bare
+    // `SCAN songs` is a pass over every library's rows.
+    expect(plan).not.toMatch(/SCAN songs/);
+  });
+
+  it('serves the derivation backfill from its own index, so a caught-up library costs one empty seek', () => {
+    // The backfill's entire steady-state cost is this query, and it runs on **every**
+    // poll — including for a library that is already current. If it degraded to a table
+    // scan, a fully-repaired library would pay a full `songs` pass on every
+    // `getScanStatus`, which is the "the guard costs more than the thing it guards" shape
+    // this suite exists to catch.
+    //
+    // A dedicated `(library_id, derived_version)` index is what prevents that. The
+    // existing `(library_id, album_ci)` cannot serve `derived_version < ?`, and once a
+    // library is caught up every row sits at the current version, so the predicate is a
+    // range over a column nothing else filters by.
+    const plan = queryPlan(handle, 'SELECT id, dir_path FROM songs WHERE library_id = ? AND derived_version < ? ORDER BY id LIMIT ?', ['L', 1, 200]);
+    expect(plan).toMatch(/SEARCH songs USING (?:COVERING )?INDEX idx_songs_derived/);
     expect(plan).not.toMatch(/SCAN songs/);
   });
 });
@@ -578,25 +611,30 @@ describe('path-derived grouping', () => {
     await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
 
     const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
-    expect(row?.album).toBe('Black Sands');
-    expect(row?.artist).toBe('Bonobo (derived)');
-    expect(row?.album_artist).toBe('Bonobo (derived)');
+    // **Both** names carry the marker, and that is load-bearing rather than cosmetic: it
+    // is the only provenance a derived value has, so it is the only thing that lets a
+    // later version of this convention tell a guess it wrote from a tag a file supplied.
+    // With the artist marked and the album bare, a version bump could correct a wrong
+    // artist and never a wrong album.
+    expect(row?.album).toBe(`Black Sands${DERIVED_MARKER}`);
+    expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
+    expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
 
     // Every `_ci` twin moves with its counterpart, in the same statement. Asserted
     // separately from the display values because the two are *independently* breakable:
     // a `_ci` column that drifts from its source is an ungroupable row, and the drift
     // is invisible until somebody browses by artist — the display name looks perfect the
-    // whole time. Removing `COALESCE` from only the `_ci` assignments, leaving the
+    // whole time. Removing the handling from only the `_ci` assignments, leaving the
     // display ones intact, passes every other assertion in this file.
-    expect(row?.album_ci).toBe('black sands');
-    expect(row?.artist_ci).toBe('bonobo (derived)');
-    expect(row?.album_artist_ci).toBe('bonobo (derived)');
+    expect(row?.album_ci).toBe(`black sands${DERIVED_MARKER.toLowerCase()}`);
+    expect(row?.artist_ci).toBe(`bonobo${DERIVED_MARKER.toLowerCase()}`);
+    expect(row?.album_artist_ci).toBe(`bonobo${DERIVED_MARKER.toLowerCase()}`);
 
     // And the aggregate that filters on those columns now answers.
     const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' });
-    expect(albums.map((song) => song.album)).toEqual(['Black Sands']);
+    expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
     const artists = await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0);
-    expect(artists.map((song) => song.artist)).toEqual(['Bonobo (derived)']);
+    expect(artists.map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
   });
 
   it('groups a flat "Artist - Album" folder, which is a whole library layout', async () => {
@@ -608,8 +646,8 @@ describe('path-derived grouping', () => {
     await indexSong(libraryId, 'Radiohead - OK Computer/01 Airbag.opus');
 
     const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Radiohead - OK Computer/01 Airbag.opus'));
-    expect(row?.album).toBe('OK Computer');
-    expect(row?.artist).toBe('Radiohead (derived)');
+    expect(row?.album).toBe(`OK Computer${DERIVED_MARKER}`);
+    expect(row?.artist).toBe(`Radiohead${DERIVED_MARKER}`);
   });
 
   it('splits on the FIRST separator only, so an album title with a dash survives', async () => {
@@ -618,8 +656,8 @@ describe('path-derived grouping', () => {
     await indexSong(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus');
 
     const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus'));
-    expect(row?.album).toBe('Symphony No. 5 - 1949 Recording');
-    expect(row?.artist).toBe('Mahler (derived)');
+    expect(row?.album).toBe(`Symphony No. 5 - 1949 Recording${DERIVED_MARKER}`);
+    expect(row?.artist).toBe(`Mahler${DERIVED_MARKER}`);
   });
 
   it('never overwrites a real tag, on a rescan or otherwise', async () => {
@@ -685,6 +723,216 @@ describe('path-derived grouping', () => {
     expect(row?.track).toBeNull();
     expect(row?.year).toBeNull();
     expect(await new SongIndexDAO(handle.db).listGenres(libraryId)).toEqual([]);
+  });
+
+  /**
+   * The backfill: the same derivation, for rows the indexer will never touch again.
+   *
+   * ### Why this exists, and why it is not an optimisation
+   *
+   * Every writer of these columns is gated on the file having **changed** — the
+   * `Depth: 0` root probe, `isScanned: !changed`, `if (changed)` in `reconcileFolder`, and
+   * the read-through `getMusicDirectory` path. That gating is correct and is the entire
+   * point of storing `mtime_ms` in `nodes`. The consequence is that the derivation is
+   * **unreachable for an already-indexed library**, so its aggregates never recover
+   * without a file moving.
+   *
+   * It shipped exactly that way, and the first attempt to fix it did not work either: the
+   * derivation was added to the upsert, which is only reached for a *changed* file, and
+   * deploying it changed nothing on a library where nothing had changed. The tests below
+   * all seed rows the way the broken deployment left them — written, ungrouped, and
+   * stamped at version 0 — because a backfill test that seeds rows the indexer just wrote
+   * would pass against the code that shipped broken.
+   */
+  describe('the backfill over rows the indexer will not revisit', () => {
+    /**
+     * A row as the broken deployment left it: indexed, with the grouping columns NULL and
+     * no derivation stamp.
+     *
+     * Inserted directly rather than through `upsertFileFacts`, because that method now
+     * derives — so it cannot produce the state this pass exists to repair, and a test
+     * using it would be testing the index path with the index path's own output.
+     */
+    async function seedUngrouped(libraryId: string, path: string): Promise<string> {
+      const id = songId(libraryId, path);
+      await handle.raw
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                              duration, bitrate, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1000, 1000, 'audio/ogg', 'opus', 0, 0, 0, 0)`,
+        )
+        .run(id, libraryId, path, path.split('/').slice(0, -1).join('/'), path.split('/').pop() ?? path, path.toLowerCase());
+      return id;
+    }
+
+    async function drain(libraryId: string, version = DERIVED_VERSION): Promise<number> {
+      const dao = new SongDerivationDAO(handle.db);
+      let written = 0;
+      for (let pass = 0; pass < 20; pass += 1) {
+        const rows = await dao.listNeedingDerivation(libraryId, 50, version);
+        if (rows.length === 0) return written;
+        written += await dao.applyDerivation(SongDerivationDAO.deriveFor(rows), version);
+      }
+      throw new Error('backfill did not converge');
+    }
+
+    it('groups a row the file-change path will never reach, which is the shipped symptom', async () => {
+      // The end-to-end version of the defect. 113 rows on a live library, all indexed
+      // before the deploy, all with `album_ci` NULL, and every SQL-filtered aggregate
+      // answering `[]`.
+      const userId = await seedUser('BackfillBasic');
+      const libraryId = await seedLibrary(userId, 'LDB');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+
+      // Before: absent from the aggregate, not shown with a blank name.
+      expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' })).toEqual([]);
+
+      await drain(libraryId);
+
+      const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+      expect(row?.album).toBe(`Black Sands${DERIVED_MARKER}`);
+      expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
+      expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
+
+      // The aggregate answers. This is the assertion the whole change exists for.
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' });
+      expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
+      expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
+    });
+
+    it('splits a flat "Artist - Album" row, which is the layout this deployment uses', async () => {
+      // Verified against the live instance rather than assumed: decoding an album id gives
+      // `<libraryId>\nLEZEL - 未完成ランデヴー`, so `dir_path` is a single top-level
+      // segment and the flat branch is the one that runs. A nested layout would take
+      // `fromNestedPath` and group the whole folder name as an artist — browsable albums,
+      // no artists, which is the split this is meant to remove.
+      const userId = await seedUser('BackfillFlat');
+      const libraryId = await seedLibrary(userId, 'LDF2');
+      await seedUngrouped(libraryId, 'LEZEL - 未完成ランデヴー/01 夢の Jel.ly.opus');
+
+      await drain(libraryId);
+
+      const row = await new SongDAO(handle.db).findById(songId(libraryId, 'LEZEL - 未完成ランデヴー/01 夢の Jel.ly.opus'));
+      expect(row?.artist).toBe(`LEZEL${DERIVED_MARKER}`);
+      expect(row?.album).toBe(`未完成ランデヴー${DERIVED_MARKER}`);
+    });
+
+    it('never overwrites a real tag, and stamps it so it is never reconsidered', async () => {
+      const userId = await seedUser('BackfillNoClobber');
+      const libraryId = await seedLibrary(userId, 'LDNC');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await handle.raw
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                              duration, bitrate, artist, artist_ci, album, album_ci, album_artist, album_artist_ci,
+                              created_at, updated_at)
+           VALUES (?, ?, ?, 'Bonobo/Black Sands', '01 Kerala.opus', '01 kerala.opus', 1000, 1000, 'audio/ogg', 'opus',
+                   0, 0, 'Bonobo', 'bonobo', 'Black Sands (Remastered)', 'black sands (remastered)',
+                   'Bonobo', 'bonobo', 0, 0)`,
+        )
+        .run(id, libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+
+      await drain(libraryId);
+
+      const row = await new SongDAO(handle.db).findById(id);
+      expect(row?.album).toBe('Black Sands (Remastered)');
+      expect(row?.artist).toBe('Bonobo');
+      // The `_ci` twins too, and separately: a guard on the display column proves nothing
+      // about them, and a drifted twin is a row that displays correctly and is in no
+      // album list.
+      expect(row?.album_ci).toBe('black sands (remastered)');
+      expect(row?.artist_ci).toBe('bonobo');
+      // And it is stamped, so a later version bump does not even reconsider it.
+      expect(row?.derived_version).toBe(DERIVED_VERSION);
+    });
+
+    it('re-derives what an earlier convention guessed, which is what the version is for', async () => {
+      // The `reader_version` invariant, one layer down. A corrected *reader* needs a
+      // version to reach rows an earlier reader wrote; a corrected *derivation* needs the
+      // same, and a plain `COALESCE` cannot provide it — it re-selects the row and then
+      // declines to change it, which is a version column that buys nothing.
+      const userId = await seedUser('BackfillVersion');
+      const libraryId = await seedLibrary(userId, 'LDV');
+      const id = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      await handle.raw
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                              duration, bitrate, artist, artist_ci, album, album_ci, created_at, updated_at, derived_version)
+           VALUES (?, ?, ?, 'Blur/Holocene', '01 Holocene.opus', '01 holocene.opus', 1000, 1000, 'audio/ogg', 'opus',
+                   0, 0, 'Wrong Artist (derived)', 'wrong artist (derived)', 'Wrong Album (derived)', 'wrong album (derived)', 0, 0, 1)`,
+        )
+        .run(id, libraryId, 'Blur/Holocene/01 Holocene.opus');
+
+      // At the current version the row is caught up, so nothing is selected.
+      const dao = new SongDerivationDAO(handle.db);
+      expect(await dao.listNeedingDerivation(libraryId, 10, DERIVED_VERSION)).toEqual([]);
+
+      // At a later version it is selected again, and the marker is what lets the write
+      // tell its own guess from a tag: a *real* tag does not end in the marker and is
+      // left alone, which is the paired case asserted above.
+      expect(await dao.listNeedingDerivation(libraryId, 10, DERIVED_VERSION + 1)).toHaveLength(1);
+      await drain(libraryId, DERIVED_VERSION + 1);
+
+      const row = await new SongDAO(handle.db).findById(id);
+      expect(row?.artist).toBe(`Blur${DERIVED_MARKER}`);
+      expect(row?.album).toBe(`Holocene${DERIVED_MARKER}`);
+      expect(row?.derived_version).toBe(DERIVED_VERSION + 1);
+    });
+
+    it('terminates: a second pass selects nothing and writes nothing', async () => {
+      // The property the whole design rests on. A backfill whose rows keep re-selecting is
+      // a backfill that costs the 5,000-rows/day allowance on every poll for ever — the
+      // guard costing more than the thing it guards.
+      const userId = await seedUser('BackfillConverges');
+      const libraryId = await seedLibrary(userId, 'LDC');
+      await seedUngrouped(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      await seedUngrouped(libraryId, 'Blur/Holocene/02 Lotus.opus');
+      await seedUngrouped(libraryId, 'Blur/For Emma/03 Beatrix.opus');
+
+      const dao = new SongDerivationDAO(handle.db);
+      expect(await drain(libraryId)).toBe(3);
+      expect(await dao.listNeedingDerivation(libraryId, 50)).toEqual([]);
+      // Zero rows, not "zero rows that happened to change nothing": the write is not
+      // issued at all, so this cannot be satisfied by a no-op UPDATE.
+      expect(await drain(libraryId)).toBe(0);
+    });
+
+    it('leaves `enriched_at` alone, because nothing read these files', async () => {
+      // The backfill must not claim a row was enriched. `EnrichmentService` short-circuits
+      // on `enriched_at`, so stamping it here would mean a track with `duration: 0` is
+      // never range-read on first play — a backfill that repairs the grouping by breaking
+      // enrichment, which is the trade this is least willing to make.
+      const userId = await seedUser('BackfillNoEnriched');
+      const libraryId = await seedLibrary(userId, 'LDNE');
+      const id = await seedUngrouped(libraryId, 'Blur/Holocene/01 Holocene.opus');
+
+      await drain(libraryId);
+
+      const row = await handle.raw.prepare('SELECT enriched_at, duration FROM songs WHERE id = ?').get(id) as { enriched_at: number | null; duration: number };
+      expect(row.enriched_at).toBeNull();
+      expect(row.duration).toBe(0);
+    });
+
+    it('is bounded per pass, and the remainder waits for the next one', async () => {
+      // A poll is a request a client is waiting on. Draining 5,000 rows in one poll is a
+      // poll that times out, which is the `getScanStatus` defect repeated on a different
+      // axis.
+      const userId = await seedUser('BackfillBounded');
+      const libraryId = await seedLibrary(userId, 'LDBB');
+      for (let n = 0; n < 5; n += 1) {
+        await seedUngrouped(libraryId, `Blur/Holocene/${n} track.opus`);
+      }
+
+      const dao = new SongDerivationDAO(handle.db);
+      const first = await dao.listNeedingDerivation(libraryId, 2);
+      expect(first).toHaveLength(2);
+      expect(await dao.applyDerivation(SongDerivationDAO.deriveFor(first))).toBe(2);
+
+      // Three remain, and the two just written are *not* among them — the selection is on
+      // the stamp, so a pass can never re-derive its own output and starve the tail.
+      expect(await dao.listNeedingDerivation(libraryId, 50)).toHaveLength(3);
+      expect(await drain(libraryId)).toBe(3);
+    });
   });
 
   it('is stable, so a rescan of an unchanged folder writes no different value', async () => {

@@ -8,7 +8,7 @@ import { Container } from '@edge-sonic/backend-runtime/di';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
-import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
@@ -66,6 +66,7 @@ function createRequestScope(env: RequestScopeEnv): Container {
   scope.bindValue(Tokens.LibraryDAO, async () => new LibraryDAO(db));
   scope.bindValue(Tokens.NodeDAO, async () => new NodeDAO(db));
   scope.bindValue(Tokens.SongDAO, async () => new SongDAO(db));
+  scope.bindValue(Tokens.SongDerivationDAO, async () => new SongDerivationDAO(db));
   scope.bindValue(Tokens.SongIndexDAO, async () => new SongIndexDAO(db));
   scope.bindValue(Tokens.PlaylistDAO, async () => new PlaylistDAO(db));
   scope.bindValue(Tokens.AnnotationDAO, async () => new AnnotationDAO(db));
@@ -151,6 +152,17 @@ function createRequestScope(env: RequestScopeEnv): Container {
         saveProgress: async (libraryId, scanned, cursor) => (await scope.get(Tokens.ScanStateDAO)()).saveProgress(libraryId, scanned, cursor),
         complete: async (libraryId, scanned) => (await scope.get(Tokens.ScanStateDAO)()).complete(libraryId, scanned),
         fail: async (libraryId, error) => (await scope.get(Tokens.ScanStateDAO)()).fail(libraryId, error),
+      },
+      // The derived-grouping backfill, for rows the file-change path will never revisit.
+      // Every other song write the scan makes is gated on a file having changed, so a
+      // library nobody has touched since it was indexed would otherwise never group —
+      // and `getArtists`/`getAlbumList2`/`getGenres`/`search3` would answer `[]` while
+      // the per-track endpoints looked healthy, because the song mapper falls back to the
+      // folder name for display. It reads `dir_path` off the row and spends no
+      // subrequests, so it runs ahead of the walk on every poll.
+      derivation: {
+        listNeedingDerivation: async (libraryId, limit) => (await scope.get(Tokens.SongDerivationDAO)()).listNeedingDerivation(libraryId, limit),
+        applyDerivation: async (writes) => (await scope.get(Tokens.SongDerivationDAO)()).applyDerivation(writes),
       },
       clientFor,
       timeoutMs: config.getWebdavTimeoutMs(),

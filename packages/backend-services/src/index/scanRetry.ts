@@ -70,11 +70,13 @@ function decideStep(state: ScanStateRow): StepDecision {
  *
  * `foldersVisited`, `webdavRequests` and `rowsWritten` are all zero because they are
  * **measured**, not defaulted: this call issued no request and wrote no row, and a
- * non-zero number here would be a claim the service cannot support. `lastError` is
- * carried so the reason a scan is incomplete survives a poll that touched nothing — the
- * operator API is the only surface that can show it, and this is where it comes from.
+ * non-zero number here would be a claim the service cannot support — except for
+ * `rowsWritten`, which the caller may have written to, by the derivation backfill, before
+ * the status check decided the walk had nothing to do. `lastError` is carried so the
+ * reason a scan is incomplete survives a poll that touched nothing — the operator API is
+ * the only surface that can show it, and this is where it comes from.
  */
-function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled'): ChunkResult {
+function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', rowsWritten = 0): ChunkResult {
   return {
     status,
     scanned: state.scanned_count,
@@ -85,7 +87,7 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled'):
     lastError: status === 'idle' ? null : state.last_error,
     foldersVisited: 0,
     webdavRequests: 0,
-    rowsWritten: 0,
+    rowsWritten,
     stoppedBy: null,
   };
 }
@@ -97,8 +99,8 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled'):
  * permanently broken library is not re-attempted, and a check that ran *after* the first
  * request would already have spent one.
  */
-function stalledResult(state: ScanStateRow): ChunkResult {
-  return idleResult(state, 'stalled');
+function stalledResult(state: ScanStateRow, rowsWritten = 0): ChunkResult {
+  return idleResult(state, 'stalled', rowsWritten);
 }
 
 /**
@@ -111,10 +113,14 @@ function stalledResult(state: ScanStateRow): ChunkResult {
  * The stored reason is re-recorded rather than a new one invented: the cause has not
  * changed, and there is nothing to retry until `startScan` reseeds the frontier.
  */
-async function unableToAdvance(state: ScanStateRow, fail: (error: string) => Promise<number>): Promise<ChunkResult> {
+async function unableToAdvance(
+  state: ScanStateRow,
+  fail: (error: string) => Promise<number>,
+  rowsWritten = 0,
+): Promise<ChunkResult> {
   const message = state.last_error ?? 'The library root could not be read, so the scan has no folder to start from.';
   const consecutiveFailures = await fail(message);
-  return idleResult(state, consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed');
+  return idleResult(state, consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed', rowsWritten);
 }
 
 /**

@@ -25,9 +25,11 @@
  * `test/scan-budget.test.ts`; this file is about the walk.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ScanService, MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
+import { DERIVE_MAX_ROWS_PER_CHUNK, MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-services/index';
+import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { ScanDeps } from '@edge-sonic/backend-services/index';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavEntry } from './helpers/fakeDav';
 
@@ -155,6 +157,7 @@ function createIndex() {
             const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
             const existing = songs.get(input.id);
             if (existing !== undefined && existing.size === input.size && existing.mtime_ms === input.mtimeMs) continue;
+            const derived = deriveFromPath(input.dirPath);
             songs.set(input.id, {
               id: input.id,
               library_id: LIBRARY_ID,
@@ -168,12 +171,17 @@ function createIndex() {
               suffix: input.suffix,
               title: null,
               title_ci: null,
-              artist: null,
-              artist_ci: null,
-              album: null,
-              album_ci: null,
-              album_artist: null,
-              album_artist_ci: null,
+              // Derived from `dir_path`, because the real `UPSERT_FILE_FACTS` derives them
+              // — this double had `null` here while the statement filled the columns, and
+              // that disagreement is the reason the first attempt at the grouping fix was
+              // invisible: the suite agreed with itself and with neither production. A
+              // double must model the platform, and the platform derives.
+              artist: derived.artist,
+              artist_ci: derived.artist?.toLowerCase() ?? null,
+              album: derived.album,
+              album_ci: derived.album?.toLowerCase() ?? null,
+              album_artist: derived.artist,
+              album_artist_ci: derived.artist?.toLowerCase() ?? null,
               track: null,
               disc: null,
               year: null,
@@ -189,6 +197,10 @@ function createIndex() {
               // about which rows need re-reading — and that disagreement is invisible
               // until a reader changes.
               reader_version: 0,
+              // The upsert stamps the current derivation version, so a row the indexer
+              // just wrote is not also owed to the backfill. A double that left this at 0
+              // would make the backfill re-select every row the walk had just written.
+              derived_version: DERIVED_VERSION,
               created_at: 0,
               updated_at: 0,
             });
@@ -685,28 +697,28 @@ describe('ScanService', () => {
    * `{"scanning": false, "count": 1}` indefinitely, and the reason was in
    * `scan_state.last_error` where only the operator API could reach it.
    */
-  describe('a failed scan', () => {
-    /**
-     * A second service over the same `index`, whose origin fails with `status`.
-     *
-     * Deliberately a *separate* service rather than a mutable flag on the shared one:
-     * `start` seeds the frontier, so a scan that fails in its own root probe has nothing
-     * to resume from, and the retry path is only exercised by a scan that got past the
-     * seed first. Sharing the index is what makes "it resumed" observable — the state
-     * that persists across the failure is the one in `deps`.
-     */
-    function serviceFailingWith(status: number): ScanService {
-      const failing = fakeDav(sampleTree(), { status });
-      return new ScanService({
-        ...index.deps,
-        clientFor: async (_library, onRequest) =>
-          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch, onRequest),
-        timeoutMs: 1000,
-        ...UNBOUNDED_CHUNK,
-        enrichMaxPerFolder: 0,
-      });
-    }
+  /**
+   * A second service over the same `index`, whose origin fails with `status`.
+   *
+   * Deliberately a *separate* service rather than a mutable flag on the shared one:
+   * `start` seeds the frontier, so a scan that fails in its own root probe has nothing to
+   * resume from, and the retry path is only exercised by a scan that got past the seed
+   * first. Sharing the index is what makes "it resumed" observable — the state that
+   * persists across the failure is the one in `deps`.
+   */
+  function serviceFailingWith(status: number): ScanService {
+    const failing = fakeDav(sampleTree(), { status });
+    return new ScanService({
+      ...index.deps,
+      clientFor: async (_library, onRequest) =>
+        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch, onRequest),
+      timeoutMs: 1000,
+      ...UNBOUNDED_CHUNK,
+      enrichMaxPerFolder: 0,
+    });
+  }
 
+  describe('a failed scan', () => {
     /**
     Poll to completion, so a test can assert on the end state rather than a step.
     */
@@ -792,6 +804,148 @@ describe('ScanService', () => {
       const result = await broken.step(row);
       expect(result.status).toBe('failed');
       expect(result.lastError).toBeTruthy();
+    });
+  });
+
+  /**
+   * The backfill, as the service runs it.
+   *
+   * The placement is the fix, so it is what the first test asserts. The derivation is
+   * reachable only for a *changed* file, so a library that is fully walked has nothing
+   * left to change and never derives its grouping — and a fully walked library is `idle`,
+   * which returns from `step` without touching the walk at all. A backfill placed after
+   * the status check therefore never runs for exactly the libraries that need it, which is
+   * what the first attempt at this did: deploying it changed nothing on a library where
+   * nothing had changed.
+   */
+  describe('the derived-grouping backfill', () => {
+    /**
+     * A `ScanService` over the shared `index` with a `derivation` store attached.
+     *
+     * Built the same way the `beforeEach` service is, rather than from `index.deps` alone:
+     * `deps` is the three stores, and a service without `clientFor` and `timeoutMs` is not
+     * a service — it typechecks-fails, and at runtime it fails on the first walk.
+     */
+    function withDerivation(store: NonNullable<ScanDeps['derivation']>): ScanService {
+      return new ScanService({
+        ...index.deps,
+        derivation: store,
+        clientFor: async (_library, onRequest) =>
+          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
+        timeoutMs: 1000,
+        ...UNBOUNDED_CHUNK,
+        enrichMaxPerFolder: 0,
+      });
+    }
+
+    /**
+    A `derivation` double over an explicit pending set, so the test controls both ends.
+    */
+    function derivationOver(pending: string[], dirPaths: Record<string, string> = {}) {
+      const state = { remaining: [...pending], written: 0 };
+      return {
+        state,
+        store: {
+          listNeedingDerivation: async (_libraryId: string, limit: number) =>
+            state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '' })),
+          applyDerivation: async (writes: readonly { id: string }[]) => {
+            state.remaining = state.remaining.filter((id) => writes.every((write) => write.id !== id));
+            state.written += writes.length;
+            return writes.length;
+          },
+        },
+      };
+    }
+
+    it('runs for a library with no scan running, which is the case that shipped broken', async () => {
+      // No `startScan`, no frontier, no WebDAV. The state a fully-scanned library is in,
+      // and the state the deployed instance was in when its aggregates came back empty.
+      const { store, state } = derivationOver(['s1', 's2'], { s1: 'Blur/Holocene', s2: 'Blur/For Emma' });
+      const idle = withDerivation(store);
+
+      const result = await idle.step(row);
+
+      expect(result.status).toBe('idle');
+      expect(state.written).toBe(2);
+      // Reported honestly. Reporting `0` would report a repair that wrote two rows as no
+      // work at all, which is the kind of number an operator reads to decide nothing
+      // happened.
+      expect(result.rowsWritten).toBe(2);
+      // And it spent no subrequests: `dir_path` is already on the row, so this is a
+      // function of data D1 holds.
+      expect(result.webdavRequests).toBe(0);
+      expect(dav.propfinds).toHaveLength(0);
+    });
+
+    it('runs for a failed scan too, because a stalled library is still broken', async () => {
+      // `stalled` is the terminal state of the retry budget, and it is reached by a
+      // library that is *also* missing its grouping. Returning the stored failure before
+      // the backfill would leave a repaired-never library looking correctly stuck.
+      const { store, state } = derivationOver(['s1']);
+      const stalled = withDerivation(store);
+      // Drive it to the retry bound with a genuinely failing origin, so the state is
+      // reached the way it is reached in production rather than written into the double.
+      const broken = serviceFailingWith(500);
+      await broken.start(row);
+      for (let attempt = 0; attempt < MAX_CONSECUTIVE_FAILURES; attempt += 1) {
+        await broken.step(row);
+      }
+      expect(index.state().consecutive_failures).toBeGreaterThanOrEqual(MAX_CONSECUTIVE_FAILURES);
+
+      const result = await stalled.step(row);
+      expect(result.status).toBe('stalled');
+      expect(state.written).toBe(1);
+      expect(result.rowsWritten).toBe(1);
+    });
+
+    it('costs nothing once the library is current, so a poll on a healthy library is still free', async () => {
+      // The steady state, and the property that makes running this on every poll
+      // acceptable. An empty selection means the write batch is never issued, so this is
+      // zero rows rather than "zero rows that changed nothing" — a no-op UPDATE would still
+      // spend an allowance and a round trip.
+      const { store, state } = derivationOver([]);
+      const current = withDerivation(store);
+
+      const result = await current.step(row);
+
+      expect(result.status).toBe('idle');
+      expect(result.rowsWritten).toBe(0);
+      expect(state.written).toBe(0);
+    });
+
+    it('leaves the remainder for the next poll rather than draining in one', async () => {
+      // A poll is a request a client is waiting on. Draining a large library in one poll
+      // is a poll that times out, which is the `getScanStatus` defect on a different axis.
+      const { store, state } = derivationOver(['s1', 's2', 's3', 's4', 's5']);
+      const bounded = withDerivation(store);
+
+      const first = await bounded.step(row);
+      expect(first.rowsWritten).toBeLessThanOrEqual(DERIVE_MAX_ROWS_PER_CHUNK);
+      expect(state.remaining).toHaveLength(5 - state.written);
+
+      // Converges across polls, and the first poll does not do the whole job.
+      for (let poll = 0; poll < 10 && state.remaining.length > 0; poll += 1) {
+        await bounded.step(row);
+      }
+      expect(state.remaining).toEqual([]);
+    });
+
+    it('a scan without a derivation store still walks, which is the right degradation', async () => {
+      // `derivation` is optional so the doubles in this file are not required to model
+      // it — and `service` is built in `beforeEach` from `index.deps`, which has none, so
+      // the shared service *is* this case rather than a specially-built one. A library
+      // that cannot derive keeps scanning and keeps browsing; only the aggregates stay
+      // empty, which is a far better failure than a scan that does not run.
+      await service.start(row);
+      for (let poll = 0; poll < 50; poll += 1) {
+        if ((await service.step(row)).status !== 'scanning') break;
+      }
+
+      // Every track in the sample tree: three albums of two. The count rather than a
+      // status, because a scan that returned `idle` without walking would satisfy a
+      // status-only assertion — which is how the retry test above was initially able to
+      // pass against a wedged scan.
+      expect(index.songs.size).toBe(6);
     });
   });
 

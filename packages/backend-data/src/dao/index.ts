@@ -13,8 +13,13 @@ export type { NodeInput, NodePatch } from './NodeDAO';
 export { SongDAO } from './SongDAO';
 export { chunkArray } from './chunking';
 export type { SongUpsertInput } from './SongDAO';
-export { deriveFromPath, DERIVED_MARKER } from './pathConvention';
+export { deriveFromPath, DERIVED_MARKER, DERIVED_VERSION } from './pathConvention';
 export type { DerivedNames } from './pathConvention';
+// Own module rather than a method on `SongDAO`: the backfill is a bounded pass over
+// *many* rows selected by a version stamp, which is a different question from "one song
+// row, by id" — and folding it in put `SongDAO` over the god-file limit.
+export { SongDerivationDAO } from './songDerivation';
+export type { DerivableRow, DerivationWrite } from './songDerivation';
 export { SongIndexDAO } from './songIndex';
 export type { GenreCountRow } from './songIndex';
 export { AnnotationDAO, AuthThrottleDAO } from './UserStateDAO';

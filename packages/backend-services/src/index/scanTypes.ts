@@ -11,7 +11,7 @@
  * handful of queries its case needs, and a change to a DAO that the scan does not depend
  * on is not a change here.
  */
-import type { LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
+import type { DerivableRow, DerivationWrite, LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { ChunkStopReason } from './scanBudget';
 
@@ -87,10 +87,32 @@ interface ScanStateStore {
   fail(libraryId: string, error: string): Promise<number>;
 }
 
+/**
+ * The store the derivation backfill needs.
+ *
+ * Separate from `ScanSongStore` because it answers a different question — "which rows are
+ * behind the current naming convention, and stamp them" — over a selection no other scan
+ * query makes. It is a *version* selection rather than a change selection, which is the
+ * whole point: every other song write here happens because a file moved, and this is the
+ * one that happens because the convention moved.
+ */
+interface ScanDerivationStore {
+  listNeedingDerivation(libraryId: string, limit: number): Promise<readonly DerivableRow[]>;
+  applyDerivation(writes: readonly DerivationWrite[]): Promise<number>;
+}
+
 interface ScanDeps {
   nodes: ScanNodeStore;
   songs: ScanSongStore;
   scanState: ScanStateStore;
+  /**
+   * Backfill the path-derived grouping for rows the file-change path will never revisit.
+   *
+   * Optional so the doubles in the scan suites are not required to model it, and required
+   * in production by the composition root. A scan that cannot derive still walks, which is
+   * the right degradation: the aggregates stay empty and nothing else regresses.
+   */
+  derivation?: ScanDerivationStore;
   /**
    * The `onRequest` callback is forwarded to the client, so every subrequest this
    * scan issues is charged to the chunk's budget — including the ones issued by
@@ -242,7 +264,18 @@ for every writer, the service's is what the operator is shown.
 */
 const LAST_ERROR_MAX = 500;
 
-export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult, ScanEnrichFacts,  };
+export type {
+  ScanDeps,
+  ScanNodeInput,
+  ScanNodeStore,
+  ScanSongInput,
+  ScanSongStore,
+  ScanStateStore,
+  ScanDerivationStore,
+  ScanStatus,
+  ChunkResult,
+  ScanEnrichFacts,
+};
 export { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES };
 
 export {type ChunkStopReason} from './scanBudget';
