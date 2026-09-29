@@ -17,7 +17,7 @@ import {
   WebDavClient,
   WebDavError,
 } from '@edge-sonic/webdav';
-import { multistatus } from './helpers/fakeDav';
+import { fakeDav, multistatus, withReceiverCheck } from './helpers/fakeDav';
 
 const FILE = { path: 'music/Bon Iver/01.flac', size: 4096, contentType: 'audio/flac', mtime: 1_700_000_000_000, etag: '"abc"' };
 const DIR = { path: 'music/Bon Iver', collection: true, mtime: 1_700_000_100_000 };
@@ -263,5 +263,50 @@ describe('WebDavClient failure classification', () => {
     }
     expect(caught).not.toBeInstanceOf(WebDavError);
     expect(caught).toBeInstanceOf(TypeError);
+  });
+});
+
+/**
+ * The receiver of an injected `fetch`.
+ *
+ * `WebDavClient` once stored the global `fetch` in a field and called it as
+ * `this.fetchImpl(...)`. That is a **method call**: the receiver is the client, not
+ * the global scope, and workerd's `fetch` refuses it with
+ *
+ *     TypeError: Illegal invocation: function called with incorrect `this` reference.
+ *
+ * It broke every WebDAV path in the product against a live origin answering `207`,
+ * and reached the operator as "Library is unreachable." — a `TypeError` has no
+ * `status`, so it fell through every status-based branch and was described as a
+ * fault in *their* server.
+ *
+ * These two tests are a pair on purpose. The first asserts the client behaves; the
+ * second proves the guard has teeth. Without the second, a double that had quietly
+ * stopped checking receivers would make the first pass forever, which is exactly
+ * how the original defect survived a green suite.
+ */
+describe('the receiver of an injected fetch', () => {
+  it('reaches the origin without the platform global being called as a method', async () => {
+    // Keyed by the full request path, as `fakeDav` documents: the client builds
+    // `/rootPath/relative`, so a tree keyed by the relative path alone looks like a
+    // library whose every folder is missing.
+    const dav = fakeDav({ '/dav': [{ path: '/dav', collection: true }] });
+    const client = new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch);
+    // `dav.fetch` is guarded by `withReceiverCheck`, so a `this`-bound invocation
+    // throws here rather than silently working the way it does under Node.
+    const listed = await client.propfind('', { depth: 0 });
+    expect(listed).toHaveLength(1);
+    expect(dav.propfinds).toEqual(['/dav']);
+  });
+
+  it('has teeth: the guard rejects a method call, so the assertion above is not vacuous', () => {
+    const guarded = withReceiverCheck((async () => new Response('')) as typeof fetch);
+
+    // The bug, isolated: the global is reachable as a property of something else.
+    expect(() => ({ fetch: guarded }).fetch('https://dav.example.com/')).toThrow(/Illegal invocation/);
+
+    // And the shape that is correct — a bare call, which is what hand-written Worker
+    // code does, and what the client's wrapper produces.
+    expect(() => guarded('https://dav.example.com/')).not.toThrow();
   });
 });

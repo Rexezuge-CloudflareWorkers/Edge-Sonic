@@ -34,12 +34,15 @@ What replaced it is better for the assertions that matter:
 
 What is genuinely lost is workerd-specific behaviour: `executionCtx` timing, worker's own
 `Response` quirks, and KV's eventual consistency. That is stated in the harness rather
-than papered over.
+than papered over. The one omission that had already cost a production outage — workerd
+validating the receiver of its globals — is now modelled by `withReceiverCheck`, because a
+behaviour that can take the product down does not have to wait for the integration pool to
+be worth reproducing.
 
 ## Test doubles must model the platform
 
 A double that shares a wrong assumption with the code it tests makes both look right.
-Three from this repository's own history, all of which shipped:
+Four from this repository's own history, all of which shipped:
 
 - **A D1 double that lowercased both sides** of a comparison is why the reference project
   carried `lower(owner_email) = lower(?)` through a full green suite. The predicate was
@@ -54,11 +57,29 @@ Three from this repository's own history, all of which shipped:
   what it served — and it hid the one bug this product exists to avoid. It truncates now,
   answers `416` past the end, and `test/streaming.test.ts` asserts the recorded range
   *and* the received bytes.
+- **A `fetch` double that was an arrow function**, and therefore had no `this` binding at
+  all. `WebDavClient` was calling the platform global as `this.fetchImpl(...)`, which
+  workerd rejects with `Illegal invocation` — so the double was *structurally incapable*
+  of seeing the bug it existed to catch, and Node's own `globalThis.fetch` does not check a
+  receiver either, so the `vi.stubGlobal` suites inherited the same blind spot. 423 tests
+  were green while every WebDAV path in the product was broken. `fakeDav` now returns
+  `withReceiverCheck(impl)`, which throws on a foreign receiver the way workerd does; 33
+  tests across 5 suites go red against that bug.
+
+  The generalisable form: **a double that cannot observe a failure is worse than no
+  double**, because it lends the failure a passing test. Ask what the double is
+  *incapable* of noticing — an arrow cannot see a receiver, a mock cannot see a
+  collation, a hand-written XML fixture cannot see a namespace the parser mishandles.
 
 Two more rules that are easy to get wrong:
 
 - **Only KV and WebDAV are doubled**, because they are exactly the two things that are
   modellable without lying. D1 is real.
+- **A guard needs a test that proves it has teeth.** `withReceiverCheck` is asserted twice
+  in `webdav-client.test.ts`: once that the client behaves, and once that the guard
+  actually rejects a method call. Without the second, the guard could be removed in a
+  "simplification" and the first test would keep passing — which is the same blindness one
+  level up.
 - **A diagnostic is tested where the operator reads it.** `probe-notice.test.ts` imports
   from `apps/web` for one reason: the decisions that were wrong lived inside a
   component, and a component with no test is a decision with no evidence. A pure
@@ -76,7 +97,7 @@ Two more rules that are easy to get wrong:
 | `subsonic-md5.test.ts`                   | MD5 against RFC 1321 and the spec's own `sesame`/`c19b2d` worked example                   |
 | `subsonic-protocol.test.ts`              | The node model, all three serializers, the error envelope, id round-trips                  |
 | `kv-outage.test.ts`                      | Fail-soft reads/writes, the breaker, the version-in-key policy                            |
-| `webdav-client.test.ts`                  | The 207 parser, the credential boundary, `Range` forwarding, the URL guard                 |
+| `webdav-client.test.ts`                  | The 207 parser, the credential boundary, `Range` forwarding, the URL guard, the receiver of the injected `fetch` |
 | `media-tags.test.ts`                     | MP3, FLAC, and Ogg readers against fixtures written from the specs                         |
 | `library-ssrf.test.ts`                   | The private-host classifier, the URL canonicalizer, the client's own refusals              |
 | `scan-incremental.test.ts`               | The root probe, mtime-driven descent, the prune, chunk accounting                         |
