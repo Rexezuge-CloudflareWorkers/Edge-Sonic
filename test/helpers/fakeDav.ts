@@ -209,6 +209,55 @@ function serveEntry(entry: DavEntry, range: string | null): Response {
 }
 
 /**
+ * Reject a `fetch` invoked with the wrong receiver, the way workerd does.
+ *
+ * ### Why this exists, and what it cost to not have it
+ *
+ * `WebDavClient` stored the global `fetch` in a field and called it as
+ * `this.fetchImpl(...)` — a **method call**, so the receiver was the client rather
+ * than the global scope. workerd's `fetch` validates its receiver and throws
+ * `TypeError: Illegal invocation: function called with incorrect 'this' reference.`
+ * Every WebDAV path in the product was broken by it: probe, scan, tree
+ * materialization, enrichment, and streaming, all against a live origin answering
+ * `207`.
+ *
+ * The suite was green throughout, for two reasons that had to both be true:
+ *
+ * 1. **The double was an arrow function.** An arrow has no `this` binding, so it
+ *    *cannot observe a receiver*. A double that is structurally incapable of
+ *    detecting the class of bug it existed to detect is worse than no double,
+ *    because it lends the bug a passing test.
+ * 2. **Node's real `globalThis.fetch` does not check its receiver either.** So even
+ *    the tests that stubbed in this double were exercising a `fetch` more forgiving
+ *    than the platform's.
+ *
+ * A double is a claim about the platform. This one now makes the claim workerd
+ * actually makes, and it is a `function` rather than an arrow precisely so that the
+ * receiver is observable.
+ *
+ * ### The rule being enforced
+ *
+ * A platform global must be invoked **bare** — `fetch(url)` — or with the global
+ * scope as its receiver. `this` is `undefined` for a bare call from module code,
+ * which is what a hand-written `fetch(...)` in a Worker produces; anything else
+ * means a stored reference is being called as somebody else's method.
+ *
+ * @param inner The implementation to guard. Its own receiver is irrelevant, so it
+ *   stays an arrow.
+ */
+function withReceiverCheck(inner: typeof fetch): typeof fetch {
+  return function receiverChecked(this: unknown, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    if (this !== undefined && this !== globalThis) {
+      throw new TypeError(
+        "Illegal invocation: function called with incorrect `this` reference. " +
+          'A platform global was invoked as a method of another object.',
+      );
+    }
+    return inner(input, init);
+  } as typeof fetch;
+}
+
+/**
  * A `fetch` implementation backed by a flat list of entries.
  *
  * @param tree Directory path → **the entries that live in that directory**,
@@ -267,7 +316,7 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
   }) as typeof fetch;
 
   return {
-    fetch: impl,
+    fetch: withReceiverCheck(impl),
     propfinds,
     gets,
     credentials,
@@ -299,4 +348,4 @@ function toResources(entries: readonly DavEntry[]): DavResource[] {
   }));
 }
 
-export { fakeDav, multistatus, toResources };
+export { fakeDav, multistatus, toResources, withReceiverCheck };

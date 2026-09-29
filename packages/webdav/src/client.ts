@@ -94,12 +94,40 @@ function basicAuthHeader(credentials: DavCredentials): string {
 }
 
 class WebDavClient {
+  /**
+   * The injected `fetch`, wrapped so it is never invoked as a method of this client.
+   *
+   * See the constructor for why that matters.
+   */
+  private readonly fetchImpl: typeof fetch;
+
   constructor(
     private readonly baseUrl: string,
     private readonly rootPath: string,
     private readonly credentials: DavCredentials,
-    private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    fetchImpl: typeof fetch = fetch,
+  ) {
+    // The wrapper is the fix, and it is here rather than at the call site on
+    // purpose.
+    //
+    // A function stored in a field and called as `this.fetchImpl(...)` is a
+    // **method call**: the receiver is the client, not the global scope. workerd's
+    // global `fetch` validates its receiver and throws
+    //
+    //     TypeError: Illegal invocation: function called with incorrect `this` reference.
+    //
+    // which is the documented symptom of a lost `this` on a runtime-provided
+    // function. It is a `TypeError` with no `status`, so it fell through every
+    // status-based branch in `LibraryService.probe` and was reported to the
+    // operator as "Library is unreachable." — a fault in this server, described as
+    // a fault in theirs, against an origin that was answering `207` throughout.
+    // Every WebDAV path shared it, because every one of them builds its client here.
+    //
+    // The arrow calls the injected function *bare*, so the receiver is never a
+    // foreign object — for the default global `fetch` and for any test double
+    // alike. Doing it in the constructor means no call site can reintroduce it.
+    this.fetchImpl = (input, init) => fetchImpl(input, init);
+  }
 
   /**
    * Attach credentials and a timeout, then fetch.

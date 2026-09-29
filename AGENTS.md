@@ -103,12 +103,32 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   neither an `Error` shape nor a status and therefore reached the residual branch.
   Asserted in `test/library-ssrf.test.ts`, including the case that *does* say
   "unreachable" — without it the other three pass vacuously.
+- **A platform global is invoked bare, never as a stored field.** `WebDavClient` kept
+  the global `fetch` in a field and called it as `this.fetchImpl(...)` — a *method call*,
+  so the receiver was the client rather than the global scope. workerd validates that
+  receiver and throws `TypeError: Illegal invocation: function called with incorrect
+  'this' reference.` It broke every WebDAV path in the product — probe, scan, tree,
+  enrichment, streaming — against a live origin answering `207`. Being a `TypeError`, it
+  has no `status`, so it fell through every status-based branch and reached the operator
+  as *"Library is unreachable."*: a fault in **this** server, described as a fault in
+  theirs. The wrapper lives in the constructor, so no call site can reintroduce it, and
+  the same mistake is worth grepping for after any refactor that stores a function.
+- **A double that cannot observe a failure is worse than no double.** 423 tests were
+  green throughout the above. `fakeDav`'s `fetch` was an **arrow function**, and an
+  arrow has no `this` binding, so it was structurally incapable of detecting the one
+  class of bug it existed to catch — and Node's real `globalThis.fetch` does not check
+  its receiver either, so the `vi.stubGlobal` suites inherited the same blind spot. A
+  passing test is evidence *only* to the extent the double shares the platform's
+  assumptions. `withReceiverCheck` now models the receiver: 33 tests across 5 suites go
+  red against the bug, including a paired test that proves the guard has teeth, without
+  which the guard could be quietly removed and the first test would pass forever.
 - **A stored failure is read back, or it was never written.** `scan_state.last_error`
   was populated on every scan failure and read by nothing, and `apps/web` declared a
   `ScanStateSummary.lastError` the server never sent — so a failed scan rendered the
   bare word "failed" while the reason sat in the database. Persisting a diagnosis
   nobody can retrieve is the same defect as never computing it, and the type declared
-  the field, so nothing ever reported the gap.
+  the field, so nothing ever reported the gap. Wiring it up is what named the
+  `Illegal invocation` above: the reason had been in the database the whole time.
 - **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
   so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
   `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.
