@@ -28,13 +28,18 @@ interface ProbeResult {
 
 /**
 Mirrors `scan_state`. `status` is the raw value so the UI can show a failure.
+
+`lastError` is nullable rather than optional on purpose: the server sends it on
+every status, because `ChunkResult` carries it unconditionally. It was optional
+*and* never populated, so the one field that could explain a failed scan was
+declared on the client and absent from the wire.
 */
 interface ScanStateSummary {
   readonly status: 'idle' | 'scanning' | 'failed';
   readonly scanned: number;
   readonly total: number;
   readonly indexVersion: number;
-  readonly lastError?: string | null;
+  readonly lastError: string | null;
 }
 
 interface UserSummary {

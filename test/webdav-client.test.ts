@@ -6,7 +6,17 @@
  * `songs.path` becomes a `stream` target.
  */
 import { describe, expect, it } from 'vitest';
-import { parseMultistatus, parseXml, toLibraryPath, buildDavUrl, encodePath, XmlParseError, decodeHrefPath } from '@edge-sonic/webdav';
+import {
+  parseMultistatus,
+  parseXml,
+  toLibraryPath,
+  buildDavUrl,
+  encodePath,
+  XmlParseError,
+  decodeHrefPath,
+  WebDavClient,
+  WebDavError,
+} from '@edge-sonic/webdav';
 import { multistatus } from './helpers/fakeDav';
 
 const FILE = { path: 'music/Bon Iver/01.flac', size: 4096, contentType: 'audio/flac', mtime: 1_700_000_000_000, etag: '"abc"' };
@@ -116,7 +126,10 @@ describe('parseMultistatus', () => {
   });
 
   it('rejects a negative or non-numeric content length rather than storing it', () => {
-    const body = multistatus([FILE]).replace('<D:getcontentlength>4096</D:getcontentlength>', '<D:getcontentlength>-1</D:getcontentlength>');
+    const body = multistatus([FILE]).replace(
+      '<D:getcontentlength>4096</D:getcontentlength>',
+      '<D:getcontentlength>-1</D:getcontentlength>',
+    );
     expect(parseMultistatus(body)[0]!.contentLength).toBeNull();
   });
 
@@ -178,5 +191,77 @@ describe('buildDavUrl', () => {
   it('refuses a malformed origin and an over-long URL', () => {
     expect(buildDavUrl('not a url', '/dav', 'a.flac')).toBeNull();
     expect(buildDavUrl('https://dav.example.com', '/dav', 'x'.repeat(5000))).toBeNull();
+  });
+});
+
+/**
+ * Failure classification at the client's own boundary.
+ *
+ * The `207` reader's tests above are about hostile input; these are about the two
+ * failures that have no status and therefore used to be indistinguishable. Both
+ * arrived as an opaque rejection with no `status` property, so every caller that
+ * classifies by status — `LibraryService.probe`, `ScanService.listFolder` — fell
+ * through to its residual branch. For the probe that residual branch said
+ * "Library is unreachable", so a hung origin and a dead one were the same answer
+ * with opposite fixes.
+ */
+describe('WebDavClient failure classification', () => {
+  /**
+   * A `fetch` that hangs until its own signal aborts, which is what a real
+   * `AbortSignal.timeout` does to an origin that accepts the connection and then
+   * never answers.
+   *
+   * The abort is taken from `init.signal` rather than a timer so the test is
+   * deterministic: it does not wait out a real timeout, and it cannot pass because
+   * the machine happened to be slow.
+   */
+  function hangingFetch(): typeof fetch {
+    return (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const signal = init?.signal ?? null;
+      // Asserted rather than assumed: the client builds the signal, and a test that
+      // silently tolerated its absence would pass against a client that never
+      // time-limited anything.
+      if (signal === null) throw new Error('the client must pass an AbortSignal');
+      return await new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error('The operation was aborted.'));
+        });
+      });
+    }) as unknown as typeof fetch;
+  }
+
+  it('reports an aborted request as 408, not as an unclassifiable failure', async () => {
+    const client = new WebDavClient('https://dav.example.com', '/', { username: 'u', password: 'p' }, hangingFetch());
+    // `try`/`catch` because the assertion needs the thrown value in hand, which a
+    // `.catch()` handler would have to smuggle out through a mutable binding.
+    let caught: unknown = null;
+    try {
+      await client.propfind('', { depth: 0, timeoutMs: 5 });
+    } catch (error) {
+      caught = error;
+    }
+    // 408 rather than nothing: a hung origin is actionable (`WEBDAV_TIMEOUT_MS`) and
+    // is not a DNS, TLS, or connectivity problem.
+    expect(caught).toBeInstanceOf(WebDavError);
+    expect((caught as WebDavError).status).toBe(408);
+    expect((caught as Error).message).toMatch(/timed out after 5ms/);
+  });
+
+  it('leaves a genuine transport failure unclassified, so it is not a timeout', async () => {
+    // The other half of the pair. Without this, translating every rejection into a
+    // 408 would make the new branch true for everything and the distinction
+    // worthless.
+    const failing = (async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+    const client = new WebDavClient('https://dav.example.com', '/', { username: 'u', password: 'p' }, failing);
+    let caught: unknown = null;
+    try {
+      await client.propfind('', { depth: 0, timeoutMs: 1000 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).not.toBeInstanceOf(WebDavError);
+    expect(caught).toBeInstanceOf(TypeError);
   });
 });

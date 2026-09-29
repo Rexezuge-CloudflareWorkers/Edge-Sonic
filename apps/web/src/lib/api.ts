@@ -12,6 +12,7 @@
  * older Worker build may still return, and it **truncates** — an unbounded error string
  * from a proxy error page is a rendering hazard.
  */
+import type { LibraryPatch } from './libraryDraft';
 import type { LibrarySummary, ProbeResult, ScanStateSummary, UserSummary } from '../types';
 
 const API_BASE = '/user';
@@ -64,7 +65,7 @@ async function readError(response: Response): Promise<string> {
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) throw new Error(await readError(response));
-  return (await response.json());
+  return await response.json();
 }
 
 function buildQuery(params: Record<string, string | number | boolean | undefined>): string {
@@ -104,13 +105,16 @@ export const createLibrary = (body: {
   displayName?: string;
 }): Promise<{ id: string; slug: string }> => apiSend('POST', '/libraries', body);
 
-export const updateLibrary = (
-  id: string,
-  body: { slug: string; baseUrl: string; rootPath: string; davUsername: string; davPassword?: string; displayName?: string },
-): Promise<{ ok: true }> => apiSend('PATCH', `/libraries/${encodeURIComponent(id)}`, body);
+/**
+ * The body is `LibraryPatch`, not an inline shape, so the rule that an untouched
+ * password must be **absent** rather than empty is expressed once in the type that
+ * produces it. An inline copy here could drift to `davPassword: string` and quietly
+ * re-encrypt an empty password over a working credential.
+ */
+export const updateLibrary = (id: string, body: LibraryPatch): Promise<{ ok: true }> =>
+  apiSend('PATCH', `/libraries/${encodeURIComponent(id)}`, body);
 
-export const deleteLibrary = (id: string): Promise<{ ok: true }> =>
-  apiSend('DELETE', `/libraries/${encodeURIComponent(id)}`);
+export const deleteLibrary = (id: string): Promise<{ ok: true }> => apiSend('DELETE', `/libraries/${encodeURIComponent(id)}`);
 
 /**
  * Probe and rescan are POSTs, not query flags on GET.
@@ -128,8 +132,12 @@ export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiG
 
 export const listUsers = (): Promise<{ users: UserSummary[] }> => apiGet('/users');
 
-export const createUser = (body: { username: string; password: string; email?: string; isAdmin?: boolean }): Promise<{ id: string; username: string }> =>
-  apiSend('POST', '/users', body);
+export const createUser = (body: {
+  username: string;
+  password: string;
+  email?: string;
+  isAdmin?: boolean;
+}): Promise<{ id: string; username: string }> => apiSend('POST', '/users', body);
 
 export const setUserEnabled = (id: string, enabled: boolean): Promise<{ ok: true }> =>
   apiSend('PATCH', `/users/${encodeURIComponent(id)}/enabled${buildQuery({ enabled })}`);

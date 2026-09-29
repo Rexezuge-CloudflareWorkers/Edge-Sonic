@@ -77,4 +77,51 @@ interface ScanDeps {
   chunkFolders: number;
 }
 
-export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore };
+/**
+ * The scan's **output**, alongside the inputs above.
+ *
+ * `ChunkResult` is what every scan call returns and what the operator surface
+ * renders, so it is declared here with the contracts rather than inside
+ * `ScanService`: a test writing a fake `scanState` writes against this file, and a
+ * field added to the result without a fake that produces it is a field nothing
+ * exercises.
+ */
+type ScanStatus = 'idle' | 'scanning' | 'failed';
+
+interface ChunkResult {
+  readonly status: ScanStatus;
+  readonly scanned: number;
+  readonly total: number;
+  readonly indexVersion: number;
+  /**
+  Why the last chunk failed, or `null`.
+
+  This is the `scan_state.last_error` the DAO has always written and nothing ever
+  read back. An operator polling a failed scan got `status: 'failed'` and no
+  reason, which is the same defect as a probe reporting "unreachable": the
+  diagnosis existed in the database and never reached the screen.
+
+  Truncated to `LAST_ERROR_MAX` by the service as well as by the DAO, so what the
+  operator is shown is exactly what was persisted rather than a longer string the
+  database never held.
+  */
+  readonly lastError: string | null;
+  /**
+  Instrumented so the write/subrequest budget is testable, not just asserted.
+  */
+  readonly foldersVisited: number;
+  readonly webdavRequests: number;
+  readonly rowsWritten: number;
+}
+
+/**
+Bound on a persisted scan failure, matching `ScanStateDAO.fail`.
+
+The text originates upstream, so it is bounded before it is written and again in
+the DAO. Two bounds is defence in depth, not drift: the DAO's is a hard guarantee
+for every writer, the service's is what the operator is shown.
+*/
+const LAST_ERROR_MAX = 500;
+
+export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult };
+export { LAST_ERROR_MAX };

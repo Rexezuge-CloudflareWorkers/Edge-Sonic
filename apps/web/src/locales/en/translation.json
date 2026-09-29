@@ -20,14 +20,18 @@
     "created": "Library registered.",
     "deleted": "Library deleted.",
     "save": "Save",
+    "saveChanges": "Save changes",
     "cancel": "Cancel",
     "test": "Test",
     "rescan": "Rescan",
-    "probe": "Probe",
+    "edit": "Edit",
+    "scan": "Scan",
     "scanStarted": "Scan started.",
     "probed": "Probe finished.",
-    "reachable": "reachable",
-    "unreachable": "unreachable",
+    "probedOk": "The origin answered.",
+    "updated": "Library updated.",
+    "probeUnknownFailure": "The probe failed.",
+    "reachable": "Reachable",
     "disabled": "disabled",
     "delete": "Delete",
     "davUser": "WebDAV user",
@@ -37,7 +41,8 @@
       "baseUrl": "WebDAV origin",
       "rootPath": "Root path inside the origin",
       "davUsername": "WebDAV username",
-      "davPassword": "WebDAV password"
+      "davPassword": "WebDAV password",
+      "davPasswordUnchanged": "Unchanged — type to replace"
     }
   },
   "users": {

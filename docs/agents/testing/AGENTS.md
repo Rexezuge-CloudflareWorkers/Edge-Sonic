@@ -4,8 +4,8 @@ Scope: the whole suite. Parent index: `../../../AGENTS.md`.
 
 Everything runs under **Node**. There is no workerd, no pool, and no second toolchain.
 
-Thresholds (`vitest.config.mts`): **78 / 65 / 79 / 80** (statements / branches /
-functions / lines), against a measured 79 / 66 / 81 / 82. These are a **measured
+Thresholds (`vitest.config.mts`): **79 / 66 / 81 / 82** (statements / branches /
+functions / lines), against a measured 80 / 67 / 82 / 83. These are a **measured
 floor**, not an aspiration: lower one to make CI green and the gate stops saying
 anything. Raise them as coverage grows.
 
@@ -59,6 +59,11 @@ Two more rules that are easy to get wrong:
 
 - **Only KV and WebDAV are doubled**, because they are exactly the two things that are
   modellable without lying. D1 is real.
+- **A diagnostic is tested where the operator reads it.** `probe-notice.test.ts` imports
+  from `apps/web` for one reason: the decisions that were wrong lived inside a
+  component, and a component with no test is a decision with no evidence. A pure
+  function in the SPA is importable from here without a DOM harness, so "the SPA is
+  not in the coverage gate" must not quietly become "the SPA has no tests at all".
 - **A fake's input shape is part of its contract.** `EnrichmentService` decides whether
   to read a file from `enriched_at !== null`; a camelCase stand-in leaves that `undefined`,
   `undefined !== null` is true, and the service correctly concludes every row is already
@@ -80,7 +85,8 @@ Two more rules that are easy to get wrong:
 | `schema.int.test.ts`                     | The real schema, cascades, `EXPLAIN QUERY PLAN` on every hot lookup, DAO round-trips       |
 | `worker.int.test.ts`                     | The Worker end to end: route order, auth, the envelope, error surface, the cache          |
 | `streaming.test.ts`                      | `stream`/`download`/`getCoverArt`: no transcoding, no buffering, upstream failures        |
-| `user-api.test.ts`                      | The operator API: the SSRF gate, quotas, key separation, credential handling             |
+| `user-api.test.ts`                      | The operator API: the SSRF gate, quotas, key separation, credentials, the probe verdict   |
+| `probe-notice.test.ts`                  | The operator surface's decisions: probe classification, scan reason, patch shape          |
 | `endpoints.test.ts`                      | The rest of `/rest`: lists, state, users, ratings, scrobbling, the scan controls          |
 
 ## Rules for writing an assertion here

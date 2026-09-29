@@ -15,7 +15,7 @@
  * Auth is the environment allow-list, so most of these run with the dev bypass active
  * and the bypass's *refusals* are covered in `test/user-auth.test.ts`.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHarness, ORIGIN, TEST_KEY } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { decryptData } from '@edge-sonic/backend-data/crypto';
@@ -26,7 +26,13 @@ beforeEach(async () => {
   harness = await createHarness();
 });
 
-afterEach(() => harness.close());
+// The origin is a global, so a stub left installed by one test is the *next* test's
+// origin — and a stale one answers from a closed database, which looks like a
+// product bug rather than a leaked double.
+afterEach(() => {
+  vi.unstubAllGlobals();
+  harness.close();
+});
 
 interface UserBody {
   libraries?: Array<Record<string, unknown>>;
@@ -37,6 +43,16 @@ interface UserBody {
    * needs one decoder rather than two.
    */
   Exception?: { Type: string; Message: string };
+  /**
+   * The probe's verdict. Declared here rather than reached for with a cast because the
+   * whole point of the probe is that these three fields answer different questions:
+   * `ok` is whether the origin was usable, `status` is what it said, and `error` is
+   * what the operator should do.
+   */
+  ok?: boolean;
+  status?: number | string | null;
+  error?: string | null;
+  lastError?: string | null;
   [key: string]: unknown;
 }
 
@@ -178,7 +194,11 @@ describe('libraries', () => {
     const { status } = await harness.fetch(
       `${ORIGIN}/user/libraries`,
       { ALLOW_PRIVATE_WEBDAV_HOSTS: 'true' },
-      { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ slug: 'local', baseUrl: 'http://127.0.0.1:8080', davUsername: 'u', davPassword: 'p' }) },
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ slug: 'local', baseUrl: 'http://127.0.0.1:8080', davUsername: 'u', davPassword: 'p' }),
+      },
     );
     expect(status).toBe(201);
   });
@@ -206,7 +226,13 @@ describe('libraries', () => {
     const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify({ slug: 'x', baseUrl: 'https://dav.example.org', davUsername: 'u', davPassword: 'p', displayName: 'y'.repeat(3_000_000) }),
+      body: JSON.stringify({
+        slug: 'x',
+        baseUrl: 'https://dav.example.org',
+        davUsername: 'u',
+        davPassword: 'p',
+        displayName: 'y'.repeat(3_000_000),
+      }),
     });
     expect(status).toBe(413);
     expect(body.Exception?.Type).toBe('PayloadTooLarge');
@@ -223,7 +249,10 @@ describe('libraries', () => {
   });
 
   it('updates a library without disturbing the credential it already stores', async () => {
-    const before = await harness.db.db.prepare('SELECT password_ciphertext FROM libraries WHERE id = ?').bind('L1').first<{ password_ciphertext: string }>();
+    const before = await harness.db.db
+      .prepare('SELECT password_ciphertext FROM libraries WHERE id = ?')
+      .bind('L1')
+      .first<{ password_ciphertext: string }>();
 
     // A `PATCH` here is a full replace of the library's editable fields; the password
     // is the one field it does not take unless asked. Sending a partial body is a 400,
@@ -269,7 +298,70 @@ describe('libraries', () => {
     // host is unreachable" and then fix the network.
     const { status, body } = await call('/user/libraries/L1/probe', { method: 'POST' });
     expect(status).toBe(200);
-    expect(body).toHaveProperty('ok');
+    expect(body.ok).toBe(false);
+    // Not `toHaveProperty('ok')`, which passes for `{}`. A body with no `error` is
+    // exactly what the operator surface cannot render, so the field is asserted.
+    expect(body.error).toBe('Library is unreachable.');
+  });
+
+  it('carries the origin’s status through, so the SPA can name the fault', async () => {
+    // The probe is the only diagnostic in the product, and the whole point of the
+    // `status` field is that a 401 and a 404 have different fixes. A deployment
+    // fault — a rotated key, an unprovisioned secret — must not borrow the wording
+    // of a dead host; that is asserted in `test/library-ssrf.test.ts`, and this
+    // asserts the field survives the route, which is a separate seam.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { status, body } = await call('/user/libraries/L1/probe', { method: 'POST' });
+    // The harness tree has no entry for the library root, so the origin answers 404.
+    expect(status).toBe(200);
+    expect(body.status).toBe(404);
+    expect(body.error).toMatch(/root path does not exist/i);
+  });
+
+  it('reports a failed scan with the reason the DAO persisted', async () => {
+    // `scan_state.last_error` was written by `ScanStateDAO.fail` and read by nobody,
+    // and `ChunkResult` had no field for it, so a failed scan told an operator
+    // "failed" and nothing else. The reason is now on the wire.
+    //
+    // A harness with a root entry, because `start` distinguishes "the root is gone"
+    // (a `404`, which completes the scan and clears the index) from "the origin is
+    // unreachable". With the default empty tree the scan never starts, and the test
+    // would be asserting on a library the product had already pruned.
+    harness.close();
+    const root = '/remote.php/dav/files/alice/Music';
+    harness = await createHarness({ [root]: [{ path: root, collection: true, mtime: 1000 }] });
+
+    // `start` only seeds the frontier. The chunk is advanced by `getScanStatus`,
+    // which is the one caller of `ScanService.step` — the `/user` scan route is a
+    // passive read, so advancing through it would assert that a poll never fails
+    // anything.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const started = await call('/user/libraries/L1/scan', { method: 'POST' });
+    expect(started.body.status).toBe('scanning');
+
+    vi.stubGlobal('fetch', (async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch);
+    await harness.rest('getScanStatus');
+
+    const failed = await call('/user/libraries/L1/scan');
+    expect(failed.status).toBe(200);
+    expect(failed.body.status).toBe('failed');
+    expect(failed.body.lastError).toBeTruthy();
+
+    // The failure survives the request that caused it, which is the point: a poll
+    // after the fact is the only place an operator can still read the reason.
+    const after = await call('/user/libraries/L1/scan');
+    expect(after.body.status).toBe('failed');
+    expect(after.body.lastError).toBe(failed.body.lastError);
+  });
+
+  it('sends lastError as null on a healthy scan, not as an absent field', async () => {
+    // "Absent" and "no error" are different answers. A client that cannot tell them
+    // apart either renders an empty error line or treats a blank string as a fault.
+    const { body } = await call('/user/libraries/L1/scan');
+    expect(body).toHaveProperty('lastError');
+    expect(body.lastError).toBeNull();
   });
 });
 
@@ -297,7 +389,11 @@ describe('users', () => {
     // Subsonic clients match usernames case-insensitively, so `Ann` and `ann` are one
     // user to a client and two rows to the database. The database has to agree with the
     // client, or the second registration silently shadows the first.
-    const { status, body } = await call('/user/users', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ username: 'ANN', password: 'x' }) });
+    const { status, body } = await call('/user/users', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ username: 'ANN', password: 'x' }),
+    });
     expect(status).toBe(409);
     expect(body.Exception?.Message).toMatch(/already exists/i);
   });
@@ -333,7 +429,11 @@ describe('users', () => {
   it('grants and revokes a library, changing what the user can see', async () => {
     const id = await userId('ann');
 
-    const { status } = await call(`/user/users/${id}/libraries`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ libraryIds: [] }) });
+    const { status } = await call(`/user/users/${id}/libraries`, {
+      method: 'PATCH',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ libraryIds: [] }),
+    });
     expect(status).toBe(200);
 
     // With no grant, the library is invisible — not an error, just an empty library. A

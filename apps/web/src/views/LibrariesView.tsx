@@ -1,10 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
 import { t } from 'i18next';
-import { HardDrive, Plus, RefreshCw, Search, Trash2 } from 'lucide-react';
-import { Button, Input, Label } from '../components/ui/controls';
-import { Badge, Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
-import { createLibrary, deleteLibrary, libraryScanStatus, listLibraries, probeLibrary, startLibraryScan } from '../lib/api';
+import { HardDrive, Plus, RefreshCw } from 'lucide-react';
+import { Button } from '../components/ui/controls';
+import { LibraryForm } from '../components/LibraryForm';
+import { LibraryRow } from '../components/LibraryRow';
+import type { RunAction } from '../components/LibraryRow';
+import { Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
+import { createLibrary, deleteLibrary, listLibraries, updateLibrary } from '../lib/api';
+import { toPatch } from '../lib/libraryDraft';
+import type { LibraryDraft } from '../lib/libraryDraft';
 import type { LibrarySummary, Notice } from '../types';
+
+/**
+ * A row action in flight: `'create'`, or a library id.
+ *
+ * One key rather than a boolean, so two actions cannot both claim the busy state
+ * and so a row can test `busy === library.id` directly instead of being handed a
+ * pre-computed flag it cannot check.
+ */
+type BusyKey = string | null;
 
 /**
  * The library registry.
@@ -16,9 +30,9 @@ import type { LibrarySummary, Notice } from '../types';
  */
 function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void }) {
   const [libraries, setLibraries] = useState<LibrarySummary[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<BusyKey>(null);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState({ slug: '', baseUrl: '', rootPath: '/', davUsername: '', davPassword: '', displayName: '' });
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // The fetch, separate from the effect that runs it, so the same code serves the
   // initial load and every refresh button without the effect having to reach into
@@ -54,11 +68,19 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
     };
   }, [load]);
 
-  const run = async (id: string, action: () => Promise<unknown>, success: string) => {
+  /**
+   * Run an action, report its outcome, then refresh.
+   *
+   * The action returns `void` to take the default success message, or a `Notice` to
+   * override it. The override is not a convenience: a failed probe is an HTTP `200`,
+   * so without it the one diagnostic in the product reported success for the
+   * failure it existed to explain.
+   */
+  const run: RunAction = async (id, action, success) => {
     setBusy(id);
     try {
-      await action();
-      showNotice({ type: 'success', text: success });
+      const override = await action();
+      showNotice(override ?? { type: 'success', text: success });
       await reload();
     } catch (error) {
       showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
@@ -67,28 +89,37 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
     }
   };
 
-  const submit = async () => {
-    setBusy('create');
-    try {
-      await createLibrary({
-        slug: draft.slug,
-        baseUrl: draft.baseUrl,
-        rootPath: draft.rootPath,
-        davUsername: draft.davUsername,
-        davPassword: draft.davPassword,
-        ...((draft.displayName.length > 0) && { displayName: draft.displayName }),
-      });
-      // The password is dropped from component state as soon as it is accepted, so
-      // it does not linger in a React tree or in a devtools inspector.
-      setDraft({ slug: '', baseUrl: '', rootPath: '/', davUsername: '', davPassword: '', displayName: '' });
-      setCreating(false);
-      showNotice({ type: 'success', text: t('libraries.created', 'Library registered.') });
-      await reload();
-    } catch (error) {
-      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
-    } finally {
-      setBusy(null);
-    }
+  const submitCreate = (draft: LibraryDraft) => {
+    void run(
+      'create',
+      async () => {
+        await createLibrary({
+          slug: draft.slug,
+          baseUrl: draft.baseUrl,
+          rootPath: draft.rootPath,
+          davUsername: draft.davUsername,
+          davPassword: draft.davPassword,
+          ...(draft.displayName.length > 0 && { displayName: draft.displayName }),
+        });
+        setCreating(false);
+        return undefined;
+      },
+      t('libraries.created', 'Library registered.'),
+    );
+  };
+
+  const submitEdit = (id: string, draft: LibraryDraft) => {
+    void run(
+      id,
+      async () => {
+        // `toPatch` omits an untouched password, so correcting a display name or a
+        // root path cannot destroy the stored credential on the way past.
+        await updateLibrary(id, toPatch(draft));
+        setEditingId(null);
+        return undefined;
+      },
+      t('libraries.updated', 'Library updated.'),
+    );
   };
 
   return (
@@ -114,53 +145,7 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
           )}
         </p>
 
-        {creating && (
-          <form
-            className="mb-4 grid gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 sm:grid-cols-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <div>
-              <Label htmlFor="slug">{t('libraries.field.slug', 'Slug')}</Label>
-              <Input id="slug" required value={draft.slug} onChange={(e) => setDraft({ ...draft, slug: e.target.value })} placeholder="home" />
-            </div>
-            <div>
-              <Label htmlFor="displayName">{t('libraries.field.displayName', 'Display name')}</Label>
-              <Input id="displayName" value={draft.displayName} onChange={(e) => setDraft({ ...draft, displayName: e.target.value })} placeholder="Home" />
-            </div>
-            <div className="sm:col-span-2">
-              <Label htmlFor="baseUrl">{t('libraries.field.baseUrl', 'WebDAV origin')}</Label>
-              <Input
-                id="baseUrl"
-                required
-                type="url"
-                value={draft.baseUrl}
-                onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value })}
-                placeholder="https://dav.example.com"
-              />
-            </div>
-            <div>
-              <Label htmlFor="rootPath">{t('libraries.field.rootPath', 'Root path inside the origin')}</Label>
-              <Input id="rootPath" value={draft.rootPath} onChange={(e) => setDraft({ ...draft, rootPath: e.target.value })} placeholder="/remote.php/dav/files/alice/Music" />
-            </div>
-            <div>
-              <Label htmlFor="davUsername">{t('libraries.field.davUsername', 'WebDAV username')}</Label>
-              <Input id="davUsername" required value={draft.davUsername} onChange={(e) => setDraft({ ...draft, davUsername: e.target.value })} autoComplete="off" />
-            </div>
-            <div>
-              <Label htmlFor="davPassword">{t('libraries.field.davPassword', 'WebDAV password')}</Label>
-              <Input id="davPassword" required type="password" value={draft.davPassword} onChange={(e) => setDraft({ ...draft, davPassword: e.target.value })} autoComplete="new-password" />
-            </div>
-            <div className="flex items-end gap-2">
-              <Button type="submit" variant="primary" loading={busy === 'create'}>
-                {t('libraries.save', 'Save')}
-              </Button>
-              <Button onClick={() => setCreating(false)}>{t('libraries.cancel', 'Cancel')}</Button>
-            </div>
-          </form>
-        )}
+        {creating && <LibraryForm busy={busy === 'create'} onSubmit={submitCreate} onCancel={() => setCreating(false)} />}
 
         {libraries === null ? (
           <LoadingSpinner label={t('libraries.loading', 'Loading libraries')} />
@@ -173,85 +158,31 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
         ) : (
           <ul className="space-y-2">
             {libraries.map((library) => (
-              <LibraryRow key={library.id} library={library} busy={busy === library.id} onRun={run} onDelete={() => void run(library.id, () => deleteLibrary(library.id), t('libraries.deleted', 'Library deleted.'))} />
+              <LibraryRow
+                key={library.id}
+                library={library}
+                busy={busy === library.id}
+                editing={editingId === library.id}
+                onEdit={() => setEditingId(library.id)}
+                onEditDone={() => setEditingId(null)}
+                onEditSubmit={submitEdit}
+                onRun={run}
+                onDelete={() =>
+                  void run(
+                    library.id,
+                    async () => {
+                      await deleteLibrary(library.id);
+                      return undefined;
+                    },
+                    t('libraries.deleted', 'Library deleted.'),
+                  )
+                }
+              />
             ))}
           </ul>
         )}
       </Card>
     </div>
-  );
-}
-
-/**
- * One library, with the three actions an operator actually needs.
- *
- * `Test` and `Rescan` are separate because they answer different questions — "is
- * this reachable with these credentials" and "has the index caught up" — and
- * conflating them makes a failing probe look like a stale index.
- */
-function LibraryRow({
-  library,
-  busy,
-  onRun,
-  onDelete,
-}: {
-  library: LibrarySummary;
-  busy: boolean;
-  onRun: (id: string, action: () => Promise<unknown>, success: string) => Promise<void>;
-  onDelete: () => void;
-}) {
-  const [probe, setProbe] = useState<string | null>(null);
-  const [scan, setScan] = useState<string | null>(null);
-
-  const test = async () => {
-    setProbe('running');
-    await onRun(library.id, async () => {
-      const result = await probeLibrary(library.id);
-      setProbe(result.ok ? 'ok' : 'failed');
-    }, t('libraries.probed', 'Probe finished.'));
-  };
-
-  const rescan = async () => {
-    setScan('running');
-    await onRun(library.id, async () => {
-      const started = await startLibraryScan(library.id);
-      setScan(started.status);
-      const current = await libraryScanStatus(library.id);
-      setScan(current.status);
-    }, t('libraries.scanStarted', 'Scan started.'));
-  };
-
-  return (
-    <li className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-[var(--color-text-primary)]">{library.displayName ?? library.slug}</span>
-        <code className="rounded bg-[var(--color-surface-base)] px-1.5 py-0.5 text-xs text-[var(--color-text-muted)]">{library.slug}</code>
-        {probe === 'ok' && <Badge variant="success">{t('libraries.reachable', 'reachable')}</Badge>}
-        {probe === 'failed' && <Badge variant="error">{t('libraries.unreachable', 'unreachable')}</Badge>}
-        {library.isEnabled ? null : <Badge variant="warning">{t('libraries.disabled', 'disabled')}</Badge>}
-      </div>
-      <p className="mt-1 truncate text-xs text-[var(--color-text-muted)]">
-        {library.baseUrl}
-        {library.rootPath}
-      </p>
-      <p className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-        {t('libraries.davUser', 'WebDAV user')}: <code>{library.davUsername}</code>
-      </p>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button size="sm" loading={busy} onClick={() => void test()}>
-          <Search className="h-3.5 w-3.5" aria-hidden="true" />
-          {t('libraries.test', 'Test')}
-        </Button>
-        <Button size="sm" loading={busy} onClick={() => void rescan()}>
-          {t('libraries.rescan', 'Rescan')}
-        </Button>
-        {scan !== null && <span className="text-xs text-[var(--color-text-muted)]">scan: {scan}</span>}
-        <Button size="sm" variant="danger" className="ml-auto" onClick={onDelete}>
-          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-          {t('libraries.delete', 'Delete')}
-        </Button>
-      </div>
-    </li>
   );
 }
 

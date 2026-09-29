@@ -117,7 +117,24 @@ class WebDavClient {
 
     // An `AbortSignal.timeout` is a fetch-level abort, so a hung origin burns
     // this request's wall clock and nothing else.
-    const response = await this.fetchImpl(url, { ...init, headers, signal: AbortSignal.timeout(timeoutMs) });
+    //
+    // The abort is translated into a `WebDavError` because a timeout is a
+    // *distinguishable* fault and a bare `TimeoutError` is not: it is neither an
+    // `Error` shape every caller classifies nor an HTTP status, so it fell through
+    // every `status`-based branch and reached the operator as "the library is
+    // unreachable" — the same answer as a DNS failure, with a different fix
+    // (`WEBDAV_TIMEOUT_MS` against a hung origin, a network fix against a dead
+    // one). `signal.aborted` is the test rather than `error.name === 'TimeoutError'`
+    // because the signal is ours: nothing else can set it, so it cannot misreport
+    // a connection failure as a slow one.
+    const signal = AbortSignal.timeout(timeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, { ...init, headers, signal });
+    } catch (error) {
+      if (signal.aborted) throw new WebDavError(408, `WebDAV ${init.method ?? 'GET'} ${url} timed out after ${timeoutMs}ms.`);
+      throw error;
+    }
     if (!response.ok) {
       // The body is intentionally not read: it is attacker-influenced text and
       // nothing in this codebase needs it to classify the failure.
