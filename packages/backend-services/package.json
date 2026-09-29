@@ -28,7 +28,7 @@
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
     "@edge-sonic/webdav": "workspace:*",
-    "jose": "6.1.0"
+    "jose": "6.2.12"
   },
   "devDependencies": {
     "@types/node": "26.6.2",
