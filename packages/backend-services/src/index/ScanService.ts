@@ -43,29 +43,8 @@ import { encodeId, IdKind } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { basename, isAudioFile, suffixOf } from './TreeService';
-import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
-
-/**
- * A node row to write.
- *
- * Declared structurally rather than as `Parameters<NodeStore['upsertMany']>[0]`
- * because that indirection is circular here: the interface's parameter would
- * reference the alias, which references the interface.
- */
-type ScanStatus = 'idle' | 'scanning' | 'failed';
-
-interface ChunkResult {
-  readonly status: ScanStatus;
-  readonly scanned: number;
-  readonly total: number;
-  readonly indexVersion: number;
-  /**
-  Instrumented so the write/subrequest budget is testable, not just asserted.
-  */
-  readonly foldersVisited: number;
-  readonly webdavRequests: number;
-  readonly rowsWritten: number;
-}
+import type { ChunkResult, ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
+import { LAST_ERROR_MAX } from './scanTypes';
 
 class ScanService {
   constructor(private readonly deps: ScanDeps) {}
@@ -97,6 +76,7 @@ class ScanService {
           scanned: 0,
           total: 0,
           indexVersion,
+          lastError: null,
           foldersVisited: 0,
           webdavRequests: 1,
           rowsWritten: 0,
@@ -117,6 +97,7 @@ class ScanService {
         scanned: state.scanned_count,
         total: state.scanned_count,
         indexVersion: state.index_version,
+        lastError: null,
         foldersVisited: 0,
         webdavRequests: 1,
         rowsWritten: 0,
@@ -144,6 +125,7 @@ class ScanService {
       scanned: 0,
       total: 0,
       indexVersion: state.index_version,
+      lastError: null,
       foldersVisited: 0,
       webdavRequests: 1,
       rowsWritten: 0,
@@ -159,11 +141,16 @@ class ScanService {
     if (state.status !== 'scanning') {
       // A poll with no scan running is the common case — a client opening the app —
       // so it must not touch the network or write anything.
+      //
+      // The stored `last_error` is carried through here specifically: this is the
+      // path a client takes after a failure, and it is the only place the reason
+      // can still be recovered without another failing request.
       return {
         status: state.status === 'failed' ? 'failed' : 'idle',
         scanned: state.scanned_count,
         total: state.total_count,
         indexVersion: state.index_version,
+        lastError: state.last_error,
         foldersVisited: 0,
         webdavRequests: 0,
         rowsWritten: 0,
@@ -178,6 +165,7 @@ class ScanService {
         scanned: state.scanned_count,
         total: state.total_count,
         indexVersion,
+        lastError: null,
         foldersVisited: 0,
         webdavRequests: 0,
         rowsWritten: 0,
@@ -211,6 +199,7 @@ class ScanService {
         scanned,
         total: state.total_count,
         indexVersion: state.index_version,
+        lastError: null,
         foldersVisited: frontier.length,
         webdavRequests,
         rowsWritten,
@@ -227,22 +216,34 @@ class ScanService {
       scanned: state.scanned_count,
       total: state.total_count,
       indexVersion: state.index_version,
+      // Reported for `failed` only: an `idle` row's `last_error` is already `NULL`,
+      // and an `idle` scan is the state an operator is not asking about.
+      lastError: state.status === 'failed' ? state.last_error : null,
       foldersVisited: 0,
       webdavRequests: 0,
       rowsWritten: 0,
     };
   }
 
-  private async failChunk(library: LibraryRow, state: ScanStateRow, error: unknown, partial?: { webdavRequests: number; rowsWritten: number; scanned: number }): Promise<ChunkResult> {
+  private async failChunk(
+    library: LibraryRow,
+    state: ScanStateRow,
+    error: unknown,
+    partial?: { webdavRequests: number; rowsWritten: number; scanned: number },
+  ): Promise<ChunkResult> {
     // The frontier is left where it was, so the next poll resumes rather than
-    // restarting. The text is truncated by the DAO because it can be
-    // upstream-controlled.
-    await this.deps.scanState.fail(library.id, error instanceof Error ? error.message : String(error));
+    // restarting. The text can be upstream-controlled, so it is bounded to the
+    // same length the DAO persists, and the *bounded* value is what is returned:
+    // reporting the untruncated string would show the operator more than the
+    // database actually holds.
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, LAST_ERROR_MAX);
+    await this.deps.scanState.fail(library.id, message);
     return {
       status: 'failed',
       scanned: partial?.scanned ?? state.scanned_count,
       total: state.total_count,
       indexVersion: state.index_version,
+      lastError: message,
       foldersVisited: 0,
       webdavRequests: partial?.webdavRequests ?? 1,
       rowsWritten: partial?.rowsWritten ?? 0,
@@ -378,6 +379,5 @@ class ScanService {
 }
 
 export { ScanService };
-export type {  ChunkResult, ScanStatus };
-
-export {type ScanDeps} from './scanTypes';
+export type { ChunkResult, ScanStatus } from './scanTypes';
+export { type ScanDeps } from './scanTypes';

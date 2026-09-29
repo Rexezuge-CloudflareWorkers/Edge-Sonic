@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
 import { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug } from '@edge-sonic/backend-services/library';
 import { encryptData, decryptData, isUsableKey, timingSafeEqualStrings, generateAesGcmKey } from '@edge-sonic/backend-data';
+import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { WebDavClient, WebDavError } from '@edge-sonic/webdav';
 import { fakeDav } from './helpers/fakeDav';
 
@@ -168,7 +169,9 @@ describe('credential handling', () => {
 });
 
 describe('LibraryService', () => {
-  function buildService(overrides: Partial<{ allowPrivate: boolean; dav: ReturnType<typeof fakeDav> }> = {}) {
+  function buildService(
+    overrides: Partial<{ allowPrivate: boolean; dav: ReturnType<typeof fakeDav>; resolveKey: () => Promise<string>; baseUrl: string }> = {},
+  ) {
     const dav = overrides.dav ?? fakeDav({ '': [{ path: '' }] });
     const rows = new Map<string, Record<string, unknown>>();
     const service = new LibraryService({
@@ -190,7 +193,7 @@ describe('LibraryService', () => {
           rows.delete(id);
         },
       },
-      resolveKey: async () => KEY,
+      resolveKey: overrides.resolveKey ?? (async () => KEY),
       timeoutMs: 1000,
       allowPrivateHosts: () => overrides.allowPrivate ?? false,
     });
@@ -259,8 +262,12 @@ describe('LibraryService', () => {
 
   /**
   A row with a credential that actually decrypts, so a probe reaches the network.
+
+  Typed as `LibraryRow` rather than cast to `never` so a test can derive a variant
+  from it with a spread. `never` is assignable everywhere, which is convenient right
+  up until a test needs to change one field.
   */
-  async function probeRow() {
+  async function probeRow(): Promise<LibraryRow> {
     const encrypted = await encryptData('hunter2', KEY);
     return {
       id: 'L1',
@@ -276,7 +283,7 @@ describe('LibraryService', () => {
       is_enabled: 1,
       created_at: 0,
       updated_at: 0,
-    } as never;
+    };
   }
 
   it('classifies a probe failure by status, without echoing the upstream body', async () => {
@@ -314,6 +321,75 @@ describe('LibraryService', () => {
     vi.unstubAllGlobals();
     expect(result.ok).toBe(false);
     expect(result.status).toBeNull();
+  });
+
+  /**
+   * The four ways a probe can fail before or instead of reaching the origin, and
+   * the one sentence that used to be returned for all of them.
+   *
+   * This is a real report, not a hypothetical. A library against a live Durable-DAV
+   * origin, with a correct username and password, probed as "Library is
+   * unreachable." — because the deployment's WebDAV key could not decrypt the
+   * stored row. The origin was answering `207` the whole time. An operator told the
+   * origin is unreachable goes and debugs the wrong system, so the three causes
+   * that are *not* about the origin must not borrow its wording.
+   */
+  describe('a failure that is not the origin being unreachable', () => {
+    it('names a rotated encryption key rather than the network', async () => {
+      // The row is intact and the origin is fine; `decryptData` throws because the
+      // key that encrypted it is gone. GCM authenticating is what makes this a
+      // decryption failure instead of a garbage password sent to the origin.
+      //
+      // The shape of this failure in production: `prepare-wrangler-config` mints a
+      // new Secrets Store when the store is recreated, `init-secrets` generates a
+      // fresh key into it, and every D1 row is still ciphertext under the old one.
+      const { service } = buildService({ resolveKey: async () => await generateAesGcmKey() });
+      const result = await service.probe(await probeRow());
+      expect(result.ok).toBe(false);
+      expect(result.status).toBeNull();
+      expect(result.error).toMatch(/decrypt/i);
+      // The assertion the defect actually was: this must not be the sentence that
+      // sends the operator to their WebDAV server.
+      expect(result.error).not.toMatch(/unreachable/i);
+    });
+
+    it('names an unconfigured encryption key rather than the network', async () => {
+      // `resolveKey` fails closed on purpose, so in a deployment whose Secrets Store
+      // was never provisioned every library probes as "unreachable" — and the
+      // operator has no way to guess that the fault is a missing secret here.
+      const { service } = buildService({
+        resolveKey: async () => {
+          throw new Error('WEBDAV_ENCRYPTION_KEY_SECRET is not configured for this scope.');
+        },
+      });
+      const result = await service.probe(await probeRow());
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/decrypt/i);
+      expect(result.error).not.toMatch(/unreachable/i);
+      // The binding's own text names a scope and a variable; the operator is told
+      // what to do instead of what the worker happened to say.
+      expect(result.error).not.toMatch(/WEBDAV_ENCRYPTION_KEY_SECRET/);
+    });
+
+    it('names an SSRF-policy refusal as a policy decision, not a dead host', async () => {
+      // The origin was never contacted, so calling it unreachable is a statement
+      // about something this server chose not to do.
+      const { service } = buildService();
+      const result = await service.probe({ ...(await probeRow()), base_url: 'https://192.168.1.10' });
+      expect(result.ok).toBe(false);
+      expect(result.error).toMatch(/ALLOW_PRIVATE_WEBDAV_HOSTS/);
+      expect(result.error).not.toMatch(/unreachable/i);
+    });
+
+    it('still says "unreachable" for a genuine transport failure', async () => {
+      // The one case the sentence is true in. Without this the word could stop
+      // meaning anything at all, and the tests above would pass vacuously.
+      const { service, dav } = buildService({ dav: fakeDav({}, { failAll: true }) });
+      vi.stubGlobal('fetch', dav.fetch);
+      const result = await service.probe(await probeRow());
+      vi.unstubAllGlobals();
+      expect(result.error).toBe('Library is unreachable.');
+    });
   });
 });
 
@@ -384,4 +460,3 @@ describe('WebDavClient', () => {
     expect(dav.gets).toHaveLength(0);
   });
 });
-

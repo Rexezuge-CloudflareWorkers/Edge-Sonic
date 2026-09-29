@@ -20,6 +20,8 @@ import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
 import { WebDavClient, WebDavError } from '@edge-sonic/webdav';
+import { classifyBeforeRequest, credentialUnreadable, fromStatus, reachable, unreachable } from './probeOutcome';
+import type { ProbeOutcome } from './probeOutcome';
 
 interface LibraryStore {
   findById(id: string): Promise<LibraryRow | null>;
@@ -136,7 +138,10 @@ function normalizeRootPath(raw: string): string {
     throw new BadRequestError('Library root path is not valid percent-encoding.');
   }
   if (decoded.split('/').includes('..')) throw new BadRequestError('Library root path must not contain "..".');
-  const normalized = `/${decoded.split('/').filter((segment) => segment.length > 0).join('/')}`;
+  const normalized = `/${decoded
+    .split('/')
+    .filter((segment) => segment.length > 0)
+    .join('/')}`;
   return normalized;
 }
 
@@ -246,7 +251,10 @@ class LibraryService {
     });
   }
 
-  public async update(id: string, input: { slug: string; baseUrl: string; rootPath: string; davUsername: string; displayName?: string | null }): Promise<void> {
+  public async update(
+    id: string,
+    input: { slug: string; baseUrl: string; rootPath: string; davUsername: string; displayName?: string | null },
+  ): Promise<void> {
     const slug = normalizeSlug(input.slug);
     const existing = await this.deps.libraries.findBySlug(slug);
     if (existing && existing.id !== id) throw new ConflictError(`A library with slug "${slug}" already exists.`);
@@ -296,26 +304,41 @@ class LibraryService {
    * works. The error is reported by status class rather than passed through,
    * because the upstream body is attacker-influenced text and this server has no
    * use for it.
+   *
+   * ### Three try blocks, not one
+   *
+   * A single `try` around all three steps meant every failure without an HTTP
+   * status produced the same sentence — and two of the three causes are faults in
+   * *this* deployment, not at the operator's WebDAV server. An operator told the
+   * origin is unreachable goes and debugs the wrong system. Each block is
+   * therefore narrowed to the step it wraps, so its `catch` cannot mean anything
+   * else. See `probeOutcome.ts` for the taxonomy and why each wording is the one
+   * an operator can act on.
    */
-  public async probe(row: LibraryRow): Promise<{ ok: boolean; status: number | null; error: string | null }> {
+  public async probe(row: LibraryRow): Promise<ProbeOutcome> {
     try {
       this.assertReachable(row);
-      const client = await this.clientFor(row);
-      await client.propfind('', { depth: 0, timeoutMs: this.deps.timeoutMs });
-      return { ok: true, status: 207, error: null };
     } catch (error) {
-      return error instanceof WebDavError ? { ok: false, status: error.status, error: describeWebDavStatus(error.status) } : { ok: false, status: null, error: 'Library is unreachable.' };
+      return classifyBeforeRequest(error);
+    }
+
+    let client: WebDavClient;
+    try {
+      // Decrypting the stored password is the only step that can fail on this
+      // server's own configuration rather than on anything the origin said.
+      client = await this.clientFor(row);
+    } catch {
+      return credentialUnreadable();
+    }
+
+    try {
+      await client.propfind('', { depth: 0, timeoutMs: this.deps.timeoutMs });
+      return reachable();
+    } catch (error) {
+      return error instanceof WebDavError ? fromStatus(error.status) : unreachable();
     }
   }
 }
 
-function describeWebDavStatus(status: number): string {
-  if (status === 401) return 'The WebDAV username or password was rejected.';
-  if (status === 403) return 'The WebDAV account may not read that path.';
-  if (status === 404) return 'The library root path does not exist on the WebDAV server.';
-  if (status === 429) return 'The WebDAV server is rate limiting this worker.';
-  return status >= 500 ? 'The WebDAV server returned a server error.' : `The WebDAV server responded ${status}.`;
-}
-
-export { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug, describeWebDavStatus };
+export { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug };
 export type { LibraryDeps, ResolvedLibrary };

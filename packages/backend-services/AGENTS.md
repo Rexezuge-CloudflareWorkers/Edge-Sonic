@@ -66,6 +66,34 @@ library's **stored DAV password**: without the gate, an operator registration fo
 way to send that credential to `169.254.169.254` or to an internal service. Plaintext
 `http` is allowed only for loopback.
 
+### `probe` has one `try` per step, and the wording lives in `probeOutcome.ts`
+
+`probe` is the only place an operator can find out why a library does not work, and it
+used to wrap all three steps in one `try`, so every failure without an HTTP status
+collapsed into *"Library is unreachable."* That is a claim about the operator's WebDAV
+server, and it is false for three of the four causes: `resolveKey` refusing (a
+misconfigured deployment), `decryptData` failing (a rotated key over an existing row),
+and `assertReachable` refusing (an SSRF-policy decision, where the origin was never
+contacted at all). It shipped against a live origin answering `207` with a correct
+password.
+
+So the three steps are three `try` blocks, and each `catch` can only mean the thing it
+wraps. The messages are constructors in `library/probeOutcome.ts` rather than branches
+in the service, because the taxonomy is the thing worth reading in one place, and
+because a wording change should not be a diff through three call sites. Two rules keep
+it honest: **no cause text and no upstream body ever reaches the operator** — a GCM
+failure message names the operation and nothing else — and *"unreachable"* is produced by
+exactly one branch, so the word means something when it appears.
+
+`assertReachable`'s own `NotFoundError` is unchanged. Its indistinguishability from a
+missing row is deliberate on `/rest`; only the way the *operator* surface renders it
+changed, and the operator can already see the row in their own list.
+
+A timeout arrives as a `WebDavError(408)` rather than a bare abort — see
+`packages/webdav`. That translation is what makes this classification possible at all,
+since an `AbortSignal.timeout` rejection is neither an `Error` shape callers classify
+nor an HTTP status.
+
 ## Scanning
 
 `index/ScanService.ts` is a state machine advanced by `getScanStatus`. No cron, no Durable
@@ -80,6 +108,15 @@ Object, no trigger.
   against a 5,000/day allowance — survivable because the scan is chunked and resumable,
   and because every later scan writes zero rows.
 - A failure leaves the frontier where it was, so the next poll resumes.
+
+`ChunkResult` is declared in `index/scanTypes.ts` beside the service's inputs, because
+it is a contract a test writes against — and a field added to the result with no fake
+that produces it is a field nothing exercises. It carries **`lastError`**: the
+`scan_state.last_error` the DAO has always written and that nothing ever read back. A
+failed scan told an operator "failed" and no reason, which is the same defect as a probe
+reporting "unreachable" — the diagnosis existed and was not on the screen. It is bounded
+in the service as well as in the DAO, so what an operator is shown is exactly what was
+persisted rather than a longer string the database never held.
 
 `index/TreeService.ts` does the read-through materialization: `getMusicDirectory` on an
 uncached folder issues a live `PROPFIND` **and persists** what it found, so the second

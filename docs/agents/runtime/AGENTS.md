@@ -129,6 +129,18 @@ The schema carries `key_version` on both tables and `token_epoch` on `users`.
 — and `token_epoch` is bumped by a password change, because a Subsonic token is valid
 forever and there is no other way to revoke one.
 
+**A store that is recreated is a new key, and the rows are not.**
+`provisionWranglerResources` mints a *new* `store_id` when the store has to be created,
+and `init-secrets` generates a *new* value into it, while every
+`libraries.password_ciphertext` is still ciphertext under the old one. GCM authenticating
+makes that a decryption failure rather than a garbage password, which is the correct
+behaviour - but it makes every library unusable at once, and the only remedy is
+re-entering each password. `init-secrets` deliberately skips an existing secret, so
+re-running the pipeline in place is safe; it is a *new store* that rotates the key. This
+is why `probe` names a decryption failure separately from a network one: it is the fault
+an operator is most likely to meet, and the one whose message misleads most if it borrows
+the origin's.
+
 ## Dependency injection
 
 - `AppConfiguration` — an injectable view over env parsing: a facade over the section

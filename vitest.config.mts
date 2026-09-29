@@ -66,14 +66,19 @@ export default defineConfig({
         // Raise these as coverage grows. Never lower them to excuse a regression in
         // code that is already covered.
         //
-        // Set from a measurement of 79/66/81/82 (statements/branches/functions/lines).
+        // Set from a measurement of 80/67/82/83 (statements/branches/functions/lines).
         // The branch floor is the closest to its measured value because branch coverage
         // is the one that moves most when code is added, and a floor that a routine PR
         // trips is a floor people learn to ignore.
-        statements: 78,
-        branches: 65,
-        functions: 79,
-        lines: 80,
+        //
+        // Raised from 78/65/79/80, which was the previous *measured* value rather than a
+        // number chosen to be comfortable. The probe-diagnosis change added classified
+        // failure paths that are each asserted, and a floor left where it was would have
+        // stopped the gate from noticing the difference.
+        statements: 79,
+        branches: 66,
+        functions: 81,
+        lines: 82,
       },
     },
   },

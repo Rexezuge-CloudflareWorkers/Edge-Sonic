@@ -90,6 +90,25 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   reported success while no key was ever created, and the failure surfaced two steps later
   on the deploy. Same rule as awaiting an authorization check instead of voiding it — a
   discarded rejection is not a failed guard, it is no guard.
+- **A diagnostic names its cause, and only one of them is "unreachable".** The probe is
+  the only place an operator learns why a library does not work, and it had one `catch`
+  and one sentence. A missing Secrets Store binding, a rotated WebDAV key, an
+  SSRF-policy refusal, and a dead host all reported *"Library is unreachable."* — so a
+  fault in **this** deployment sent the operator off to debug their own server. It
+  shipped against a live origin answering `207` with a correct password. Three rules,
+  and each is a way this collapsed: a `try` per step rather than one around all of
+  them, so a `catch` cannot mean more than one thing; a fault with no HTTP status is a
+  **category** (`resolveKey`, `decryptData`), not a network failure; and a timeout is
+  translated into a status, because `AbortSignal.timeout` rejects with something that is
+  neither an `Error` shape nor a status and therefore reached the residual branch.
+  Asserted in `test/library-ssrf.test.ts`, including the case that *does* say
+  "unreachable" — without it the other three pass vacuously.
+- **A stored failure is read back, or it was never written.** `scan_state.last_error`
+  was populated on every scan failure and read by nothing, and `apps/web` declared a
+  `ScanStateSummary.lastError` the server never sent — so a failed scan rendered the
+  bare word "failed" while the reason sat in the database. Persisting a diagnosis
+  nobody can retrieve is the same defect as never computing it, and the type declared
+  the field, so nothing ever reported the gap.
 - **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
   so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
   `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.
@@ -132,7 +151,7 @@ carries a `DEV_AUTH_EMAIL` bypass and the two raw 32-zero placeholder keys;
 400 error, and `test/` is a workspace project so both `pnpm -r typecheck` and `pnpm run
 lint` reach it.
 
-Coverage floors are a **measured** floor (78/65/79/80 against 79/66/81/82), not an
+Coverage floors are a **measured** floor (79/66/81/82 against 80/67/82/83), not an
 aspiration — lower one to make CI green and the gate stops saying anything.
 `packages/backend-errors` is excluded, and says why in the config: it is a pure taxonomy
 whose *mapping out* is tested.
