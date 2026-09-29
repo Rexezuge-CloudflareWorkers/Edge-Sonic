@@ -2,6 +2,10 @@ export { TreeService, isAudioFile, suffixOf, parentOf, depthOf, basename, AUDIO_
 export type { TreeDeps } from './TreeService';
 export { ScanService } from './ScanService';
 export type { ChunkResult, ScanStatus } from './ScanService';
+export { ScanBudget, stopReason } from './scanBudget';
+export type { ScanBudgetOptions, ChunkStopReason } from './scanBudget';
+export { MAX_REQUESTS_PER_TRACK } from './scanEnrichment';
+export { reconcileFolder } from './scanFolder';
 export type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
 export { EnrichmentService, shouldEnrich } from './EnrichmentService';
 export type { EnrichmentDeps } from './EnrichmentService';

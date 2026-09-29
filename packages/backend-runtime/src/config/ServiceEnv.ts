@@ -32,6 +32,8 @@ interface ServiceEnv {
   MAX_LIBRARIES?: string;
   WEBDAV_TIMEOUT_MS?: string;
   SCAN_CHUNK_FOLDERS?: string;
+  SCAN_CHUNK_MAX_REQUESTS?: string;
+  SCAN_CHUNK_DEADLINE_MS?: string;
   TAG_READ_BYTES?: string;
   TAG_READ_TAIL_BYTES?: string;
   SCAN_ENRICH_MAX_PER_FOLDER?: string;

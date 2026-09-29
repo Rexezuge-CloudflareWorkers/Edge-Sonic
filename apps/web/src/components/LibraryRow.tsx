@@ -4,10 +4,10 @@ import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from './ui/controls';
 import { LibraryForm } from './LibraryForm';
 import { Badge } from './ui/panels';
-import { libraryScanStatus, probeLibrary, startLibraryScan } from '../lib/api';
+import { libraryScanStatus, probeLibrary, startLibraryScan, stepLibraryScan } from '../lib/api';
 import type { LibraryDraft } from '../lib/libraryDraft';
-import { describeProbe, describeScan } from '../lib/probe';
-import type { LibrarySummary, Notice, ProbeResult } from '../types';
+import { describeProbe, describeScan, describeStopReason } from '../lib/probe';
+import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../types';
 
 /**
  * Run a row action, then let the view refresh.
@@ -50,7 +50,7 @@ interface LibraryRowProps {
 function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, onRun, onDelete }: LibraryRowProps) {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
-  const [scan, setScan] = useState<{ status: string; lastError: string | null } | null>(null);
+  const [scan, setScan] = useState<{ status: string; lastError: string | null; stoppedBy: ChunkStopReason } | null>(null);
 
   const test = async () => {
     setProbing(true);
@@ -73,14 +73,28 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
     setProbing(false);
   };
 
+  /**
+   * Rescan: seed the frontier, then advance one chunk.
+   *
+   * Both halves are needed and neither is enough alone. `start` probes the root and
+   * decides whether there is work; `step` is the only thing that does any, because the
+   * scan is client-driven and `/rest/getScanStatus` is the surface that normally drives
+   * it. So an operator with no Subsonic client polling used to click this and watch a
+   * scan that never moved.
+   *
+   * The status is then re-read rather than taken from the chunk, so what the row shows
+   * is the persisted state a `/rest` poll would see.
+   */
   const rescan = async () => {
     await onRun(
       library.id,
       async () => {
         const started = await startLibraryScan(library.id);
-        setScan({ status: started.status, lastError: started.lastError });
+        setScan({ status: started.status, lastError: started.lastError, stoppedBy: started.stoppedBy });
+        const chunk = await stepLibraryScan(library.id);
+        setScan({ status: chunk.status, lastError: chunk.lastError, stoppedBy: chunk.stoppedBy });
         const current = await libraryScanStatus(library.id);
-        setScan({ status: current.status, lastError: current.lastError });
+        setScan({ status: current.status, lastError: current.lastError, stoppedBy: null });
         return undefined;
       },
       t('libraries.scanStarted', 'Scan started.'),
@@ -89,6 +103,13 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
 
   const presented = probe === null ? null : describeProbe(probe);
   const scanFailure = describeScan(scan?.lastError);
+  // Which bound cut the last chunk short, when one did. Rendered under the row for the
+  // same reason as `lastError`: `useNotice` clears after 6 s, and a scan that pauses
+  // every poll is not something an operator reads once and remembers.
+  const scanPaused = describeStopReason(scan?.stoppedBy, {
+    requests: t('libraries.scanPausedRequests', 'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.'),
+    deadline: t('libraries.scanPausedDeadline', 'Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.'),
+  });
 
   return (
     <li className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
@@ -124,6 +145,13 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
         <p className="mt-1 text-xs text-[var(--color-text-muted)]">
           {t('libraries.scan', 'Scan')}: {scan.status}
           {scanFailure !== null && <span className="ml-2 break-words text-[var(--color-error-text)]">{scanFailure}</span>}
+          {/*
+            Muted rather than an error tone: a chunk that hit a bound did its job and
+            left the rest of the frontier for the next poll. It is information about
+            throughput, not a fault, and colouring it as one would train an operator to
+            ignore the line that does mean something went wrong.
+          */}
+          {scanPaused !== null && <span className="ml-2 break-words">{scanPaused}</span>}
         </p>
       )}
       {editing && <LibraryForm library={library} busy={busy} onSubmit={(draft) => onEditSubmit(library.id, draft)} onCancel={onEditDone} />}

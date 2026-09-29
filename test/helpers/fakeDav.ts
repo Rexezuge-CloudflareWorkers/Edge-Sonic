@@ -25,6 +25,25 @@ export interface FakeDavOptions {
   Per-call failure, so a test can fail the second request only.
   */
   failOnCall?: number;
+  /**
+  Milliseconds of real delay before every response.
+
+  ### Why this exists
+
+  The scan's wall-clock bound is the second of the two that keep a chunk inside its
+  budget, and until this option existed **no test could observe it**: `fakeDav`
+  answered instantly, so a chunk finished in microseconds no matter how slow the
+  origin was, and a deadline that did nothing looked exactly like a deadline that
+  worked. That is the same defect as the subrequest count — a double that cannot
+  observe the failure lends it a passing test.
+
+  A **real** `setTimeout` rather than a fake clock, so the deadline is exercised
+  through the same `Date.now` the Worker uses and a test cannot pass by mocking
+  away the thing under test. Tests using it assert on *counts* (folders visited,
+  requests issued), never on elapsed milliseconds: a wall-clock assertion is a flaky
+  assertion, and the bound this models is a decision, not a duration.
+  */
+  latencyMs?: number;
 }
 
 export interface FakeDav {
@@ -37,6 +56,15 @@ export interface FakeDav {
   `GET` paths requested, in order.
   */
   readonly gets: Array<{ path: string; range: string | null }>;
+  /**
+  Every request this origin received, of any method.
+
+  The number a test asserts `ChunkResult.webdavRequests` against. The service
+  counts inside `WebDavClient.request()`, so this is an independent observation of
+  the same fact rather than the service's own arithmetic restated — which is what
+  makes the equality meaningful.
+  */
+  readonly requestCount: () => number;
   /**
   Basic credentials seen, so a test can assert the client sent the right ones.
   */
@@ -290,6 +318,12 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
     if (options.failAll) throw new Error('WebDAV origin unreachable');
     if (options.failOnCall !== undefined && calls === options.failOnCall) throw new Error('WebDAV origin dropped the connection');
 
+    // Before the response is built, and after the call is recorded, so a delayed
+    // origin still counts every request it was asked for.
+    if (options.latencyMs !== undefined && options.latencyMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, options.latencyMs));
+    }
+
     if (request.method === 'PROPFIND') {
       propfinds.push(path);
       if (options.status !== undefined) return new Response('', { status: options.status });
@@ -320,6 +354,10 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
     propfinds,
     gets,
     credentials,
+    // `calls` rather than `propfinds.length + gets.length`: a third method added to
+    // the client later would show up here without this helper changing, so the count
+    // cannot quietly go stale the way a two-array sum would.
+    requestCount: () => calls,
     setTree: (next: Record<string, DavEntry[]>) => {
       tree = next;
     },

@@ -38,6 +38,15 @@ Cap on a single ranged media read, for the same reason.
 const MAX_MEDIA_CHUNK_BYTES = 32 * 1024 * 1024;
 
 /**
+ * The default `onRequest`: no accounting.
+ *
+ * A named constant rather than an inline `() => undefined` default, because a client is
+ * built per folder by the scan and a fresh closure per construction is a small waste in
+ * the one path that builds thousands of them.
+ */
+const NO_REQUEST_ACCOUNTING = (): void => undefined;
+
+/**
  * How the `207` is asked for.
  *
  * `allprop` is what the reference router's browser client used and it works
@@ -106,6 +115,24 @@ class WebDavClient {
     private readonly rootPath: string,
     private readonly credentials: DavCredentials,
     fetchImpl: typeof fetch = fetch,
+    /**
+     * Called once per outbound request, immediately before it is issued.
+     *
+     * ### Why the count is taken here
+     *
+     * A counter incremented by a *caller* is a claim about how much work was
+     * attempted, and it drifts the moment a code path forgets to increment it. That
+     * is not hypothetical: the scan counted one subrequest per `PROPFIND` and none
+     * for the range reads its own enrichment made, so it under-reported its own
+     * chunk by up to 40x while a comment described the number as instrumented "so
+     * the budget is testable". A caller that cannot see the requests it causes
+     * cannot bound them.
+     *
+     * `request()` is the single choke point every method funnels through —
+     * `propfind`, `get`, and therefore `readPrefix` and `readTail` — so a charge
+     * placed here cannot be bypassed by a new method added later.
+     */
+    private readonly onRequest: () => void = NO_REQUEST_ACCOUNTING,
   ) {
     // The wrapper is the fix, and it is here rather than at the call site on
     // purpose.
@@ -156,6 +183,11 @@ class WebDavClient {
     // because the signal is ours: nothing else can set it, so it cannot misreport
     // a connection failure as a slow one.
     const signal = AbortSignal.timeout(timeoutMs);
+    // Charged **before** the request, so a caller that stops when the budget is
+    // spent can never have one already in flight past the ceiling. The count is a
+    // measure of what was issued, so it is raised whether the request succeeds or
+    // throws: both consumed a subrequest.
+    this.onRequest();
     let response: Response;
     try {
       response = await this.fetchImpl(url, { ...init, headers, signal });

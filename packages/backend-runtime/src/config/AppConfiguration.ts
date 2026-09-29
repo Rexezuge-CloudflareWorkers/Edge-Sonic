@@ -72,6 +72,14 @@ class AppConfiguration {
     return this.scan.getScanChunkFolders();
   }
 
+  public getScanChunkMaxRequests(): number {
+    return this.scan.getScanChunkMaxRequests();
+  }
+
+  public getScanChunkDeadlineMs(): number {
+    return this.scan.getScanChunkDeadlineMs();
+  }
+
   public getTagReadBytes(): number {
     return this.scan.getTagReadBytes();
   }
@@ -150,6 +158,9 @@ class AppConfiguration {
       'MAX_LIBRARIES',
       'WEBDAV_TIMEOUT_MS',
       'SCAN_CHUNK_FOLDERS',
+      'SCAN_CHUNK_MAX_REQUESTS',
+      'SCAN_CHUNK_DEADLINE_MS',
+      'SCAN_ENRICH_MAX_PER_FOLDER',
       'TAG_READ_BYTES',
       'MAX_PAGE_SIZE',
       'DEFAULT_PAGE_SIZE',

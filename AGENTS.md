@@ -77,6 +77,42 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   The rate limiter prefers `c.get('AuthenticatedUserEmailAddress')` over the client address, so registering it
   before `userAuthentication` makes it fall back to `ip:…` — silently, and with a comment
   claiming the opposite. A limiter's key and the order that produces it are one decision.
+- **A chunk is bounded by a *measured* request count, not by a folder number.**
+  `getScanStatus` is not a progress read — it *is* the scan — so one call descending
+  `SCAN_CHUNK_FOLDERS` folders sequentially is unbounded work on a surface whose
+  clients time out. It shipped: a chunk on a 2.2 s origin took ~88 s while clients
+  gave up at ~45 s, so the work finished server-side where nobody was watching, and
+  a client that backed off stopped advancing the scan *by construction*. Enrichment
+  then moved per-track range reads inside that same loop, taking a chunk from 40
+  subrequests to 1,640 — past the ceiling, so a chunk that **fails** rather than one
+  that is slow. Two rules, and each is how the previous one collapsed:
+  - **The count is taken where the request is issued.** `WebDavClient` takes an
+    `onRequest` callback invoked inside its private `request()`, the one path
+    `propfind`/`get`/`readPrefix`/`readTail` all funnel through. `webdavRequests`
+    used to be `+= 1` inside the walk's loop, which charged the `PROPFIND`s and
+    nothing the scan's own enrichment caused — an undercount of up to 40x, on a field
+    whose comment claimed it was instrumented "so the budget is testable". A
+    caller-incremented counter is a *claim* about work; one incremented at the choke
+    point is a measurement of it, and only the second can bound anything.
+  - **A bound that is not checked is not a bound.** `webdavRequests` was returned in
+    `ChunkResult` and compared against nothing anywhere. There is now a request
+    ceiling *and* a wall-clock deadline, the loop checks `canAfford` **before** each
+    unit of work, and the remainder of the frontier is simply left for the next poll.
+  Asserted in `test/scan-budget.test.ts`: `webdavRequests` is compared against what
+  the `fakeDav` double actually received, a `fakeDav` gained a real `latencyMs` so a
+  deadline is observable at all, and every bound test is paired with one that shows
+  the guard has teeth. The same rule the previous invariant records, one level up: the
+  budget lived in a comment and in the choice of default numbers, and **a comment is
+  not a measurement**.
+- **Size a subrequest budget against the plan that will run it.** Cloudflare retired
+  the 1,000-subrequest ceiling on 2026-02-11: Workers **Free** allows **50 external**
+  subrequests per invocation and **Paid** 10,000 (raiseable to 10M). This codebase
+  sizes every other quota against the free tier, and `SCAN_CHUNK_FOLDERS = 40` was
+  already 80% of the whole external budget before a single enrichment read. A default
+  of 1,000 is not a slow chunk, it is a **failed** chunk on a Free-plan account, and
+  the number sat in a comment that read like a measurement. `DEFAULT_SCAN_CHUNK_MAX_REQUESTS`
+  is 40, and `test/scan-budget.test.ts` asserts both the constant and that a real
+  chunk stays under it with enrichment on.
 - **A `no-store` predicate must name a path the router serves.** `isSensitiveJsonPath`
   once checked a prefix this worker did not register, so the branch was unreachable and the
   operator surface shipped with no `Cache-Control`. A predicate copied from another router's

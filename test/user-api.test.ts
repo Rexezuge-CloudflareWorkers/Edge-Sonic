@@ -363,6 +363,47 @@ describe('libraries', () => {
     expect(body).toHaveProperty('lastError');
     expect(body.lastError).toBeNull();
   });
+
+  it('advances the scan from the operator surface, and says which bound stopped it', async () => {
+    // The scan is client-driven, and `/rest/getScanStatus` was the only thing that
+    // advanced it — so an operator clicking "Rescan" started a scan that only moved
+    // if some *Subsonic client* happened to be polling. This route is the missing
+    // half, and `stoppedBy` is only readable here, because the Subsonic envelope
+    // carries just `scanning` and `count`.
+    //
+    // A tree with a root entry, because `start` reads a missing root as "the library
+    // is gone", completes the scan and clears the index — the case the test above
+    // leans on. With the default empty tree there would be nothing to advance.
+    const root = '/remote.php/dav/files/alice/Music';
+    harness.dav.setTree({
+      [root]: [
+        { path: root, collection: true, mtime: 1000 },
+        { path: `${root}/Bon Iver`, collection: true, mtime: 2000 },
+      ],
+      [`${root}/Bon Iver`]: [{ path: `${root}/Bon Iver`, collection: true, mtime: 2000 }],
+    });
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const started = await call('/user/libraries/L1/scan', { method: 'POST' });
+    expect(started.body.status).toBe('scanning');
+
+    const chunk = await call('/user/libraries/L1/scan/step', { method: 'POST' });
+
+    expect(chunk.status).toBe(200);
+    // It really advanced: the frontier moved, and the request reached the origin.
+    expect(chunk.body.foldersVisited).toBeGreaterThan(0);
+    expect(harness.dav.propfinds.length).toBeGreaterThan(0);
+    // The two costs a chunk spends, and the bound that ended it. `null` would mean
+    // "nothing stopped it", which for a `scanning` result is never the case.
+    expect(chunk.body).toHaveProperty('stoppedBy');
+    expect(chunk.body.webdavRequests).toBeGreaterThan(0);
+    expect(chunk.body.stoppedBy).toBe('frontier');
+  });
+
+  it('refuses to advance a scan for a library that does not exist', async () => {
+    const { status, body } = await call('/user/libraries/nope/scan/step', { method: 'POST' });
+    expect(status).toBe(404);
+    expect(body.Exception?.Message).toContain('not found');
+  });
 });
 
 describe('users', () => {

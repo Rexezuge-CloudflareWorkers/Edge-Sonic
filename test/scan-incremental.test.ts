@@ -14,6 +14,15 @@
  * 2. An **unchanged** rescan: **one** request (the root probe) and **zero** rows.
  *    This is the whole point of storing `mtime_ms` in `nodes`.
  * 3. A one-album change: requests proportional to the *change*, not the library.
+ *
+ * ### Why `clientFor` here forwards the caller's meter
+ *
+ * `webdavRequests` is counted inside `WebDavClient.request()`, so a `clientFor` that
+ * drops the `onRequest` callback reports **zero** for a chunk that did real work. That
+ * is not a service defect: it is this double being structurally unable to observe the
+ * thing, which is the failure the testing guide warns about — and it is exactly how the
+ * under-counting survived for so long. The budget itself is exercised in
+ * `test/scan-budget.test.ts`; this file is about the walk.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ScanService } from '@edge-sonic/backend-services/index';
@@ -231,6 +240,15 @@ function createIndex() {
   };
 }
 
+/**
+ * A generous ceiling, so a test that is about the *walk* is never truncated by a bound.
+ *
+ * The shipped defaults are asserted separately, against the constants themselves, in
+ * "the shipped defaults" below. A budget quietly set low enough to cut a walk short
+ * would make an unrelated test pass for the wrong reason.
+ */
+const UNBOUNDED_CHUNK = { chunkFolders: 40, chunkMaxRequests: 10_000, chunkDeadlineMs: 60_000 };
+
 function library(overrides: Partial<LibraryRow> = {}): LibraryRow {
   return {
     id: LIBRARY_ID,
@@ -327,12 +345,18 @@ describe('the scan enriches the tracks it changed', () => {
   function scanWith(enrichMaxPerFolder: number, onEnrich?: (facts: { id: string; path: string; size: number; mtimeMs: number }) => Promise<void>): ScanService {
     return new ScanService({
       ...index.deps,
-      clientFor: async () =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch),
+      clientFor: async (_library, onRequest) =>
+        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
       timeoutMs: 1000,
-      chunkFolders: 40,
-      enrichSong: async (_library, facts) => {
+      ...UNBOUNDED_CHUNK,
+      enrichSong: async (_library, facts, onRequest) => {
         enriched.push(facts);
+        // Charged the way the real enrichment service charges: one prefix read here,
+        // and a second for a container whose length is only at the end of the file.
+        // Without this the budget would never see the reads the scan causes, which is
+        // the under-reporting the count assertions below exist to catch.
+        onRequest?.();
+        onRequest?.();
         if (onEnrich !== undefined) await onEnrich(facts);
       },
       enrichMaxPerFolder,
@@ -445,10 +469,10 @@ describe('ScanService', () => {
     dav = fakeDav(sampleTree());
     service = new ScanService({
       ...index.deps,
-      clientFor: async () =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch),
+      clientFor: async (_library, onRequest) =>
+        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
       timeoutMs: 1000,
-      chunkFolders: 40,
+      ...UNBOUNDED_CHUNK,
       // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
       enrichMaxPerFolder: 0,
     });
@@ -619,10 +643,10 @@ describe('ScanService', () => {
 
     const failingService = new ScanService({
       ...index.deps,
-      clientFor: async () =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch),
+      clientFor: async (_library, onRequest) =>
+        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch, onRequest),
       timeoutMs: 1000,
-      chunkFolders: 40,
+      ...UNBOUNDED_CHUNK,
       // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
       enrichMaxPerFolder: 0,
     });
@@ -656,10 +680,10 @@ describe('ScanService', () => {
     const gone = fakeDav({}, { status: 404 });
     const goneService = new ScanService({
       ...index.deps,
-      clientFor: async () =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, gone.fetch),
+      clientFor: async (_library, onRequest) =>
+        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, gone.fetch, onRequest),
       timeoutMs: 1000,
-      chunkFolders: 40,
+      ...UNBOUNDED_CHUNK,
       // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
       enrichMaxPerFolder: 0,
     });

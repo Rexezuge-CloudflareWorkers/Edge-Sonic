@@ -215,11 +215,16 @@ class LibraryService {
    * to `WebDavClient`, which attaches it to the request. No caller ever holds the
    * plaintext — that is what makes "the stored password only ever goes to the
    * library's own origin" a property of the code rather than a convention.
+   *
+   * @param onRequest Charged once per outbound request, inside the client. The scan
+   *   passes its chunk budget's meter here so a range read is counted against the
+   *   same ceiling as the `PROPFIND` that found the file — the counting point being
+   *   the client is what makes the number a measurement rather than a claim.
    */
-  public async clientFor(row: LibraryRow): Promise<WebDavClient> {
+  public async clientFor(row: LibraryRow, onRequest?: () => void): Promise<WebDavClient> {
     const key = await this.deps.resolveKey();
     const password = await decryptData(row.password_ciphertext, row.password_iv, key);
-    return new WebDavClient(row.base_url, row.root_path, { username: row.dav_username, password }, fetch);
+    return new WebDavClient(row.base_url, row.root_path, { username: row.dav_username, password }, fetch, onRequest);
   }
 
   public async create(input: {

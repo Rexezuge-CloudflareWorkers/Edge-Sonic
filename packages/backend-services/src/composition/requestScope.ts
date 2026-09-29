@@ -10,6 +10,7 @@ import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
+import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
@@ -97,7 +98,11 @@ function createRequestScope(env: RequestScopeEnv): Container {
     }),
   );
 
-  const clientFor = async (row: Parameters<LibraryService['clientFor']>[0]) => await scope.get(Tokens.LibraryService).clientFor(row);
+  // The optional `onRequest` is the caller's subrequest meter. It is threaded here
+  // rather than at each service so a range read and a `PROPFIND` are charged to the
+  // same budget by the same rule — the scan's chunk bound only works because the
+  // enrichment reads inside its loop are counted too.
+  const clientFor = async (row: LibraryRow, onRequest?: () => void) => await scope.get(Tokens.LibraryService).clientFor(row, onRequest);
 
   scope.bindValue(
     Tokens.TreeService,
@@ -150,11 +155,20 @@ function createRequestScope(env: RequestScopeEnv): Container {
       clientFor,
       timeoutMs: config.getWebdavTimeoutMs(),
       chunkFolders: config.getScanChunkFolders(),
+      // The two bounds a chunk runs under. `chunkMaxRequests` is the platform's
+      // external subrequest ceiling and `chunkDeadlineMs` is what makes a poll
+      // return on a slow origin; `chunkFolders` above is a separate bound on D1
+      // work. Defaults are sized for the Free plan — see `ConfigurationDefaults`.
+      chunkMaxRequests: config.getScanChunkMaxRequests(),
+      chunkDeadlineMs: config.getScanChunkDeadlineMs(),
       // The scan enriches what it changed, through the same `EnrichmentService` a
       // `getSong` uses, so browsing reports a real duration and the artist/album/genre
       // aggregates have rows to group on.
-      enrichSong: async (library, facts) => {
-        await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts);
+      //
+      // `onRequest` is the chunk's meter. Forwarding it is what keeps a range read
+      // counted against the same budget as the `PROPFIND` that found the file.
+      enrichSong: async (library, facts, onRequest) => {
+        await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts, onRequest);
       },
       enrichMaxPerFolder: config.getScanEnrichMaxPerFolder(),
     }),
