@@ -80,6 +80,24 @@ async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> 
  * read: with no client polling, the scan does not advance. See `ScanService` for
  * why that is acceptable and what the upgrade path is.
  *
+ * ### A poll that returns is a poll that succeeded
+ *
+ * This call does real work, so a client that asks "how far along am I?" is doing
+ * more of the scan — and that shaped how long it can take. A chunk is bounded by a
+ * subrequest ceiling and a wall-clock deadline, and it **returns early** when it
+ * reaches either, leaving the rest of the frontier for the next poll.
+ *
+ * That matters for how a client should read a timeout. Before the bounds, a chunk
+ * on a slow origin ran ~88 s while clients gave up at ~45 s, so the scan appeared
+ * stalled and backing off genuinely stopped it. A bounded chunk returns inside its
+ * deadline, so "still scanning" is an answer and not a symptom. A client that does
+ * back off should keep polling rather than lengthen its interval: polling is the
+ * scan.
+ *
+ * Neither bound is visible in the protocol's `scanStatus` element, which carries
+ * only `scanning` and `count`. Which bound ended a chunk is on `ChunkResult.stoppedBy`,
+ * which the operator surface reads through `POST /user/libraries/:id/scan/step`.
+ *
  * `count` is the protocol's single progress number, and it reports folders
  * scanned — the number that actually moves. Reporting song count instead would
  * need a full library count on every poll.

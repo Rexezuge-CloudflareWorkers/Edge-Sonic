@@ -136,6 +136,27 @@ Refusals are deliberately uniform. An id for a library the caller cannot see ans
 `code=70`, not `code=50`, and not `code=10`: `50` would confirm the id is real, turning
 the endpoint into an oracle for which paths exist.
 
+## `getScanStatus` advances the scan, and a poll that returns is a success
+
+`getScanStatus` is not a passive read. It **is** the scan: with no client polling, nothing
+advances, because there is no cron, no Durable Object and no queue. The protocol has no
+read-only scan-status method, and the operator surface has one (`GET
+/user/libraries/:id/scan`), so a client asking "how far along am I?" is doing more of the
+scan.
+
+That shaped how long a poll can take. A chunk is bounded by a subrequest ceiling and a
+wall-clock deadline, and it **returns early** when it reaches either, leaving the rest of
+the frontier for the next poll. Before the bounds, a chunk on a slow origin ran ~88 s while
+clients gave up at ~45 s, so the scan looked stalled and backing off genuinely stopped it.
+A bounded chunk returns inside its deadline, so "still scanning" is an answer and not a
+symptom — and a client that does back off should keep polling rather than lengthen its
+interval, because **polling is the scan**.
+
+Neither bound is visible in the `scanStatus` element, which carries only `scanning` and
+`count`. Which bound ended a chunk is on `ChunkResult.stoppedBy`, read through
+`POST /user/libraries/:id/scan/step` — a `POST` for the same reason `probe` is, since it
+performs live outbound requests with the stored credential.
+
 ## Stream and download
 
 A `Range` is forwarded verbatim and the upstream `Response` is returned as it arrived —

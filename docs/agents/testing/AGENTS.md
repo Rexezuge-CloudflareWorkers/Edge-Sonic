@@ -71,6 +71,27 @@ Four from this repository's own history, all of which shipped:
   *incapable* of noticing — an arrow cannot see a receiver, a mock cannot see a
   collation, a hand-written XML fixture cannot see a namespace the parser mishandles.
 
+Two more from the scan's subrequest budget, and the second is the subtler one:
+
+- **A double that answers instantly cannot see a deadline.** `fakeDav` returned with no
+  latency, so a chunk finished in microseconds however slow the origin was, and a
+  deadline that did *nothing* looked exactly like a deadline that worked. It takes
+  `latencyMs` now, a **real** `setTimeout` rather than a fake clock, so the bound is
+  exercised through the same `Date.now` production uses and a test cannot pass by mocking
+  away the thing under test. Such a test asserts on **counts and folders visited**, never
+  on elapsed milliseconds: a wall-clock assertion is a flaky assertion, and a bound is a
+  decision rather than a duration.
+- **A double that drops a callback cannot see what the callback counts.** The scan's
+  `webdavRequests` is charged inside `WebDavClient.request()`, so a test whose
+  `clientFor` ignored the caller's `onRequest` reported **zero** for a chunk that had
+  done real work. That is not a service defect — it is the double being structurally
+  unable to observe the thing, which is precisely how the real under-counting survived:
+  the field was `+= 1` in the walk's loop, so it charged the `PROPFIND`s and nothing the
+  scan's own enrichment caused, under-reporting by up to 40x while its comment described
+  it as instrumented "so the budget is testable". **A comment is not a measurement**, and
+  `test/scan-budget.test.ts` now asserts `webdavRequests` against what the double
+  actually received.
+
 Two more rules that are easy to get wrong:
 
 - **Only KV and WebDAV are doubled**, because they are exactly the two things that are
@@ -101,6 +122,7 @@ Two more rules that are easy to get wrong:
 | `media-tags.test.ts`                     | MP3, FLAC, and Ogg readers against fixtures written from the specs                         |
 | `library-ssrf.test.ts`                   | The private-host classifier, the URL canonicalizer, the client's own refusals              |
 | `scan-incremental.test.ts`               | The root probe, mtime-driven descent, the prune, chunk accounting                         |
+| `scan-budget.test.ts`                    | A chunk's request ceiling and deadline, measured against a double that can see both     |
 | `enrichment-config.test.ts`              | Lazy enrichment, `AppConfiguration.validate()`, `resolveKey`, both error mappers           |
 | `user-auth.test.ts`                     | The Access strategy chain, the allow-list, and the never-trust-the-header rule            |
 | `schema.int.test.ts`                     | The real schema, cascades, `EXPLAIN QUERY PLAN` on every hot lookup, DAO round-trips       |

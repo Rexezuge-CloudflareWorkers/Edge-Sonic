@@ -68,9 +68,28 @@ one is present but inert, because that is the case one config edit from being li
 | Group  | Vars (default)                                                             |
 | ------ | -------------------------------------------------------------------------- |
 | App    | `DEBUG_MODE` (`false`), `SITE_URL` (`""`), `ENVIRONMENT` (`development`) |
-| Limits | `MAX_LIBRARIES_PER_USER` (`20`), `SCAN_CHUNK_FOLDERS`, `SCAN_FETCH_TIMEOUT_MS`, `MEDIA_READ_BYTES` |
+| Scan   | `SCAN_CHUNK_FOLDERS` (`40`), `SCAN_CHUNK_MAX_REQUESTS` (`40`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`20`), `WEBDAV_TIMEOUT_MS` (`10000`), `TAG_READ_BYTES`, `TAG_READ_TAIL_BYTES` |
+| Limits | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`) |
 | Auth   | `TEAM_DOMAIN`, `POLICY_AUD` (no default — see above)                       |
 | SSRF   | `ALLOW_PRIVATE_WEBDAV_HOSTS` (unset)                                       |
+
+### Size a subrequest budget against the plan that runs it
+
+Cloudflare retired the 1,000-subrequest-per-invocation ceiling on **2026-02-11**. The
+current limits are **50 external** subrequests on Workers **Free** and 10,000 on Paid,
+raiseable to 10M with `limits.subrequests` in the wrangler config; internal service
+subrequests (D1, KV) are 1,000 on Free.
+
+Every other quota in this codebase is sized against the free tier, so
+`SCAN_CHUNK_MAX_REQUESTS` defaults to **40** — ten under the ceiling, for redirect
+chains, which the platform also counts. A default of 1,000 is not a slow chunk, it is a
+**failed** chunk on a Free-plan account. A deployment on Workers Paid should raise it, or
+set `limits.subrequests`; scans then finish in proportionally fewer polls. The
+conservative default is the one that cannot fail on an account that never raised it.
+
+`SCAN_CHUNK_FOLDERS` is a **different** bound — D1 work, against the 5,000-rows/day
+allowance — and `SCAN_CHUNK_DEADLINE_MS` a third: wall clock, so a poll returns on a slow
+origin. All three guard different resources, so none of them is redundant with the others.
 
 `ALLOW_PRIVATE_WEBDAV_HOSTS` gates whether a library may be registered at a private,
 loopback, or link-back address. The Worker fetches `baseUrl` with the library's **stored

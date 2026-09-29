@@ -116,6 +116,34 @@ async function scanStatus(c: UserContext): Promise<Response> {
   return c.json(await scope.get(Tokens.ScanService).status(id));
 }
 
+/**
+ * Advance one scan chunk.
+ *
+ * A `POST` for the same reason `probe` is: this performs live outbound requests with
+ * the stored credential, and a `GET` that can be triggered by a link is a `GET` that
+ * can be triggered by a prefetcher.
+ *
+ * ### Why this route exists
+ *
+ * The scan is client-driven — `/rest/getScanStatus` advances it and nothing else does,
+ * because there is no cron, no queue and no Durable Object. So an operator who clicks
+ * "Rescan" here was starting a scan that only progressed if some *Subsonic client*
+ * happened to be polling, which is not a thing an operator can arrange or observe.
+ *
+ * This is the read/advance pair the operator surface was missing: `GET` for the state
+ * without incurring any of the work, `POST` to do one bounded chunk of it. It is also
+ * the only place `ChunkResult.stoppedBy` is readable, since the Subsonic envelope
+ * carries just `scanning` and `count`.
+ */
+async function stepScan(c: UserContext): Promise<Response> {
+  const id = requireParam(c, 'id');
+  const scope = BaseRoute.getScope(c);
+  const service = scope.get(Tokens.LibraryService);
+  const library = (await service.listAll()).find((candidate) => candidate.id === id);
+  if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  return c.json(await scope.get(Tokens.ScanService).step(library));
+}
+
 async function listUsers(c: UserContext): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const users = await (await scope.get(Tokens.UserDAO)()).list();
@@ -245,6 +273,7 @@ function registerUserRoutes(app: {
   app.post('/user/libraries/:id/probe', probeLibrary);
   app.post('/user/libraries/:id/scan', startScan);
   app.get('/user/libraries/:id/scan', scanStatus);
+  app.post('/user/libraries/:id/scan/step', stepScan);
 
   app.get('/user/users', listUsers);
   app.post('/user/users', createUser);

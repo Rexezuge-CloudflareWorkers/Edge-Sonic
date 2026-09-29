@@ -27,7 +27,17 @@
  * string would be testing i18next; taking the two labels as arguments keeps this a
  * decision about *which* text, not about *where* it comes from.
  */
-import type { Notice, ProbeResult } from '../types';
+import type { ChunkStopReason, Notice, ProbeResult } from '../types';
+
+/**
+ * The two stop-reason sentences, injectable for the same reason `PROBE_LABELS` is:
+ * this module decides *which* text, not where it comes from, so a test asserts the
+ * decision without initialising i18next.
+ */
+interface StopReasonLabels {
+  readonly requests: string;
+  readonly deadline: string;
+}
 
 /**
 Badge tone. `neutral` covers the in-flight state, which is not a verdict.
@@ -88,5 +98,33 @@ function describeScan(lastError: string | null | undefined): string | null {
   return lastError;
 }
 
-export { describeProbe, describeScan, PROBE_LABELS };
-export type { ProbePresentation, ProbeTone };
+/**
+ * Why a chunk stopped early, or `null` for one that did not.
+ *
+ * A scan chunk is bounded by a subrequest ceiling and a wall-clock deadline, and it
+ * returns when it reaches either. Reporting that is the difference between an
+ * operator reading "still scanning" and reading "still scanning, because your origin
+ * takes two seconds a request and the chunk is capped at twenty" — one is a status,
+ * the other is a diagnosis, and the second one is the one that has an action.
+ *
+ * `frontier` returns `null`: the chunk ran out of folders to visit, which is the
+ * ordinary case and not worth a line of text. `null`/`undefined` likewise, for a
+ * read-only status that did no work.
+ *
+ * The two limits are named separately because they have different remedies — a slow
+ * origin is fixed with `WEBDAV_TIMEOUT_MS` and a faster server, a small budget with
+ * `SCAN_CHUNK_MAX_REQUESTS` — and "it stopped" is not either of them.
+ */
+function describeStopReason(stoppedBy: ChunkStopReason | undefined, labels?: StopReasonLabels): string | null {
+  if (stoppedBy === 'requests') return labels?.requests ?? STOP_REASON_LABELS.requests;
+  if (stoppedBy === 'deadline') return labels?.deadline ?? STOP_REASON_LABELS.deadline;
+  return null;
+}
+
+const STOP_REASON_LABELS: StopReasonLabels = {
+  requests: 'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.',
+  deadline: 'Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.',
+};
+
+export { describeProbe, describeScan, describeStopReason, PROBE_LABELS, STOP_REASON_LABELS };
+export type { ProbePresentation, ProbeTone, StopReasonLabels };

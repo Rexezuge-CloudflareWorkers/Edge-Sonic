@@ -13,6 +13,7 @@
  */
 import type { LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import type { WebDavClient } from '@edge-sonic/webdav';
+import type { ChunkStopReason } from './scanBudget';
 
 /**
  * What a range read needs to enrich a track, and nothing else.
@@ -83,12 +84,39 @@ interface ScanDeps {
   nodes: ScanNodeStore;
   songs: ScanSongStore;
   scanState: ScanStateStore;
-  clientFor: (row: LibraryRow) => Promise<WebDavClient>;
+  /**
+   * The `onRequest` callback is forwarded to the client, so every subrequest this
+   * scan issues is charged to the chunk's budget — including the ones issued by
+   * `enrichSong` below, which run inside the same loop and were previously
+   * uncounted.
+   */
+  clientFor: (row: LibraryRow, onRequest?: () => void) => Promise<WebDavClient>;
   timeoutMs: number;
   /**
-  Folders descended into per chunk. Sized against the 1,000-subrequest limit.
+  Folders descended into per chunk.
+
+  A bound on **D1 work** — frontier rows read and rows written — sized against the
+  5,000-rows/day allowance rather than against the subrequest ceiling. The two are
+  different resources, so both bounds exist; see `ScanBudget`.
   */
   chunkFolders: number;
+  /**
+   * Subrequests one chunk may issue.
+   *
+   * Sized against the platform's *external* subrequest ceiling. That is 50 on the
+   * Free plan and 10,000 on Paid — the 1,000 this was originally sized against was
+   * retired on 2026-02-11 — so a default assuming 1,000 produced a chunk that
+   * *fails* rather than one that is slow.
+   */
+  chunkMaxRequests: number;
+  /**
+   * Milliseconds one chunk may take.
+   *
+   * The bound that makes a poll *return* on a slow origin: 40 folders at 2.2 s each
+   * is 88 seconds of work a client abandoned at 45. Checked between units of work,
+   * so a chunk overruns by at most one in-flight request.
+   */
+  chunkDeadlineMs: number;
   /**
   Fill in a changed track's duration, bitrate and text tags while the scan holds its
   facts in hand.
@@ -98,16 +126,20 @@ interface ScanDeps {
   subrequests by the track count. `EnrichmentService` stays the authority — the scan
   calls the same method `getSong` does, so a row enriched here and a row enriched on
   first play are enriched identically.
+  *
+  * `onRequest` is the chunk's meter, forwarded so a range read is charged to the same
+  * budget as the `PROPFIND` that found the file.
   */
-  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts) => Promise<void>;
+  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<void>;
   /**
   Tracks enriched per folder, per chunk.
 
-  The bound is on **subrequests**, and it is what keeps a chunk inside the 1,000 limit:
-  an Ogg track costs a prefix read and a tail read, so this number decides whether the
-  enrichment fits. Whatever does not fit keeps `enriched_at = null` and is enriched on
-  first play instead — a track with no duration until someone opens it, rather than a
-  chunk that fails.
+  A bound on the *shape* of a folder, separate from the chunk's own budget: without
+  it, one album of 500 changed tracks takes the whole budget on its first folder and
+  the walk never advances. An Ogg track costs a prefix read and a tail read, so the
+  chunk budget admits one on the cost of two. Whatever does not fit keeps
+  `enriched_at = null` and is enriched on first play instead — a track with no
+  duration until someone opens it, rather than a chunk that fails.
   */
   enrichMaxPerFolder: number;
 }
@@ -142,11 +174,35 @@ interface ChunkResult {
   */
   readonly lastError: string | null;
   /**
-  Instrumented so the write/subrequest budget is testable, not just asserted.
+  Folders this chunk actually opened.
+
+  Folders visited, **not** the length of the frontier it was handed. A chunk
+  that leaves early because it hit a bound visited fewer than it asked for, and
+  reporting the frontier length would claim work that did not happen.
   */
   readonly foldersVisited: number;
+  /**
+  Subrequests this chunk issued, counted by `WebDavClient` itself.
+
+  Measured rather than accumulated by the walk, which is what makes it a budget:
+  the scan's loop used to `+= 1` per `PROPFIND` and charge nothing for the range
+  reads its own enrichment made, so it under-reported by up to 40x while the
+  field's comment described it as instrumented "so the budget is testable". A
+  test asserts this equals what the WebDAV double received, so the two cannot
+  drift apart again.
+  */
   readonly webdavRequests: number;
   readonly rowsWritten: number;
+  /**
+  Which bound ended this chunk, or `null` for one that did no work.
+
+  `'frontier'` is the ordinary case. `'requests'` and `'deadline'` say the work
+  was cut short by a limit, which is the fact an operator watching a scan that is
+  not finishing needs — and the two have different remedies, so they are reported
+  separately rather than collapsed into "stopped". `null` is a chunk that had
+  nothing to do: no scan running, or a library not yet configured.
+  */
+  readonly stoppedBy: ChunkStopReason;
 }
 
 /**
@@ -158,5 +214,7 @@ for every writer, the service's is what the operator is shown.
 */
 const LAST_ERROR_MAX = 500;
 
-export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult, ScanEnrichFacts };
+export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult, ScanEnrichFacts,  };
 export { LAST_ERROR_MAX };
+
+export {type ChunkStopReason} from './scanBudget';

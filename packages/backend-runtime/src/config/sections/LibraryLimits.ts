@@ -5,7 +5,9 @@ import {
   DEFAULT_MAX_LIBRARIES,
   DEFAULT_MAX_PAGE_SIZE,
   DEFAULT_PAGE_SIZE,
+  DEFAULT_SCAN_CHUNK_DEADLINE_MS,
   DEFAULT_SCAN_CHUNK_FOLDERS,
+  DEFAULT_SCAN_CHUNK_MAX_REQUESTS,
   DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER,
   DEFAULT_STREAM_RATE_LIMIT,
   DEFAULT_STREAM_TIMEOUT_MS,
@@ -58,11 +60,34 @@ class ScanLimits {
   /**
    * Folders descended into per scan chunk.
    *
-   * Bounded by the 1,000-subrequest Worker limit rather than by taste; see the
-   * note in `ConfigurationDefaults`.
+   * A bound on D1 work, not on subrequests; see the note in
+   * `ConfigurationDefaults`, which is where the two bounds are kept distinct.
    */
   public getScanChunkFolders(): number {
     return EnvParser.positiveInt(this.env, 'SCAN_CHUNK_FOLDERS', DEFAULT_SCAN_CHUNK_FOLDERS);
+  }
+
+  /**
+   * Subrequests one scan chunk may issue.
+   *
+   * A hard ceiling rather than a target: exceeding the platform's per-invocation
+   * limit fails the chunk instead of slowing it down. The default is sized for the
+   * Free plan's 50-external-subrequest limit, so a chunk cannot be the thing that
+   * trips it on an account that never raised `limits.subrequests`.
+   */
+  public getScanChunkMaxRequests(): number {
+    return EnvParser.positiveInt(this.env, 'SCAN_CHUNK_MAX_REQUESTS', DEFAULT_SCAN_CHUNK_MAX_REQUESTS);
+  }
+
+  /**
+   * Milliseconds one scan chunk may take.
+   *
+   * The bound that makes a poll *return*: a chunk is `folders × per-request latency`
+   * with nothing else stopping it, and a client that gives up has stopped advancing
+   * the scan, because polling is the scan.
+   */
+  public getScanChunkDeadlineMs(): number {
+    return EnvParser.positiveInt(this.env, 'SCAN_CHUNK_DEADLINE_MS', DEFAULT_SCAN_CHUNK_DEADLINE_MS);
   }
 
   public getTagReadBytes(): number {
@@ -89,11 +114,11 @@ class ScanLimits {
   /**
    * Tracks the scan enriches per folder, per chunk.
    *
-   * Sized against the 1,000-subrequest limit rather than against taste. An Ogg track
-   * costs a prefix read and a tail read, so this is the number that decides whether a
-   * chunk's enrichment fits alongside its `PROPFIND` calls. Whatever exceeds it keeps
-   * `enriched_at = null` and is enriched on first play, which is the path that was
-   * already carrying the whole feature.
+   * A bound on the *shape* of one folder, separate from the chunk's request ceiling:
+   * without it a single wide-changed album takes the whole budget and the walk behind
+   * it never advances. An Ogg track costs a prefix read and a tail read. Whatever
+   * exceeds it keeps `enriched_at = null` and is enriched on first play, which is the
+   * path that was already carrying the whole feature.
    */
   public getScanEnrichMaxPerFolder(): number {
     return EnvParser.positiveInt(this.env, 'SCAN_ENRICH_MAX_PER_FOLDER', DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER);

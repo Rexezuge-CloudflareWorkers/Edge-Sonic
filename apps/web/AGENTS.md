@@ -95,6 +95,25 @@ A scan failure carries the same treatment via `lastError`, which the server now 
 every status — nullable, not optional, so a client can tell "no error" from "field
 absent".
 
+A scan that **pauses** carries it too, via `stoppedBy`. A chunk is bounded by a subrequest
+ceiling and a wall-clock deadline, and returns when it reaches either;
+`describeStopReason` turns that into a sentence naming the bound, because an operator
+reading "still scanning" is reading a *status*, and one reading "still scanning, because
+your origin takes two seconds a request and the chunk is capped at twenty" is reading a
+**diagnosis** — the second has an action and the first does not. The two limits are named
+separately because their remedies differ (`SCAN_CHUNK_MAX_REQUESTS` against
+`SCAN_CHUNK_DEADLINE_MS`), and "it stopped" is neither. It is rendered **muted**, not in
+the error tone: a chunk that hit a bound did its job and left the rest of the frontier
+for the next poll, and colouring that as a fault would train an operator to ignore the
+line that does mean something went wrong.
+
+`Rescan` calls `stepLibraryScan` as well as `startLibraryScan`, and both halves are
+needed. The scan is client-driven and `/rest/getScanStatus` was the only thing that
+advanced it, so before the step route this button started a scan that only progressed
+while some *Subsonic client* happened to be polling — which is not a thing an operator
+can arrange. The status is then re-read with `libraryScanStatus`, so the row shows the
+persisted state a `/rest` poll would see.
+
 ## An untouched password is absent, not empty
 
 `updateLibrary` has existed on the server and in `lib/api.ts` since the surface was

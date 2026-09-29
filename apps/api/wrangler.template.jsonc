@@ -110,7 +110,29 @@
     // Library and scan limits.
     "MAX_LIBRARIES": "10",
     "WEBDAV_TIMEOUT_MS": "10000",
+
+    // SCAN_CHUNK_FOLDERS bounds D1 work (frontier rows read, rows written) against the
+    // 5,000-rows/day allowance. It is NOT the subrequest bound — that is the next one.
     "SCAN_CHUNK_FOLDERS": "40",
+
+    // Subrequests one scan chunk may issue. Exceeding the platform's ceiling does not
+    // slow a chunk down, it FAILS it, so this is a hard limit.
+    //
+    // Workers allow 50 external subrequests per invocation on the Free plan and 10,000
+    // on Paid (the 1,000 figure older versions of this file assumed was retired on
+    // 2026-02-11). 40 leaves ten for redirect chains, which are counted too.
+    //
+    // On Workers Paid, raise this — or set `limits.subrequests` in your own config —
+    // and scans finish in proportionally fewer polls. The default is the one that
+    // cannot fail on an account that never raised it.
+    "SCAN_CHUNK_MAX_REQUESTS": "40",
+
+    // Milliseconds one scan chunk may take. A chunk is `folders x per-request latency`
+    // with nothing else stopping it, and polling `getScanStatus` IS the scan: a client
+    // that times out and backs off has stopped advancing it. Checked between units of
+    // work, so a chunk overruns by at most one in-flight request.
+    "SCAN_CHUNK_DEADLINE_MS": "20000",
+
     "MAX_PAGE_SIZE": "500",
     "DEFAULT_PAGE_SIZE": "20",
 
@@ -126,9 +148,11 @@
     // Set to 0 to disable: an Ogg track then reports no duration rather than a wrong one.
     "TAG_READ_TAIL_BYTES": "65536",
 
-    // Tracks the scan enriches per folder, per chunk. Sized against the 1,000-subrequest
-    // limit: an Ogg track costs a prefix read and a tail read, so 20 tracks across a
-    // 20-folder chunk is ~800 subrequests. What does not fit is enriched on first play.
+    // Tracks the scan enriches per folder, per chunk. A bound on the SHAPE of one
+    // folder, separate from the chunk's request ceiling above: without it, one album of
+    // 500 changed tracks takes the whole budget and the folders behind it are never
+    // walked. An Ogg track costs a prefix read and a tail read, and the scan admits one
+    // on the cost of two. What does not fit is enriched on first play instead.
     "SCAN_ENRICH_MAX_PER_FOLDER": "20",
 
     // Streaming and the auth throttle.

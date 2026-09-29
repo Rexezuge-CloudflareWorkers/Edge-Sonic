@@ -103,10 +103,28 @@ Object, no trigger.
   mtime matches the stored one, the scan is over — 1 subrequest, 0 rows.
 - Otherwise only folders whose mtime moved are descended. The `is_scanned` flag is written
   by the node upsert, so the frontier is the database's, not memory's.
-- The chunk size is sized against the **1,000-subrequest limit**, not against
-  convenience. A cold scan of 1,000 folders / 5,000 tracks is roughly 6,100 row writes
-  against a 5,000/day allowance — survivable because the scan is chunked and resumable,
-  and because every later scan writes zero rows.
+- **A chunk is bounded three ways, and the three are not redundant** — they guard
+  different resources. `chunkMaxRequests` (default 40) is the platform's *external*
+  subrequest ceiling, which is **50 on the Free plan** and 10,000 on Paid; the 1,000
+  these were originally sized against was retired on 2026-02-11. `chunkDeadlineMs`
+  (default 20 s) is what makes a poll *return* on a slow origin. `chunkFolders`
+  (default 40) bounds D1 work against the 5,000-rows/day allowance. The loop checks
+  `budget.canAfford()` before each folder and before each enriched track, and **leaves
+  early** rather than running itself out — a cold scan of 1,000 folders / 5,000 tracks
+  is roughly 6,100 row writes against a 5,000/day allowance, survivable because the
+  scan is chunked and resumable and because every later scan writes zero rows.
+- **The subrequest count is measured, not asserted.** `WebDavClient` charges a caller
+  supplied `onRequest` inside its private `request()` — the single path `propfind`,
+  `get`, `readPrefix` and `readTail` share — and `ScanService` threads one meter
+  through `clientFor` *and* through `enrichSong`, so a range read the scan causes is
+  charged to the same ceiling as the `PROPFIND` that found the file. It used to be
+  `+= 1` in the walk's loop, which counted nothing the enrichment did and
+  under-reported by up to 40x.
+- **The operator surface can advance a scan.** `POST /user/libraries/:id/scan/step`
+  runs one chunk. `/rest/getScanStatus` was the only caller of `step`, so an operator
+  clicking "Rescan" started a scan that only progressed while some *Subsonic client*
+  happened to be polling. That route is also the only place `stoppedBy` is readable,
+  because the Subsonic `scanStatus` element carries just `scanning` and `count`.
 - A failure leaves the frontier where it was, so the next poll resumes.
 
 `ChunkResult` is declared in `index/scanTypes.ts` beside the service's inputs, because
@@ -159,6 +177,14 @@ aggregates were empty because there was nothing to group.
 The scan passes a four-field `EnrichFacts` rather than a `SongRow`. It has no row in hand,
 and a fabricated one is a copy of the schema that rots silently when a column is added:
 the failure is a wrong answer, not a type error.
+
+The per-folder cap (`SCAN_ENRICH_MAX_PER_FOLDER`) and the chunk's request ceiling are
+**different bounds**, and each collapses into the other if one is removed. The cap shapes
+one album: without it, an album of 500 changed tracks takes the whole chunk budget and
+the folders behind it are never walked. The ceiling spends what the `PROPFIND`s leave, and
+enrichment takes the remainder — so a wide-changed album can end its own chunk, which is
+the trade made deliberately, because a chunk that ends early is resumable and a chunk that
+exceeds the platform's ceiling is not.
 
 Per-folder enrichment is capped by `SCAN_ENRICH_MAX_PER_FOLDER` because a cold scan of
 5,000 tracks is 5,000 subrequests against a 1,000 limit. What does not fit keeps

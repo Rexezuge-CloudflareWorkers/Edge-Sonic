@@ -128,6 +128,20 @@ export const startLibraryScan = (id: string): Promise<ScanStateSummary> => apiSe
 
 export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiGet(`/libraries/${encodeURIComponent(id)}/scan`);
 
+/**
+ * Advance one scan chunk.
+ *
+ * A `POST` for the same reason `probeLibrary` is: it performs live outbound requests
+ * with the stored credential, and a `GET` a link — or a prefetcher — can trigger is a
+ * `GET` neither should.
+ *
+ * This is what makes "Rescan" do something without a Subsonic client polling. The scan
+ * is client-driven, so before this route an operator started a scan that only advanced
+ * while some other surface happened to poll it.
+ */
+export const stepLibraryScan = (id: string): Promise<ScanStateSummary> =>
+  apiSend('POST', `/libraries/${encodeURIComponent(id)}/scan/step`);
+
 // --- Users -----------------------------------------------------------------
 
 export const listUsers = (): Promise<{ users: UserSummary[] }> => apiGet('/users');

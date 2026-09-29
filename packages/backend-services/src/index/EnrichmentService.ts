@@ -9,10 +9,11 @@
  * field, and it is not in the filesystem's vocabulary.
  *
  * Reading it from every file during the scan is not affordable: one ranged read
- * per track, and a 5,000-track library is 5,000 subrequests against a 1,000 limit.
- * So it is read from two places, and both are bounded — the scan, for the tracks it
- * changed (see `scanEnrichment.ts`), and `getSong`, for the rest, at the cost of
- * one subrequest per song the client actually opens.
+ * per track, and a 5,000-track library is 5,000 subrequests against a per-invocation
+ * ceiling that is 50 external on the Free plan. So it is read from two places, and
+ * both are bounded — the scan, for the tracks it changed (see `scanEnrichment.ts`),
+ * and `getSong`, for the rest, at the cost of one subrequest per song the client
+ * actually opens.
  *
  * ### The second read
  *
@@ -71,7 +72,13 @@ interface SongStore {
 
 interface EnrichmentDeps {
   songs: SongStore;
-  clientFor: (row: LibraryRow) => Promise<WebDavClient>;
+  /**
+   * The optional second argument is a caller's request meter, forwarded to the
+   * client so a range read is charged to the caller's budget. The scan passes one
+   * because its range reads happen inside the folder walk, and they are the reads
+   * that took a chunk from 40 subrequests to 1,640.
+   */
+  clientFor: (row: LibraryRow, onRequest?: () => void) => Promise<WebDavClient>;
   kv: KvCache;
   resolveKey: () => Promise<string>;
   /**
@@ -192,10 +199,10 @@ class EnrichmentService {
    * Both entry points share `readAndPersist`, so a track enriched by a scan and a track
    * enriched on first play are enriched identically.
    */
-  public async enrichFacts(library: LibraryRow, facts: EnrichFacts): Promise<AudioTags | null> {
+  public async enrichFacts(library: LibraryRow, facts: EnrichFacts, onRequest?: () => void): Promise<AudioTags | null> {
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [facts.id]);
     if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION) return null;
-    return await this.readAndPersist(library, null, facts);
+    return await this.readAndPersist(library, null, facts, onRequest);
   }
 
   /**
@@ -204,7 +211,7 @@ class EnrichmentService {
    * `row` is `null` when the caller has no row to write metadata through — the scan
    * writes by id, which is all a freshly upserted row needs.
    */
-  private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts): Promise<AudioTags | null> {
+  private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts, onRequest?: () => void): Promise<AudioTags | null> {
     const write = async (
       duration: number | null,
       bitrate: number | null,
@@ -237,7 +244,7 @@ class EnrichmentService {
 
     let tags: AudioTags | null = null;
     try {
-      const client = await this.deps.clientFor(library);
+      const client = await this.deps.clientFor(library, onRequest);
       const bytes = await client.readPrefix(facts.path, this.deps.readBytes, this.deps.timeoutMs);
       tags = readAudioTags(bytes, facts.size);
     } catch {
@@ -255,7 +262,7 @@ class EnrichmentService {
     // The prefix read cannot see the final page of an Ogg stream, so `durationSeconds`
     // is null there by design rather than by failure. One tail-anchored read resolves
     // it, reusing the sample rate and pre-skip the prefix read already established.
-    const duration = tags.durationSeconds ?? (await this.resolveTailDuration(library, facts, tags));
+    const duration = tags.durationSeconds ?? (await this.resolveTailDuration(library, facts, tags, onRequest));
 
     const entry: CachedEnrichment = {
       mtimeMs: facts.mtimeMs,
@@ -286,7 +293,7 @@ class EnrichmentService {
    * 15329 kbps instead of 191 because the prefix read's truncated page was taken for the
    * file's last.
    */
-  private async resolveTailDuration(library: LibraryRow, facts: EnrichFacts, tags: AudioTags): Promise<number | null> {
+  private async resolveTailDuration(library: LibraryRow, facts: EnrichFacts, tags: AudioTags, onRequest?: () => void): Promise<number | null> {
     const tailBytes = this.deps.readTailBytes ?? 0;
     if ((tailBytes <= 0) || tags.sampleRate === null || facts.size === 0) return null;
     // Only Ogg records its length this way. MP4 puts `moov` at the end and needs a
@@ -294,7 +301,7 @@ class EnrichmentService {
     if (tags.container !== 'ogg-opus' && tags.container !== 'ogg-vorbis') return null;
 
     try {
-      const client = await this.deps.clientFor(library);
+      const client = await this.deps.clientFor(library, onRequest);
       const bytes = await client.readTail(facts.path, tailBytes, facts.size, this.deps.timeoutMs);
       // The granule includes the pre-skip and the duration must not, and the pre-skip is
       // in the identification header at the *front* of the file — which the prefix read
