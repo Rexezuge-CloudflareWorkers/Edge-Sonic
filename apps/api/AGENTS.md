@@ -6,8 +6,13 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
   Objects, no `scheduled`).
 - `src/workers/EdgeSonicWorker.ts` — Hono routes, no file routing, in this order:
   `securityHeaders` → `onError` → `/health` + SPA shell → `scopeMiddleware` →
-  `OPTIONS *` preflight → rate limits → `/admin/*` (Access) → `/rest/*` (Subsonic).
-  Runs `AppConfiguration.validate()` once per isolate on the first request.
+  `OPTIONS *` preflight → `/rest/*` limits → `/admin/*` (Access) → `/admin/*` limits →
+  `/admin/*` routes → `/rest/*` (Subsonic). Runs `AppConfiguration.validate()` once per
+  isolate on the first request. The two limit registrars sit on opposite sides of auth
+  on purpose; see below.
+- `src/endpoints/BaseRoute.ts` — the shared `WorkerEnv` / `AdminContext` types and the
+  static helpers every route uses: `getScope`, `readJson`, `requireString`,
+  `toErrorType`, `toErrorBody`, `jsonError`, `toErrorResponse`.
 - `src/rest/dispatch.ts` — the `/rest` dispatcher: version check, authentication, the
   `RestContext`, and the endpoint table.
 - `src/rest/endpoints/` — one module per protocol area. `index.ts` holds the table and
@@ -15,7 +20,9 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 - `src/rest/context.ts` — the per-request shape: `songs` (row state) and `songIndex`
   (the aggregate reads), plus `params`, `format`, and `pageSize`.
 - `src/admin/routes.ts` — the operator API behind Access.
-- `src/middleware/` — `scopeMiddleware`, `adminAuth`, `rateLimit`, `securityHeaders`.
+- `src/middleware/` — `scopeMiddleware`, `adminAuth`, `rateLimit`, `rateLimitConfig`,
+  `securityHeaders`. `index.ts` is the barrel the worker imports from, so the installed
+  set is one list rather than one import line per middleware.
 
 ## Relative imports, not the `@/` alias
 
@@ -40,6 +47,61 @@ which keeps a 4xx and its message and masks a 5xx. The blanket 500 this replaced
 missing field, a duplicate slug, and a grant for a library that does not exist were all
 "InternalServerError" — an answer an operator cannot act on and a support ticket that
 cannot be reproduced.
+
+## The two error dialects, and why the split is by surface
+
+`/rest` answers in the Subsonic envelope. Everything else answers in
+`{Exception:{Type,Message}}` — the shape the reference project used, which the SPA
+already decodes. This is **not** a leftover of copying the reference: the argument
+against `Exception` is specific to `/rest`, where a client branches on the envelope and
+treats a 401 with an unrecognized body as "server error". An SPA reads the HTTP status,
+so the same shape is correct here.
+
+One surface has one dialect, enforced. A 429 from the rate limiter used to hand-build
+`Exception` while every other admin error emitted `{error:{code,message}}`, so a client
+needed two decoders. Both now route through `toAdminResponse` / `BaseRoute.toErrorBody`,
+and a test asserts the body has exactly one key.
+
+`BaseRoute` lives in `src/endpoints/BaseRoute.ts` and owns `WorkerEnv`, `AdminContext`,
+and the shared statics. It used to sit in `admin/routes.ts` and be imported backwards by
+`rest/dispatch.ts` and `middleware/adminAuth.ts`; a route module owning the type that
+`/rest`, `/admin`, and the auth middleware all share is what let three of those files
+re-declare their own copy, and two of the copies had already drifted.
+
+## The admin rate limits come after auth
+
+`registerAdminRateLimits(app)` is registered **after** `app.use('/admin/*', adminAuthentication())`,
+because the limiter keys on `c.get('AdminEmail')` and that variable does not exist until
+auth has run. The previous order registered limits first while a comment claimed the
+opposite ("before auth, so they can key on the resolved identity"), so every bucket
+silently fell back to `ip:…` and several operators behind one NAT shared a budget.
+
+`/rest` limits are registered *before* its route instead, because a Subsonic client
+authenticates inside the dispatcher from `u`/`t`/`s` query parameters: there is no
+ambient identity on that surface to read.
+
+`RATE_LIMIT_DEFS` carries a `surface` field rather than being sliced by array index. The
+reference project uses `slice(0, 3)` / `slice(3)`, so inserting a definition at index 3
+silently reclassifies it and a new `/rest` limit starts being keyed on the admin identity.
+
+## One trusted client address
+
+`clientIp` in `middleware/rateLimit.ts` trusts `CF-Connecting-IP` and nothing else, and
+takes a header reader rather than a Hono context so `rest/dispatch.ts` shares it. The
+previous `/rest` chain also accepted `x-real-ip`, which is client-controlled: rotating it
+per attempt keeps the D1-backed **fail-closed** credential throttle from ever incrementing,
+so an offline brute force works forever. With no trusted address at all, callers share the
+`unknown` bucket — fail-closed grouping rather than per-spoofed-header isolation.
+
+## A `no-store` predicate must name a served path
+
+`isSensitiveJsonPath` checks `/admin/` and `/rest/`. It arrived from the reference project
+as `startsWith('/user/')` — that project's private surface. This worker registers no
+`/user/` route, so the predicate could never return `true` and `Cache-Control: no-store`
+was never applied to anything: `/admin/me` and `/admin/users` shipped with no
+`Cache-Control`. Nothing else in the app would have said so, because the Subsonic envelope
+sets its own `no-store` and the tests that existed all passed. Asserted in
+`test/security-headers.test.ts`.
 
 ## The two list shapes
 

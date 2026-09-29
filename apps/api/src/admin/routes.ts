@@ -1,117 +1,8 @@
-import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import type { Context } from 'hono';
-import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
-import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composition';
-import { getRequestScope, asScopedContext } from '@edge-sonic/backend-runtime/di';
-import { toAdminResponse } from '@edge-sonic/backend-services/errors';
+import { Tokens } from '@edge-sonic/backend-services/composition';
 import { UUIDUtil } from '@edge-sonic/shared/utils';
-
-type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
-type AdminContext = Context<WorkerEnv>;
-
-/**
-Admin JSON body cap. Small by design — no admin call carries media.
-*/
-const MAX_JSON_BODY_BYTES = 64 * 1024;
-
-abstract class BaseRoute {
-  public static getScope(c: { get(key: string): unknown; env: unknown }): ReturnType<typeof createRequestScope> {
-    try {
-      return getRequestScope(asScopedContext(c));
-    } catch {
-      return createRequestScope(c.env as Cloudflare.Env);
-    }
-  }
-
-  /**
-   * Strict JSON body reader.
-   *
-   * Distinguishes *malformed* from *empty* because collapsing a parse error to `{}`
-   * turns "your JSON is broken" into "the `name` field is required", which sends the
-   * caller looking in the wrong place. Oversized bodies are rejected before they are
-   * buffered.
-   */
-  public static async readJson<T>(c: C): Promise<{ malformed: boolean; oversized: boolean; body: T }> {
-    // The declared length is a *fast path only*. A chunked request carries no
-    // `content-length`, and a client that omits or lies about one is not unusual — so
-    // trusting the header alone means the cap is enforced for well-behaved callers and
-    // not for anyone else, which is the wrong way round for a limit that exists to
-    // bound memory.
-    const raw = c.req.header('content-length');
-    const declared = raw === undefined ? NaN : Number(raw);
-    if (Number.isFinite(declared) && declared > MAX_JSON_BODY_BYTES) {
-      return { malformed: false, oversized: true, body: {} as T };
-    }
-
-    let text: string;
-    try {
-      text = await c.req.text();
-    } catch {
-      return { malformed: true, oversized: false, body: {} as T };
-    }
-    // The authoritative check, on what was actually received. Measured in bytes rather
-    // than `String.length`, which counts UTF-16 code units and so undercounts a body
-    // of multi-byte characters by up to a factor of three.
-    if (new TextEncoder().encode(text).byteLength > MAX_JSON_BODY_BYTES) {
-      return { malformed: false, oversized: true, body: {} as T };
-    }
-    if (text.trim().length === 0) return { malformed: false, oversized: false, body: {} as T };
-
-    try {
-      return { malformed: false, oversized: false, body: JSON.parse(text) as T };
-    } catch {
-      return { malformed: true, oversized: false, body: {} as T };
-    }
-  }
-
-  /**
-   * Read a required string field.
-   *
-   * An explicit type check rather than a cast: `body.name.trim()` on a number that
-   * arrived as JSON surfaces as a 500 where the answer is a 400.
-   */
-  public static requireString(body: Record<string, unknown>, field: string, maxLength = 512): string {
-    const value = body[field];
-    if (typeof value !== 'string' || value.trim().length === 0) {
-      throw new BadRequestError(`Field "${field}" is required and must be a non-empty string.`);
-    }
-    if (value.length > maxLength) throw new BadRequestError(`Field "${field}" exceeds ${maxLength} characters.`);
-    return value.trim();
-  }
-
-  public static optionalString(body: Record<string, unknown>, field: string, maxLength = 512): string | null {
-    const value = body[field];
-    if (value === undefined || value === null) return null;
-    if (typeof value !== 'string') throw new BadRequestError(`Field "${field}" must be a string.`);
-    if (value.length > maxLength) throw new BadRequestError(`Field "${field}" exceeds ${maxLength} characters.`);
-    return value;
-  }
-
-  /**
-  The error path for the admin API, which does read HTTP statuses.
-  */
-  public static toErrorResponse(c: C, error: unknown): Response {
-    const mapped = toAdminResponse(error, c.req.header('accept-language'));
-    // The cast is where the allow-list meets the type system: `toAdminResponse` returns
-    // a plain `number` because `ADMIN_STATUSES` lives in a Layer 3 package that must not
-    // know Hono's status union, and the set it filters through is exactly the set of
-    // statuses that union allows.
-    return c.json(mapped.body, mapped.status as ContentfulStatusCode);
-  }
-}
-
-/**
- * The request context, with the admin identity attached.
- *
- * Short, because every handler below takes one and the full name repeated on each
- * signature is noise. `sonarjs/redundant-type-aliases` objects; it is switched off with
- * that reason recorded in `eslint.config.mjs`.
- */
-type C = AdminContext;
-
-function json(c: C, body: unknown, status: 200 | 201 = 200): Response {
-  return c.json(body, status);
-}
+import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
+import { BaseRoute } from '../endpoints/BaseRoute';
+import type { AdminContext } from '../endpoints/BaseRoute';
 
 /**
  * Read a path parameter that the route pattern guarantees exists.
@@ -120,7 +11,7 @@ function json(c: C, body: unknown, status: 200 | 201 = 200): Response {
  * hide the real question — which is that an absent id must not become the string
  * "undefined" and query for it.
  */
-function requireParam(c: C, name: string): string {
+function requireParam(c: AdminContext, name: string): string {
   const value = c.req.param(name);
   if (value === undefined || value.length === 0) {
     throw new BadRequestError(`Missing path parameter "${name}".`);
@@ -128,10 +19,10 @@ function requireParam(c: C, name: string): string {
   return value;
 }
 
-async function listLibraries(c: C): Promise<Response> {
+async function listLibraries(c: AdminContext): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const libraries = await scope.get(Tokens.LibraryService).listAll();
-  return json(c, {
+  return c.json({
     libraries: libraries.map((library) => ({
       id: library.id,
       slug: library.slug,
@@ -146,10 +37,10 @@ async function listLibraries(c: C): Promise<Response> {
   });
 }
 
-async function createLibrary(c: C): Promise<Response> {
+async function createLibrary(c: AdminContext): Promise<Response> {
   const { malformed, oversized, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
-  if (malformed) return c.json({ error: { code: 'BadRequest', message: 'Request body is not valid JSON.' } }, 400);
-  if (oversized) return c.json({ error: { code: 'PayloadTooLarge', message: 'Request body is too large.' } }, 413);
+  if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
+  if (oversized) return BaseRoute.jsonError(c, 'Request body is too large.', 413);
 
   const scope = BaseRoute.getScope(c);
   const created = await scope.get(Tokens.LibraryService).create({
@@ -161,18 +52,18 @@ async function createLibrary(c: C): Promise<Response> {
     davPassword: BaseRoute.requireString(body, 'davPassword', 256),
     displayName: BaseRoute.optionalString(body, 'displayName', 128),
   });
-  return json(c, { id: created.id, slug: created.slug }, 201);
+  return c.json({ id: created.id, slug: created.slug }, 201);
 }
 
-async function updateLibrary(c: C): Promise<Response> {
+async function updateLibrary(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const { malformed, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
-  if (malformed) return c.json({ error: { code: 'BadRequest', message: 'Request body is not valid JSON.' } }, 400);
+  if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
 
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
   const existing = await service.listAll().then((all) => all.find((library) => library.id === id));
-  if (!existing) return c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
+  if (!existing) return BaseRoute.jsonError(c, 'Library not found.', 404);
 
   const password = BaseRoute.optionalString(body, 'davPassword', 256);
   await service.update(id, {
@@ -183,14 +74,14 @@ async function updateLibrary(c: C): Promise<Response> {
     displayName: BaseRoute.optionalString(body, 'displayName', 128),
   });
   if (password !== null) await service.setPassword(id, password);
-  return json(c, { ok: true });
+  return c.json({ ok: true });
 }
 
-async function deleteLibrary(c: C): Promise<Response> {
+async function deleteLibrary(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   await scope.get(Tokens.LibraryService).delete(id);
-  return json(c, { ok: true });
+  return c.json({ ok: true });
 }
 
 /**
@@ -201,29 +92,31 @@ async function deleteLibrary(c: C): Promise<Response> {
  * /libraries`: an operator clicking "test" should be able to do it without a
  * `GET` being able to.
  */
-async function probeLibrary(c: C): Promise<Response> {
+async function probeLibrary(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
-  return library ? json(c, await service.probe(library)) : c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
+  if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  return c.json(await service.probe(library));
 }
 
-async function startScan(c: C): Promise<Response> {
+async function startScan(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
-  return library ? json(c, await scope.get(Tokens.ScanService).start(library)) : c.json({ error: { code: 'NotFound', message: 'Library not found.' } }, 404);
+  if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  return c.json(await scope.get(Tokens.ScanService).start(library));
 }
 
-async function scanStatus(c: C): Promise<Response> {
+async function scanStatus(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
-  return json(c, await scope.get(Tokens.ScanService).status(id));
+  return c.json(await scope.get(Tokens.ScanService).status(id));
 }
 
-async function listUsers(c: C): Promise<Response> {
+async function listUsers(c: AdminContext): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const users = await (await scope.get(Tokens.UserDAO)()).list();
   // Granted libraries are resolved per user. These are few enough that the N+1 is
@@ -232,7 +125,7 @@ async function listUsers(c: C): Promise<Response> {
   for (const user of users) {
     grants.set(user.id, await (await scope.get(Tokens.UserDAO)()).listLibraryIds(user.id));
   }
-  return json(c, {
+  return c.json({
     users: users.map((user) => ({
       id: user.id,
       username: user.username,
@@ -252,10 +145,10 @@ async function listUsers(c: C): Promise<Response> {
  * under the *user* key — never the WebDAV key, so the frequently-read key cannot
  * mint a streaming session.
  */
-async function createUser(c: C): Promise<Response> {
+async function createUser(c: AdminContext): Promise<Response> {
   const { malformed, oversized, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
-  if (malformed) return c.json({ error: { code: 'BadRequest', message: 'Request body is not valid JSON.' } }, 400);
-  if (oversized) return c.json({ error: { code: 'PayloadTooLarge', message: 'Request body is too large.' } }, 413);
+  if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
+  if (oversized) return BaseRoute.jsonError(c, 'Request body is too large.', 413);
 
   const scope = BaseRoute.getScope(c);
   const username = BaseRoute.requireString(body, 'username', 64);
@@ -266,7 +159,7 @@ async function createUser(c: C): Promise<Response> {
 
   const users = await scope.get(Tokens.UserDAO)();
   if (await users.findByUsername(username)) {
-    return c.json({ error: { code: 'Conflict', message: 'A user with that username already exists.' } }, 409);
+    return BaseRoute.jsonError(c, 'A user with that username already exists.', 409);
   }
   const created = await users.create({
     username,
@@ -275,28 +168,28 @@ async function createUser(c: C): Promise<Response> {
     email: BaseRoute.optionalString(body, 'email', 256),
     isAdmin: body.isAdmin === true,
   });
-  return json(c, { id: created.id, username: created.username }, 201);
+  return c.json({ id: created.id, username: created.username }, 201);
 }
 
-async function setUserEnabled(c: C): Promise<Response> {
+async function setUserEnabled(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const enabled = c.req.query('enabled') === 'true';
   const scope = BaseRoute.getScope(c);
   await (await scope.get(Tokens.UserDAO)()).setEnabled(id, enabled);
-  return json(c, { ok: true });
+  return c.json({ ok: true });
 }
 
-async function deleteUser(c: C): Promise<Response> {
+async function deleteUser(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   await (await scope.get(Tokens.UserDAO)()).delete(id);
-  return json(c, { ok: true });
+  return c.json({ ok: true });
 }
 
-async function setUserLibraries(c: C): Promise<Response> {
+async function setUserLibraries(c: AdminContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const { malformed, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
-  if (malformed) return c.json({ error: { code: 'BadRequest', message: 'Request body is not valid JSON.' } }, 400);
+  if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
   const raw = body.libraryIds;
   if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== 'string')) {
     throw new BadRequestError('Field "libraryIds" must be an array of strings.');
@@ -318,11 +211,11 @@ async function setUserLibraries(c: C): Promise<Response> {
   }
 
   await (await scope.get(Tokens.UserDAO)()).setLibraryGrants(id, raw as string[]);
-  return json(c, { ok: true });
+  return c.json({ ok: true });
 }
 
-async function whoami(c: C): Promise<Response> {
-  return json(c, { email: c.get('AdminEmail'), workerId: UUIDUtil.getRandomUUID() });
+async function whoami(c: AdminContext): Promise<Response> {
+  return c.json({ email: c.get('AdminEmail'), workerId: UUIDUtil.getRandomUUID() });
 }
 
 /**
@@ -334,10 +227,10 @@ async function whoami(c: C): Promise<Response> {
  * rather than fail loudly.
  */
 function registerAdminRoutes(app: {
-  get: (path: string, handler: (c: C) => Promise<Response>) => unknown;
-  post: (path: string, handler: (c: C) => Promise<Response>) => unknown;
-  patch: (path: string, handler: (c: C) => Promise<Response>) => unknown;
-  delete: (path: string, handler: (c: C) => Promise<Response>) => unknown;
+  get: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
+  post: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
+  patch: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
+  delete: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
 }): void {
   app.get('/admin/me', whoami);
 
@@ -356,5 +249,4 @@ function registerAdminRoutes(app: {
   app.delete('/admin/users/:id', deleteUser);
 }
 
-export { BaseRoute, registerAdminRoutes };
-export type { AdminContext, WorkerEnv };
+export { registerAdminRoutes };

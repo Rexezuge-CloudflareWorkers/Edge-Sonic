@@ -1,8 +1,9 @@
-import type { Context, Next } from 'hono';
+import type { Next } from 'hono';
 import { asScopedContext, setRequestScope } from '@edge-sonic/backend-runtime/di';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
+import type { AdminContext } from '../endpoints/BaseRoute';
 
-type ScopeContext = Context<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
+type ScopeContext = AdminContext;
 
 /**
  * Single-scope-per-request middleware (Otter composition-root pattern).

@@ -1,6 +1,7 @@
-import type { Context, Next } from 'hono';
+import type { Next } from 'hono';
+import type { AdminContext } from '../endpoints/BaseRoute';
 
-type HeaderContext = Context<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
+type HeaderContext = AdminContext;
 
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Content-Type-Options': 'nosniff',
@@ -14,10 +15,21 @@ const SECURITY_HEADERS: Record<string, string> = {
 };
 
 // Paths carrying credential secrets or private user data — never cache.
-// All `/user/*` JSON is `no-store` by default (credentials, volumes);
-// public volume reads stay cacheable.
+//
+// ### The prefix must name a path this router actually serves
+//
+// This predicate was inherited as `startsWith('/user/')`, which is the *reference
+// project's* private surface. This worker has no `/user/` route, so the predicate
+// could never return `true` and `Cache-Control: no-store` was never applied to
+// anything — `/admin/me` (the operator's own address) and `/admin/users` (every user's
+// address) were cacheable. A predicate copied from another router's route table is
+// not a conservative default; it is an unconditional no-op.
+//
+// `/rest/*` is listed for the same reason even though the Subsonic envelope already
+// sets `no-store`: a `/rest` response that is not an envelope — a bare `404` from the
+// router, a 429 from the limiter — must not be cached either.
 function isSensitiveJsonPath(pathname: string): boolean {
-  return pathname.startsWith('/user/');
+  return pathname.startsWith('/admin/') || pathname.startsWith('/rest/');
 }
 
 /**

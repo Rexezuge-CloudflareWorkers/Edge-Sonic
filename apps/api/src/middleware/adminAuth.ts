@@ -5,17 +5,24 @@
  * `u`/`t`/`s`, so it is authenticated by `SubsonicAuthService` against the `users`
  * table. Keeping the two identity systems separate is a security property — an
  * operator's Access identity must not double as a streaming credential.
+ *
+ * The service comes from the request scope like every other service, so it shares the
+ * scope's one `AppConfiguration` and is reachable from a test that wants a stub. It is
+ * resolved through `BaseRoute.getScope`, which also works for a handler driven outside
+ * the middleware ordering.
  */
 import type { Next } from 'hono';
-import { AccessAuthService } from '@edge-sonic/backend-services/auth';
-import type { AccessIdentityContext } from '@edge-sonic/backend-services/auth';
+import { Tokens } from '@edge-sonic/backend-services/composition';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
-import { BaseRoute } from '../admin/routes';
-import type { AdminContext } from '../admin/routes';
+import { BaseRoute } from '../endpoints/BaseRoute';
+import type { AdminContext } from '../endpoints/BaseRoute';
 
 async function adminAuthenticationHandler(c: AdminContext, next: Next): Promise<Response | void> {
   try {
-    const email = await new AccessAuthService(c.env).getAuthenticatedUserEmail(c.req.raw, c.executionCtx as unknown as AccessIdentityContext);
+    // Only the request is passed. The `ACCESS` binding rides on `env`, which the scope
+    // already holds — it is a binding, not a property of the execution context, and
+    // reading it off `c.executionCtx` is a branch that can never resolve.
+    const email = await BaseRoute.getScope(c).get(Tokens.AccessAuthService).getAuthenticatedUserEmail(c.req.raw);
     c.set('AdminEmail', email);
   } catch (error) {
     // An authentication failure is expected; anything else is a bug and is logged

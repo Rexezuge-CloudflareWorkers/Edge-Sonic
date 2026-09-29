@@ -12,6 +12,7 @@ import type {
 import type { Token } from '@edge-sonic/backend-runtime/di';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
+import type { AccessAuthService } from '../auth/AccessAuthService';
 import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import type { LibraryService } from '../library/LibraryService';
 import type { ScanService } from '../index/ScanService';
@@ -42,6 +43,12 @@ const Tokens = {
   ScanStateDAO: Symbol('ScanStateDAO') as Token<() => Promise<ScanStateDAO>>,
 
   SubsonicAuthService: Symbol('SubsonicAuthService') as Token<SubsonicAuthService>,
+  /**
+   * Cloudflare Access, for `/admin/*`. A token like every other service: resolved
+   * from the scope rather than constructed at the call site, so it is reachable
+   * from a test that wants a stub and shares the scope's one `AppConfiguration`.
+   */
+  AccessAuthService: Symbol('AccessAuthService') as Token<AccessAuthService>,
   LibraryService: Symbol('LibraryService') as Token<LibraryService>,
   TreeService: Symbol('TreeService') as Token<TreeService>,
   ScanService: Symbol('ScanService') as Token<ScanService>,

@@ -10,6 +10,7 @@ import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
+import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
 import { ScanService } from '../index/ScanService';
@@ -166,6 +167,11 @@ function createRequestScope(env: RequestScopeEnv): Container {
       timeoutMs: config.getWebdavTimeoutMs(),
     }),
   );
+
+  // Cloudflare Access, for `/admin/*`. Shares the scope's `config` rather than
+  // re-deriving one per request, and reads the platform-provisioned `ACCESS`
+  // binding off `env` — the one place that binding is visible at Layer 3.
+  scope.bindValue(Tokens.AccessAuthService, new AccessAuthService(env, config));
 
   scope.bindValue(
     Tokens.SubsonicAuthService,

@@ -17,11 +17,22 @@
 import type { Hono } from 'hono';
 import { rateLimit } from './rateLimit';
 
+/**
+ * Which authenticated surface a definition belongs to.
+ *
+ * The split is a **field**, not an array index. The reference project slices
+ * `RATE_LIMIT_DEFS.slice(0, 3)` / `.slice(3)`, which means inserting a definition at
+ * index 3 silently reclassifies it — a new `/rest` limit would become an admin limit
+ * and start being keyed on the wrong identity. A field cannot drift that way.
+ */
+type LimitSurface = 'rest' | 'admin';
+
 interface RateLimitDef {
   path: string;
   windowMs: number;
   max: number;
   keyPrefix: string;
+  surface: LimitSurface;
   /**
    * Why this budget exists. Recorded so the table can be tuned without archaeology.
    */
@@ -34,6 +45,7 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     windowMs: 60_000,
     max: 600,
     keyPrefix: 'stream',
+    surface: 'rest',
     reason: 'Range requests multiply: one 5-minute track is a handful of seeks, so this must not be a per-request-tight budget.',
   },
   {
@@ -41,6 +53,7 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     windowMs: 60_000,
     max: 60,
     keyPrefix: 'download',
+    surface: 'rest',
     reason: 'A whole-file fetch is unbounded egress, unlike a range.',
   },
   {
@@ -48,6 +61,7 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     windowMs: 60_000,
     max: 300,
     keyPrefix: 'coverart',
+    surface: 'rest',
     reason: 'Clients request artwork per grid cell, so it is high-frequency but small.',
   },
   {
@@ -55,6 +69,7 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     windowMs: 60_000,
     max: 120,
     keyPrefix: 'scanstatus',
+    surface: 'rest',
     reason: 'Polling drives the scan, so it is capped — but generously, because a client legitimately polls during a scan.',
   },
   {
@@ -62,15 +77,45 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     windowMs: 60_000,
     max: 60,
     keyPrefix: 'admin',
+    surface: 'admin',
     reason: 'Probe and rescan actions perform live outbound requests with a stored credential.',
   },
 ];
 
-function registerRateLimits(app: Hono<{ Bindings: Cloudflare.Env; Variables: { AdminEmail: string } }>): void {
+type LimitApp = Hono<{ Bindings: Cloudflare.Env; Variables: { AdminEmail: string } }>;
+
+function install(app: LimitApp, def: RateLimitDef): void {
+  app.use(def.path, rateLimit({ windowMs: def.windowMs, max: def.max, keyPrefix: def.keyPrefix }));
+}
+
+/**
+ * `/rest/*`. Keyed on the client address, because a Subsonic client authenticates
+ * per request and there is no ambient identity on this surface.
+ *
+ * Registered *after* the router, so the limiter wraps the dispatcher rather than
+ * running before it.
+ */
+function registerRestRateLimits(app: LimitApp): void {
   for (const def of RATE_LIMIT_DEFS) {
-    app.use(def.path, rateLimit({ windowMs: def.windowMs, max: def.max, keyPrefix: def.keyPrefix }));
+    if (def.surface === 'rest') install(app, def);
   }
 }
 
-export { RATE_LIMIT_DEFS, registerRateLimits };
-export type { RateLimitDef };
+/**
+ * `/admin/*`. Registered **after** `adminAuthentication`, so the bucket can be keyed
+ * on the resolved Access identity rather than only on an address that every operator
+ * behind one NAT shares. This ordering is load-bearing; see the worker's route order.
+ */
+function registerAdminRateLimits(app: LimitApp): void {
+  for (const def of RATE_LIMIT_DEFS) {
+    if (def.surface === 'admin') install(app, def);
+  }
+}
+
+function registerRateLimits(app: LimitApp): void {
+  registerRestRateLimits(app);
+  registerAdminRateLimits(app);
+}
+
+export { RATE_LIMIT_DEFS, registerRateLimits, registerRestRateLimits, registerAdminRateLimits };
+export type { RateLimitDef, LimitSurface };
