@@ -69,6 +69,7 @@ import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
+import { derivePending } from './deriveBackfill';
 import { ScanBudget, stopReason } from './scanBudget';
 import { decideStep, idleResult, MAX_CONSECUTIVE_FAILURES, stalledResult, unableToAdvance } from './scanRetry';
 import type { ChunkResult, ScanDeps } from './scanTypes';
@@ -181,14 +182,30 @@ class ScanService {
    */
   public async step(library: LibraryRow): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(library.id);
+    const budget = this.budget();
+
+    // ### The derived grouping is backfilled here, ahead of everything
+    //
+    // Ahead of `decideStep` deliberately, and that placement is the whole fix. A fully
+    // scanned library is `idle`, and `idle` returns without touching the walk at all — so
+    // a backfill placed after the status check would never run for exactly the libraries
+    // that need it, which is what the first attempt at this did.
+    //
+    // It is here because nothing else can reach these rows. Every writer of `album` /
+    // `artist` is gated on the file having *changed*, and that gating is correct: it is
+    // what makes a rescan of an unchanged library cost one subrequest. The consequence is
+    // that a library nobody has touched since it was indexed never derives its grouping
+    // and the aggregates answer `[]` for ever. It shipped: 113 rows, every one indexed
+    // before the deploy, every one with `album_ci` NULL.
+    const derivedRows = this.deps.derivation ? await derivePending(this.deps.derivation, library.id, budget) : 0;
 
     // Whether a `failed` scan may run again is a state-machine decision, and it is not
     // an obvious one: `failed` used to be terminal, and treating it as terminal is what
     // left a library of eighty albums at one scanned folder for the life of a
     // deployment. See `scanRetry.ts` for the whole account.
     const decision = decideStep(state);
-    if (decision === 'stalled') return stalledResult(state);
-    if (decision === 'idle') return idleResult(state, 'idle');
+    if (decision === 'stalled') return stalledResult(state, derivedRows);
+    if (decision === 'idle') return idleResult(state, 'idle', derivedRows);
 
     const frontier = await this.deps.nodes.listFrontier(library.id, this.deps.chunkFolders);
     if (frontier.length === 0) {
@@ -199,7 +216,7 @@ class ScanService {
       // walk stopped. `start` seeds the frontier with the library root, so a scan that
       // failed in its own root probe is the case that lands here.
       if (state.status === 'failed') {
-        return await unableToAdvance(state, async (error) => await this.deps.scanState.fail(library.id, error));
+        return await unableToAdvance(state, async (error) => await this.deps.scanState.fail(library.id, error), derivedRows);
       }
       const indexVersion = await this.deps.scanState.complete(library.id, state.scanned_count);
       return {
@@ -210,13 +227,15 @@ class ScanService {
         lastError: null,
         foldersVisited: 0,
         webdavRequests: 0,
-        rowsWritten: 0,
+        // The backfill's rows, not zero. This path is reached by a library that is
+        // already fully walked, which is the *usual* case for a library being repaired,
+        // so reporting `0` here would report the repair as no work at all.
+        rowsWritten: derivedRows,
         stoppedBy: null,
       };
     }
 
-    const budget = this.budget();
-    let rowsWritten = 0;
+    let rowsWritten = derivedRows;
     let scanned = state.scanned_count;
     let foldersVisited = 0;
 

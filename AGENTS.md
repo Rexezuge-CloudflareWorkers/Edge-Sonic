@@ -258,13 +258,43 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   does not group, returns rows happily. It shipped. The fix is to derive `album`/`artist`
   from `dir_path` at index time (`pathConvention.ts`, handling both `Artist/Album` and the
   flat `Artist - Album` layout), written through the existing upsert rather than as extra
-  statements. Two rules make it safe: **`COALESCE`, always** — a derived value fills a
-  NULL and only a NULL, so a real tag is never rolled back to a guess and a rescan
-  rewrites nothing; and the derived name is **marked**, so a client can tell a guess from a
-  tag and the string is stable across scans. `genre`, `track` and `year` are deliberately
-  **not** derived: a guessed genre is offered to the user as fact, and `getGenres` would
-  publish it with a song count. An uninformative path yields NULL, never `''`, because
-  `''` groups under a blank name — the same defect `NodeDAO.listRoots` had with the root.
+  statements. `genre`, `track` and `year` are deliberately **not** derived: a guessed genre
+  is offered to the user as fact, and `getGenres` would publish it with a song count. An
+  uninformative path yields NULL, never `''`, because `''` groups under a blank name — the
+  same defect `NodeDAO.listRoots` had with the root.
+- **Indexing only happens on change, so deriving there is not enough — and the symptom
+  hides in the one endpoint that does not group.** Every writer of the grouping columns is
+  gated on the file having *moved*: the `Depth: 0` root probe, `isScanned: !changed`,
+  `if (changed)` in `reconcileFolder`, and the read-through `getMusicDirectory` path. That
+  gating is correct — it is what makes a rescan of an unchanged library cost one
+  subrequest — and the consequence is that the derivation is **unreachable for an
+  already-indexed library**, so its aggregates never recover without a file changing. It
+  shipped *twice*, the second time as a fix that changed nothing: 113 rows on a live
+  library, all indexed before the deploy, all with `album_ci`/`artist_ci` NULL, and
+  `getArtists`/`getAlbumList2`/`getGenres`/`search3` answering `[]` after a redeploy that
+  carried the derivation. Per-track everything looked fine, because `rest/mappers.ts`
+  falls back to the folder name when `album` is NULL — **the one endpoint that does not
+  group in SQL was the only one that looked healthy**, which is why this took a whole
+  deployment to name. Four rules, and the first two are why the second attempt worked:
+  - **The backfill runs where the rows are, not where the files are.**
+    `SongDerivationDAO` re-runs the *same* `deriveFromPath` over rows the walk will never
+    revisit. Deriving the same fact in SQL was rejected: a second implementation of the
+    convention, free to disagree over the separator rules and the marker, and a
+    disagreement between two naming conventions is invisible until a client groups a
+    library wrongly.
+  - **It runs on every poll, ahead of the status check.** A fully scanned library is
+    `idle`, and `idle` returns from `step` without touching the walk — so a backfill
+    placed after the status check never runs for precisely the libraries that need it.
+  - **The selection is on `derived_version`, not on NULL**, and the write is a `CASE` on
+    `DERIVED_MARKER`: replace a value that is itself a guess, fill a NULL, leave a real
+    tag. `NULL` alone cannot express a *corrected* convention — this is the
+    `reader_version` invariant one layer down, and a plain `COALESCE` would re-select the
+    row and then decline to change it, which is a version column that buys nothing. It is
+    also why the marker sits on the **album** as well as the artist: artist-marked and
+    album-bare means a version bump can correct a wrong artist and never a wrong album.
+  - **It never stamps `enriched_at`.** `EnrichmentService` short-circuits on that, so
+    claiming a row was read means a track with `duration: 0` is never range-read on first
+    play — a backfill that repairs the grouping by breaking enrichment.
 - **An Ogg page is not a packet, and a granule is only a duration on the last page.**
   Packets are delimited by the **segment table** — a packet ends where a lacing entry is
   below 255, and one page may carry several. `libavformat` writes an Opus identification
@@ -292,6 +322,14 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   production assumptions; here it shared the *correct* behaviour and the DAO did not.
   The DAO now runs against real `node:sqlite` for this predicate, where a wrong query and
   a double cannot disagree.
+- **A double may disagree with production about the very column under repair.** The
+  `upsertFileFacts` double in `test/scan-incremental.test.ts` wrote `artist: null,
+  album: null` while the real `UPSERT_FILE_FACTS` *derived* them. That is the same
+  failure as the one above, and it is why the grouping fix appeared to do nothing: the
+  suite agreed with itself and with neither production, so every test passed against a
+  deployment whose aggregates stayed empty. The double now calls `deriveFromPath` and
+  stamps `DERIVED_VERSION` — because a double is evidence only to the extent it models
+  the platform, and *which* platform matters as much as modelling it.
 
 ## Test doubles must model the platform
 

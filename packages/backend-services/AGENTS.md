@@ -125,6 +125,19 @@ Object, no trigger.
   clicking "Rescan" started a scan that only progressed while some *Subsonic client*
   happened to be polling. That route is also the only place `stoppedBy` is readable,
   because the Subsonic `scanStatus` element carries just `scanning` and `count`.
+- **A poll backfills the derived grouping before it does anything else.** `step` runs
+  `deriveBackfill` *ahead of* `decideStep`, and that placement is the fix rather than a
+  detail. Every writer of `album`/`artist` is gated on a file having changed, so a library
+  nobody has touched since it was indexed has nothing left to change and never derives its
+  grouping — and a fully scanned library is `idle`, which returns without touching the
+  walk at all. A backfill placed after the status check therefore never runs for exactly
+  the libraries that need it, which is what the first attempt did: 113 rows, all indexed
+  before the deploy, all with `album_ci` NULL, and every aggregate answering `[]`.
+  It reads `dir_path` off the row, so it spends **no subrequests** — one indexed read and
+  one bounded write batch — and is charged only against the chunk's wall-clock deadline,
+  because D1 latency is real and the subrequest ceiling is a resource it cannot spend.
+  Once a library is current the read returns no rows and the write batch is never issued,
+  so a poll on a healthy library stays free.
 - A failure leaves the frontier where it was, and the next poll **resumes** — bounded.
   `step` re-enters a `failed` scan rather than treating the status as terminal, because it
   used to, and that made one bad chunk permanent: the frontier sat intact in D1 and

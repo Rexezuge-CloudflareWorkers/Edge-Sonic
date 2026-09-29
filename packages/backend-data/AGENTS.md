@@ -74,6 +74,36 @@ page-then-fetch pattern readable in one place instead of duplicated five times.
     anything but a guess, and `getGenres` would publish a guessed genre with a song count
     beside it. An uninformative path yields NULL, never `''` — `''` groups under a blank
     name, the defect `NodeDAO.listRoots` had with the library root.
+- **Deriving at index time was not enough, and the reason is that indexing only happens
+  on change.** Every writer of the grouping columns is gated on the file having *moved*:
+  the `Depth: 0` root probe, `isScanned: !changed`, `if (changed)` in `reconcileFolder`,
+  and the read-through `getMusicDirectory` path. That gating is **correct** — it is what
+  makes a rescan of an unchanged library cost one subrequest — and the consequence is that
+  the derivation is unreachable for an already-indexed library, so its aggregates never
+  recover without a file changing. It shipped twice: the first attempt added the
+  derivation to the upsert and deploying it changed **nothing** on a live library where
+  nothing had changed, with 113 rows all carrying NULL grouping.
+  - It was invisible per-track because `rest/mappers.ts` falls back to the folder name
+    when `album` is NULL. The one endpoint that does not group in SQL was the one that
+    looked healthy.
+  - So `songDerivation.ts` runs the same `deriveFromPath` over rows selected by
+    **`derived_version`**, not by `NULL`, and `ScanService.step` runs it *ahead of* the
+    status check — a fully-scanned library is `idle` and returns without touching the
+    walk, so a backfill placed after the check never runs for the libraries that need it.
+  - **The selection is on a version because `NULL` cannot express a corrected
+    convention.** With the stamp, bumping `DERIVED_VERSION` re-derives everything, which
+    is the `reader_version` invariant one layer down. The write is a `CASE` keyed on
+    `DERIVED_MARKER` — replace a value that is itself a guess, fill a NULL, leave a real
+    tag — because a plain `COALESCE` there would re-select the row and then decline to
+    change it, which is a version column that buys nothing. That is also why the marker is
+    on the **album** as well as the artist: with the artist marked and the album bare, a
+    version bump could correct a wrong artist and never a wrong album.
+  - **It never stamps `enriched_at`.** `EnrichmentService` short-circuits on it, so
+    claiming a row was read would mean a track with `duration: 0` is never range-read on
+    first play — a backfill that repairs the grouping by breaking enrichment.
+  - `idx_songs_derived (library_id, derived_version)` is load-bearing: the query runs on
+    **every** poll, and a table scan there would cost a full `songs` pass on a fully
+    repaired library. Asserted with `EXPLAIN QUERY PLAN`.
 - **An applied migration is immutable, and nothing in a `.sql` file says so.** D1 records
   applied migrations by *filename* in `d1_migrations`, so one that has run is skipped by
   every later `wrangler d1 migrations apply` — silently. `songs.reader_version` was added

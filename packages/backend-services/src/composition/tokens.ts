@@ -6,6 +6,7 @@ import type {
   PlaylistDAO,
   ScanStateDAO,
   SongDAO,
+  SongDerivationDAO,
   SongIndexDAO,
   UserDAO,
 } from '@edge-sonic/backend-data/dao';
@@ -33,6 +34,12 @@ const Tokens = {
   LibraryDAO: Symbol('LibraryDAO') as Token<() => Promise<LibraryDAO>>,
   NodeDAO: Symbol('NodeDAO') as Token<() => Promise<NodeDAO>>,
   SongDAO: Symbol('SongDAO') as Token<() => Promise<SongDAO>>,
+  /**
+   * The derived-grouping backfill. Separate from `SongDAO` because it is a *version*
+   * selection over many rows rather than one row by id, and because it is the only song
+   * write the scan makes that is not gated on a file having changed.
+   */
+  SongDerivationDAO: Symbol('SongDerivationDAO') as Token<() => Promise<SongDerivationDAO>>,
   /**
   The aggregate reads. Separate from `SongDAO` because they page over groups, not rows.
   */

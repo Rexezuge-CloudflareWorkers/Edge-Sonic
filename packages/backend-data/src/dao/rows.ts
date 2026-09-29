@@ -93,6 +93,16 @@ interface SongRow {
    * `READER_VERSION` in `media-tags` and the migration's comment.
    */
   reader_version: number;
+  /**
+   * Which version of `pathConvention` wrote this row's `album`/`artist`.
+   *
+   * The derivation's half of the same invariant as `reader_version`. Every writer of the
+   * grouping columns is gated on the file having *changed*, so a version bump is the only
+   * thing that can reach rows an earlier convention wrote — without it, a corrected
+   * derivation would leave a wrong guess in place for ever, exactly as a corrected reader
+   * once did. See `pathConvention.ts`.
+   */
+  derived_version: number;
   created_at: number;
   updated_at: number;
 }

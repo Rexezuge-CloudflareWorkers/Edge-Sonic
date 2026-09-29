@@ -33,6 +33,22 @@
  *    so the string is stable across scans: the same path always derives the same
  *    value, so a rescan rewrites nothing and the incrementality guarantee holds.
  *
+ * ### Why deriving at index time was not enough on its own
+ *
+ * Every writer of these columns is gated on the file having *changed* — the root
+ * `Depth: 0` probe, `isScanned: !changed`, `if (changed)` in `reconcileFolder`, and the
+ * read-through `getMusicDirectory` path. So for an already-indexed library the
+ * derivation never ran at all, and the aggregates stayed empty: 113 rows, every one
+ * indexed before the deploy, every one with `album_ci` NULL. It was invisible per-track
+ * because the song mapper falls back to the folder name for display, so `getRandomSongs`
+ * returned rows that *looked* tagged while every SQL-filtered aggregate saw NULL.
+ *
+ * `songDerivation.ts` therefore runs the same function over rows the indexer will never
+ * touch, selected on `derived_version` rather than on the value. Deriving in SQL was
+ * rejected: it would be a second implementation of this module, free to disagree with
+ * it, which is the "a double that shares a wrong assumption" failure in a place where
+ * nothing would notice.
+ *
  * ### What it deliberately does not derive
  *
  * `genre`. There is no path convention for it that is not a guess, and a guessed
@@ -46,8 +62,32 @@
  *
  * Part of the stored value rather than a separate column, so the aggregates need no
  * join and no extra predicate to answer "is this real or derived?".
+ *
+ * It is on **both** the artist and the album, and that is load-bearing rather than
+ * cosmetic. It is the only provenance a derived value carries, so it is the only thing
+ * that lets a *corrected* convention tell a guess it wrote from a tag a file supplied —
+ * and `songDerivation.ts` keys its overwrite on exactly this suffix. With the artist
+ * marked and the album not, a version bump could correct a wrong artist and could never
+ * correct a wrong album: a rule true for half the columns and silently false for the
+ * other half, which is the shape of bug this repository keeps paying for.
  */
 const DERIVED_MARKER = ' (derived)';
+
+/**
+ * Which version of this convention wrote a row's grouping.
+ *
+ * ### Bump this whenever the derivation changes
+ *
+ * Because "the column is NULL" cannot express a *corrected* convention. Once an earlier
+ * derivation has written a value, the columns are no longer NULL, so a later and better
+ * `deriveFromPath` could never reach the rows the earlier one wrote. That is the
+ * `reader_version` defect one layer down: a corrected **reader** could not re-read an
+ * existing library, and without this a corrected **derivation** would not re-derive one.
+ *
+ * The backfill selects on this stamp rather than on the value, so bumping it re-derives
+ * everything, and the `COALESCE` in the write keeps a real tag winning over both.
+ */
+const DERIVED_VERSION = 1;
 
 /**
  * The separator in an `Artist - Album` folder name.
@@ -75,7 +115,7 @@ function fromNestedPath(dirPath: string): DerivedNames {
   }
   const album = dirPath.slice(slash + 1);
   const artist = dirPath.slice(0, slash);
-  return { artist: artist.length > 0 ? mark(artist) : null, album: album.length > 0 ? album : null };
+  return { artist: artist.length > 0 ? mark(artist) : null, album: album.length > 0 ? mark(album) : null };
 }
 
 /**
@@ -95,7 +135,7 @@ function fromFlatAlbumFolder(dirName: string): DerivedNames {
   // A separator at either end is a name that happens to contain a dash, not the
   // convention. `- Album` has no artist and `Artist -` has no album.
   if (artist.length === 0 || album.length === 0) return { artist: null, album: dirName };
-  return { artist: mark(artist), album };
+  return { artist: mark(artist), album: mark(album) };
 }
 
 /**
@@ -124,5 +164,5 @@ function mark(name: string): string {
   return `${name}${DERIVED_MARKER}`;
 }
 
-export { DERIVED_MARKER, deriveFromPath };
+export { DERIVED_MARKER, DERIVED_VERSION, deriveFromPath };
 export type { DerivedNames };
