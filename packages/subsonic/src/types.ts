@@ -120,8 +120,15 @@ interface Directory {
   readonly playable?: boolean;
 }
 
+/**
+A music folder from `getMusicFolders`.
+
+`id` is a **position**, not a library identifier: the schema types it as an
+`integer`, and it is what every `musicFolderId` in any other request is an index
+into. See `userFolderElements` for why the two surfaces have to agree.
+*/
 interface MusicFolder {
-  readonly id: string;
+  readonly id: number;
   readonly name: string;
 }
 

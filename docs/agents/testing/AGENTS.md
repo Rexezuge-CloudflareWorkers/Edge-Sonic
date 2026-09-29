@@ -111,6 +111,23 @@ Two more rules that are easy to get wrong:
   `undefined !== null` is true, and the service correctly concludes every row is already
   enriched and does nothing. A test that passes while asserting nothing.
 
+One more, and it is the same rule applied to an *expectation* rather than to a double: an
+assertion written from our own reading of the spec shares that reading with the code it
+checks, so the pair can be wrong together and green. `user.folder` was asserted as
+`[{"id": 0}]` by a test that read the element as a record, while the schema types it as
+`Array of int` — and a client modelling `folder: List<Int>` threw on it inside its login
+path, so the report was "failed to connect, check your credentials" from a server that had
+answered `ping` and authenticated correctly.
+
+- **When the failure mode is a client's decoder, decode with a model of *theirs*.**
+  `test/client-decoding.test.ts` decodes our real answers with a strict reader written
+  from the schema, carrying the same strictness the client uses — a JSON *string* is as
+  fatal as a JSON *object* where a number is declared, because the client's `Json` is not
+  lenient. Its expectations are therefore not a shape of ours, which is the whole point:
+  `test/endpoints.test.ts` asserted the shape we chose, and the shape we chose was wrong.
+  The suite pairs it with the case that must **reject** the record and the quoted forms,
+  because a decoder that accepted anything would let both tests pass forever.
+
 ## Suites
 
 | File                                     | Covers                                                                                  |
@@ -131,6 +148,8 @@ Two more rules that are easy to get wrong:
 | `user-api.test.ts`                      | The operator API: the SSRF gate, quotas, key separation, credentials, the probe verdict   |
 | `probe-notice.test.ts`                  | The operator surface's decisions: probe classification, scan reason, patch shape          |
 | `endpoints.test.ts`                      | The rest of `/rest`: lists, state, users, ratings, scrobbling, the scan controls          |
+| `music-folder-index.test.ts`             | The two folder publishers agree, and a published position resolves back to its library   |
+| `client-decoding.test.ts`                | Our answers decode as a client modelling the schema's types — and the reader has teeth   |
 
 ## Rules for writing an assertion here
 

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createHarness, LIBRARY_ID, PASSWORD, SALT, USERNAME, EXPECTED_TOKEN, ORIGIN, subsonicId, ALBUM_DIR } from './helpers/harness';
+import { createHarness, PASSWORD, SALT, USERNAME, EXPECTED_TOKEN, ORIGIN, subsonicId, ALBUM_DIR } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { fakeKv } from './helpers/fakeKv';
 import { READER_VERSION } from '@edge-sonic/media-tags';
@@ -268,8 +268,10 @@ describe('route order', () => {
 describe('browsing', () => {
   it('lists only the libraries this user was granted', async () => {
     const { body } = await rest('getMusicFolders');
-    const folders = (body['subsonic-response'].musicFolders as { musicFolder: Array<{ id: string; name: string }> }).musicFolder;
-    expect(folders).toEqual([{ id: LIBRARY_ID, name: 'Home' }]);
+    const folders = (body['subsonic-response'].musicFolders as { musicFolder: Array<{ id: number; name: string }> }).musicFolder;
+    // `id` is the position in the list, not the library's own key: the schema types it
+    // as an `integer`, and it is what every `musicFolderId` refers to.
+    expect(folders).toEqual([{ id: 0, name: 'Home' }]);
   });
 
   it('serves getIndexes from the index, with no WebDAV request', async () => {
