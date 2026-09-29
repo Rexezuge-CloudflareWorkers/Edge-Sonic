@@ -13,7 +13,7 @@ import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { songToModel } from '../mappers';
-import { resolveLibrary } from './browse';
+import { resolveLibrary } from './libraries';
 import {   annotationsFor, groupAlbums } from './structured';
 import type { AnnotationLookup } from '../mappers';
 

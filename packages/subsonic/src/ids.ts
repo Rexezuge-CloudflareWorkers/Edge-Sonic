@@ -42,6 +42,11 @@ const IdKind = {
   Directory: 'dir',
   /**
   A music folder root (a registered library, from `getMusicFolders`).
+
+  Never minted. A `musicFolderId` is a **position** in the folder list, not an id —
+  the schema types it as an `integer` — so there is nothing here to encode. Kept
+  because a reserved kind that is documented costs nothing and an unreserved one
+  would make a forged prefix look legitimate.
   */
   MusicFolder: 'mf',
   /**

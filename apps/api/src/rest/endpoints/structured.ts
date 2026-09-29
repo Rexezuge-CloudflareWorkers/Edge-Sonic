@@ -21,7 +21,7 @@ import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import type { AnnotationLookup } from '../mappers';
 import { songToModel } from '../mappers';
-import { resolveLibrary } from './browse';
+import { resolveLibrary } from './libraries';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 

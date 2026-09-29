@@ -73,6 +73,28 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   element's name is the JSON key its wrapper declares. A client doing
   `response.starred2.song.map(...)` throws on an absent key and renders an empty screen
   on `[]`.
+- **A scalar the schema says is a scalar is not a record.** `user.folder` is typed
+  `Array of int`, so each entry is the bare position; `musicFolder` has a `name` beside
+  its `id` and is a record. Building `folder` as `el('folder', { id })` renders
+  `[{"id": 0}]` in JSON, because an element carrying an attribute is a record to every
+  serializer. It shipped, and the symptom was the worst available one: a client whose
+  `User` model is `folder: List<Int>` throws **inside its login path**, so a correct
+  server that had answered `ping` and authenticated correctly reported *"failed to
+  connect, check your credentials"*. A wrong shape in a scalar field is
+  indistinguishable from a wrong password, so the shape is stated in the builder —
+  `el('folder', {}, [index])` — rather than inferred, exactly as `elList` takes a
+  `listKey`. Asserted in `test/client-decoding.test.ts`, which decodes our real answers
+  with a model written from the schema rather than from our own reading of it.
+- **An id the protocol publishes twice is resolved once.** `getUser`'s `folder` and
+  `getMusicFolders` are the same list — an id from one is what every `musicFolderId`
+  refers to — so one module owns the list, its order and both publishers. They did not
+  agree: `getUser` published positions, `getMusicFolders` published library identifiers,
+  and a client that read an id from `getUser` got `code=70` from every folder-scoped
+  endpoint. **No test passed a `musicFolderId` at all** — each shape was asserted in
+  isolation, so both halves were green while the round trip was never executed, which is
+  the same defect as the subrequest bound that lived in a comment. Asserted in
+  `test/music-folder-index.test.ts`, paired with the shape assertions because shapes
+  alone pass again on two surfaces that disagree.
 - **A limit that claims to key on an identity runs after the middleware that sets it.**
   The rate limiter prefers `c.get('AuthenticatedUserEmailAddress')` over the client address, so registering it
   before `userAuthentication` makes it fall back to `ip:…` — silently, and with a comment

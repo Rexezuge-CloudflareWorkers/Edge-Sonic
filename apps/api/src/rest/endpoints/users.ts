@@ -8,10 +8,11 @@
  * systems are deliberately not connected: an operator's Access identity must not be
  * usable as a streaming credential.
  */
-import { ErrorCode,  SubsonicError,   elList, successResponse, userElement, userFolderElements } from '@edge-sonic/subsonic';
+import { ErrorCode,  SubsonicError,   elList, successResponse, userElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
+import { userFolderElementsFor } from './libraries';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
@@ -69,16 +70,21 @@ async function getUser(context: RestContext): Promise<EnvelopeResponse> {
  * The folders are the libraries the **named** user may see, not the caller's: an admin
  * reading another account needs that account's own view of the world, or a client
  * renders folder ids that resolve to the admin's libraries.
+ *
+ * The list comes from `./libraries`, which also publishes it as `getMusicFolders`, so
+ * the positions here and the ids there are the same list in the same order. Each entry
+ * is a bare integer — the schema types `folder` as `Array of int` — and that shape is
+ * load-bearing: a client whose `User` model is `folder: List<Int>` fails to decode a
+ * record here, inside its login path, and reports it as bad credentials.
  */
 async function respondWithUser(context: RestContext, user: UserRow): Promise<EnvelopeResponse> {
-  const libraries = await context.libraries.listForUser(user.id);
   return respond(context, {
     ...userElement(toView(user)),
     // `listKey` so `folder` is present as an array even with no grants: a client doing
     // `user.folder.map(...)` throws on an absent key, and "no libraries" is the state a
     // brand-new account is in.
     listKey: 'folder',
-    children: userFolderElements(libraries.map((library) => library.id)),
+    children: await userFolderElementsFor(context, user.id),
   });
 }
 

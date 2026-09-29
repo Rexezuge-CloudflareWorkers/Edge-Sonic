@@ -186,9 +186,12 @@ describe('getUser and getUsers', () => {
     // Genuinely unsupported, and reported false rather than omitted, so a client can
     // tell "not supported" from "server too old to say".
     expect(user.podcastRole).toBe(false);
-    // `folder` is still in the schema and is what every `musicFolderId` in any other
-    // response is an index into.
-    expect(user.folder).toEqual([{ id: 0 }]);
+    // `folder` is the list every `musicFolderId` in any other response is a position
+    // into, and the schema types it as `Array of int` — bare numbers, not records. A
+    // client whose model is `folder: List<Int>` throws on a record, inside its login
+    // path, and reports it as bad credentials. `test/music-folder-index.test.ts` asserts
+    // the positions resolve; `test/client-decoding.test.ts` asserts the decode.
+    expect(user.folder).toEqual([0]);
   });
 
   it('lets a non-admin read only themselves', async () => {

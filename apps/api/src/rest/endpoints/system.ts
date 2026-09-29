@@ -5,6 +5,7 @@ import { el, elList, scanStatusElement, successResponse } from '@edge-sonic/subs
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
+import { musicFolderElementsFor } from './libraries';
 
 /**
 Every handler here returns a finished envelope.
@@ -13,14 +14,6 @@ type EnvelopeResponse = ReturnType<typeof successResponse>;
 
 function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
-
-/**
-Display name, falling back to the slug.
-*/
-function libraryName(library: LibraryRow): string {
-  const name = library.display_name?.trim();
-  return name && name.length > 0 ? name : library.slug;
 }
 
 /**
@@ -65,12 +58,15 @@ async function getLicense(context: RestContext): Promise<EnvelopeResponse> {
  * `getMusicFolders` — the libraries this user may see.
  *
  * Filtered by the `user_libraries` grant, so a user never learns a library
- * exists that they have not been given. The ids are library ids, which is what
- * every other endpoint's `musicFolderId` resolves through.
+ * exists that they have not been given. The `id` is the **position** in that list
+ * rather than the library's own key, because the schema types it as an `integer`
+ * and every other endpoint's `musicFolderId` resolves through it. `./libraries`
+ * publishes the identical list on `getUser`, so the two cannot disagree about what
+ * position 1 is.
  */
 async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> {
-  const libraries = await context.libraries.listForUser(context.user.id);
-  return respond(context, elList('musicFolders', 'musicFolder', {}, libraries.map((library) => el('musicFolder', { id: library.id, name: libraryName(library) }))));
+  const folders = await musicFolderElementsFor(context, context.user.id);
+  return respond(context, elList('musicFolders', 'musicFolder', {}, folders));
 }
 
 /**

@@ -103,7 +103,7 @@ was never applied to anything: `/user/me` and `/user/users` shipped with no
 sets its own `no-store` and the tests that existed all passed. Asserted in
 `test/security-headers.test.ts`.
 
-## The two list shapes
+## The list shapes, and the one element that is not a record
 
 - `elList(name, listKey, attrs, children)` declares the repeated element's name, so an
   **empty** list serializes as `[]` rather than as an absent key. The name is a
@@ -116,6 +116,9 @@ sets its own `no-store` and the tests that existed all passed. Asserted in
   empty seed, so a client following the schema sees nothing.
 - An element with no attributes and exactly one scalar child **is** that scalar:
   `<position>42000</position>` is `42000` in JSON, not `{"#text": 42000}`.
+- Every other element **is** a record, which is what makes the last rule usable: the
+  one exception the schema makes is `user.folder`, and a record there fails to decode.
+  See *A scalar the schema says is a scalar* below.
 
 ## Paging
 
@@ -123,6 +126,47 @@ sets its own `no-store` and the tests that existed all passed. Asserted in
 **number** `0` for an absent parameter, `0` is not nullish, so the fallback never applies
 and `pageSize`'s floor turns it into exactly one item. Every paged endpoint shipped that
 way at least once.
+
+## A scalar the schema says is a scalar
+
+`user.folder` is typed `Array of int` — "Folder ID(s)" — so each entry is the bare
+position, while `musicFolder` carries a `name` beside its `id` and is a record. Building
+`folder` as `el('folder', { id })` is the natural reading of the element name and the
+wrong shape: an element carrying an attribute is a record to every serializer, so JSON
+came out `[{"id": 0}]` where a client modelling `User.folder` as `List<Int>` throws.
+
+It shipped, and the symptom was the worst available one: the throw lands in a client's
+**login** path, so a correct server that had answered `ping` and authenticated the
+request reported *"failed to connect, check your credentials"*. A wrong shape in a scalar
+field is indistinguishable from a wrong password, and nothing in the product could tell
+them apart.
+
+The shape is therefore **stated where it is known** — `el('folder', {}, [index])`, a
+scalar child the serializer's existing collapse carries — for the same reason `elList`
+takes a `listKey`: the serializer cannot tell a scalar-valued element from a record, so
+the builder that knows says so. `mf:` in the id kinds is now explicitly un-mintable and
+says so, because `getMusicFolders` publishes a position and there is nothing to encode.
+
+## A folder id is a position, and both publishers are one list
+
+`getUser`'s `folder` and `getMusicFolders` are the same list — an `id` from one is what
+any other request's `musicFolderId` refers to — so `rest/endpoints/libraries.ts` owns the
+list, its order, and both publishers, and `resolveLibrary` resolves a position against
+that same order. They did not agree: `getUser` published positions and `getMusicFolders`
+published library identifiers, so a client that read an id from `getUser` got `code=70`
+from every folder-scoped endpoint.
+
+**No test passed a `musicFolderId` at all.** Each surface's shape was asserted in
+isolation, so both halves were green while the round trip between them was never
+executed — the comment on `respondWithUser` claimed an invariant that nothing measured,
+which is the same defect as the subrequest bound that lived in a comment. The round trip
+is `test/music-folder-index.test.ts`, and it is deliberately paired with the shape
+assertions: shapes alone pass again on two surfaces that disagree.
+
+`resolveLibrary` still accepts a library identifier, so a client holding one persisted
+before this change keeps working. It is authorized by the same grant check, so it is a
+second **spelling** rather than a second way past it, and only a canonical position
+*in range* is read as one — otherwise `"00"` would shadow a library whose id is `"00"`.
 
 ## Ids
 
@@ -134,7 +178,8 @@ move the boundary.
 
 Refusals are deliberately uniform. An id for a library the caller cannot see answers
 `code=70`, not `code=50`, and not `code=10`: `50` would confirm the id is real, turning
-the endpoint into an oracle for which paths exist.
+the endpoint into an oracle for which paths exist. A position needs no such check — it is
+resolved inside the caller's own grant list, so there is no id to forge.
 
 ## `getScanStatus` advances the scan, and a poll that returns is a success
 

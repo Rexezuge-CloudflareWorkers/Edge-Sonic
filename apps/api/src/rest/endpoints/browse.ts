@@ -9,22 +9,18 @@
  * cannot find an album because the index is stale can still walk to it, so the
  * folder view is the safety net for the tag view rather than a legacy path.
  */
-import { childElement, decodeId, el, elList, encodeId, ErrorCode, IdKind, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { childElement, decodeId, el, elList, encodeId, IdKind, successResponse } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { toIso, songToChild } from '../mappers';
+import { libraryName, resolveLibrary } from './libraries';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
 function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
-
-function libraryName(library: LibraryRow): string {
-  const name = library.display_name?.trim();
-  return name && name.length > 0 ? name : library.slug;
 }
 
 function baseName(path: string): string {
@@ -35,27 +31,6 @@ function baseName(path: string): string {
 function isPlayable(name: string): boolean {
   const dot = name.lastIndexOf('.');
   return dot > 0 && /\.(?:mp3|flac|ogg|oga|opus|m4a|mp4|aac|wav|wma|aiff|aif|ape|wv|mpc|dsf|dff)$/i.test(name);
-}
-
-/**
- * Resolve a `musicFolderId`, or pick the caller's only library.
- *
- * A caller that sent no id and has exactly one library gets that library; a caller
- * with several and no id gets the first by slug, which is deterministic. Refusing
- * the ambiguous case would break every client that omits the id, and the
- * alternative — guessing — is not a security problem because the result is still
- * filtered to libraries this user was granted.
- */
-async function resolveLibrary(context: RestContext, requested: string | undefined): Promise<LibraryRow> {
-  const libraries = await context.libraries.listForUser(context.user.id);
-  if (libraries.length === 0) {
-    throw new SubsonicError(ErrorCode.NotFound, 'No library has been granted to this user.');
-  }
-  if (requested === undefined || requested.length === 0) return libraries[0];
-  // Authorization happens inside `requireForUser`, so an id for a library this user
-  // cannot see is reported as "not found" rather than "forbidden" — the latter
-  // would confirm the library exists.
-  return await context.libraries.requireForUser(context.user.id, requested);
 }
 
 /**
@@ -184,4 +159,7 @@ async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse
 
 const browseEndpoints = { getIndexes, getMusicDirectory };
 
-export { browseEndpoints, getIndexes, getMusicDirectory, resolveLibrary, firstLetterOf, isPlayable };
+// `resolveLibrary` and `libraryName` moved to `./libraries`, which owns the folder list
+// that `getUser` and `getMusicFolders` both publish. Not re-exported: every importer was
+// repointed, so a second path to the same function would be one more place to change.
+export { browseEndpoints, getIndexes, getMusicDirectory, firstLetterOf, isPlayable };

@@ -120,6 +120,12 @@ function directoryElement(directory: Directory): ElementNode {
   );
 }
 
+/**
+A `musicFolder` record: an `id` **and** a `name`, so it is an object in JSON.
+
+The counterpart to `userFolderElements`, which is *not* a record. That contrast is
+the protocol's, not a stylistic one — see there.
+*/
 function musicFolderElement(folder: MusicFolder): ElementNode {
   return el('musicFolder', { id: folder.id, name: folder.name });
 }
@@ -164,19 +170,40 @@ function userElement(user: SubsonicUserView): ElementNode {
 }
 
 /**
- * The `folder` children of a `user` element.
+ * The `folder` children of a `user` element: one **position** per library the user may
+ * see, so `musicFolderId=0` names the first entry and `getMusicFolders` publishes the
+ * same list in the same order. It is separate from the role booleans above because a
+ * client that predates those still needs it to resolve a folder id, and one that has
+ * them still uses `folder` to render the library switcher.
  *
- * `folder` is in the 1.16.1 schema and is the list every `musicFolderId` in any other
- * response is an **index** into — `musicFolderId=0` means the first entry here. It is
- * separate from the role booleans above because a client that predates those still needs
- * it to resolve a folder id, and one that has them still uses `folder` to render the
- * library switcher.
+ * ### A position, not a record
  *
- * Positional and stable, which is the whole contract: reordering this list would
- * silently repoint every stored `musicFolderId` a client is holding.
+ * The schema types this element as `Array of int` — "Folder ID(s)" — so each entry is the
+ * bare number, and `musicFolder` from `getMusicFolders` is the one place a folder id
+ * arrives with a `name` beside it. Building this as `el('folder', { id })`, which is
+ * what it was, renders `[{"id": 0}]` in JSON: an element carrying an attribute is a
+ * record to every serializer, and this is the single element in the schema that is a
+ * scalar wearing a container's name.
+ *
+ * It shipped. A client whose `User` model is `folder: List<Int>` — which is what the
+ * schema says, and what the docs example shows — throws decoding the object, and the
+ * throw lands in its *login* path, so the symptom is "failed to connect, check your
+ * credentials" on a server that answered `ping` and authenticated correctly. A wrong
+ * shape in a scalar field is indistinguishable from bad credentials.
+ *
+ * So the value is a scalar **child** and the serializer's existing collapse carries it:
+ * `<folder>0</folder>` in XML, `0` in JSON, from one node. Stated here rather than
+ * inferred, for the same reason `elList` takes a `listKey` — the serializer cannot tell
+ * a scalar-valued element from a record, so the one that knows says so.
+ *
+ * Stable, which is the whole contract: reordering this list would silently repoint
+ * every `musicFolderId` a client is holding.
+ *
+ * @param libraryCount How many libraries the user may see. Only the count is read,
+ *   which is the point: the id is the position, never a library identifier.
  */
-function userFolderElements(libraryIds: readonly string[]): ElementNode[] {
-  return libraryIds.map((_, index) => ({ ...el('folder', { id: index }), array: true as const }));
+function userFolderElements(libraryCount: number): ElementNode[] {
+  return Array.from({ length: libraryCount }, (_, index) => ({ ...el('folder', {}, [index]), array: true as const }));
 }
 
 function childElement(child: Child): ElementNode {
