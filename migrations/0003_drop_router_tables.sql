@@ -1,0 +1,36 @@
+-- Migration 0003: drop the reference project's router tables.
+--
+-- `migrations/0001_router_init.sql` is inherited from Durable-DAV-Router, the project
+-- this repository was scaffolded from. It creates three tables. One of them, `users`,
+-- collides with Edge-Sonic's own and is silently a no-op — both files say
+-- `CREATE TABLE IF NOT EXISTS`, and `0001_edge_sonic_init.sql` sorts first, so
+-- Edge-Sonic's `users` wins. The other two are dead: nothing in this codebase reads
+-- `namespaces` or `router_backends`.
+--
+-- **And `router_backends` carries a broken foreign key.** It declares
+--
+--     owner_email TEXT, FOREIGN KEY (owner_email) REFERENCES users(email)
+--
+-- while Edge-Sonic's `users` is keyed on `id` and its `email` is a nullable,
+-- non-unique column. SQLite resolves a foreign key to a *unique* index on the parent
+-- column, so the reference does not resolve at all: `PRAGMA foreign_key_check` fails
+-- with `foreign key mismatch - "router_backends" referencing "users"`.
+--
+-- That was invisible until `test/schema.int.test.ts` was changed to read the migration
+-- *directory* rather than one hardcoded file, which is the same change that caught
+-- the `reader_version` defect. The suite had been asserting a table list no real
+-- database has, so it could not have reported a schema that real has.
+--
+-- D1 enforces foreign keys, so this is a landmine rather than a cosmetic problem: the
+-- mismatch is latent until something writes to the table or a check runs, and the
+-- error names a table no operator knows exists.
+--
+-- Dropping the tables is the fix rather than repairing the key, because the tables
+-- belong to a different product. `DROP TABLE` is safe here and only here: neither is
+-- a parent of anything in Edge-Sonic, which is the condition the parent-table rule in
+-- AGENTS.md exists to protect. `users` is untouched — it is Edge-Sonic's, created by
+-- 0001, and the router's declaration of it never took effect.
+--
+-- Nothing here reads user data, so there is no migration of rows to perform.
+DROP TABLE IF EXISTS router_backends;
+DROP TABLE IF EXISTS namespaces;

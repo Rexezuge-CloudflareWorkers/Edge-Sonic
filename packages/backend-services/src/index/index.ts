@@ -7,5 +7,6 @@ export type { ScanBudgetOptions, ChunkStopReason } from './scanBudget';
 export { MAX_REQUESTS_PER_TRACK } from './scanEnrichment';
 export { reconcileFolder } from './scanFolder';
 export type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
+export { MAX_CONSECUTIVE_FAILURES, isAdvancing } from './scanRetry';
 export { EnrichmentService, shouldEnrich } from './EnrichmentService';
 export type { EnrichmentDeps } from './EnrichmentService';

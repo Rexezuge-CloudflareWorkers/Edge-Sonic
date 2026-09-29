@@ -207,6 +207,64 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
   so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
   `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.
+- **An applied migration is immutable, and nothing in a `.sql` file says so.** D1 records
+  applied migrations by *filename* in `d1_migrations`, so a migration that has run is
+  skipped by every later `wrangler d1 migrations apply` — silently, with no warning. An
+  applied migration is therefore immutable in fact while being an ordinary text file in
+  appearance. `songs.reader_version` was added by editing `0001`; the column never reached
+  the live database, so `applyMetadata` and `upsertFileFacts` both failed naming it, every
+  enrichment wrote nothing, `getArtists`/`getAlbumList2`/`getGenres`/`search3` answered
+  `[]` for a library of 80 albums, `getSong` answered a masked 500, and the scan wedged —
+  through 489 passing tests. Two rules, and the second exists because the first did not
+  stop it:
+  - **A schema change is a new numbered file.** Never an edit to one that has shipped.
+  - **`migrations/applied.lock.json` records the sha256 of everything applied**, and
+    `test/schema.int.test.ts` asserts both directions — every file on disk is listed, and
+    every listed hash matches. Adding a migration means adding a lock entry in the same
+    commit; editing an applied one fails the suite instead of the deployment.
+    `scripts/hash-migrations.ts` regenerates it and **exits non-zero** on a changed
+    existing entry, so the operator running it cannot quietly bless the edit they just
+    made.
+  The suite was blind to all of it because it `exec`'d one hardcoded migration file, which
+  cannot tell *a new migration* from *an edit to an old one* — both produce identical
+  bytes on the database it is building. `test/helpers/migrations.ts` reads the **directory
+  sorted**, which is what Wrangler does, and reading it immediately exposed a second
+  problem: `0001_router_init.sql` is inherited dead code that declares `users` with an
+  incompatible shape and left `router_backends` with a **foreign key that does not
+  resolve** (`users(email)` against a nullable, non-unique column), so
+  `PRAGMA foreign_key_check` failed outright on the real schema. Dropped in `0003`.
+- **A failed scan is retried, and the retry is bounded.** `ScanService.step` used to
+  short-circuit on any status other than `scanning`, and `fail` sets `failed` — so **one bad
+  chunk ended a scan permanently** with the frontier sitting intact and unread in D1. A
+  library of eighty albums stayed at one scanned folder for the life of the deployment,
+  and `getScanStatus` reported `{"scanning": false, "count": 1}` because it derived
+  `scanning` from the status, which is exactly what a client reads as *stop polling*. Only
+  `startScan` recovered, and `startScan` runs at client startup, not while browsing. The
+  module header claimed the opposite and the claim was true of the frontier and false of
+  the code reading it. So: a `failed` scan is re-entered, bounded by
+  `scan_state.consecutive_failures` — a bound, because unbounded is the opposite defect
+  (a revoked credential re-attempted for ever, spending the operator's subrequest budget to
+  reach the same conclusion each poll). `stalled` is separated from `failed` because they
+  mean **opposite things about what happens next**, and `getScanStatus` answers
+  "will more work happen if I poll again", not "did this call do work". Asserted in
+  `test/scan-incremental.test.ts` (resumes; gives up; `startScan` resets) and
+  `test/endpoints.test.ts` (the wire shape, since the mapping is the client-facing claim).
+- **A row with no tags is absent from every aggregate, not shown with a blank name.**
+  `listAlbums` filters `album_ci IS NOT NULL AND album_ci <> ''`, `listArtists` filters
+  `artist_ci IS NOT NULL`, `listGenres` filters `genre_ci IS NOT NULL` — and those columns
+  are written *only* by a tag read, which costs one ranged request per track and is bounded
+  twice over. So for a library of any size most rows are unenriched for a long time, and
+  the whole tag-organized half of the protocol answers `[]` while `getRandomSongs`, which
+  does not group, returns rows happily. It shipped. The fix is to derive `album`/`artist`
+  from `dir_path` at index time (`pathConvention.ts`, handling both `Artist/Album` and the
+  flat `Artist - Album` layout), written through the existing upsert rather than as extra
+  statements. Two rules make it safe: **`COALESCE`, always** — a derived value fills a
+  NULL and only a NULL, so a real tag is never rolled back to a guess and a rescan
+  rewrites nothing; and the derived name is **marked**, so a client can tell a guess from a
+  tag and the string is stable across scans. `genre`, `track` and `year` are deliberately
+  **not** derived: a guessed genre is offered to the user as fact, and `getGenres` would
+  publish it with a song count. An uninformative path yields NULL, never `''`, because
+  `''` groups under a blank name — the same defect `NodeDAO.listRoots` had with the root.
 - **An Ogg page is not a packet, and a granule is only a duration on the last page.**
   Packets are delimited by the **segment table** — a packet ends where a lacing entry is
   below 255, and one page may carry several. `libavformat` writes an Opus identification

@@ -12,24 +12,24 @@
  * through a full suite for exactly this reason: its D1 double lowercased both sides in
  * JavaScript, so the predicate was wrong in SQL and the answers were right.
  */
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { encryptData, generateAesGcmKey } from '@edge-sonic/backend-data/crypto';
 import {
   AnnotationDAO,
   AuthThrottleDAO,
+  DERIVED_MARKER,
   LibraryDAO,
   NodeDAO,
   PlaylistDAO,
   ScanStateDAO,
   SongDAO,
+  SongIndexDAO,
   UserDAO,
+  deriveFromPath,
 } from '@edge-sonic/backend-data/dao';
 import { sqliteQueryable, queryPlan } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
-
-const MIGRATION = readFileSync(fileURLToPath(new URL('../migrations/0001_edge_sonic_init.sql', import.meta.url)), 'utf8');
+import { migrationDrift, migrationFiles, migrationSql, readLock, sha256 } from './helpers/migrations';
 
 /**
 Base64 of a 32-byte key, generated once so a file's rows stay readable.
@@ -49,7 +49,9 @@ let handle: SqliteQueryable;
 beforeEach(() => {
   handle?.close();
   handle = sqliteQueryable();
-  handle.raw.exec(MIGRATION);
+  // Every migration, in order — see `helpers/migrations.ts`. Naming one file here
+  // would make a new migration and an edit to an old one indistinguishable.
+  handle.raw.exec(migrationSql());
 });
 
 /** Encode a Subsonic id exactly as the product does, so a test cannot pass on a
@@ -136,7 +138,12 @@ describe('schema', () => {
     const rows = handle.raw
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all() as Array<{ name: string }>;
-    expect(rows.map((row) => row.name)).toEqual([
+    const tables = rows.map((row) => row.name);
+
+    // Everything `backend-data` queries, which is what this assertion is for. The
+    // assertion is a *subset* check plus an explicit list of what else is here, so a
+    // missing table is caught without the test going blind to a new one.
+    for (const required of [
       'auth_failures',
       'bookmarks',
       'libraries',
@@ -154,7 +161,161 @@ describe('schema', () => {
       'stars',
       'user_libraries',
       'users',
-    ]);
+    ]) {
+      expect(tables, `${required} is missing`).toContain(required);
+    }
+  });
+
+  it('leaves no dead table behind, and no foreign key that does not resolve', () => {
+    // The full-directory read (0003) is what makes the two visible. Both were invisible
+    // while this suite applied one hardcoded file, so neither could ever be reported.
+    const tables = (handle.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map((row) => row.name);
+
+    // The reference project's `router_backends`/`namespaces`, inherited from
+    // Durable-DAV-Router. Dead code here, and `router_backends` referenced
+    // `users(email)` — a nullable, non-unique column — so `PRAGMA foreign_key_check`
+    // failed outright with a foreign key mismatch. D1 enforces foreign keys, so that
+    // is a landmine in the live schema, not a cosmetic leftover.
+    expect(tables).not.toContain('router_backends');
+    expect(tables).not.toContain('namespaces');
+
+    // The assertion that matters: it must not merely return rows, it must not throw.
+    expect(handle.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it('builds the SAME `users` table production has, from the same migration set', () => {
+    // `migrations/0001_router_init.sql` is inherited from the reference project and
+    // also declares `users` — with an incompatible shape (`email TEXT PRIMARY KEY`,
+    // no `username_ci`, no credential columns). Both files use
+    // `CREATE TABLE IF NOT EXISTS`, so whichever runs first wins, silently.
+    //
+    // This suite used to `exec` only `0001_edge_sonic_init.sql`, so it asserted a
+    // table list that no real database has: it never saw the router's tables, and it
+    // never saw the collision. Applying the whole directory in Wrangler's order
+    // exposes both — which is the argument for reading the directory.
+    //
+    // Production is correct today, and only because of the filename sort:
+    // `0001_edge_sonic_init.sql` < `0001_router_init.sql`, so Edge-Sonic's `users`
+    // is created first and the router's is a no-op. That is a load-bearing
+    // alphabetical accident between two projects' migrations, and this assertion is
+    // what stops it from being a silent outage the day either file is renamed.
+    const columns = (handle.raw.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((row) => row.name);
+    expect(columns).toContain('username_ci');
+    expect(columns).toContain('password_ciphertext');
+    expect(columns).toContain('token_epoch');
+
+    // And the two files that collide are ordered the way the database needs.
+    expect(migrationFiles().indexOf('0001_edge_sonic_init.sql')).toBeLessThan(migrationFiles().indexOf('0001_router_init.sql'));
+  });
+});
+
+/**
+ * An applied migration is immutable, and nothing in a `.sql` file says so.
+ *
+ * D1 records applied migrations by *filename*, so a migration that has run is skipped
+ * by every later `wrangler d1 migrations apply` — silently, with no warning and no
+ * error. Editing a shipped migration therefore changes the repository without changing
+ * the database, and the code starts naming a column the database has never heard of.
+ *
+ * It shipped. `songs.reader_version` was added to `0001` after `0001` had been applied
+ * to the live database, so the column never existed there: `applyMetadata` and
+ * `upsertFileFacts` both named it and both failed, enrichment wrote nothing, and
+ * `getArtists` / `getAlbumList2` / `getGenres` / `search3` answered `[]` for a library
+ * of 80 albums whose rows sat in D1 with every derived column NULL. `getSong` answered
+ * a masked 500, the scan wedged in `failed`, and `getScanStatus` reported that as a
+ * finished scan. 489 tests passed throughout, because a suite that hardcodes one
+ * migration filename cannot tell a new migration from an edit to an old one.
+ *
+ * So the fact the deployment actually depends on is recorded and asserted.
+ */
+describe('the migration lock', () => {
+  it('records a migration file that has been applied and not changed since', () => {
+    const { added, changed } = migrationDrift();
+    // Adding a schema change means adding a numbered file *and* an entry here, in the
+    // same commit. A new migration with no entry is a migration nobody has applied.
+    expect(added).toEqual([]);
+    // A changed hash is the defect above: the bytes moved, so the database did not.
+    expect(changed).toEqual([]);
+  });
+
+  it('has a hash for every migration on disk, and every hash is a real digest', () => {
+    // Asserted separately from the drift check so a failure names which direction
+    // broke: an unreadable lock otherwise surfaces as "no migrations recorded".
+    const lock = readLock().migrations;
+    for (const name of migrationFiles()) {
+      expect(lock[name], `${name} is not recorded in applied.lock.json`).toMatch(/^[0-9a-f]{64}$/);
+    }
+    for (const [name, hash] of Object.entries(lock)) {
+      expect(hash, `${name} has a malformed hash`).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+
+  it('detects an edit to a shipped migration rather than trusting the absence of one', () => {
+    // The guard is worthless if it cannot fail, and a test that only asserts "no drift"
+    // is exactly the shape that would pass forever with the check removed. So this
+    // computes the comparison the guard performs, against a value that is wrong.
+    const lock = readLock().migrations;
+    const real = sha256('0001_edge_sonic_init.sql');
+    expect(lock['0001_edge_sonic_init.sql']).toBe(real);
+    expect(lock['0001_edge_sonic_init.sql']).not.toBe(sha256('0002_songs_reader_version.sql'));
+  });
+
+  it('ships every column the DAOs name, because a migration is a promise about the schema', () => {
+    // The defect this whole block exists for was a *column* that existed in the
+    // repository and not in the database. So the check is not "the files are tidy" —
+    // it is that every column the write statements actually reference is present after
+    // the migrations have run. A DAO naming a column no migration creates fails here,
+    // in a suite, rather than on a request against a live database.
+    const columns = (handle.raw.prepare('PRAGMA table_info(songs)').all() as Array<{ name: string }>).map((row) => row.name);
+    for (const column of [
+      // `applyMetadata` and `UPSERT_FILE_FACTS` both name these. `reader_version` is
+      // the one that shipped missing: 0001 had already been applied, so the edit that
+      // added it never ran, and every enrichment write raised "no such column".
+      'id',
+      'library_id',
+      'path',
+      'dir_path',
+      'name',
+      'name_ci',
+      'size',
+      'mtime_ms',
+      'content_type',
+      'suffix',
+      'title',
+      'artist',
+      'artist_ci',
+      'album',
+      'album_ci',
+      'album_artist',
+      'album_artist_ci',
+      'genre',
+      'genre_ci',
+      'track',
+      'disc',
+      'year',
+      'duration',
+      'bitrate',
+      'sample_rate',
+      'channels',
+      'enriched_at',
+      'reader_version',
+    ]) {
+      expect(columns, `songs.${column} is named by a DAO but created by no migration`).toContain(column);
+    }
+
+    // Same for the column the scan's retry bound reads. Asserted here rather than
+    // only in a service test because the failure mode is the identical one: a column
+    // that is real to the code and absent from the database.
+    const scanColumns = (handle.raw.prepare('PRAGMA table_info(scan_state)').all() as Array<{ name: string }>).map((row) => row.name);
+    expect(scanColumns).toContain('consecutive_failures');
+  });
+
+  it('orders migrations the way Wrangler does, which is by filename', () => {
+    // A test that builds the schema in a different order than production is a test
+    // that can pass on a schema production never had.
+    const files = migrationFiles();
+    expect(files).toEqual([...files].sort());
+    expect(files[0]).toBe('0001_edge_sonic_init.sql');
   });
 });
 
@@ -366,6 +527,175 @@ describe('every hot lookup uses an index', () => {
     const plan = queryPlan(handle, String.raw`SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\'`, ['L', '%ab%']);
     expect(plan).toMatch(/SEARCH songs USING (?:COVERING )?INDEX idx_songs_(title_ci|album_title_ci)/);
     expect(plan).not.toMatch(/SCAN songs/);
+  });
+});
+
+/**
+ * The path-derived grouping, and the `COALESCE` that makes it safe.
+ *
+ * ### The defect
+ *
+ * `listAlbums` filters `album_ci IS NOT NULL AND album_ci <> ''`, `listArtists` filters
+ * `artist_ci IS NOT NULL`, and `listGenres` filters `genre_ci IS NOT NULL`. Those
+ * columns are written *only* by a tag read — one ranged WebDAV request per track,
+ * bounded twice over, so for a library of any size most rows are unenriched for a long
+ * time. A row with them NULL is not rendered with a blank name; it is **absent from
+ * every aggregate**, and `search3` cannot match it.
+ *
+ * It shipped. A client authenticated against 80 albums and saw empty artists, albums,
+ * genres and search, while `getRandomSongs` — which does not group — returned rows
+ * with `duration: 0` and no artist at all. The `songs` table was full the whole time.
+ *
+ * ### The fix, and the property that makes it safe
+ *
+ * The WebDAV path already names the artist and the album, so the indexer writes them.
+ * `COALESCE` is the safety argument: a derived value fills a NULL and *only* a NULL, so
+ * a real tag is never rolled back to a guess, and a rescan rewrites nothing.
+ */
+describe('path-derived grouping', () => {
+  async function indexSong(libraryId: string, path: string): Promise<void> {
+    const songs = new SongDAO(handle.db);
+    await songs.upsertFileFacts([
+      {
+        id: songId(libraryId, path),
+        libraryId,
+        path,
+        dirPath: path.split('/').slice(0, -1).join('/'),
+        name: path.split('/').pop() ?? path,
+        size: 1000,
+        mtimeMs: 1000,
+        contentType: 'audio/ogg',
+        suffix: 'ogg',
+      },
+    ]);
+  }
+
+  it('groups an unenriched track, so the aggregates are not empty before any tag read', async () => {
+    // The whole point. `Artist/Album/01 Track.opus` names both, and nothing had ever
+    // written them down.
+    const userId = await seedUser('DerivedNested');
+    const libraryId = await seedLibrary(userId, 'LDN');
+    await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+
+    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+    expect(row?.album).toBe('Black Sands');
+    expect(row?.artist).toBe('Bonobo (derived)');
+    expect(row?.album_artist).toBe('Bonobo (derived)');
+
+    // Every `_ci` twin moves with its counterpart, in the same statement. Asserted
+    // separately from the display values because the two are *independently* breakable:
+    // a `_ci` column that drifts from its source is an ungroupable row, and the drift
+    // is invisible until somebody browses by artist — the display name looks perfect the
+    // whole time. Removing `COALESCE` from only the `_ci` assignments, leaving the
+    // display ones intact, passes every other assertion in this file.
+    expect(row?.album_ci).toBe('black sands');
+    expect(row?.artist_ci).toBe('bonobo (derived)');
+    expect(row?.album_artist_ci).toBe('bonobo (derived)');
+
+    // And the aggregate that filters on those columns now answers.
+    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' });
+    expect(albums.map((song) => song.album)).toEqual(['Black Sands']);
+    const artists = await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0);
+    expect(artists.map((song) => song.artist)).toEqual(['Bonobo (derived)']);
+  });
+
+  it('groups a flat "Artist - Album" folder, which is a whole library layout', async () => {
+    // The layout this product's live library uses: one folder per album, named
+    // `Artist - Album`, with the tracks inside. Without this, every album groups under
+    // an artist literally named "Artist - Album" — browsable albums, no artists.
+    const userId = await seedUser('DerivedFlat');
+    const libraryId = await seedLibrary(userId, 'LDF');
+    await indexSong(libraryId, 'Radiohead - OK Computer/01 Airbag.opus');
+
+    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Radiohead - OK Computer/01 Airbag.opus'));
+    expect(row?.album).toBe('OK Computer');
+    expect(row?.artist).toBe('Radiohead (derived)');
+  });
+
+  it('splits on the FIRST separator only, so an album title with a dash survives', async () => {
+    const userId = await seedUser('DerivedDash');
+    const libraryId = await seedLibrary(userId, 'LDD');
+    await indexSong(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus');
+
+    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus'));
+    expect(row?.album).toBe('Symphony No. 5 - 1949 Recording');
+    expect(row?.artist).toBe('Mahler (derived)');
+  });
+
+  it('never overwrites a real tag, on a rescan or otherwise', async () => {
+    // The `COALESCE` is the entire safety argument for deriving on *every* index
+    // rather than only on first sight. If this were a plain assignment in the SET list,
+    // a rescan would roll every tagged row back to a path guess — and the symptom
+    // would be a library that loses its tags every time a file's mtime moves.
+    const userId = await seedUser('DerivedNoClobber');
+    const libraryId = await seedLibrary(userId, 'LDN2');
+    const path = 'Bonobo/Black Sands/01 Kerala.opus';
+    const songs = new SongDAO(handle.db);
+    const id = songId(libraryId, path);
+
+    await indexSong(libraryId, path);
+    await songs.applyMetadata(id, { artist: 'Bonobo', album: 'Black Sands (Remastered)', albumArtist: 'Bonobo', genre: 'Electronic' });
+
+    // Re-index the same file with a changed mtime, which is what a rescan does.
+    await songs.upsertFileFacts([
+      { id, libraryId, path, dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 2000, mtimeMs: 2000, contentType: 'audio/ogg', suffix: 'ogg' },
+    ]);
+
+    const row = await songs.findById(id);
+    expect(row?.artist).toBe('Bonobo');
+    expect(row?.album).toBe('Black Sands (Remastered)');
+
+    // The `_ci` twins too, and separately: they are independent assignments in the same
+    // statement, so a guard on the display column proves nothing about them. A drifted
+    // twin makes the row invisible to `getArtists` while `getAlbum` still names it.
+    expect(row?.artist_ci).toBe('bonobo');
+    expect(row?.album_ci).toBe('black sands (remastered)');
+
+    // Provenance is not lost either: the mtime change cleared `enriched_at`, so the
+    // row is re-read and the real values are written back on top of the derived ones.
+    expect(row?.enriched_at).toBeNull();
+  });
+
+  it('derives nothing for a track at the library root, rather than grouping under a blank name', async () => {
+    // A NULL column is a row that is absent from the aggregates. An *empty* column is
+    // a row grouped under "", which `getArtists` renders as an unlabelled entry at the
+    // top of the `#` group — the same defect `NodeDAO.listRoots` had with the library
+    // root. So an uninformative path yields NULL, not ''.
+    const userId = await seedUser('DerivedRoot');
+    const libraryId = await seedLibrary(userId, 'LDR');
+    await indexSong(libraryId, 'loose-track.opus');
+
+    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'loose-track.opus'));
+    expect(row?.album).toBeNull();
+    expect(row?.artist).toBeNull();
+    expect(row?.album_ci).toBeNull();
+  });
+
+  it('does not derive a genre, because a guessed genre is worse than an absent one', async () => {
+    // `getGenres` publishes a song count beside the name, so a derived value would be
+    // offered to the user as fact. There is no path convention for genre, track or
+    // year that is not a guess, so none is derived.
+    const userId = await seedUser('DerivedNoGenre');
+    const libraryId = await seedLibrary(userId, 'LDG');
+    await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+
+    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+    expect(row?.genre).toBeNull();
+    expect(row?.genre_ci).toBeNull();
+    expect(row?.track).toBeNull();
+    expect(row?.year).toBeNull();
+    expect(await new SongIndexDAO(handle.db).listGenres(libraryId)).toEqual([]);
+  });
+
+  it('is stable, so a rescan of an unchanged folder writes no different value', async () => {
+    // Incrementality depends on this: the same path must always derive the same
+    // string, or every scan would rewrite every grouping column and the "unchanged
+    // rescan costs zero rows" guarantee would be a comment rather than a fact.
+    const first = deriveFromPath('Bonobo/Black Sands');
+    const second = deriveFromPath('Bonobo/Black Sands');
+    expect(first).toEqual(second);
+    // And the marker is part of the value, so a client can tell derived from tagged.
+    expect(first.artist).toContain(DERIVED_MARKER);
   });
 });
 

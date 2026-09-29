@@ -12,7 +12,7 @@
  *   problem to a table that costs one indexed read to answer.
  */
 import { BaseDAO } from './BaseDAO';
-import type { ScanStateRow, StarItemType } from './rows';
+import type { StarItemType } from './rows';
 import { nowSeconds } from './identity';
 
 
@@ -314,86 +314,14 @@ class AuthThrottleDAO extends BaseDAO {
   }
 }
 
-class ScanStateDAO extends BaseDAO {
-  public async find(libraryId: string): Promise<ScanStateRow | null> {
-    return await this.withRetry(
-      async () => await this.database.prepare('SELECT * FROM scan_state WHERE library_id = ?').bind(libraryId).first<ScanStateRow>(),
-      'scanState.find',
-    );
-  }
-
-  public async ensure(libraryId: string): Promise<ScanStateRow> {
-    const existing = await this.find(libraryId);
-    if (existing) return existing;
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('INSERT OR IGNORE INTO scan_state (library_id, status, scanned_count, total_count, index_version, updated_at) VALUES (?, ?, 0, 0, 1, ?)')
-          .bind(libraryId, 'idle', nowSeconds())
-          .run(),
-      'scanState.ensure',
-    );
-    const created = await this.find(libraryId);
-    if (!created) throw new Error('scan_state.ensure did not produce a readable row.');
-    return created;
-  }
-
-  public async markScanning(libraryId: string, totalCount: number): Promise<void> {
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare("UPDATE scan_state SET status = 'scanning', total_count = ?, scanned_count = 0, cursor_path = NULL, last_error = NULL, started_at = ?, updated_at = ? WHERE library_id = ?")
-          .bind(totalCount, nowSeconds(), nowSeconds(), libraryId)
-          .run(),
-      'scanState.markScanning',
-    );
-  }
-
-  public async saveProgress(libraryId: string, scannedCount: number, cursorPath: string | null): Promise<void> {
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('UPDATE scan_state SET status = ?, scanned_count = ?, cursor_path = ?, updated_at = ? WHERE library_id = ?')
-          .bind('scanning', scannedCount, cursorPath, nowSeconds(), libraryId)
-          .run(),
-      'scanState.saveProgress',
-    );
-  }
-
-  /**
-   * Finish a scan and bump `index_version`.
-   *
-   * The bump is what invalidates every cached aggregate for this library — not by
-   * deleting anything, but by making the old keys unreachable. See
-   * `KvDomains.ts` for why that matters against a 1,000-writes-per-day plan.
-   */
-  public async complete(libraryId: string, scannedCount: number): Promise<number> {
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare("UPDATE scan_state SET status = 'idle', scanned_count = ?, cursor_path = NULL, last_error = NULL, updated_at = ?, index_version = index_version + 1 WHERE library_id = ?")
-          .bind(scannedCount, nowSeconds(), libraryId)
-          .run(),
-      'scanState.complete',
-    );
-    const row = await this.find(libraryId);
-    return row?.index_version ?? 1;
-  }
-
-  public async fail(libraryId: string, error: string): Promise<void> {
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare("UPDATE scan_state SET status = 'failed', last_error = ?, updated_at = ? WHERE library_id = ?")
-          .bind(error.slice(0, 500), nowSeconds(), libraryId)
-          .run(),
-      'scanState.fail',
-    );
-  }
-}
 
 
-export { AnnotationDAO, AuthThrottleDAO, ScanStateDAO };
+export { AnnotationDAO, AuthThrottleDAO };
+// Re-exported so `@edge-sonic/backend-data/dao` keeps one import path for all three.
+// It lives in its own module because it is a different concern — a scan's lifecycle
+// rather than a user's annotations — and folding it back in put this file over the
+// god-file limit.
+export { ScanStateDAO } from './ScanStateDAO';
 
 
 export {type StarItemType} from './rows';

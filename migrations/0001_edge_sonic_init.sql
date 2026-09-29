@@ -198,23 +198,6 @@ CREATE TABLE IF NOT EXISTS songs (
   channels INTEGER,
   -- When duration/bitrate were last read from the file, for staleness reporting.
   enriched_at INTEGER,
-  -- Which version of the *tag reader* produced enriched_at.
-  --
-  -- The staleness of a row is a function of two things, and only one of them used to be
-  -- recorded: the file's bytes, via mtime_ms, and the reader that extracted from them. A
-  -- reader that learns to read something it previously could not — an Opus comment block
-  -- sharing a page with its identification header, a granule that is only a duration on
-  -- the last page — leaves every row it already wrote looking current. The file has not
-  -- changed, so mtime matches, so `enrich` short-circuits and the wrong value is served
-  -- for ever. It shipped: a deploy carrying the corrected reader left a library reporting
-  -- a 240.61 s track as 3 s at 15329 kbps, with no artist, album, genre, track or year,
-  -- and a full rescan did not repair it.
-  --
-  -- So the value is 0 until a read happens, and `enrich` re-reads any row whose
-  -- reader_version is not the one it implements. The same `key_version` shape the
-  -- credential rows use: a counter whose only job is to make a superseded value
-  -- structurally unreachable rather than merely stale.
-  reader_version INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE

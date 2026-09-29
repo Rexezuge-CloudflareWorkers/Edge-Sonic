@@ -2,6 +2,7 @@
  * System endpoints: connectivity, licensing, and scan control.
  */
 import { el, elList, scanStatusElement, successResponse } from '@edge-sonic/subsonic';
+import { isAdvancing } from '@edge-sonic/backend-services/index';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -102,8 +103,19 @@ async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
   const result = await context.scan.step(library);
-  return respond(context, scanStatusElement({ scanning: result.status === 'scanning', count: result.scanned }));
+  return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count: result.scanned }));
 }
+
+/**
+ * `scanning` answers "will more work happen if I poll again", which is the only question
+ * it can usefully answer to a client — see `isAdvancing` in `backend-services`, and the
+ * defect it records: a retried scan reported `scanning: false`, every client read that
+ * as *stop polling*, and the library was never scanned.
+ *
+ * The reason a scan failed is not on this surface. `scanStatus` carries only `scanning`
+ * and `count`, and a reason here would be a non-standard attribute some strict clients
+ * reject. It is on `scan_state.last_error`, read through the operator API.
+ */
 
 /**
 `startScan` — probes the root and seeds the frontier. The work happens on later polls.
@@ -112,7 +124,7 @@ async function startScan(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
   const result = await context.scan.start(library);
-  return respond(context, scanStatusElement({ scanning: result.status === 'scanning', count: result.scanned }));
+  return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count: result.scanned }));
 }
 
 const systemEndpoints = { ping, getLicense, getMusicFolders, getScanStatus, startScan };

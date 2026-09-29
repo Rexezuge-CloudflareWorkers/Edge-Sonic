@@ -84,31 +84,42 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const offset = context.params.int('offset', 0, { min: 0 });
 
   const rows = await context.songIndex.listArtists(library.id, limit + offset, 0);
-  const byName = new Map<string, { albums: Set<string>; songs: number }>();
+
+  // The display name is captured **per group, while grouping** rather than recovered
+  // afterwards with `rows.find(...)`.
+  //
+  // That `find` was inside the loop over artists, so it was O(artists × rows) — a
+  // quadratic scan over a `SELECT *` of the artist's whole catalogue, run on the
+  // endpoint a client calls to draw its main screen. A 5,000-track library with 400
+  // artists is millions of string comparisons to produce a list a client shows once.
+  const byName = new Map<string, { name: string; albums: Set<string>; songs: number }>();
   for (const row of rows) {
-    const name = artistNameOf(row);
-    const key = (row.artist ?? name).toLowerCase();
+    const name = row.artist ?? artistNameOf(row);
+    const key = name.toLowerCase();
     const existing = byName.get(key);
     if (existing) {
       existing.albums.add(albumKeyOf(row));
       existing.songs += 1;
     } else {
-      byName.set(key, { albums: new Set([albumKeyOf(row)]), songs: 1 });
+      // A real tag over a path-derived name, so the first row carrying a tag wins: a
+      // library half-enriched groups under the true name rather than under a guess.
+      if (row.artist === null) {byName.set(key, { name, albums: new Set([albumKeyOf(row)]), songs: 1 });}
+      else {byName.set(key, { name: row.artist, albums: new Set([albumKeyOf(row)]), songs: 1 });}
     }
   }
 
   const annotations = await annotationsFor(context, [...byName.keys()]);
   const buckets = new Map<string, ElementNode[]>();
-  const ordered = [...byName].sort(([a], [b]) => a.localeCompare(b)).slice(offset, offset + limit);
-
-  for (const [key, group] of ordered) {
-    const name = rows.find((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === key);
-    if (!name) continue;
-    const id = encodeId(IdKind.Artist, library.id, name.artist ?? artistNameOf(name));
-    const letter = /^[A-Z]/i.test(name.artist ?? artistNameOf(name)) ? (name.artist ?? artistNameOf(name))[0].toUpperCase() : '#';
+  // Sorted by the grouping key, sliced for the page, and the name each group needs is
+  // read off the entry rather than recovered with a `rows.find(...)` — which is what
+  // removed the quadratic scan this loop used to do per artist.
+  const page = [...byName].sort(([a], [b]) => a.localeCompare(b)).slice(offset, offset + limit);
+  for (const [, group] of page) {
+    const id = encodeId(IdKind.Artist, library.id, group.name);
+    const letter = /^[A-Z]/i.test(group.name) ? group.name[0].toUpperCase() : '#';
     const node = artistElement({
       id,
-      name: name.artist ?? artistNameOf(name),
+      name: group.name,
       albumCount: group.albums.size,
       ...(annotations.stars.has(id) && { starred: undefined }),
     });

@@ -52,12 +52,25 @@
  * allowance. Because the frontier lives in D1 and the scan is resumable, the
  * overshoot degrades to *"the scan takes a couple of days"* rather than *"the scan
  * fails"*.
+ *
+ * ### A failure is retried, and the retry is bounded
+ *
+ * A failure leaves the frontier where it was and the next poll resumes, so that claim
+ * is a property of the code rather than of this comment. It used to be neither:
+ * `step` short-circuited on any status other than `scanning`, and `fail` sets
+ * `failed`, so one bad chunk ended a scan permanently with the frontier sitting
+ * untouched in D1. Eighty albums stayed at one visited folder, and `getScanStatus` —
+ * which derives `scanning` from this status — answered `scanning: false`, which every
+ * client reads as *finished*. `MAX_CONSECUTIVE_FAILURES` is the other half: retrying a
+ * transient fault is the entire point, and retrying a permanent one for ever is a loop
+ * that spends the operator's WebDAV requests to reach the same conclusion every time.
  */
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
 import { ScanBudget, stopReason } from './scanBudget';
+import { decideStep, idleResult, MAX_CONSECUTIVE_FAILURES, stalledResult, unableToAdvance } from './scanRetry';
 import type { ChunkResult, ScanDeps } from './scanTypes';
 import { LAST_ERROR_MAX } from './scanTypes';
 
@@ -168,28 +181,26 @@ class ScanService {
    */
   public async step(library: LibraryRow): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(library.id);
-    if (state.status !== 'scanning') {
-      // A poll with no scan running is the common case — a client opening the app —
-      // so it must not touch the network or write anything.
-      //
-      // The stored `last_error` is carried through here specifically: this is the
-      // path a client takes after a failure, and it is the only place the reason
-      // can still be recovered without another failing request.
-      return {
-        status: state.status === 'failed' ? 'failed' : 'idle',
-        scanned: state.scanned_count,
-        total: state.total_count,
-        indexVersion: state.index_version,
-        lastError: state.last_error,
-        foldersVisited: 0,
-        webdavRequests: 0,
-        rowsWritten: 0,
-        stoppedBy: null,
-      };
-    }
+
+    // Whether a `failed` scan may run again is a state-machine decision, and it is not
+    // an obvious one: `failed` used to be terminal, and treating it as terminal is what
+    // left a library of eighty albums at one scanned folder for the life of a
+    // deployment. See `scanRetry.ts` for the whole account.
+    const decision = decideStep(state);
+    if (decision === 'stalled') return stalledResult(state);
+    if (decision === 'idle') return idleResult(state, 'idle');
 
     const frontier = await this.deps.nodes.listFrontier(library.id, this.deps.chunkFolders);
     if (frontier.length === 0) {
+      // An empty frontier normally means the scan is done, and `complete` is right.
+      //
+      // The exception is a chunk *entered from* a failed state, where there is nothing
+      // left to retry — and completing would claim a library is fully walked when the
+      // walk stopped. `start` seeds the frontier with the library root, so a scan that
+      // failed in its own root probe is the case that lands here.
+      if (state.status === 'failed') {
+        return await unableToAdvance(state, async (error) => await this.deps.scanState.fail(library.id, error));
+      }
       const indexVersion = await this.deps.scanState.complete(library.id, state.scanned_count);
       return {
         status: 'idle',
@@ -255,7 +266,10 @@ class ScanService {
   public async status(libraryId: string): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(libraryId);
     return {
-      status: state.status === 'scanning' ? 'scanning' : state.status === 'failed' ? 'failed' : 'idle',
+      // A read-only status reports `stalled` from the stored counter, so an operator
+      // opening the page sees the same terminal state a poll would have reported —
+      // rather than a `failed` that reads as "retrying" when it is not.
+      status: state.status === 'scanning' ? 'scanning' : state.status === 'failed' ? (state.consecutive_failures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed') : 'idle',
       scanned: state.scanned_count,
       total: state.total_count,
       indexVersion: state.index_version,
@@ -280,14 +294,15 @@ class ScanService {
     budget: ScanBudget,
     partial?: { rowsWritten: number; scanned: number; foldersVisited: number },
   ): Promise<ChunkResult> {
-    // The frontier is left where it was, so the next poll resumes rather than
-    // restarting. The text can be upstream-controlled, so it is bounded to the
-    // same length the DAO persists, and the *bounded* value is what is returned:
-    // reporting the untruncated string would show the operator more than the
-    // database actually holds.
+    // The frontier is left where it was, and `step` re-enters a failed scan rather
+    // than treating the status as terminal — so "the next poll resumes" is now a
+    // property of the code and not of this comment. The text can be upstream-controlled,
+    // so it is bounded to the same length the DAO persists, and the *bounded* value is
+    // what is returned: reporting the untruncated string would show the operator more
+    // than the database actually holds.
     const message = (error instanceof Error ? error.message : String(error)).slice(0, LAST_ERROR_MAX);
-    await this.deps.scanState.fail(library.id, message);
-    return {
+    const consecutiveFailures = await this.deps.scanState.fail(library.id, message);
+    const result: ChunkResult = {
       status: 'failed',
       scanned: partial?.scanned ?? state.scanned_count,
       total: state.total_count,
@@ -301,6 +316,10 @@ class ScanService {
       rowsWritten: partial?.rowsWritten ?? 0,
       stoppedBy: null,
     };
+    // The last permitted failure reports as `stalled`, because it will not be retried
+    // and `failed` elsewhere means exactly that it will be. Both carry the reason; only
+    // this one is the end of the road without an explicit `startScan`.
+    return consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? { ...result, status: 'stalled' } : result;
   }
 
   private async listFolder(library: LibraryRow, path: string, budget: ScanBudget): Promise<DavResource[] | null> {

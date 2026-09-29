@@ -106,6 +106,18 @@ interface ScanStateRow {
   index_version: number;
   last_error: string | null;
   started_at: number | null;
+  /**
+   * Consecutive chunks that ended in a failure.
+   *
+   * Bounded retries, not a boolean. A scan that failed once is retried by the next
+   * poll — the frontier is in D1 and the fault may have been transient — so a `failed`
+   * status cannot itself be terminal. Without a count, a permanently broken library
+   * is re-attempted on every poll for ever.
+   *
+   * In D1 rather than in a module-level variable because it must survive the isolate:
+   * a counter that resets when a different isolate serves the next poll is not a bound.
+   */
+  consecutive_failures: number;
   updated_at: number;
 }
 

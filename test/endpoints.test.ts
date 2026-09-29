@@ -16,6 +16,7 @@
  * that only shows up on a screen nobody tests.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { createHarness, ALBUM_DIR, subsonicId } from './helpers/harness';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
@@ -455,6 +456,64 @@ describe('the scan controls', () => {
     const { status, body } = await harness.rest('startScan');
     expect(status).toBe(200);
     expect(payload<{ scanning: boolean }>(body, 'scanStatus')).toBeDefined();
+  });
+
+  /**
+   * `scanning` answers "will more work happen if I poll again", not "did this call work".
+   *
+   * It shipped as the latter. A scan that failed reported `scanning: false`, which every
+   * client reads as *stop polling* — so the client stopped, the frontier in D1 was never
+   * read again, and a library of 80 albums sat at one scanned folder reporting
+   * `{"scanning": false, "count": 1}` indefinitely. The reason sat in
+   * `scan_state.last_error`, reachable only from the operator API behind Access.
+   *
+   * So this asserts the wire shape for each stored status directly. Going through the
+   * service would only re-assert the service's own mapping; the claim is about what a
+   * client is told.
+   */
+  describe('what "scanning" means to a client', () => {
+    /**
+     * Put `scan_state` into a stored state and report what the next poll says.
+     *
+     * Written straight to the row because the *mapping* is the claim under test: the
+     * service's own behaviour for each status is covered in
+     * `test/scan-incremental.test.ts`, and driving it through a real failing origin here
+     * would assert that twice while testing the mapping never.
+     *
+     * `scanned_count = 0` and no frontier, so a re-entered failed scan has nothing to
+     * retry and reports `failed` or `stalled` without doing work — which is the state a
+     * library whose root probe keeps failing actually sits in.
+     */
+    async function reportWith(consecutiveFailures: number): Promise<boolean> {
+      // The caller's own library: `getScanStatus` resolves "the" library as the first
+      // granted one, so the row written has to be that one.
+      const granted = await harness.db.db.prepare('SELECT library_id AS id FROM user_libraries LIMIT 1').all<{ id: string }>();
+      await harness.db.db
+        .prepare(
+          `INSERT INTO scan_state (library_id, status, scanned_count, total_count, index_version, consecutive_failures, updated_at)
+           VALUES (?, 'failed', 0, 0, 1, ?, 0)
+           ON CONFLICT (library_id) DO UPDATE SET
+             status = 'failed', scanned_count = 0, consecutive_failures = excluded.consecutive_failures`,
+        )
+        .bind(granted.results[0]?.id, consecutiveFailures)
+        .run();
+      const { body } = await harness.rest('getScanStatus');
+      return payload<{ scanning: boolean }>(body, 'scanStatus').scanning;
+    }
+
+    it('tells a client to keep polling while a failed scan will be retried', async () => {
+      // The regression. `scanning: false` here is read by every client as *stop
+      // polling*, so the client stopped, the frontier was never read again, and the
+      // library stayed at whatever the failing chunk had reached.
+      expect(await reportWith(1)).toBe(true);
+    });
+
+    it('tells a client to stop only once the retry budget is spent', async () => {
+      // The distinction that matters. Reporting `false` for the first is what stopped
+      // the scan; reporting it for the second is correct, because nothing will change
+      // without an explicit `startScan`.
+      expect(await reportWith(MAX_CONSECUTIVE_FAILURES)).toBe(false);
+    });
   });
 });
 

@@ -223,9 +223,25 @@ async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: 
     // An artist id carries the artist *name*, not a path, so the folder has to be
     // found. Albums are searched first, because that is where the cover lives, and
     // the artist directory is the fallback for a library that keeps one.
-    const rows = await context.songIndex.listArtists(library.id, 500, 0);
+    const rows = await context.songIndex.listArtists(library.id, ARTIST_COVER_ROW_LIMIT, 0);
+
+    // One probe per *album directory*, not per song row. `listArtists` returns every
+    // song on the artist page, so an artist with 300 tracks in 30 albums was 300
+    // `findCoverIn` calls — each a D1 read or a live `PROPFIND` — to look for one
+    // image. A `Set` over the directories collapses that to at most 30, and the
+    // `take` bounds it at a handful so a compilation cannot spend a whole budget of
+    // requests on a cover that is not there.
+    //
+    // The first album is not necessarily the one with art, so this is a *sample*, and
+    // the directory fallback below is what covers the rest. Probing all 30 to be sure
+    // is the trade being declined: `getCoverArt` is called once per album row a client
+    // draws, so 30 subrequests per row is a budget failure, not thoroughness.
+    const wanted = path.toLowerCase();
+    const probed = new Set<string>();
     for (const row of rows) {
-      if ((row.artist ?? row.album_artist ?? '').toLowerCase() !== path.toLowerCase()) continue;
+      if (((row.artist ?? row.album_artist ?? '').toLowerCase() !== wanted) || probed.has(row.dir_path)) continue;
+      if (probed.size >= ARTIST_COVER_PROBE_LIMIT) break;
+      probed.add(row.dir_path);
       const found = await findCoverIn(library, row.dir_path, context);
       if (found !== null) return found;
     }
@@ -234,6 +250,26 @@ async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: 
   }
   return null;
 }
+
+/**
+ * How many song rows an artist cover request will consider.
+ *
+ * A bound because `listArtists` is `SELECT *` over every track by that artist — a page
+ * size of 500 on an artist with 5,000 tracks is not a cover lookup, it is a table
+ * fetch. The probe limit below is what actually caps the outbound requests; this one
+ * only caps the rows read to find candidate directories.
+ */
+const ARTIST_COVER_ROW_LIMIT = 500;
+
+/**
+ * How many album directories one artist cover request will `PROPFIND`.
+ *
+ * Sampled, not exhaustive, and the reason is arithmetic rather than taste: a client
+ * draws one cover per album row, so probing every album of a 30-album artist is 30
+ * subrequests per row drawn, against a 50-request ceiling for the whole invocation on
+ * the Free plan. Missing art renders the placeholder every client already handles.
+ */
+const ARTIST_COVER_PROBE_LIMIT = 3;
 
 async function findCoverIn(library: LibraryRow, dirPath: string, context: RestContext): Promise<string | null> {
   const { children } = await context.tree.children(library, dirPath);

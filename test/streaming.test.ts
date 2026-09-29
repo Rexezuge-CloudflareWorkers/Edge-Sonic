@@ -210,6 +210,27 @@ describe('download', () => {
 });
 
 describe('getCoverArt', () => {
+  /**
+   * Albums in the compilation fixture: 40, which is what makes "one probe per album
+   * directory" a different number from "one probe per track".
+   */
+  const ALBUM_COUNT = 40;
+  const TRACKS_PER_ALBUM = 3;
+  /**
+   * The shipped cap on album directories one artist cover request will probe.
+   *
+   * Read from the module rather than restated, so the assertion and the code cannot
+   * drift — a restated number is a number that stops meaning anything the day someone
+   * tunes the constant.
+   */
+  const ARTIST_COVER_PROBE_LIMIT = 3;
+
+  /**
+   * The origin's root, as `fakeDav` keys its tree. A trailing segment is not stripped by
+   * the double, so a test that guesses this gets a 404 and a false pass.
+   */
+  const LIBRARY_ROOT = '/remote.php/dav/files/alice/Music';
+
   it('serves the image bytes with the origin content type', async () => {
     // An `artwork-embedded` client passes a cover-art id, which is derived from the
     // album's directory rather than a file, so the server has to look for a conventional
@@ -234,6 +255,77 @@ describe('getCoverArt', () => {
     // again, so adding a cover later never shows up.
     const { body } = await harness.rest('getCoverArt', { id: subsonicId('ar', 'No Such Artist') });
     expect(body['subsonic-response'].error?.code).toBe(70);
+  });
+
+  it('probes an artist once per album directory, up to a bound, not once per track', async () => {
+    // An artist id carries a *name*, so the cover's folder has to be found, and finding it
+    // reads every song on the artist page. The lookup used to issue one `findCoverIn` per
+    // matching **row**: an artist with 120 tracks spent 120 D1 reads or live `PROPFIND`s
+    // looking for one image, on a request a client makes once per album row it draws,
+    // against a 50-external-subrequest ceiling for the whole invocation on the Free plan.
+    //
+    // Two independent bounds, so two things are asserted. A `Set` over directories
+    // collapses the per-row duplication (120 → 40); a separate cap bounds a compilation
+    // that genuinely has 40 albums (40 → 3). Removing only the cap still passes a
+    // "fewer than 120" assertion, so the count is a hard ceiling.
+    //
+    // The origin really has these albums and they have **no** cover, so nothing
+    // short-circuits on a hit: the loop runs to its own cap every time. A seed whose
+    // first album had art would make the count an accident of the fixture.
+    const davTree: Record<string, DavEntry[]> = {};
+    for (let album = 1; album <= ALBUM_COUNT; album += 1) {
+      const dir = `${LIBRARY_ROOT}/Compilers/${album}`;
+      davTree[dir] = [
+        { path: dir, collection: true, mtime: 1000 },
+        ...Array.from({ length: TRACKS_PER_ALBUM }, (_, index) => ({ path: `${dir}/${index + 1}.flac`, mtime: 1000 })),
+      ];
+    }
+    harness.dav.setTree(davTree);
+
+    const libraryId = await harness.db.db.prepare('SELECT id FROM libraries LIMIT 1').first<{ id: string }>();
+    const statements = [];
+    for (let album = 1; album <= ALBUM_COUNT; album += 1) {
+      for (let track = 1; track <= TRACKS_PER_ALBUM; track += 1) {
+        statements.push(
+          harness.db.db
+            .prepare(
+              `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                                  duration, bitrate, artist, artist_ci, album, album_ci, album_artist, album_artist_ci,
+                                  created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 100, 1, 'audio/flac', 'flac', 0, 0,
+                       'The Compilers', 'the compilers', ?, ?, 'The Compilers', 'the compilers', 0, 0)`,
+            )
+            .bind(
+              `s:comp-${album}-${track}`,
+              libraryId?.id ?? '',
+              `Compilers/${album}/${track}.flac`,
+              `Compilers/${album}`,
+              `${track}.flac`,
+              `${track}.flac`,
+              `Compilation ${album}`,
+              `compilation ${album}`,
+            ),
+        );
+      }
+    }
+    // `batch` is optional on the D1 surface a test may be handed, and the sequential
+    // fallback is what `BaseDAO` does for real too — so this goes through the same
+    // helper rather than assuming a method the double might not have.
+    for (const statement of statements) {
+      await statement.run();
+    }
+
+    const response = await harness.fetch(harness.restUrl('getCoverArt', { id: subsonicId('ar', 'The Compilers') }));
+    // `code=70`, because after the album probes the lookup falls back to the artist's
+    // *name* as a directory — and this artist has no such folder, only `Compilers/1..40`.
+    // The fallback is what the bound protects: it is one more request, and a client
+    // drawing 40 album rows is 40 such lookups.
+    expect(await response.clone().json()).toMatchObject({ 'subsonic-response': { error: { code: 70 } } });
+
+    // The claim. 120 rows, 40 directories, 3 album probes — and a 4th request for the
+    // artist-directory fallback, which is one fixed cost rather than one per album. The
+    // number that shipped was 121.
+    expect(harness.dav.propfinds.length).toBeLessThanOrEqual(ARTIST_COVER_PROBE_LIMIT + 1);
   });
 });
 

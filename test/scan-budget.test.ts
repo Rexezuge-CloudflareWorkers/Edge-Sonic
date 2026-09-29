@@ -77,6 +77,7 @@ function createIndex() {
     index_version: 1,
     last_error: null,
     started_at: null,
+    consecutive_failures: 0,
     updated_at: 0,
   };
 
@@ -194,7 +195,11 @@ function createIndex() {
           return state.index_version;
         },
         fail: async (_libraryId: string, error: string) => {
-          state = { ...state, status: 'failed', last_error: error };
+          // Incremented, because the returned count is what bounds the retry: a
+          // double that always returned 1 would let a broken scan retry for ever
+          // and a test asserting the bound would pass for the wrong reason.
+          state = { ...state, status: 'failed', last_error: error, consecutive_failures: state.consecutive_failures + 1 };
+          return state.consecutive_failures;
         },
       },
     },

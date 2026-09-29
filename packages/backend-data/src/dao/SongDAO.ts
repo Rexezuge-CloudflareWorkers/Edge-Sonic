@@ -21,6 +21,8 @@ import { nowSeconds } from './identity';
 import { chunkArray } from './chunking';
 import { UPSERT_FILE_FACTS } from './songSql';
 import type { SongMetadataInput } from './songSql';
+import { deriveFromPath } from './pathConvention';
+import { buildMetadataPatch } from './songMetadata';
 
 interface SongUpsertInput {
   id: string;
@@ -32,15 +34,31 @@ interface SongUpsertInput {
   mtimeMs: number;
   contentType: string | null;
   suffix: string;
+  /**
+   * The path-derived `album` / `artist` for this row, or `null` where the path says
+   * nothing.
+   *
+   * Passed in rather than derived here because the indexer is what knows `dirPath`, and
+   * a DAO that re-derived it would own a second copy of the convention. Nulls are
+   * bound as SQL NULL so `COALESCE` leaves the column alone — see `songSql.ts` for why
+   * filling a gap is safe and overwriting a tag is not.
+   */
+  derivedAlbum?: string | null;
+  derivedArtist?: string | null;
 }
 
 /**
  * Insert or refresh a song's *file* facts, leaving derived metadata alone.
  *
- * The derived columns (`title`, `album`, `duration`, …) are deliberately absent
+ * The tag-derived columns (`title`, `duration`, `bitrate`, …) are deliberately absent
  * from the `SET` list. A rescan that found the file unchanged must not blank out
- * metadata an enrichment pass already filled in — that is the difference between
- * a rescan costing zero writes and it destroying the index.
+ * metadata an enrichment pass already filled in — that is the difference between a
+ * rescan costing zero writes and it destroying the index.
+ *
+ * The path-derived `album`/`artist` are the one exception, and they are `COALESCE`d
+ * rather than assigned: they fill a NULL and never replace a value. Without them the
+ * aggregates are empty for every row the scan has not range-read, which is most of a
+ * library for a long time. See `pathConvention.ts`.
  */
 
 interface SongQuery {
@@ -98,8 +116,14 @@ class SongDAO extends BaseDAO {
   public async upsertFileFacts(inputs: readonly SongUpsertInput[]): Promise<number> {
     if (inputs.length === 0) return 0;
     const timestamp = nowSeconds();
-    const statements = inputs.map((input) =>
-      this.database
+    // Derived once per input rather than per bound parameter, and only when the caller
+    // did not supply it — so a caller that already knows the answer (the indexer does)
+    // and a caller that does not (a test, a future writer) cannot disagree about it.
+    const statements = inputs.map((input) => {
+      const derived = deriveFromPath(input.dirPath);
+      const album = input.derivedAlbum ?? derived.album;
+      const artist = input.derivedArtist ?? derived.artist;
+      return this.database
         .prepare(UPSERT_FILE_FACTS)
         .bind(
           input.id,
@@ -112,10 +136,22 @@ class SongDAO extends BaseDAO {
           input.mtimeMs,
           input.contentType,
           input.suffix,
+          // Derived names, each with its `_ci` twin, because a `_ci` column that
+          // drifts from its counterpart is an ungroupable row and the drift is
+          // invisible until somebody browses by artist.
+          artist,
+          artist?.toLowerCase() ?? null,
+          album,
+          album?.toLowerCase() ?? null,
+          // `album_artist` mirrors the derived artist: `getArtist` groups on it, and an
+          // album with a NULL album artist does not appear under the artist a client
+          // navigated to. The same value, so a compilation's tracks group consistently.
+          artist,
+          artist?.toLowerCase() ?? null,
           timestamp,
           timestamp,
-        ),
-    );
+        );
+    });
     return await this.runWriteBatch(statements, 'songs.upsertFileFacts');
   }
 
@@ -127,50 +163,23 @@ class SongDAO extends BaseDAO {
    * song a client actually opens.
    */
   public async applyMetadata(id: string, metadata: SongMetadataInput): Promise<void> {
-    const assignments: string[] = [];
-    const values: unknown[] = [];
-    const push = (column: string, value: string | number | null | undefined): void => {
-      if (value === undefined) return;
-      assignments.push(`${column} = ?`);
-      values.push(value);
-    };
-
-    // Every text column has a `_ci` twin, and they are written together here
-    // rather than at each call site. A `_ci` column that drifts from its
-    // counterpart is an unsearchable row, and the drift is invisible until
-    // somebody searches for the track.
-    const pushText = (column: string, value: string | null | undefined): void => {
-      if (value === undefined) return;
-      assignments.push(`${column} = ?`, `${column}_ci = ?`);
-      values.push(value, value === null ? null : value.toLowerCase());
-    };
-
-    pushText('title', metadata.title);
-    pushText('artist', metadata.artist);
-    pushText('album', metadata.album);
-    pushText('album_artist', metadata.albumArtist);
-    pushText('genre', metadata.genre);
-    push('track', metadata.track);
-    push('disc', metadata.disc);
-    push('year', metadata.year);
-    push('duration', metadata.duration);
-    push('bitrate', metadata.bitrate);
-    push('sample_rate', metadata.sampleRate);
-    push('channels', metadata.channels);
-    // Stamped with the same statement that writes the values, because a row whose
-    // `enriched_at` moved without its `reader_version` is a row nothing can re-read:
-    // the next reader compares the version, finds a match against whatever wrote last,
-    // and concludes the file has not been read since. The two are written together and
-    // read together for the same reason `mtime_ms` and `enriched_at` are.
-    if (metadata.readerVersion !== undefined) push('reader_version', metadata.readerVersion);
+    // The column list and the `_ci`-twin rule live in `songMetadata.ts`, beside the
+    // shape they target. Building them here rather than inline is what keeps
+    // `SongDAO` readable and the two in step.
+    const { assignments, values } = buildMetadataPatch(metadata);
+    // Nothing supplied: no statement. A `SET` with no assignments still costs a round
+    // trip, and a caller that supplied nothing has nothing to record.
     if (assignments.length === 0) return;
 
-    assignments.push('enriched_at = ?', 'updated_at = ?');
+    // `enriched_at` and `updated_at` in the same statement as the values, always. A row
+    // whose values moved without them is a row nothing will re-read.
     const timestamp = nowSeconds();
-    values.push(timestamp, timestamp, id);
-
     await this.withRetry(
-      async () => await this.database.prepare(`UPDATE songs SET ${assignments.join(', ')} WHERE id = ?`).bind(...values).run(),
+      async () =>
+        await this.database
+          .prepare(`UPDATE songs SET ${[...assignments, 'enriched_at = ?', 'updated_at = ?'].join(', ')} WHERE id = ?`)
+          .bind(...values, timestamp, timestamp, id)
+          .run(),
       'songs.applyMetadata',
     );
   }
