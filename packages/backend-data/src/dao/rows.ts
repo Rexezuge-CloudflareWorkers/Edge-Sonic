@@ -84,6 +84,15 @@ interface SongRow {
   sample_rate: number | null;
   channels: number | null;
   enriched_at: number | null;
+  /**
+   * Which version of the tag reader produced `enriched_at`.
+   *
+   * Staleness is a function of the file's bytes *and* of the reader that extracted from
+   * them, and only the first was recorded — so a reader that learns to read something
+   * it previously could not leaves every row it already wrote looking current. See
+   * `READER_VERSION` in `media-tags` and the migration's comment.
+   */
+  reader_version: number;
   created_at: number;
   updated_at: number;
 }

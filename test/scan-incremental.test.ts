@@ -174,6 +174,11 @@ function createIndex() {
               sample_rate: null,
               channels: null,
               enriched_at: null,
+              // 0, which is what the real upsert writes for a row whose bytes moved. A
+              // non-zero value here would make this double disagree with the statement
+              // about which rows need re-reading — and that disagreement is invisible
+              // until a reader changes.
+              reader_version: 0,
               created_at: 0,
               updated_at: 0,
             });

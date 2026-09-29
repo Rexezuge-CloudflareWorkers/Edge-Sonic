@@ -37,7 +37,7 @@
  */
 import { decryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { readAudioTags, readOggTailDuration } from '@edge-sonic/media-tags';
+import { readAudioTags, readOggTailDuration, READER_VERSION } from '@edge-sonic/media-tags';
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { WebDavClient } from '@edge-sonic/webdav';
@@ -59,6 +59,12 @@ interface SongStore {
       bitrate?: number | null;
       sampleRate?: number | null;
       channels?: number | null;
+      /**
+       * Which version of the tag reader produced this write. Written with the values
+       * rather than beside them, because a row whose `enriched_at` moved without its
+       * `reader_version` is a row no future reader can tell apart from a current one.
+       */
+      readerVersion?: number | null;
     },
   ): Promise<void>;
 }
@@ -102,6 +108,14 @@ Cached enrichment, keyed by song id and validated by the file's mtime.
 */
 interface CachedEnrichment {
   readonly mtimeMs: number;
+  /**
+   * Which reader produced this entry.
+   *
+   * Part of the entry rather than implied by it: an entry written by a reader that could
+   * not read something a later reader can is not a value this reader may skip a read
+   * for, and the mtime cannot say so — the file really did not move.
+   */
+  readonly readerVersion: number;
   readonly durationSeconds: number | null;
   readonly bitrateKbps: number | null;
   readonly sampleRate: number | null;
@@ -112,7 +126,7 @@ interface CachedEnrichment {
 /**
  * A row worth another read.
  *
- * The guard is the mtime, not `duration = 0`. A row with `duration = 0` is either
+ * The guard is a **pair** of facts, not one. A row with `duration = 0` is either
  * *not yet read* or *unreadable by this module* — MP4/M4A puts `moov` at the end of
  * the file, so a prefix read cannot reach it. Retrying those on every `getSong`
  * would be one wasted subrequest per play, forever, for a format that needs a tail
@@ -121,9 +135,22 @@ interface CachedEnrichment {
  * - mtime moved → re-read (the file changed, it may be readable now);
  * - mtime unchanged and `enriched_at` is set → never read again;
  * - mtime unchanged and `enriched_at` is null → never scanned, read once.
+ *
+ * ### The second fact is the reader, and omitting it shipped
+ *
+ * That third rule above is only sound while the reader is fixed. What it extracts is a
+ * property of the *reader* as much as of the bytes, and a reader that learns to read
+ * something it previously could not leaves every row it already wrote looking current:
+ * mtime matches, so nothing is re-read, and the wrong value is served for ever. It
+ * shipped — a deploy carrying a corrected Ogg reader left a library reporting a 240.61 s
+ * track as 3 s at 15329 kbps with no artist, album, genre, track or year, and neither a
+ * `getSong` nor a full rescan repaired it.
+ *
+ * So `reader_version` is the other half of the condition, and a row that does not carry
+ * this reader's version is re-read whatever its mtime says.
  */
 function shouldEnrich(song: SongRow): boolean {
-  return song.enriched_at === null;
+  return song.enriched_at === null || song.reader_version !== READER_VERSION;
 }
 
 class EnrichmentService {
@@ -137,13 +164,15 @@ class EnrichmentService {
    * because it could not read a duration is worse than one that reports `0`.
    */
   public async enrich(library: LibraryRow, song: SongRow): Promise<AudioTags | null> {
-    if (song.enriched_at !== null && song.duration > 0) return null;
+    if (song.enriched_at !== null && song.duration > 0 && song.reader_version === READER_VERSION) return null;
 
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [song.id]);
-    if (cached && cached.mtimeMs === song.mtime_ms) {
+    if (cached && cached.mtimeMs === song.mtime_ms && cached.readerVersion === READER_VERSION) {
       // Replay the cached result into D1 if the row lost it (a restored backup, or
-      // a row written by a scan after the cache was populated).
-      if (song.enriched_at === null) {
+      // a row written by a scan after the cache was populated). The reader version is
+      // part of the entry for the same reason it is a column: a cached value is only
+      // usable by the reader that produced it.
+      if (song.enriched_at === null || song.reader_version !== READER_VERSION) {
         await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, null);
       }
       return null;
@@ -165,7 +194,7 @@ class EnrichmentService {
    */
   public async enrichFacts(library: LibraryRow, facts: EnrichFacts): Promise<AudioTags | null> {
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [facts.id]);
-    if (cached && cached.mtimeMs === facts.mtimeMs) return null;
+    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION) return null;
     return await this.readAndPersist(library, null, facts);
   }
 
@@ -190,6 +219,7 @@ class EnrichmentService {
       await this.deps.songs.applyMetadata(facts.id, {
         duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
         bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
+        readerVersion: READER_VERSION,
         ...(sampleRate !== null && { sampleRate }),
         ...(channels !== null && { channels }),
         ...(tags && {
@@ -229,6 +259,7 @@ class EnrichmentService {
 
     const entry: CachedEnrichment = {
       mtimeMs: facts.mtimeMs,
+      readerVersion: READER_VERSION,
       durationSeconds: duration,
       // The bitrate of a variable-bitrate file is `size × 8 ÷ duration`, so it needs the
       // duration first: computed here rather than in the reader, which was handed a
@@ -295,6 +326,10 @@ class EnrichmentService {
       // 0 rather than null.
       duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
       bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
+      // Stamped even when every tag is null and only the "we tried" part of this write
+      // matters. A row that records the attempt must also record *who* attempted it, or
+      // the next reader has no way to tell a deliberate skip from a stale one.
+      readerVersion: READER_VERSION,
       ...(sampleRate !== null && { sampleRate }),
       ...(channels !== null && { channels }),
       ...(tags && {

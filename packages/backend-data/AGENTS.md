@@ -46,11 +46,23 @@ page-then-fetch pattern readable in one place instead of duplicated five times.
   track count for a selected album is the same bug in a narrower window.
 - **A changed file invalidates its own enrichment, in the same statement.** The upsert
   compares `mtime_ms` and clears `duration`/`bitrate`/`sample_rate`/`channels`/
-  `enriched_at` together. Doing it in two statements leaves a window where a row claims a
-  new mtime with the old duration, and `EnrichmentService` — which short-circuits on
-  `enriched_at` — will never re-read it. The text tags are deliberately *kept*: they are
-  the path-convention fallback `getArtists` groups by, and clearing them would drop the
-  track out of every group.
+  `enriched_at`/`reader_version` together. Doing it in two statements leaves a window
+  where a row claims a new mtime with the old duration, and `EnrichmentService` — which
+  short-circuits on `enriched_at` — will never re-read it. The text tags are deliberately
+  *kept*: they are the path-convention fallback `getArtists` groups by, and clearing them
+  would drop the track out of every group.
+- **A row's enrichment is a function of the bytes *and* the reader, and both go in the
+  key.** `mtime_ms` alone is correct for the bytes and blind to the reader, so a corrected
+  reader reaches no row an earlier one wrote: the file genuinely has not moved, so the
+  short-circuit is right and the wrong value is served for ever. It shipped — a deploy
+  carrying a fixed Ogg reader left a live library reporting a 240.61 s track as 3 s at
+  15329 kbps with no artist, album, genre, track or year, and a full rescan changed
+  nothing. `songs.reader_version` carries the other input, stamped by `applyMetadata` in
+  the **same statement** as the values, because a row whose `enriched_at` moved without it
+  is one nothing can re-read. The `songMeta` KV entry carries it for the same reason and
+  because `enrich` consults the cache *before* the row. `SongMetadataInput` lives in
+  `dao/songSql.ts` with the statement it targets, so the columns a patch may write and the
+  statement that writes them are read together.
 - **An ordered id list stays ordered.** `id IN (...)` returns rows in index-scan order, so
   `listIdsIn` re-orders to the caller's list. Ids that do not resolve are omitted, not
   substituted.
