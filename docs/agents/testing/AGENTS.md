@@ -76,11 +76,11 @@ Two more rules that are easy to get wrong:
 | `library-ssrf.test.ts`                   | The private-host classifier, the URL canonicalizer, the client's own refusals              |
 | `scan-incremental.test.ts`               | The root probe, mtime-driven descent, the prune, chunk accounting                         |
 | `enrichment-config.test.ts`              | Lazy enrichment, `AppConfiguration.validate()`, `resolveKey`, both error mappers           |
-| `admin-auth.test.ts`                     | The Access strategy chain, the allow-list, and the never-trust-the-header rule            |
+| `user-auth.test.ts`                     | The Access strategy chain, the allow-list, and the never-trust-the-header rule            |
 | `schema.int.test.ts`                     | The real schema, cascades, `EXPLAIN QUERY PLAN` on every hot lookup, DAO round-trips       |
 | `worker.int.test.ts`                     | The Worker end to end: route order, auth, the envelope, error surface, the cache          |
 | `streaming.test.ts`                      | `stream`/`download`/`getCoverArt`: no transcoding, no buffering, upstream failures        |
-| `admin-api.test.ts`                      | The operator API: the SSRF gate, quotas, key separation, credential handling             |
+| `user-api.test.ts`                      | The operator API: the SSRF gate, quotas, key separation, credential handling             |
 | `endpoints.test.ts`                      | The rest of `/rest`: lists, state, users, ratings, scrobbling, the scan controls          |
 
 ## Rules for writing an assertion here

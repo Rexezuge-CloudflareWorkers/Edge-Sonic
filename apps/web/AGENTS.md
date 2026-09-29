@@ -1,9 +1,9 @@
-# Edge-Sonic — Admin SPA
+# Edge-Sonic — Operator SPA
 
 Scope: `apps/web/**`. Parent index: `../../AGENTS.md`.
 
 A Vite + React 19 SPA for the operator surface: registering a WebDAV library, managing
-users, and granting them access. It speaks only to `/admin/*`, which is behind Cloudflare
+users, and granting them access. It speaks only to `/user/*`, which is behind Cloudflare
 Access — it has no Subsonic credential and could not use one.
 
 - `src/main.tsx` — `BrowserRouter` → `SpaApp`.
@@ -12,7 +12,7 @@ Access — it has no Subsonic credential and could not use one.
 - `src/hooks/useNotice.ts` — the transient status message, whose timer is cleared on
   replace so a fast sequence of messages does not leave an earlier timeout cutting a
   later one short.
-- `src/lib/api.ts` — the typed client for `/admin/*`.
+- `src/lib/api.ts` — the typed client for `/user/*`.
 - `src/i18n.ts` — i18next, English-only for now.
 
 ## Rebuild before deploying
@@ -43,7 +43,7 @@ and React 18 turns a set-state-after-unmount into a silent leak rather than a wa
 The fetch itself is a separate `useCallback` so the initial load and every refresh button
 share it without the effect reaching into component state.
 
-An unreachable admin API renders as an **empty list plus a notice**, not an error screen:
+An unreachable user API renders as an **empty list plus a notice**, not an error screen:
 the operator can still read what is on the page, and the notice says what went wrong.
 
 ## Not in the coverage gate

@@ -1,5 +1,5 @@
 /**
- * The admin API.
+ * The user API.
  *
  * This is the surface an operator uses to register a library and a user, so it holds the
  * two decisions with the widest blast radius in the product:
@@ -13,7 +13,7 @@
  *    more importantly, so the two are never interchangeable.
  *
  * Auth is the environment allow-list, so most of these run with the dev bypass active
- * and the bypass's *refusals* are covered in `test/admin-auth.test.ts`.
+ * and the bypass's *refusals* are covered in `test/user-auth.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHarness, ORIGIN, TEST_KEY } from './helpers/harness';
@@ -28,7 +28,7 @@ beforeEach(async () => {
 
 afterEach(() => harness.close());
 
-interface AdminBody {
+interface UserBody {
   libraries?: Array<Record<string, unknown>>;
   users?: Array<Record<string, unknown>>;
   /**
@@ -42,15 +42,15 @@ interface AdminBody {
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
-async function call(path: string, init: RequestInit = {}, env: Record<string, unknown> = {}): Promise<{ status: number; body: AdminBody }> {
+async function call(path: string, init: RequestInit = {}, env: Record<string, unknown> = {}): Promise<{ status: number; body: UserBody }> {
   const response = await harness.fetch(`${ORIGIN}${path}`, env, init);
   const text = await response.text();
-  return { status: response.status, body: text.length === 0 ? {} : (JSON.parse(text) as AdminBody) };
+  return { status: response.status, body: text.length === 0 ? {} : (JSON.parse(text) as UserBody) };
 }
 
 describe('libraries', () => {
   it('lists the registered libraries without any credential material', async () => {
-    const { status, body } = await call('/admin/libraries');
+    const { status, body } = await call('/user/libraries');
 
     expect(status).toBe(200);
     const library = body.libraries?.[0];
@@ -63,7 +63,7 @@ describe('libraries', () => {
   });
 
   it('registers a library, storing the password encrypted', async () => {
-    const { status, body } = await call('/admin/libraries', {
+    const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({
@@ -116,7 +116,7 @@ describe('libraries', () => {
 
     for (const baseUrl of refused) {
       const { status, body } = await call(
-        '/admin/libraries',
+        '/user/libraries',
         { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ slug: 'x', baseUrl, davUsername: 'u', davPassword: 'p' }) },
         { ALLOW_PRIVATE_WEBDAV_HOSTS: 'false' },
       );
@@ -130,7 +130,7 @@ describe('libraries', () => {
   it('refuses plaintext http to a non-loopback host, so a credential never crosses the network in the clear', async () => {
     // A Basic credential is base64, not encryption. Allowing `http://dav.example.com`
     // would put every library password on the wire in recoverable form.
-    const { status, body } = await call('/admin/libraries', {
+    const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ slug: 'x', baseUrl: 'http://dav.example.com', davUsername: 'u', davPassword: 'p' }),
@@ -140,7 +140,7 @@ describe('libraries', () => {
   });
 
   it('refuses a URL with an embedded credential, which would be stored and logged', async () => {
-    const { status, body } = await call('/admin/libraries', {
+    const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ slug: 'x', baseUrl: 'https://alice:hunter2@dav.example.com', davUsername: 'u', davPassword: 'p' }),
@@ -151,7 +151,7 @@ describe('libraries', () => {
 
   it('refuses a URL with a path, a query, or a fragment, because the root path is a separate field', async () => {
     for (const baseUrl of ['https://dav.example.com/remote.php/dav', 'https://dav.example.com?a=b', 'https://dav.example.com#x']) {
-      const { status } = await call('/admin/libraries', {
+      const { status } = await call('/user/libraries', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({ slug: 'x', baseUrl, davUsername: 'u', davPassword: 'p' }),
@@ -162,7 +162,7 @@ describe('libraries', () => {
 
   it('refuses a non-http scheme, so a stored credential cannot be smuggled out', async () => {
     for (const baseUrl of ['file://', 'gopher://example.com', 'ftp://example.com']) {
-      const { status } = await call('/admin/libraries', {
+      const { status } = await call('/user/libraries', {
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({ slug: 'x', baseUrl, davUsername: 'u', davPassword: 'p' }),
@@ -176,7 +176,7 @@ describe('libraries', () => {
     // absent from the production template, and `AppConfiguration.validate()` warns
     // when it is live in production — see `test/enrichment-config.test.ts`.
     const { status } = await harness.fetch(
-      `${ORIGIN}/admin/libraries`,
+      `${ORIGIN}/user/libraries`,
       { ALLOW_PRIVATE_WEBDAV_HOSTS: 'true' },
       { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ slug: 'local', baseUrl: 'http://127.0.0.1:8080', davUsername: 'u', davPassword: 'p' }) },
     );
@@ -184,7 +184,7 @@ describe('libraries', () => {
   });
 
   it('names a missing field instead of storing a library that cannot work', async () => {
-    const { status, body } = await call('/admin/libraries', {
+    const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ slug: 'x', baseUrl: 'https://dav.example.org' }),
@@ -197,13 +197,13 @@ describe('libraries', () => {
   });
 
   it('rejects a malformed body as a 400, not as a 500', async () => {
-    const { status, body } = await call('/admin/libraries', { method: 'POST', headers: JSON_HEADERS, body: '{not json' });
+    const { status, body } = await call('/user/libraries', { method: 'POST', headers: JSON_HEADERS, body: '{not json' });
     expect(status).toBe(400);
     expect(body.Exception?.Type).toBe('BadRequest');
   });
 
   it('rejects an oversized body with 413, before parsing it', async () => {
-    const { status, body } = await call('/admin/libraries', {
+    const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ slug: 'x', baseUrl: 'https://dav.example.org', davUsername: 'u', davPassword: 'p', displayName: 'y'.repeat(3_000_000) }),
@@ -213,7 +213,7 @@ describe('libraries', () => {
   });
 
   it('refuses a duplicate slug rather than shadowing an existing library', async () => {
-    const { status, body } = await call('/admin/libraries', {
+    const { status, body } = await call('/user/libraries', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ slug: 'home', baseUrl: 'https://dav.example.org', davUsername: 'u', davPassword: 'p' }),
@@ -229,7 +229,7 @@ describe('libraries', () => {
     // is the one field it does not take unless asked. Sending a partial body is a 400,
     // which is why the test sends all of them — a partial update that silently dropped
     // `davUsername` would break every scan for the library.
-    const { status, body } = await call('/admin/libraries/L1', {
+    const { status, body } = await call('/user/libraries/L1', {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({
@@ -255,7 +255,7 @@ describe('libraries', () => {
   it('deletes a library and its whole index, and leaves users alone', async () => {
     expect(await harness.db.db.prepare('SELECT COUNT(*) AS n FROM songs').first<{ n: number }>()).toEqual({ n: 2 });
 
-    const { status } = await call('/admin/libraries/L1', { method: 'DELETE' });
+    const { status } = await call('/user/libraries/L1', { method: 'DELETE' });
     expect(status).toBe(200);
 
     // The cascade is the schema's job, and it has to be complete: an orphaned `songs`
@@ -267,7 +267,7 @@ describe('libraries', () => {
   it('reports a probe result without failing the request when the origin is down', async () => {
     // A diagnostic endpoint that 500s is useless: the operator needs to be told "the
     // host is unreachable" and then fix the network.
-    const { status, body } = await call('/admin/libraries/L1/probe', { method: 'POST' });
+    const { status, body } = await call('/user/libraries/L1/probe', { method: 'POST' });
     expect(status).toBe(200);
     expect(body).toHaveProperty('ok');
   });
@@ -275,7 +275,7 @@ describe('libraries', () => {
 
 describe('users', () => {
   it('creates a user whose password verifies immediately', async () => {
-    const { status, body } = await call('/admin/users', {
+    const { status, body } = await call('/user/users', {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ username: 'bob', password: 'opensesame', email: 'bob@example.com' }),
@@ -297,13 +297,13 @@ describe('users', () => {
     // Subsonic clients match usernames case-insensitively, so `Ann` and `ann` are one
     // user to a client and two rows to the database. The database has to agree with the
     // client, or the second registration silently shadows the first.
-    const { status, body } = await call('/admin/users', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ username: 'ANN', password: 'x' }) });
+    const { status, body } = await call('/user/users', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ username: 'ANN', password: 'x' }) });
     expect(status).toBe(409);
     expect(body.Exception?.Message).toMatch(/already exists/i);
   });
 
   it('lists users without any credential material', async () => {
-    const { body } = await call('/admin/users');
+    const { body } = await call('/user/users');
     const serialized = JSON.stringify(body);
     expect(body.users?.[0]).toMatchObject({ username: 'ann', isAdmin: true });
     expect(serialized).not.toContain('sesame');
@@ -314,7 +314,7 @@ describe('users', () => {
     // There is no way to invalidate an already-issued token in the Subsonic protocol, so
     // disabling the row is the only lever an operator has. It has to actually stop
     // authentication.
-    const { status } = await call(`/admin/users/${await userId('ann')}/enabled?enabled=false`, { method: 'PATCH' });
+    const { status } = await call(`/user/users/${await userId('ann')}/enabled?enabled=false`, { method: 'PATCH' });
     expect(status).toBe(200);
 
     const { body } = await harness.rest('ping');
@@ -323,8 +323,8 @@ describe('users', () => {
 
   it('re-enables a user', async () => {
     const id = await userId('ann');
-    await call(`/admin/users/${id}/enabled?enabled=false`, { method: 'PATCH' });
-    await call(`/admin/users/${id}/enabled?enabled=true`, { method: 'PATCH' });
+    await call(`/user/users/${id}/enabled?enabled=false`, { method: 'PATCH' });
+    await call(`/user/users/${id}/enabled?enabled=true`, { method: 'PATCH' });
 
     const { body } = await harness.rest('ping');
     expect(body['subsonic-response'].status).toBe('ok');
@@ -333,7 +333,7 @@ describe('users', () => {
   it('grants and revokes a library, changing what the user can see', async () => {
     const id = await userId('ann');
 
-    const { status } = await call(`/admin/users/${id}/libraries`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ libraryIds: [] }) });
+    const { status } = await call(`/user/users/${id}/libraries`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ libraryIds: [] }) });
     expect(status).toBe(200);
 
     // With no grant, the library is invisible — not an error, just an empty library. A
@@ -342,7 +342,7 @@ describe('users', () => {
     const { body } = await harness.rest('getMusicFolders');
     expect((body['subsonic-response'].musicFolders as { musicFolder: unknown[] } | undefined)?.musicFolder ?? []).toEqual([]);
 
-    await call(`/admin/users/${id}/libraries`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ libraryIds: ['L1'] }) });
+    await call(`/user/users/${id}/libraries`, { method: 'PATCH', headers: JSON_HEADERS, body: JSON.stringify({ libraryIds: ['L1'] }) });
     const restored = await harness.rest('getMusicFolders');
     expect((restored.body['subsonic-response'].musicFolders as { musicFolder: unknown[] }).musicFolder).toHaveLength(1);
   });
@@ -351,7 +351,7 @@ describe('users', () => {
     // A silently-ignored id is worse than a rejection: the operator believes access was
     // granted, and the user sees nothing.
     const id = await userId('ann');
-    const { status, body } = await call(`/admin/users/${id}/libraries`, {
+    const { status, body } = await call(`/user/users/${id}/libraries`, {
       method: 'PATCH',
       headers: JSON_HEADERS,
       body: JSON.stringify({ libraryIds: ['L-nope'] }),
@@ -365,7 +365,7 @@ describe('users', () => {
 
   it('deletes a user and everything that belongs to them', async () => {
     const id = await userId('ann');
-    expect((await call(`/admin/users/${id}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await call(`/user/users/${id}`, { method: 'DELETE' })).status).toBe(200);
 
     expect(await harness.db.db.prepare('SELECT COUNT(*) AS n FROM users').first<{ n: number }>()).toEqual({ n: 0 });
     // The grant goes with it, so a re-created user with the same name starts with no
@@ -377,9 +377,9 @@ describe('users', () => {
   });
 });
 
-describe('the admin identity', () => {
+describe('the user identity', () => {
   it('reports who is calling, so the SPA can show it', async () => {
-    const { status, body } = await call('/admin/me');
+    const { status, body } = await call('/user/me');
     expect(status).toBe(200);
     // The dev bypass identifies as the configured address, so this is a test of the
     // wiring rather than of Access.

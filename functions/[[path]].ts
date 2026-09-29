@@ -2,14 +2,14 @@
  * Every non-asset request goes to the `edge-sonic` Worker.
  *
  * The SPA is same-origin by design: `apps/web/src/lib/api.ts` uses a root-relative
- * `API_BASE = '/admin'`, and `apps/web/vite.config.ts` proxies `/admin`, `/rest`, and
+ * `API_BASE = '/user'`, and `apps/web/vite.config.ts` proxies `/user`, `/rest`, and
  * `/health` to `http://localhost:8787` in dev. There is no API base URL to configure and
  * no token in JavaScript, so the Cloudflare Access session cookie rides along under the
  * default `credentials: 'same-origin'`.
  *
  * That works on the Worker, which serves the SPA and the API from one origin. It does
- * **not** work on Pages, which serves `dist/` as static files: `/admin/...` would resolve
- * to a static asset and 404, and the admin UI would render a shell that can never load
+ * **not** work on Pages, which serves `dist/` as static files: `/user/...` would resolve
+ * to a static asset and 404, and the operator UI would render a shell that can never load
  * anything. This catch-all is what makes the second deployment target real rather than
  * decorative — the Pages log shows `Uploading Functions bundle` when it is present.
  *

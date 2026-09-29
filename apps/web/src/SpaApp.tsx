@@ -2,7 +2,7 @@
  * SPA composition root.
  *
  * Deliberately tiny. The reference project this was scaffolded from had a 40-module
- * front end; the admin surface here is two lists and two forms, so the app is
+ * front end; the operator surface here is two lists and two forms, so the app is
  * composed from a notice hook, a router, and the two views. Growing it is fine —
  * adding a *framework* to it is not.
  */

@@ -17,7 +17,7 @@ built to work without.
   went wrong.
 - **Scan**: client-driven and chunked. `getScanStatus` advances one chunk; nothing runs
   on a schedule.
-- **Admin**: `apps/api/src/admin` + `apps/web`. Guarded by Cloudflare Access, never by a
+- **User**: `apps/api/src/user` + `apps/web`. Guarded by Cloudflare Access, never by a
   Subsonic credential.
 - **Keys**: two Secrets Store secrets, one per feature. Never merged.
 
@@ -57,17 +57,17 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `response.starred2.song.map(...)` throws on an absent key and renders an empty screen
   on `[]`.
 - **A limit that claims to key on an identity runs after the middleware that sets it.**
-  The rate limiter prefers `c.get('AdminEmail')` over the client address, so registering it
-  before `adminAuthentication` makes it fall back to `ip:…` — silently, and with a comment
+  The rate limiter prefers `c.get('AuthenticatedUserEmailAddress')` over the client address, so registering it
+  before `userAuthentication` makes it fall back to `ip:…` — silently, and with a comment
   claiming the opposite. A limiter's key and the order that produces it are one decision.
 - **A `no-store` predicate must name a path the router serves.** `isSensitiveJsonPath`
-  arrived from the reference project as `startsWith('/user/')`, a path this worker does not
-  register, so the branch was unreachable and `/admin/me` and `/admin/users` shipped with no
-  `Cache-Control`. A predicate copied from another router's route table is an unconditional
-  no-op, and nothing else reports it: the Subsonic envelope sets its own `no-store`.
+  once checked a prefix this worker did not register, so the branch was unreachable and the
+  operator surface shipped with no `Cache-Control`. A predicate copied from another router's
+  route table is an unconditional no-op, and nothing else reports it: the Subsonic envelope
+  sets its own `no-store`. Asserted in `test/security-headers.test.ts`.
 - **One surface speaks one error dialect.** `/rest` answers in the protocol envelope and
   everything else in `{Exception:{Type,Message}}`; that split is by surface, not by
-  convenience. A 429 built by hand while the rest of the admin API went through the mapper
+  convenience. A 429 built by hand while the rest of the user API went through the mapper
   gave one client two decoders, so both now route through `BaseRoute.toErrorBody`.
 - **`params.int(name, undefined)` is not `undefined`.** It returns the number `0`, which
   is not nullish, so a `pageSize(params.int('count', undefined), 10)` fallback never
@@ -154,7 +154,7 @@ Enforced by ESLint `no-restricted-imports` in `eslint.config.mjs`.
 | Area                          | Guide                                        |
 | ----------------------------- | -------------------------------------------- |
 | API worker, routes, `/rest`   | `apps/api/AGENTS.md`                          |
-| Admin SPA                     | `apps/web/AGENTS.md`                          |
+| Operator SPA                  | `apps/web/AGENTS.md`                          |
 | DAOs, schema, D1 rules        | `packages/backend-data/AGENTS.md`             |
 | Services, auth, composition   | `packages/backend-services/AGENTS.md`         |
 | Bindings, wrangler, secrets   | `docs/agents/runtime/AGENTS.md`               |

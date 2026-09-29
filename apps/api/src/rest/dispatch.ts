@@ -21,7 +21,7 @@ import { SubsonicParams, decodeLegacyPassword } from '@edge-sonic/subsonic';
 import { toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { BaseRoute } from '../endpoints/BaseRoute';
-import type { AdminContext } from '../endpoints/BaseRoute';
+import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
 import { ENDPOINTS } from './endpoints';
@@ -74,7 +74,7 @@ function endpointNameFromPath(pathname: string): string | null {
  * 4. negotiate the protocol version,
  * 5. dispatch.
  */
-async function dispatchRest(c: AdminContext, pathname: string, request: Request): Promise<RestOutcome> {
+async function dispatchRest(c: UserContext, pathname: string, request: Request): Promise<RestOutcome> {
   const params = await SubsonicParams.fromRequest(request);
   const format = resolveFormat(params.get('f'));
   const jsonpCallback = params.get('callback') ?? null;
@@ -162,7 +162,7 @@ function assertClientVersion(raw: string): void {
  * promise, and a request that touches one DAO does not construct the other seven.
  */
 async function buildContext(
-  c: AdminContext,
+  c: UserContext,
   input: {
     params: SubsonicParams;
     format: ReturnType<typeof resolveFormat>;

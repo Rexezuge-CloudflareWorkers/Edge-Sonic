@@ -1,6 +1,14 @@
 {
-  "brand": { "accent": "Edge", "rest": "-Sonic" },
-  "nav": { "label": "Primary", "libraries": "Libraries", "users": "Users", "admin": "Admin" },
+  "brand": {
+    "accent": "Edge",
+    "rest": "-Sonic"
+  },
+  "nav": {
+    "label": "Primary",
+    "libraries": "Libraries",
+    "users": "Users",
+    "operator": "Operator"
+  },
   "libraries": {
     "title": "Music libraries",
     "hint": "A library is a WebDAV origin plus a folder inside it. Subsonic clients see each library as a music folder.",
@@ -50,6 +58,10 @@
     "disabled": "disabled",
     "libraries": "Libraries",
     "noLibraries": "No libraries registered yet.",
-    "field": { "username": "Username", "email": "Email (optional)", "password": "Password" }
+    "field": {
+      "username": "Username",
+      "email": "Email (optional)",
+      "password": "Password"
+    }
   }
 }

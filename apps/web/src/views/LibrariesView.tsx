@@ -29,7 +29,7 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
       return loaded;
     } catch (error) {
       showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
-      // An unreachable admin API is shown as an empty list plus the notice, rather than
+      // An unreachable user API is shown as an empty list plus the notice, rather than
       // an error screen: the operator can still read what is cached in the page and the
       // notice says what went wrong.
       return [];

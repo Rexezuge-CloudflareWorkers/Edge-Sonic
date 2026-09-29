@@ -10,19 +10,19 @@
  * SPA shell                  — browser navigations only
  * scopeMiddleware            — one Container per request
  * OPTIONS *                  — CORS preflight, BEFORE auth (see below)
- * /admin/*  auth             — Cloudflare Access
- * /admin/*  rate limits      — AFTER auth, so a bucket is per operator
- * /admin/*  routes
+ * /user/*  auth              — Cloudflare Access
+ * /user/*  rate limits       — AFTER auth, so a bucket is per operator
+ * /user/*  routes
  * /rest/*                    — Subsonic credentials; limits key on the client address
  * ```
  *
- * ### Why the admin rate limits follow auth
+ * ### Why the user rate limits follow auth
  *
- * The limiter keys on `c.get('AdminEmail')` so that a budget belongs to an operator
- * rather than to an address, and several operators can share one behind a NAT. That
- * only works if the limiter runs *after* the middleware that sets the variable. The
- * previous order registered the limits first, while a comment claimed the opposite
- * ("before auth, so they can key on the resolved identity") — so every bucket
+ * The limiter keys on `c.get('AuthenticatedUserEmailAddress')` so that a budget belongs
+ * to an operator rather than to an address, and several operators can share one behind
+ * a NAT. That only works if the limiter runs *after* the middleware that sets the
+ * variable. The previous order registered the limits first, while a comment claimed the
+ * opposite ("before auth, so they can key on the resolved identity") — so every bucket
  * silently fell back to `ip:…` and the comment documented a property the code did not
  * have. A comment asserting an ordering the code does not implement is worse than
  * either a correct comment or a correct implementation.
@@ -43,9 +43,9 @@ import { AbstractEntrypointWorker } from '@edge-sonic/backend-runtime/base';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { Hono } from 'hono';
 import { errorResponse, resolveFormat } from '@edge-sonic/subsonic';
-import { toAdminResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
-import { registerAdminRoutes } from '../admin/routes';
-import { adminAuthentication, registerAdminRateLimits, registerRestRateLimits, scopeMiddleware, securityHeaders } from '../middleware';
+import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
+import { registerUserRoutes } from '../user/routes';
+import { userAuthentication, registerUserRateLimits, registerRestRateLimits, scopeMiddleware, securityHeaders } from '../middleware';
 import { dispatchRest } from '../rest/dispatch';
 import { SPA_HTML } from '../generated/spa-shell';
 import type { WorkerEnv } from '../endpoints/BaseRoute';
@@ -74,18 +74,18 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
 
     // Anything that escapes the dispatcher still answers in the right dialect rather
     // than Hono's default text body: a client parsing `/rest` has no way to interpret
-    // anything else, and the admin SPA reads HTTP statuses and a typed error body.
+    // anything else, and the user SPA reads HTTP statuses and a typed error body.
     app.onError((error, c) => {
       console.error('Unhandled worker error:', error instanceof Error ? (error.stack ?? error.message) : error);
       const url = new URL(c.req.url);
       if (!url.pathname.startsWith('/rest/')) {
-        // The **admin** API, which is a JSON surface whose client reads the status. A
+        // The **user** API, which is a JSON surface whose client reads the status. A
         // blanket 500 here threw away the whole error taxonomy: a missing field, a
         // duplicate slug, and a grant for a library that does not exist all became
         // "InternalServerError", which is an answer an operator cannot act on and a
-        // support ticket that cannot be reproduced. `toAdminResponse` keeps the 4xx and
+        // support ticket that cannot be reproduced. `toUserResponse` keeps the 4xx and
         // its message, and still masks a 5xx.
-        const mapped = toAdminResponse(error, c.req.header('accept-language'));
+        const mapped = toUserResponse(error, c.req.header('accept-language'));
         return c.json(mapped.body, mapped.status as 400);
       }
       const mapped = toSubsonicError(error);
@@ -94,7 +94,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
 
     app.get('/health', (c) => c.json({ ok: true, service: 'edge-sonic', apiVersion: '1.16.1' }));
 
-    // The admin SPA. Served for its own routes only; `/rest` and `/admin` are API
+    // The operator SPA. Served for its own routes only; `/rest` and `/user` are API
     // surfaces and must never return HTML, or a client that mistypes a URL gets a
     // page it cannot parse.
     for (const route of SPA_ROUTES) {
@@ -113,7 +113,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
       return new Response(null, {
         status: 204,
         headers: {
-          // The admin SPA is same-origin, so the default is "same-origin only".
+          // The operator SPA is same-origin, so the default is "same-origin only".
           // A deployment that genuinely needs a cross-origin client must opt in
           // explicitly; reflecting any origin would let a page on any site drive
           // this API with the caller's cookie.
@@ -129,11 +129,11 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
     // inside the dispatcher — so its limits are installed before the route.
     registerRestRateLimits(app);
 
-    app.use('/admin/*', adminAuthentication());
+    app.use('/user/*', userAuthentication());
     // After the auth middleware, not before: the bucket is per resolved operator, and
-    // that is only true if `AdminEmail` is set by the time this runs.
-    registerAdminRateLimits(app);
-    registerAdminRoutes(app);
+    // that is only true if `AuthenticatedUserEmailAddress` is set by the time this runs.
+    registerUserRateLimits(app);
+    registerUserRoutes(app);
 
     // `/rest/*` authenticates itself, inside the dispatcher, because the
     // credentials arrive as Subsonic parameters rather than as headers. A Hono
@@ -160,7 +160,8 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
           jsonpCallback: url.searchParams.get('callback'),
         });
       }
-      return c.json({ error: { code: 'NotFound', message: 'Not found.' } }, 404);
+      // One surface, one dialect: the user API speaks `Exception`, including here.
+      return c.json({ Exception: { Type: 'NotFound', Message: 'Not found.' } }, 404);
     });
 
     this.app = app;

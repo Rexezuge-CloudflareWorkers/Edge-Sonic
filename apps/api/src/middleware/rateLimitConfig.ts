@@ -22,10 +22,10 @@ import { rateLimit } from './rateLimit';
  *
  * The split is a **field**, not an array index. The reference project slices
  * `RATE_LIMIT_DEFS.slice(0, 3)` / `.slice(3)`, which means inserting a definition at
- * index 3 silently reclassifies it — a new `/rest` limit would become an admin limit
+ * index 3 silently reclassifies it — a new `/rest` limit would become a user limit
  * and start being keyed on the wrong identity. A field cannot drift that way.
  */
-type LimitSurface = 'rest' | 'admin';
+type LimitSurface = 'rest' | 'user';
 
 interface RateLimitDef {
   path: string;
@@ -73,16 +73,16 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     reason: 'Polling drives the scan, so it is capped — but generously, because a client legitimately polls during a scan.',
   },
   {
-    path: '/admin/*',
+    path: '/user/*',
     windowMs: 60_000,
     max: 60,
-    keyPrefix: 'admin',
-    surface: 'admin',
+    keyPrefix: 'user',
+    surface: 'user',
     reason: 'Probe and rescan actions perform live outbound requests with a stored credential.',
   },
 ];
 
-type LimitApp = Hono<{ Bindings: Cloudflare.Env; Variables: { AdminEmail: string } }>;
+type LimitApp = Hono<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
 
 function install(app: LimitApp, def: RateLimitDef): void {
   app.use(def.path, rateLimit({ windowMs: def.windowMs, max: def.max, keyPrefix: def.keyPrefix }));
@@ -102,20 +102,20 @@ function registerRestRateLimits(app: LimitApp): void {
 }
 
 /**
- * `/admin/*`. Registered **after** `adminAuthentication`, so the bucket can be keyed
+ * `/user/*`. Registered **after** `userAuthentication`, so the bucket can be keyed
  * on the resolved Access identity rather than only on an address that every operator
  * behind one NAT shares. This ordering is load-bearing; see the worker's route order.
  */
-function registerAdminRateLimits(app: LimitApp): void {
+function registerUserRateLimits(app: LimitApp): void {
   for (const def of RATE_LIMIT_DEFS) {
-    if (def.surface === 'admin') install(app, def);
+    if (def.surface === 'user') install(app, def);
   }
 }
 
 function registerRateLimits(app: LimitApp): void {
   registerRestRateLimits(app);
-  registerAdminRateLimits(app);
+  registerUserRateLimits(app);
 }
 
-export { RATE_LIMIT_DEFS, registerRateLimits, registerRestRateLimits, registerAdminRateLimits };
+export { RATE_LIMIT_DEFS, registerRateLimits, registerRestRateLimits, registerUserRateLimits };
 export type { RateLimitDef, LimitSurface };

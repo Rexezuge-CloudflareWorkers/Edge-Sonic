@@ -1,2 +1,2 @@
-export { toSubsonicError, toAdminResponse } from './ErrorMapper';
-export type { AdminErrorBody } from './ErrorMapper';
+export { toSubsonicError, toUserResponse } from './ErrorMapper';
+export type { UserErrorBody } from './ErrorMapper';

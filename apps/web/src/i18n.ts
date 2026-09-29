@@ -6,7 +6,7 @@ export const SUPPORTED_LANGUAGES = ['en'] as const;
 
 export type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
-export const LANGUAGE_STORAGE_KEY = 'edge-sonic-admin-lng';
+export const LANGUAGE_STORAGE_KEY = 'edge-sonic-user-lng';
 
 const baseResources = {
   en: { translation: en },

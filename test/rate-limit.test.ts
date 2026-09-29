@@ -10,7 +10,7 @@
  *
  * ### The identity key
  *
- * The limiter prefers the resolved `AdminEmail` and falls back to the client address.
+ * The limiter prefers the resolved `AuthenticatedUserEmailAddress` and falls back to the client address.
  * The fallback matters as much as the preference: without a trusted address every
  * caller shares one bucket, which is fail-closed grouping, whereas a *spoofed* address
  * would give every attacker their own budget. So `clientIp` trusts exactly one header.
@@ -25,10 +25,10 @@ import { getRequestScope, asScopedContext } from '../packages/backend-runtime/sr
 import { scopeMiddleware } from '../apps/api/src/middleware/scopeMiddleware';
 
 /**
- * The worker's own env shape, so a handler here declares the same `AdminEmail`
+ * The worker's own env shape, so a handler here declares the same `AuthenticatedUserEmailAddress`
  * variable the real middleware sets.
  */
-type TestEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
+type TestEnv = { Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } };
 type TestApp = Hono<TestEnv>;
 
 const ORIGIN_URL = 'https://edge-sonic.test';
@@ -96,9 +96,9 @@ describe('the bucket', () => {
     expect(limited.status).toBe(429);
   });
 
-  it('answers 429 in the admin dialect, with Retry-After', async () => {
-    // The 429 used to hand-build a second error dialect while every other admin error
-    // went through `toAdminResponse`. It now shares `BaseRoute.toErrorBody`, and a
+  it('answers 429 in the user dialect, with Retry-After', async () => {
+    // The 429 used to hand-build a second error dialect while every other user error
+    // went through `toUserResponse`. It now shares `BaseRoute.toErrorBody`, and a
     // client needs one decoder for the surface.
     const app = limitedApp(1);
     await hit(app);
@@ -116,12 +116,12 @@ describe('the bucket', () => {
   });
 
   it('keys on the resolved identity, so two operators do not share a budget', async () => {
-    // This is the property the route order buys. `AdminEmail` is set by
-    // `adminAuthentication`, so the limiter has to be registered *after* it; the
+    // This is the property the route order buys. `AuthenticatedUserEmailAddress` is set by
+    // `userAuthentication`, so the limiter has to be registered *after* it; the
     // previous order registered limits first while a comment claimed the opposite.
     const app = new Hono<TestEnv>();
     app.use('*', (c, next) => {
-      c.set('AdminEmail', c.req.header('x-operator') ?? '');
+      c.set('AuthenticatedUserEmailAddress', c.req.header('x-operator') ?? '');
       return next();
     });
     app.use('*', rateLimit(OK));
@@ -307,15 +307,15 @@ describe('the per-request scope', () => {
 });
 
 describe('through the real worker', () => {
-  it('returns 429 in the admin dialect when the admin budget is exhausted', async () => {
+  it('returns 429 in the user dialect when the user budget is exhausted', async () => {
     // Through `fetch`, so the assertion covers the rate limiter, the route order, the
-    // auth middleware, and the error dialect in one pass. The admin budget is 60/min, so
+    // auth middleware, and the error dialect in one pass. The user budget is 60/min, so
     // this spends 61 requests rather than reaching into the module's internals.
     const harness = await createHarness();
     try {
       let last: Response | undefined;
       for (let attempt = 0; attempt < 61; attempt += 1) {
-        last = await harness.fetch(`${ORIGIN}/admin/libraries`);
+        last = await harness.fetch(`${ORIGIN}/user/libraries`);
       }
       expect(last?.status).toBe(429);
       const body = (await last?.json()) as { Exception: { Type: string } };

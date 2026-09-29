@@ -2,7 +2,7 @@
  * User surface: `getUsers` and `getUser` (the plural, implemented one).
  *
  * Subsonic clients read `getUser` to display "signed in as" and check whether the
- * account is an admin. Edge-Sonic's admin surface is the `/admin/*` API behind
+ * account is an admin. Edge-Sonic's operator surface is the `/user/*` API behind
  * Cloudflare Access, so a Subsonic user's `isAdmin` here means "may administer
  * *Subsonic* users" and grants nothing on the Access-gated side. The two identity
  * systems are deliberately not connected: an operator's Access identity must not be

@@ -49,7 +49,7 @@ function AppHeader() {
             {t('nav.users', 'Users')}
           </NavLink>
         </nav>
-        <span className="ml-auto text-xs text-[var(--color-text-muted)]">{t('nav.admin', 'Admin')}</span>
+        <span className="ml-auto text-xs text-[var(--color-text-muted)]">{t('nav.operator', 'Operator')}</span>
       </div>
     </header>
   );
