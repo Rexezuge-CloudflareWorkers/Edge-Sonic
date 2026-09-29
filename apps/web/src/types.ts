@@ -1,5 +1,5 @@
 /**
- * Wire types for the admin API.
+ * Wire types for the user API.
  *
  * Nullable, not optional, for "the server may legitimately not know this" — the
  * same convention the worker uses. Optional is reserved for "this field is not

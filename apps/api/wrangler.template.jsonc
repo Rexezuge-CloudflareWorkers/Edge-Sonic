@@ -101,7 +101,7 @@
     "DEBUG_MODE": "false",
     "SITE_URL": "",
 
-    // Cloudflare Access, required for /admin and nothing else. /rest authenticates
+    // Cloudflare Access, required for /user and nothing else. /rest authenticates
     // against the users table, so these have no defaults on purpose: a typo here
     // presents as an Access outage rather than as a failed startup.
     "TEAM_DOMAIN": "",

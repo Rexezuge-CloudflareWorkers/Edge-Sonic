@@ -44,7 +44,7 @@ const Tokens = {
 
   SubsonicAuthService: Symbol('SubsonicAuthService') as Token<SubsonicAuthService>,
   /**
-   * Cloudflare Access, for `/admin/*`. A token like every other service: resolved
+   * Cloudflare Access, for `/user/*`. A token like every other service: resolved
    * from the scope rather than constructed at the call site, so it is reachable
    * from a test that wants a stub and shares the scope's one `AppConfiguration`.
    */

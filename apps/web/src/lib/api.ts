@@ -1,5 +1,5 @@
 /**
- * Typed fetch wrappers for the admin API.
+ * Typed fetch wrappers for the user API.
  *
  * Same-origin only, and no API base URL: the worker serves the SPA and the API from
  * one origin, so the Cloudflare Access session cookie rides along under the default
@@ -14,12 +14,12 @@
  */
 import type { LibrarySummary, ProbeResult, ScanStateSummary, UserSummary } from '../types';
 
-const API_BASE = '/admin';
+const API_BASE = '/user';
 
 interface ErrorEnvelope {
   /**
-  What the server sends. `BaseRoute.toErrorBody` and `toAdminResponse` both produce it,
-  including the rate limiter's 429, so one decoder covers the whole admin surface.
+  What the server sends. `BaseRoute.toErrorBody` and `toUserResponse` both produce it,
+  including the rate limiter's 429, so one decoder covers the whole user surface.
   */
   Exception?: { Type?: string; Message?: string };
   /**

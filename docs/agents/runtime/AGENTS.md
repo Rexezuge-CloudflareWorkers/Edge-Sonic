@@ -7,7 +7,7 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
   project, so `pnpm -r typecheck` and `pnpm run lint` both reach it. It sat outside the
   workspace once while holding ~200 KB of test code, and `eslint.config.mjs` ignored
   `test/**` outright; both are fixed, and the ignore is gone.
-- `apps/web/vite.config.ts` proxies `/admin` and `/rest` to `http://localhost:8787` in
+- `apps/web/vite.config.ts` proxies `/user` and `/rest` to `http://localhost:8787` in
   dev, and its `closeBundle` embeds `dist/index.html` into
   `apps/api/src/generated/spa-shell.ts` as `SPA_HTML`.
   `scripts/verify-spa-shell.mjs` runs in `checks` and rejects a missing, stubbed, or
@@ -21,11 +21,11 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
   Pages**, and the `deploy-pages` job `cp`s it over the root config before
   `wrangler pages deploy apps/web/dist`. Two hosts deploy the same SPA:
   - The **Worker** serves the SPA and the API from one origin, so the client is
-    same-origin with `API_BASE = '/admin'` and no token in JavaScript.
-  - **Pages** serves `dist/` as static files and would 404 every `/admin`, `/rest`, and
+    same-origin with `API_BASE = '/user'` and no token in JavaScript.
+  - **Pages** serves `dist/` as static files and would 404 every `/user`, `/rest`, and
     `/health` call. `functions/[[path]].ts` is what makes that target work: a catch-all
     that forwards to the `edge-sonic` Worker over the `API_WORKER` service binding. Its
-    presence in the Pages log is `Uploading Functions bundle`; without it the admin UI
+    presence in the Pages log is `Uploading Functions bundle`; without it the operator UI
     renders a shell that can never load anything.
   - The two templates are coupled in exactly one place: `services[].service` here must
     equal `name` in the Worker template. A typo is a deploy-time failure, not a runtime
@@ -49,7 +49,7 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
 ## Required vars (no defaults)
 
 `POLICY_AUD`, `TEAM_DOMAIN` — Cloudflare Access JWT verification
-(`AccessAuthService`). Without them `/admin` returns 401; `/rest` is unaffected, because
+(`AccessAuthService`). Without them `/user` returns 401; `/rest` is unaffected, because
 it authenticates against the `users` table.
 
 ## Local-only (no default, absent from the production template)
@@ -78,12 +78,12 @@ DAV password**, so without the gate an operator registration form is a way to se
 credential to cloud metadata (`169.254.169.254`) or to an internal service. Unset follows
 the environment: allowed outside production so a co-located `wrangler dev` works,
 denied in production. An explicit value always wins. The cloud metadata address is
-asserted in `test/admin-api.test.ts`.
+asserted in `test/user-api.test.ts`.
 
 Plaintext `http` is allowed only for a loopback host, because a Basic credential is
 base64 rather than encryption and must not cross a network in the clear. A `base_url`
 carries no path, query, fragment, or embedded credential: the root path is a separate
-field, and an embedded credential would be stored, returned by the admin API, and logged.
+field, and an embedded credential would be stored, returned by the user API, and logged.
 
 **Adding a variable**: declare it in `ServiceEnv`, give it a default in
 `ConfigurationDefaults.ts`, read it through `EnvParser` (add a section object under

@@ -1,9 +1,9 @@
 import type { Next } from 'hono';
 import { RateLimitedError } from '@edge-sonic/backend-errors';
 import { BaseRoute } from '../endpoints/BaseRoute';
-import type { AdminContext } from '../endpoints/BaseRoute';
+import type { UserContext } from '../endpoints/BaseRoute';
 
-type RateLimitContext = AdminContext;
+type RateLimitContext = UserContext;
 
 interface Bucket {
   count: number;
@@ -106,14 +106,14 @@ function rateLimit(opts: {
     try {
       const now = Date.now();
       cleanup(now);
-      // `AdminEmail` is the resolved Cloudflare Access identity, so a bucket is per
-      // operator rather than per address. It is only set when this middleware runs
-      // *after* `adminAuthentication`, which is why that ordering is load-bearing: a
-      // limiter registered before the identity exists silently degrades to `ip:…`, and
-      // every operator behind one NAT shares a budget.
+      // `AuthenticatedUserEmailAddress` is the resolved Cloudflare Access identity, so a
+      // bucket is per operator rather than per address. It is only set when this
+      // middleware runs *after* `userAuthentication`, which is why that ordering is
+      // load-bearing: a limiter registered before the identity exists silently degrades
+      // to `ip:…`, and every operator behind one NAT shares a budget.
       let identity = 'anon';
       try {
-        identity = c.get('AdminEmail') ?? `ip:${clientIp((name) => c.req.header(name))}`;
+        identity = c.get('AuthenticatedUserEmailAddress') ?? `ip:${clientIp((name) => c.req.header(name))}`;
       } catch {
         identity = `ip:${clientIp((name) => c.req.header(name))}`;
       }
@@ -127,8 +127,8 @@ function rateLimit(opts: {
       if (existing.count >= opts.max) {
         const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
         // The canonical error type, so the wire envelope cannot drift from the mapping
-        // every other admin error goes through. Hand-building the JSON here is how this
-        // response came to be the one admin error in a second dialect.
+        // every other user error goes through. Hand-building the JSON here is how this
+        // response came to be the one user error in a second dialect.
         const limited = new RateLimitedError();
         return c.json(BaseRoute.toErrorBody(limited.getErrorCode(), limited.getErrorMessage()), limited.getErrorCode() as 429, {
           // A client that is told "slow down" without being told how long to wait

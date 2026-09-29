@@ -168,7 +168,7 @@ function createRequestScope(env: RequestScopeEnv): Container {
     }),
   );
 
-  // Cloudflare Access, for `/admin/*`. Shares the scope's `config` rather than
+  // Cloudflare Access, for `/user/*`. Shares the scope's `config` rather than
   // re-deriving one per request, and reads the platform-provisioned `ACCESS`
   // binding off `env` — the one place that binding is visible at Layer 3.
   scope.bindValue(Tokens.AccessAuthService, new AccessAuthService(env, config));

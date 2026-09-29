@@ -26,8 +26,8 @@ D1 is the index, and KV is a cache the server works without.
 ## Layout
 
 ```
-apps/api          the Worker: /rest, /admin, the SPA shell
-apps/web          the admin SPA
+apps/api          the Worker: /rest, /user, the SPA shell
+apps/web          the operator SPA
 packages/subsonic the protocol: ids, envelope, node model, serializers, MD5
 packages/webdav   the 207 reader and the PROPFIND/GET client
 packages/media-tags  MP3, FLAC, Ogg Vorbis/Opus header readers
@@ -83,7 +83,7 @@ credentials under the other.
 
 The SPA deploys to **two** targets. The Worker serves the SPA and the API from one
 origin; `apps/web/wrangler.template.jsonc` is the Cloudflare Pages target, and
-`functions/[[path]].ts` forwards `/admin`, `/rest`, and `/health` to the Worker over a
+`functions/[[path]].ts` forwards `/user`, `/rest`, and `/health` to the Worker over a
 service binding, because Pages would otherwise 404 them against static assets.
 
 `ENVIRONMENT` is an **allow-list**, not a deny-list: `development` enables the
@@ -97,7 +97,7 @@ wrong but not fatal, including a bypass variable that is live in production and 
 
 No `dav-store`, no Durable Objects, no cron triggers, no queues, no transcoding, no
 FTS5 (the migration names it as the answer to the one search that has to scan), and no
-second identity system: `/rest` is a Subsonic password and `/admin` is Cloudflare
+second identity system: `/rest` is a Subsonic password and `/user` is Cloudflare
 Access, and neither credential opens the other surface.
 
 ## Where to read next
@@ -105,7 +105,7 @@ Access, and neither credential opens the other surface.
 | Area                          | Guide                             |
 | ----------------------------- | --------------------------------- |
 | The Worker, routes, `/rest`   | [`apps/api/AGENTS.md`](apps/api/AGENTS.md) |
-| The admin SPA                 | [`apps/web/AGENTS.md`](apps/web/AGENTS.md) |
+| The operator SPA              | [`apps/web/AGENTS.md`](apps/web/AGENTS.md) |
 | DAOs and the D1 rules         | [`packages/backend-data/AGENTS.md`](packages/backend-data/AGENTS.md) |
 | Services, auth, composition   | [`packages/backend-services/AGENTS.md`](packages/backend-services/AGENTS.md) |
 | Bindings, wrangler, secrets   | [`docs/agents/runtime/AGENTS.md`](docs/agents/runtime/AGENTS.md) |

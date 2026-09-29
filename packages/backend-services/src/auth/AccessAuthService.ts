@@ -1,11 +1,11 @@
 /**
- * Cloudflare Access authentication, for the **admin API only**.
+ * Cloudflare Access authentication, for the **user API only**.
  *
  * ### It does not authenticate Subsonic clients
  *
  * `/rest/*` is authenticated by `SubsonicAuthService` against the `users` table,
  * because a Subsonic client can only speak `u` + `t` + `s` and has no way to
- * present an Access cookie. This service guards `/admin/*` — the human-facing
+ * present an Access cookie. This service guards `/user/*` — the human-facing
  * surface for registering libraries and users — where the operator is a person
  * already behind an Access policy.
  *

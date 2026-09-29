@@ -34,7 +34,7 @@ export default defineConfig({
     proxy: {
       // Dev only: the SPA is served same-origin in production, so every API path
       // is root-relative and there is no base URL to configure.
-      '/admin': { target: apiTarget, changeOrigin: true },
+      '/user': { target: apiTarget, changeOrigin: true },
       '/rest': { target: apiTarget, changeOrigin: true },
       '/health': { target: apiTarget, changeOrigin: true },
     },

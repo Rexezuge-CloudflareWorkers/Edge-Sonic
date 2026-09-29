@@ -2,7 +2,7 @@ import { Tokens } from '@edge-sonic/backend-services/composition';
 import { UUIDUtil } from '@edge-sonic/shared/utils';
 import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
 import { BaseRoute } from '../endpoints/BaseRoute';
-import type { AdminContext } from '../endpoints/BaseRoute';
+import type { UserContext } from '../endpoints/BaseRoute';
 
 /**
  * Read a path parameter that the route pattern guarantees exists.
@@ -11,7 +11,7 @@ import type { AdminContext } from '../endpoints/BaseRoute';
  * hide the real question — which is that an absent id must not become the string
  * "undefined" and query for it.
  */
-function requireParam(c: AdminContext, name: string): string {
+function requireParam(c: UserContext, name: string): string {
   const value = c.req.param(name);
   if (value === undefined || value.length === 0) {
     throw new BadRequestError(`Missing path parameter "${name}".`);
@@ -19,7 +19,7 @@ function requireParam(c: AdminContext, name: string): string {
   return value;
 }
 
-async function listLibraries(c: AdminContext): Promise<Response> {
+async function listLibraries(c: UserContext): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const libraries = await scope.get(Tokens.LibraryService).listAll();
   return c.json({
@@ -37,14 +37,14 @@ async function listLibraries(c: AdminContext): Promise<Response> {
   });
 }
 
-async function createLibrary(c: AdminContext): Promise<Response> {
+async function createLibrary(c: UserContext): Promise<Response> {
   const { malformed, oversized, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
   if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
   if (oversized) return BaseRoute.jsonError(c, 'Request body is too large.', 413);
 
   const scope = BaseRoute.getScope(c);
   const created = await scope.get(Tokens.LibraryService).create({
-    ownerId: c.get('AdminEmail'),
+    ownerId: c.get('AuthenticatedUserEmailAddress'),
     slug: BaseRoute.requireString(body, 'slug', 64),
     baseUrl: BaseRoute.requireString(body, 'baseUrl', 2048),
     rootPath: BaseRoute.optionalString(body, 'rootPath', 1024) ?? '/',
@@ -55,7 +55,7 @@ async function createLibrary(c: AdminContext): Promise<Response> {
   return c.json({ id: created.id, slug: created.slug }, 201);
 }
 
-async function updateLibrary(c: AdminContext): Promise<Response> {
+async function updateLibrary(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const { malformed, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
   if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
@@ -77,7 +77,7 @@ async function updateLibrary(c: AdminContext): Promise<Response> {
   return c.json({ ok: true });
 }
 
-async function deleteLibrary(c: AdminContext): Promise<Response> {
+async function deleteLibrary(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   await scope.get(Tokens.LibraryService).delete(id);
@@ -87,12 +87,12 @@ async function deleteLibrary(c: AdminContext): Promise<Response> {
 /**
  * Probe a library.
  *
- * The one admin action that performs a live outbound request with the stored
+ * The one operator action that performs a live outbound request with the stored
  * credential, so it is a separate route rather than a query flag on `GET
  * /libraries`: an operator clicking "test" should be able to do it without a
  * `GET` being able to.
  */
-async function probeLibrary(c: AdminContext): Promise<Response> {
+async function probeLibrary(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
@@ -101,7 +101,7 @@ async function probeLibrary(c: AdminContext): Promise<Response> {
   return c.json(await service.probe(library));
 }
 
-async function startScan(c: AdminContext): Promise<Response> {
+async function startScan(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
@@ -110,17 +110,17 @@ async function startScan(c: AdminContext): Promise<Response> {
   return c.json(await scope.get(Tokens.ScanService).start(library));
 }
 
-async function scanStatus(c: AdminContext): Promise<Response> {
+async function scanStatus(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   return c.json(await scope.get(Tokens.ScanService).status(id));
 }
 
-async function listUsers(c: AdminContext): Promise<Response> {
+async function listUsers(c: UserContext): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const users = await (await scope.get(Tokens.UserDAO)()).list();
   // Granted libraries are resolved per user. These are few enough that the N+1 is
-  // cheaper than a join, and the admin list is not a hot path.
+  // cheaper than a join, and the user list is not a hot path.
   const grants = new Map<string, string[]>();
   for (const user of users) {
     grants.set(user.id, await (await scope.get(Tokens.UserDAO)()).listLibraryIds(user.id));
@@ -145,7 +145,7 @@ async function listUsers(c: AdminContext): Promise<Response> {
  * under the *user* key — never the WebDAV key, so the frequently-read key cannot
  * mint a streaming session.
  */
-async function createUser(c: AdminContext): Promise<Response> {
+async function createUser(c: UserContext): Promise<Response> {
   const { malformed, oversized, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
   if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
   if (oversized) return BaseRoute.jsonError(c, 'Request body is too large.', 413);
@@ -171,7 +171,7 @@ async function createUser(c: AdminContext): Promise<Response> {
   return c.json({ id: created.id, username: created.username }, 201);
 }
 
-async function setUserEnabled(c: AdminContext): Promise<Response> {
+async function setUserEnabled(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const enabled = c.req.query('enabled') === 'true';
   const scope = BaseRoute.getScope(c);
@@ -179,14 +179,14 @@ async function setUserEnabled(c: AdminContext): Promise<Response> {
   return c.json({ ok: true });
 }
 
-async function deleteUser(c: AdminContext): Promise<Response> {
+async function deleteUser(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   await (await scope.get(Tokens.UserDAO)()).delete(id);
   return c.json({ ok: true });
 }
 
-async function setUserLibraries(c: AdminContext): Promise<Response> {
+async function setUserLibraries(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const { malformed, body } = await BaseRoute.readJson<Record<string, unknown>>(c);
   if (malformed) return BaseRoute.jsonError(c, 'Request body is not valid JSON.', 400);
@@ -214,39 +214,43 @@ async function setUserLibraries(c: AdminContext): Promise<Response> {
   return c.json({ ok: true });
 }
 
-async function whoami(c: AdminContext): Promise<Response> {
-  return c.json({ email: c.get('AdminEmail'), workerId: UUIDUtil.getRandomUUID() });
+async function whoami(c: UserContext): Promise<Response> {
+  return c.json({ email: c.get('AuthenticatedUserEmailAddress'), workerId: UUIDUtil.getRandomUUID() });
 }
 
 /**
- * Register the admin API.
+ * Register the user API.
  *
- * `app.use('/admin/*', adminAuthentication)` must already have run — the order is
- * set in the worker constructor, and every route here reads `c.get('AdminEmail')`,
+ * Operator-only: authentication proves who the caller is, and every route here
+ * is an operator action. The `/user` path matches the reference project; the
+ * authorization model does not change with it.
+ *
+ * `app.use('/user/*', userAuthentication)` must already have run — the order is
+ * set in the worker constructor, and every route here reads `c.get('AuthenticatedUserEmailAddress')`,
  * so a route registered before that middleware would see an undefined identity
  * rather than fail loudly.
  */
-function registerAdminRoutes(app: {
-  get: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
-  post: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
-  patch: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
-  delete: (path: string, handler: (c: AdminContext) => Promise<Response>) => unknown;
+function registerUserRoutes(app: {
+  get: (path: string, handler: (c: UserContext) => Promise<Response>) => unknown;
+  post: (path: string, handler: (c: UserContext) => Promise<Response>) => unknown;
+  patch: (path: string, handler: (c: UserContext) => Promise<Response>) => unknown;
+  delete: (path: string, handler: (c: UserContext) => Promise<Response>) => unknown;
 }): void {
-  app.get('/admin/me', whoami);
+  app.get('/user/me', whoami);
 
-  app.get('/admin/libraries', listLibraries);
-  app.post('/admin/libraries', createLibrary);
-  app.patch('/admin/libraries/:id', updateLibrary);
-  app.delete('/admin/libraries/:id', deleteLibrary);
-  app.post('/admin/libraries/:id/probe', probeLibrary);
-  app.post('/admin/libraries/:id/scan', startScan);
-  app.get('/admin/libraries/:id/scan', scanStatus);
+  app.get('/user/libraries', listLibraries);
+  app.post('/user/libraries', createLibrary);
+  app.patch('/user/libraries/:id', updateLibrary);
+  app.delete('/user/libraries/:id', deleteLibrary);
+  app.post('/user/libraries/:id/probe', probeLibrary);
+  app.post('/user/libraries/:id/scan', startScan);
+  app.get('/user/libraries/:id/scan', scanStatus);
 
-  app.get('/admin/users', listUsers);
-  app.post('/admin/users', createUser);
-  app.patch('/admin/users/:id/enabled', setUserEnabled);
-  app.patch('/admin/users/:id/libraries', setUserLibraries);
-  app.delete('/admin/users/:id', deleteUser);
+  app.get('/user/users', listUsers);
+  app.post('/user/users', createUser);
+  app.patch('/user/users/:id/enabled', setUserEnabled);
+  app.patch('/user/users/:id/libraries', setUserLibraries);
+  app.delete('/user/users/:id', deleteUser);
 }
 
-export { registerAdminRoutes };
+export { registerUserRoutes };

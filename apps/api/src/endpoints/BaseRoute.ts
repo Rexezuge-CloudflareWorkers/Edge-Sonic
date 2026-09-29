@@ -3,20 +3,20 @@
  *
  * ### Why this is its own module
  *
- * The context type used to be declared in `admin/routes.ts` and imported *backwards*
- * by `rest/dispatch.ts` and `middleware/adminAuth.ts` — so a route module owned the
- * type that `/rest`, `/admin`, and the auth middleware all shared, and each of those
- * three re-declared its own copy inline. Two of those copies had already drifted: they
- * named an `AuthenticatedUserEmailAddress` variable that nothing in this worker ever
+ * The context type used to be declared in `user/routes.ts` (previously `admin/routes.ts`)
+ * and imported *backwards* by `rest/dispatch.ts` and `middleware/userAuth.ts` — so a route
+ * module owned the type that `/rest`, `/user`, and the auth middleware all shared, and each
+ * of those three re-declared its own copy inline. Two of those copies had already drifted:
+ * they named an `AuthenticatedUserEmailAddress` variable that nothing in this worker ever
  * set. One declaration, imported everywhere, is the fix that makes drift impossible
  * rather than merely absent today.
  *
- * It also brings `admin/routes.ts` back under the 300-line god-file warn: `BaseRoute`
+ * It also brings `user/routes.ts` back under the 300-line god-file warn: `BaseRoute`
  * and the type are ~100 lines that were sitting in a route module.
  *
  * ### `type C` is not a public name
  *
- * `AdminContext` is the type; `C` is the one-character alias handlers take, because
+ * `UserContext` is the type; `C` is the one-character alias handlers take, because
  * every signature below repeats the full name and the repetition is noise.
  * `sonarjs/redundant-type-aliases` objects, and it is switched off with that reason
  * recorded in `eslint.config.mjs`.
@@ -26,28 +26,32 @@ import type { Context } from 'hono';
 import { BadRequestError } from '@edge-sonic/backend-errors';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
 import { getRequestScope, asScopedContext } from '@edge-sonic/backend-runtime/di';
-import { toAdminResponse } from '@edge-sonic/backend-services/errors';
-import type { AdminErrorBody } from '@edge-sonic/backend-services/errors';
+import { toUserResponse } from '@edge-sonic/backend-services/errors';
+import type { UserErrorBody } from '@edge-sonic/backend-services/errors';
 
 /**
  * The Worker's environment shape.
  *
- * `AdminEmail` is the Cloudflare Access identity, published by `adminAuthentication`
- * and read by `/admin/*`. It is declared **required** rather than optional so a
- * handler that reads it before the middleware ran is a type error instead of a
- * `undefined` that surfaces as a 500 at runtime.
+ * `AuthenticatedUserEmailAddress` is the Cloudflare Access identity, published by
+ * `userAuthentication` and read by `/user/*`. It is declared **required** rather than
+ * optional so a handler that reads it before the middleware ran is a type error instead
+ * of a `undefined` that surfaces as a 500 at runtime.
+ *
+ * The name matches the reference project on purpose: the identity variable is the one
+ * thing every middleware, limiter, and route must spell identically, and a project-local
+ * alias is how it drifted into two spellings last time.
  */
-type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AdminEmail: string } };
+type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } };
 
 /**
- * The canonical handler context. `/admin/*`, `/rest/*`, and every middleware share
+ * The canonical handler context. `/user/*`, `/rest/*`, and every middleware share
  * this one type, so there is a single point where the environment and the identity
  * variable are declared.
  */
-type AdminContext = Context<WorkerEnv>;
+type UserContext = Context<WorkerEnv>;
 
 /**
-Admin JSON body cap. Small by design — no admin call carries media.
+User JSON body cap. Small by design — no user call carries media.
 */
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 
@@ -59,7 +63,7 @@ const MAX_JSON_BODY_BYTES = 64 * 1024;
  * falls through to `InternalServerError` without a `default:` arm that can drift.
  *
  * The cast to `ContentfulStatusCode` is where the allow-list meets the type system:
- * `toAdminResponse` returns a plain `number` because `ADMIN_STATUSES` lives in a
+ * `toUserResponse` returns a plain `number` because `USER_STATUSES` lives in a
  * Layer 3 package that must not know Hono's status union, and the set it filters
  * through is exactly the set of statuses that union allows.
  */
@@ -155,7 +159,7 @@ abstract class BaseRoute {
     return ERROR_TYPE_REGISTRY[status] ?? 'InternalServerError';
   }
 
-  public static toErrorBody(status: number, message: string): AdminErrorBody {
+  public static toErrorBody(status: number, message: string): UserErrorBody {
     return { Exception: { Type: this.toErrorType(status), Message: message } };
   }
 
@@ -171,17 +175,18 @@ abstract class BaseRoute {
   }
 
   /**
-   * The error path for the admin API, which does read HTTP statuses.
+   * The error path for the user API, which does read HTTP statuses.
    */
   public static toErrorResponse(c: C, error: unknown): Response {
-    const mapped = toAdminResponse(error, c.req.header('accept-language'));
+    const mapped = toUserResponse(error, c.req.header('accept-language'));
     return c.json(mapped.body, mapped.status as ContentfulStatusCode);
   }
 }
 
-type C = AdminContext;
+type C = UserContext;
 
 export { BaseRoute, MAX_JSON_BODY_BYTES };
-export type { AdminContext, WorkerEnv,  };
+export type { UserContext, WorkerEnv };
 
-export {type AdminErrorBody} from '@edge-sonic/backend-services/errors';
+
+export {type UserErrorBody} from '@edge-sonic/backend-services/errors';

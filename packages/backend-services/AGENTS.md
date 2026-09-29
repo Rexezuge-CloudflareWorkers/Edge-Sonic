@@ -13,7 +13,7 @@ Layer 3: layers 0–2, and never `apps/*`.
   salt is **refused**, because computing `md5(password + "")` would accept a token the
   caller chose by supplying nothing. Bumping `token_epoch` on a password change is what
   revokes an already-issued token.
-- `auth/AccessAuthService` authenticates `/admin/*` behind Cloudflare Access. The bypass
+- `auth/AccessAuthService` authenticates `/user/*` behind Cloudflare Access. The bypass
   chain is `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT → the **`ACCESS` binding**, and the first
   two are gated on an **environment allow-list**. A deny-list would enable the bypass for
   `staging`, `Preview`, and a misspelled `prodcution`.
@@ -40,11 +40,11 @@ Layer 3: layers 0–2, and never `apps/*`.
 
 Keeping them separate is a security property, not a convenience: an operator's Access
 identity must not work as a streaming credential, and a Subsonic password must not open
-the admin API.
+the user API.
 
 **`Cf-Access-Authenticated-User-Email` is never trusted.** Cloudflare documents it as a
 *response* header it sets; read back as a *request* header, any caller can name
-themselves. Asserted in `test/admin-auth.test.ts` with a forged header, and again with a
+themselves. Asserted in `test/user-auth.test.ts` with a forged header, and again with a
 forged `Cookie` beside it.
 
 An unverified identity **inside** the trusted binding still does not authenticate — both
@@ -58,7 +58,7 @@ unauthenticated caller which part of the token they got right.
 `library/LibraryService.ts` owns registration, the SSRF gate, and credential decryption.
 `base_url` is stored as a **bare origin** — no path, query, fragment, or embedded
 credential — because the root path is a separate field and an embedded credential would be
-stored, returned by the admin API, and written to logs.
+stored, returned by the user API, and written to logs.
 
 The gate refuses private, loopback, and link-local addresses unless
 `ALLOW_PRIVATE_WEBDAV_HOSTS` opts in, because the Worker fetches `base_url` with the
@@ -109,14 +109,14 @@ convenience**:
   because a request that authenticated fine and was then refused is a different thing, and
   reporting it as 40 sends a user with valid credentials to re-enter their password. A
   5xx is masked completely: the cause is logged, and a D1 error names tables and columns.
-- `toAdminResponse` → `{Exception:{Type,Message}}` with the status the SPA reads. A 4xx
+- `toUserResponse` → `{Exception:{Type,Message}}` with the status the SPA reads. A 4xx
   keeps its message; a 5xx is masked to the generic one.
 
 **The reference project's argument against `Exception` applies to `/rest` only.** A
 Subsonic client branches on the envelope, so a 401 with an unrecognized body renders as
 "server error" instead of "wrong password". An SPA reads the HTTP status, so the same
-shape is correct on `/admin` — and matching it is what removed a split-brain where the
-rate limiter's 429 emitted `Exception` while every other admin error emitted
+shape is correct on `/user` — and matching it is what removed a split-brain where the
+rate limiter's 429 emitted `Exception` while every other user error emitted
 `{error:{code,message}}`. One surface, one dialect, one decoder.
 
 ## Composition

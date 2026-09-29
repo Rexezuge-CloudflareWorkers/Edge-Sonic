@@ -20,7 +20,7 @@ import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { resetBreakerForTests, KvCache } from '@edge-sonic/backend-runtime/kv';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
 import { EnrichmentService } from '@edge-sonic/backend-services/index';
-import { toAdminResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
+import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { BadRequestError, DatabaseError, NotFoundError, RateLimitedError } from '@edge-sonic/backend-errors';
 import { SubsonicError, ErrorCode } from '@edge-sonic/subsonic';
 import { WebDavClient, WebDavError } from '@edge-sonic/webdav';
@@ -689,38 +689,38 @@ describe('toSubsonicError', () => {
   });
 });
 
-describe('toAdminResponse', () => {
+describe('toUserResponse', () => {
   it('keeps a 4xx status and its message', () => {
-    // The admin API is a JSON surface whose client — the SPA — reads the status, so
+    // The user API is a JSON surface whose client — the SPA — reads the status, so
     // this is the opposite of the Subsonic rule and deliberately so.
-    const mapped = toAdminResponse(new BadRequestError('slug is required'));
+    const mapped = toUserResponse(new BadRequestError('slug is required'));
     expect(mapped.status).toBe(400);
     expect(mapped.body.Exception.Message).toBe('slug is required');
   });
 
   it('masks a 5xx with the localized generic message', () => {
-    const mapped = toAdminResponse(new DatabaseError('SELECT * FROM libraries failed', false));
+    const mapped = toUserResponse(new DatabaseError('SELECT * FROM libraries failed', false));
     expect(mapped.status).toBe(500);
     expect(mapped.body.Exception.Message).toBe('An internal error occurred.');
     expect(mapped.body.Exception.Message).not.toContain('libraries');
   });
 
   it('maps a 404 to 404', () => {
-    expect(toAdminResponse(new NotFoundError('Library not found.')).status).toBe(404);
+    expect(toUserResponse(new NotFoundError('Library not found.')).status).toBe(404);
   });
 
   it('defaults a non-ServiceError to 500 rather than leaking its type', () => {
-    const mapped = toAdminResponse(new TypeError('x is not a function'));
+    const mapped = toUserResponse(new TypeError('x is not a function'));
     expect(mapped.status).toBe(500);
     expect(mapped.body.Exception.Type).toBe('InternalServerError');
   });
 
   it('emits one dialect, because the rate limiter used to emit a second', () => {
     // The 429 from `rateLimit` is built through `BaseRoute.toErrorBody`, not through
-    // this mapper. Before both agreed on `Exception`, the admin surface carried
+    // this mapper. Before both agreed on `Exception`, the user surface carried
     // `{error:{code,message}}` here and `{Exception:{Type,Message}}` there, and its
     // client had to decode both. Assert the two are indistinguishable.
-    const mapped = toAdminResponse(new RateLimitedError());
+    const mapped = toUserResponse(new RateLimitedError());
     expect(mapped.status).toBe(429);
     expect(Object.keys(mapped.body)).toEqual(['Exception']);
     expect(mapped.body.Exception.Type).toBe('RateLimited');

@@ -6,7 +6,7 @@
  * `isSensitiveJsonPath` was inherited from the reference project as
  * `startsWith('/user/')` — that project's private surface. This worker registers no
  * `/user/` route, so the predicate could never return `true` and the `Cache-Control:
- * no-store` branch below it was **unreachable**: `/admin/me` and `/admin/users`
+ * no-store` branch below it was **unreachable**: `/user/me` and `/user/users`
  * shipped with no `Cache-Control` at all, and the code read as though they did.
  *
  * A predicate copied from another router's route table is not a conservative default.
@@ -18,14 +18,14 @@ import { createHarness } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { ORIGIN } from './helpers/harness';
 import { SECURITY_HEADERS, isSensitiveJsonPath } from '../apps/api/src/middleware/securityHeaders';
-import { RATE_LIMIT_DEFS, registerRestRateLimits, registerAdminRateLimits } from '../apps/api/src/middleware/rateLimitConfig';
+import { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits } from '../apps/api/src/middleware/rateLimitConfig';
 
 describe('isSensitiveJsonPath', () => {
   it('names a path this router actually serves', () => {
     // Every prefix here is registered in `EdgeSonicWorker`. A prefix with no route is
     // the bug this file exists to prevent.
-    expect(isSensitiveJsonPath('/admin/users')).toBe(true);
-    expect(isSensitiveJsonPath('/admin/me')).toBe(true);
+    expect(isSensitiveJsonPath('/user/users')).toBe(true);
+    expect(isSensitiveJsonPath('/user/me')).toBe(true);
     expect(isSensitiveJsonPath('/rest/stream.view')).toBe(true);
   });
 
@@ -37,9 +37,9 @@ describe('isSensitiveJsonPath', () => {
     expect(isSensitiveJsonPath('/libraries')).toBe(false);
   });
 
-  it('does not match a bare admin path without the separator', () => {
-    // A prefix test without the trailing slash would also match `/administrator`.
-    expect(isSensitiveJsonPath('/administrator')).toBe(false);
+  it('does not match a bare user path without the separator', () => {
+    // A prefix test without the trailing slash would also match `/useradmin`.
+    expect(isSensitiveJsonPath('/useradmin')).toBe(false);
     expect(isSensitiveJsonPath('/restful')).toBe(false);
   });
 });
@@ -62,10 +62,10 @@ describe('SECURITY_HEADERS', () => {
 });
 
 describe('the headers on a real response', () => {
-  it('carries the baseline and no-store on the admin API', async () => {
+  it('carries the baseline and no-store on the user API', async () => {
     const harness: Harness = await createHarness();
     try {
-      const response = await harness.fetch(`${ORIGIN}/admin/users`);
+      const response = await harness.fetch(`${ORIGIN}/user/users`);
       expect(response.status).toBe(200);
       for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
         expect(response.headers.get(name), name).toBe(value);
@@ -109,15 +109,15 @@ describe('the rate-limit table', () => {
   it('splits by surface as a field, not by array index', async () => {
     // Git slices `RATE_LIMIT_DEFS.slice(0, 3)` / `.slice(3)`, which means inserting a
     // definition at index 3 silently reclassifies it — a new `/rest` limit would become
-    // an admin limit and start being keyed on the wrong identity. The `surface` field
+    // a user limit and start being keyed on the wrong identity. The `surface` field
     // makes that impossible, and this asserts the split is total and disjoint.
     const rest = RATE_LIMIT_DEFS.filter((def) => def.surface === 'rest');
-    const admin = RATE_LIMIT_DEFS.filter((def) => def.surface === 'admin');
-    expect(rest.length + admin.length).toBe(RATE_LIMIT_DEFS.length);
+    const user = RATE_LIMIT_DEFS.filter((def) => def.surface === 'user');
+    expect(rest.length + user.length).toBe(RATE_LIMIT_DEFS.length);
     expect(rest.length).toBeGreaterThan(0);
-    expect(admin.length).toBeGreaterThan(0);
+    expect(user.length).toBeGreaterThan(0);
     for (const def of rest) expect(def.path.startsWith('/rest/'), def.path).toBe(true);
-    for (const def of admin) expect(def.path.startsWith('/admin/'), def.path).toBe(true);
+    for (const def of user) expect(def.path.startsWith('/user/'), def.path).toBe(true);
   });
 
   it('gives every definition a reason, so the table can be tuned without archaeology', () => {
@@ -130,9 +130,9 @@ describe('the rate-limit table', () => {
 
   it('exports both registrars, and the worker calls one of each', () => {
     // The route order in `EdgeSonicWorker` depends on these being separately callable:
-    // `/rest` before its route, `/admin` after the auth middleware. Asserting they are
+    // `/rest` before its route, `/user` after the auth middleware. Asserting they are
     // callable is weak, so the ordering itself is asserted in `worker.int.test.ts`.
     expect(typeof registerRestRateLimits).toBe('function');
-    expect(typeof registerAdminRateLimits).toBe('function');
+    expect(typeof registerUserRateLimits).toBe('function');
   });
 });

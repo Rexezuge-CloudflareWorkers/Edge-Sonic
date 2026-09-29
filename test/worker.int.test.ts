@@ -147,14 +147,14 @@ describe('route order', () => {
     expect(((await response.json()) as { apiVersion: string }).apiVersion).toBe('1.16.1');
   });
 
-  it('gates /admin behind Cloudflare Access, not behind a Subsonic credential', async () => {
+  it('gates /user behind Cloudflare Access, not behind a Subsonic credential', async () => {
     // The two identity systems are deliberately separate: an operator's Access identity
     // must not be usable as a streaming credential, and a Subsonic password must not
-    // open the admin API.
+    // open the user API.
     // Asserted in `production`, where no dev bypass applies — the other test covers the
     // allow-list itself.
     const withPassword = await harness.worker.fetch(
-      new Request(`${ORIGIN}/admin/libraries`),
+      new Request(`${ORIGIN}/user/libraries`),
       { ...env(), ENVIRONMENT: 'production' } as never,
       executionContext,
     );
@@ -165,13 +165,13 @@ describe('route order', () => {
     // Both directions are asserted, because a test that only checks the bypass passes
     // even if the allow-list stopped working altogether — which is the failure that
     // matters, since it authenticates every unauthenticated request as a fixed user.
-    const inDevelopment = await harness.worker.fetch(new Request(`${ORIGIN}/admin/me`), env() as never, executionContext);
+    const inDevelopment = await harness.worker.fetch(new Request(`${ORIGIN}/user/me`), env() as never, executionContext);
     expect(inDevelopment.status).toBe(200);
 
     // The bypass is gated on an allow-list, not on `!== 'production'`: a deny-list
     // would enable it for `staging`, for `Preview`, and for a misspelled `prodcution`.
     const inProduction = await harness.worker.fetch(
-      new Request(`${ORIGIN}/admin/me`),
+      new Request(`${ORIGIN}/user/me`),
       { ...env(), ENVIRONMENT: 'production' } as never,
       executionContext,
     );
@@ -179,30 +179,30 @@ describe('route order', () => {
 
     // And a name that is *not* on the list, however it is spelled.
     const elsewhere = await harness.worker.fetch(
-      new Request(`${ORIGIN}/admin/me`),
+      new Request(`${ORIGIN}/user/me`),
       { ...env(), ENVIRONMENT: 'Preview' } as never,
       executionContext,
     );
     expect(elsewhere.status).toBe(401);
   });
 
-  it('keys the admin rate limit on the resolved identity, not on the client address', async () => {
-    // The route order in `EdgeSonicWorker` puts `registerAdminRateLimits` *after*
-    // `adminAuthentication`, and this is what that buys. The previous order registered
+  it('keys the user rate limit on the resolved identity, not on the client address', async () => {
+    // The route order in `EdgeSonicWorker` puts `registerUserRateLimits` *after*
+    // `userAuthentication`, and this is what that buys. The previous order registered
     // the limits first, while a comment claimed the opposite ("before auth, so they can
     // key on the resolved identity") — so every bucket silently fell back to `ip:…`.
     //
-    // Two requests from one address, as two different operators. The admin budget is
+    // Two requests from one address, as two different operators. The user budget is
     // 60/min and cannot be exhausted cheaply here, so this asserts the *identity* is
     // what the bucket records: two different identities from one address each get their
-    // own key, which is only true if `AdminEmail` was set before the limiter ran.
+    // own key, which is only true if `AuthenticatedUserEmailAddress` was set before the limiter ran.
     const first = await harness.worker.fetch(
-      new Request(`${ORIGIN}/admin/me`, { headers: { 'cf-connecting-ip': '203.0.113.50' } }),
+      new Request(`${ORIGIN}/user/me`, { headers: { 'cf-connecting-ip': '203.0.113.50' } }),
       { ...env(), DEV_AUTH_EMAIL: 'ann@example.com' } as never,
       executionContext,
     );
     const second = await harness.worker.fetch(
-      new Request(`${ORIGIN}/admin/me`, { headers: { 'cf-connecting-ip': '203.0.113.50' } }),
+      new Request(`${ORIGIN}/user/me`, { headers: { 'cf-connecting-ip': '203.0.113.50' } }),
       { ...env(), DEV_AUTH_EMAIL: 'bob@example.com' } as never,
       executionContext,
     );
@@ -215,20 +215,20 @@ describe('route order', () => {
     expect(getRateLimitBucketCountForTests()).toBeGreaterThanOrEqual(2);
   });
 
-  it('serves an unauthenticated /admin path in the Exception dialect, not the Subsonic one', async () => {
+  it('serves an unauthenticated /user path in the Exception dialect, not the Subsonic one', async () => {
     // Two dialects, and the split is by surface. A client parsing `/rest` has no way to
-    // interpret the admin shape, and an SPA has no way to interpret the protocol
+    // interpret the user shape, and an SPA has no way to interpret the protocol
     // envelope — so `onError` and `notFound` both choose by path. This also covers the
     // 401 from the auth middleware, which is the most common way an operator's browser
     // first meets this surface.
     const response = await harness.worker.fetch(
-      new Request(`${ORIGIN}/admin/libraries`),
+      new Request(`${ORIGIN}/user/libraries`),
       { ...env(), ENVIRONMENT: 'production' } as never,
       executionContext,
     );
     expect(response.status).toBe(401);
     const body = (await response.json()) as { Exception: { Type: string; Message: string } };
-    // One key, so a client needs a single decoder for the whole admin surface.
+    // One key, so a client needs a single decoder for the whole user surface.
     expect(Object.keys(body)).toEqual(['Exception']);
     expect(body.Exception.Type).toBe('Unauthorized');
   });
@@ -245,7 +245,7 @@ describe('route order', () => {
     expect(response.status).toBe(204);
   });
 
-  it('serves the admin SPA shell for its own routes', async () => {
+  it('serves the operator SPA shell for its own routes', async () => {
     // Compares against the imported shell constant instead of a hardcoded marker:
     // `spa-shell.ts` is gitignored and generated, so CI runs against the empty
     // postinstall stub while a local checkout may hold a built shell. What this

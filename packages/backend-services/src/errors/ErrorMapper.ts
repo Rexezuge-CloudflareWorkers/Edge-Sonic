@@ -13,11 +13,11 @@
  *   of "wrong password", because Subsonic clients branch on the envelope, not the
  *   status. A missing endpoint, a bad parameter, and a wrong password must all arrive
  *   as a well-formed envelope, or the client renders nothing at all.
- * - `toAdminResponse` — the `/admin/*` JSON surface, for the SPA. `{Exception:{Type,
+ * - `toUserResponse` — the `/user/*` JSON surface, for the SPA. `{Exception:{Type,
  *   Message}}` with conventional statuses, because **an SPA does read the status** and
  *   nothing in the argument above applies to it. This is the shape the reference
  *   project used on this surface, and matching it fixes a split-brain: the rate limiter
- *   emitted `Exception` for a 429 while every other admin error emitted
+ *   emitted `Exception` for a 429 while every other user error emitted
  *   `{error:{code,message}}`, so one surface carried two error dialects and its client
  *   had to decode both. The SPA reads the message out of either, so this is a
  *   consistency fix rather than a breaking change.
@@ -34,18 +34,18 @@ import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
 import { ErrorCode, isSubsonicError, SubsonicError } from '@edge-sonic/subsonic';
 
 /**
- * HTTP statuses the admin API is allowed to return.
+ * HTTP statuses the user API is allowed to return.
  *
  * Everything else collapses to 500, so a service error with a status this set does
  * not carry is masked along with its message.
  */
-const ADMIN_STATUSES = new Set([400, 401, 403, 404, 409, 413, 429, 502, 503]);
+const USER_STATUSES = new Set([400, 401, 403, 404, 409, 413, 429, 502, 503]);
 
 /**
- * The admin API's error body. Matches the reference project, so the SPA's decoder
+ * The user API's error body. Matches the reference project, so the SPA's decoder
  * and this server agree on one shape instead of two.
  */
-interface AdminErrorBody {
+interface UserErrorBody {
   Exception: { Type: string; Message: string };
 }
 
@@ -87,28 +87,28 @@ function toSubsonicError(error: unknown): SubsonicError {
 }
 
 /**
- * Map any thrown value to the admin API's `{Exception:{Type,Message}}` body.
+ * Map any thrown value to the user API's `{Exception:{Type,Message}}` body.
  *
  * A 4xx keeps its message, because "the library does not exist" and "your JSON is
  * broken" are the two answers an operator can act on. A 5xx does not: the cause is
  * logged and the message is the localized generic one.
  */
-function toAdminResponse(error: unknown, locale?: string | null): { status: number; body: AdminErrorBody } {
+function toUserResponse(error: unknown, locale?: string | null): { status: number; body: UserErrorBody } {
   const strings = getBackendStrings(locale).common;
 
   if (error instanceof ServiceError) {
-    const status = ADMIN_STATUSES.has(error.getErrorCode()) ? error.getErrorCode() : 500;
+    const status = USER_STATUSES.has(error.getErrorCode()) ? error.getErrorCode() : 500;
     const masked = status >= 500;
     const message = masked ? strings.internalError : error.getErrorMessage();
     if (masked) {
-      console.error('Admin API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+      console.error('User API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
     }
     return { status, body: { Exception: { Type: error.getErrorType(), Message: message } } };
   }
 
-  console.error('Unhandled admin API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+  console.error('Unhandled user API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
   return { status: 500, body: { Exception: { Type: 'InternalServerError', Message: strings.internalError } } };
 }
 
-export { toSubsonicError, toAdminResponse, ADMIN_STATUSES };
-export type { AdminErrorBody };
+export { toSubsonicError, toUserResponse, USER_STATUSES };
+export type { UserErrorBody };

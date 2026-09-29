@@ -7,8 +7,8 @@
  * from what the worker actually wired without anything noticing.
  */
 export { scopeMiddleware } from './scopeMiddleware';
-export { adminAuthentication, adminAuthenticationHandler } from './adminAuth';
+export { userAuthentication, userAuthenticationHandler } from './userAuth';
 export { rateLimit, resetRateLimitForTests, clientIp, getRateLimitBucketCountForTests } from './rateLimit';
-export { RATE_LIMIT_DEFS, registerRateLimits, registerRestRateLimits, registerAdminRateLimits } from './rateLimitConfig';
+export { RATE_LIMIT_DEFS, registerRateLimits, registerRestRateLimits, registerUserRateLimits } from './rateLimitConfig';
 export type { RateLimitDef, LimitSurface } from './rateLimitConfig';
 export { securityHeaders, SECURITY_HEADERS, isSensitiveJsonPath, applySecurityHeaders } from './securityHeaders';
