@@ -43,6 +43,7 @@ import { encodeId, IdKind } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { basename, isAudioFile, suffixOf } from './TreeService';
+import { enrichChanged } from './scanEnrichment';
 import type { ChunkResult, ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
 import { LAST_ERROR_MAX } from './scanTypes';
 
@@ -351,6 +352,16 @@ class ScanService {
       ...nodeInputs,
     ]);
     if (songInputs.length > 0) writes += await this.deps.songs.upsertFileFacts(songInputs);
+
+    // Fill in what a range read knows and a `PROPFIND` does not: duration, bitrate, and
+    // the text tags that `getArtists`, `getAlbumList2`, `getGenres` and `search3` all
+    // group on. Without this, a browsing client sees `duration: 0` and no artist on
+    // every track until it happens to open one — and the aggregates stay empty, because
+    // there is nothing to group.
+    //
+    // Only the rows this listing changed, which is exactly the set whose `enriched_at`
+    // the upsert just cleared. An unchanged track costs nothing.
+    await enrichChanged(library, songInputs, this.deps.enrichSong, this.deps.enrichMaxPerFolder);
 
     // Prune. Unconditional, and both calls return 0 without issuing a statement when
     // nothing vanished.

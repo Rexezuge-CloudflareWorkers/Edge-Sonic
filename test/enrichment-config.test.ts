@@ -494,6 +494,187 @@ describe('EnrichmentService', () => {
   });
 });
 
+/**
+ * The Ogg duration, which takes a second read from the *end* of the file.
+ *
+ * An Ogg granule position lives in the final page's header, at the end of the file, so a
+ * prefix read cannot see it. This is the read the reader's own documentation described as
+ * the caller's job and that was never written: the reader took the last granule it
+ * happened to see, so a 240.61 s track was served as 3 s and 15329 kbps instead of 191,
+ * and every client seeks by that number.
+ */
+describe('an Ogg duration, which the prefix read cannot supply', () => {
+  const PRESKIP = 312;
+  const DURATION_SECONDS = 240;
+
+  /**
+  A real Opus stream: headers and a big tag block first, EOS page last.
+  */
+  function opusFile(): Uint8Array {
+    const chunks: number[] = [];
+    const le = (value: number, width: number): number[] => {
+      const out: number[] = [];
+      let remaining = value;
+      for (let index = 0; index < width; index += 1) {
+        out.push(remaining % 256);
+        remaining = Math.floor(remaining / 256);
+      }
+      return out;
+    };
+    const page = (segments: number[], body: number[], flags: number, granule: number, seq: number): number[] => [
+      0x4f, 0x67, 0x67, 0x53,
+      0x00,
+      flags,
+      ...le(granule, 8),
+      ...le(1, 4),
+      ...le(seq, 4),
+      ...le(0, 4),
+      segments.length,
+      ...segments,
+      ...body,
+    ];
+
+    const vendor = encoder.encode('edge-sonic-test');
+    // A long entry so the comment packet is genuinely longer than one lacing entry, which
+    // is what makes it a cross-page packet. A real one is an embedded cover image: the
+    // live file's `METADATA_BLOCK_PICTURE` runs to 89,931 bytes.
+    const entries = [
+      ['ARTIST', 'Bon Iver'],
+      ['ALBUM', 'For Emma'],
+      ['METADATA_BLOCK_PICTURE', 'A'.repeat(200)],
+    ].map(([key, value]) => encoder.encode(`${key}=${value}`));
+    const comments: number[] = [...encoder.encode('OpusTags'), ...le(vendor.length, 4), ...vendor, ...le(entries.length, 4)];
+    for (const entry of entries) comments.push(...le(entry.length, 4), ...entry);
+    // Split at a lacing boundary, with the remainder under 255 so page 1 terminates it.
+    expect(comments.length).toBeGreaterThan(255);
+    expect(comments.length - 255).toBeLessThan(255);
+
+    // Page 0: the 19-byte identification header, then the comment packet continued on
+    // page 1 — the layout that defeated a page-oriented reader.
+    chunks.push(
+      ...page([19, 255], [...encoder.encode('OpusHead'), 0x01, 0x02, ...le(PRESKIP, 2), ...le(48_000, 4), ...le(0, 2), 0x00, ...comments.slice(0, 255)], 0x02, 0, 0),
+      ...page([comments.length - 255], comments.slice(255), 0x01, 0, 1),
+      // The final page, carrying the end-of-stream flag and the file's length.
+      ...page([64], [...new Uint8Array(64)], 0x04, 48_000 * DURATION_SECONDS + PRESKIP, 2),
+    );
+    return new Uint8Array(chunks);
+  }
+
+  function makeOggEnrichment(
+    file: Uint8Array,
+    // `readTailBytes: 0` is how a test disables the tail read, so the option does not
+    // need to distinguish "absent" from "zero" — the default is only the value.
+    options: { readBytes?: number; readTailBytes?: number } = {},
+  ): {
+    service: EnrichmentService;
+    applied: Array<{ id: string; metadata: Record<string, unknown> }>;
+    library: Parameters<EnrichmentService['enrich']>[0];
+  } {
+    const applied: Array<{ id: string; metadata: Record<string, unknown> }> = [];
+    const dav = fakeDav({ '/dav/A/01.opus': [{ path: '/dav/A/01.opus', size: file.length, contentType: 'audio/ogg', body: file }] });
+    const library = {
+      id: 'L1',
+      slug: 'home',
+      slug_ci: 'home',
+      base_url: 'https://dav.example.com',
+      root_path: '/dav',
+      dav_username: 'ann',
+      password_ciphertext: '',
+      password_iv: '',
+      key_version: 1,
+      display_name: 'Home',
+      is_enabled: 1,
+      created_at: 0,
+      updated_at: 0,
+    } as never;
+    const service = new EnrichmentService({
+      songs: {
+        findById: async () => null,
+        applyMetadata: async (id, metadata) => {
+          applied.push({ id, metadata: metadata as Record<string, unknown> });
+        },
+      },
+      clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
+      kv: new KvCache(fakeKv().ns),
+      resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
+      // 400 covers the two header pages (303 + 69) and stops inside the final page, so
+      // the prefix read genuinely cannot see the file's length. That is the condition
+      // the whole tail read exists for, and a fixture smaller than the prefix would not
+      // reproduce it — the prefix would simply be the whole file.
+      readBytes: options.readBytes ?? 400,
+      readTailBytes: options.readTailBytes ?? 65_536,
+      timeoutMs: 1000,
+    });
+    return { service, applied, library };
+  }
+
+  function opusSong(size: number): Record<string, unknown> {
+    return { ...makeSong({ id: 's1', path: 'A/01.opus', size, enriched_at: null, duration: 0 }) };
+  }
+
+  it('resolves the real duration from the tail, and the bitrate from it', async () => {
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file);
+
+    await service.enrich(library, opusSong(file.length) as never);
+
+    expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+    // 191 kbps at this size, not the 15329 that a 3 s duration produced.
+    expect(applied[0]?.metadata.bitrate).toBe(Math.round((file.length * 8) / DURATION_SECONDS / 1000));
+  });
+
+  it('reads the tags the prefix read found, so the aggregates have something to group', async () => {
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file);
+
+    await service.enrich(library, opusSong(file.length) as never);
+
+    // The two headers are packets in the first two pages, and the comment block is split
+    // across them by a page header. Nothing here was readable before.
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+    expect(applied[0]?.metadata.album).toBe('For Emma');
+  });
+
+  it('reports no duration rather than a wrong one when the tail read is disabled', async () => {
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file, { readTailBytes: 0 });
+
+    await service.enrich(library, opusSong(file.length) as never);
+
+    // 0, not 3. The prefix read's last page is a progress report, not the file's length,
+    // and a client seeks by whatever number it is given.
+    expect(applied[0]?.metadata.duration).toBe(0);
+    // The tags are unaffected: they are in the part of the file the prefix did read.
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+  });
+
+  it('reports no duration when the tail read cannot reach the final page', async () => {
+    const file = opusFile();
+    // A tail smaller than a page cannot contain the final page's header, so the read
+    // finds no end-of-stream granule and the answer is `null`.
+    const { service, applied, library } = makeOggEnrichment(file, { readTailBytes: 8 });
+
+    await service.enrich(library, opusSong(file.length) as never);
+
+    expect(applied[0]?.metadata.duration).toBe(0);
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+  });
+
+  it('enriches from file facts, with no song row in hand', async () => {
+    // The scan's entry point. It writes by id, so it needs no row — and passing facts
+    // rather than a fabricated row is what keeps a schema change from rotting silently.
+    const file = opusFile();
+    const { service, applied, library } = makeOggEnrichment(file);
+
+    await service.enrichFacts(library, { id: 's1', path: 'A/01.opus', size: file.length, mtimeMs: 1_700_000_000_000 });
+
+    expect(applied).toHaveLength(1);
+    expect(applied[0]?.id).toBe('s1');
+    expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+  });
+});
+
 // -------------------------------------------------------------------------------------
 // Configuration
 // -------------------------------------------------------------------------------------

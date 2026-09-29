@@ -56,6 +56,14 @@ function createIndex() {
         find: async (_libraryId: string, path: string) => nodes.get(nodeKey(path)) ?? null,
         listChildren: async (_libraryId: string, parentPath: string) =>
           [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci)),
+        // `path !== ''` excludes the library root's own row, which is
+        // `path === parentPath === ''` and so matches `parent_path === ''` exactly as a
+        // top-level folder does. This double had that filter while `NodeDAO.listRoots`
+        // did not — the DAO shipped a blank-named entry at the top of `getIndexes` whose
+        // id failed with `code 70`, and this suite stayed green, because a double that
+        // compensates for a bug hides it. `test/schema.int.test.ts` now asserts the
+        // predicate against a real SQLite, where a wrong query and a double cannot
+        // disagree.
         listRoots: async () => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== ''),
         // The scan frontier: unscanned folders, shallowest first. This ordering is
         // what makes a partial scan produce a browsable top of the tree.
@@ -302,6 +310,125 @@ function touch(tree: Record<string, DavEntry[]>, libraryRelative: string, mtime 
   }
 }
 
+describe('the scan enriches the tracks it changed', () => {
+  let index: ReturnType<typeof createIndex>;
+  let dav: ReturnType<typeof fakeDav>;
+  let row: LibraryRow;
+  let enriched: Array<{ id: string; path: string; size: number; mtimeMs: number }>;
+
+  /**
+  A scan over the shared `dav`, recording what it was asked to enrich.
+  */
+  function scanWith(enrichMaxPerFolder: number, onEnrich?: (facts: { id: string; path: string; size: number; mtimeMs: number }) => Promise<void>): ScanService {
+    return new ScanService({
+      ...index.deps,
+      clientFor: async () =>
+        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch),
+      timeoutMs: 1000,
+      chunkFolders: 40,
+      enrichSong: async (_library, facts) => {
+        enriched.push(facts);
+        if (onEnrich !== undefined) await onEnrich(facts);
+      },
+      enrichMaxPerFolder,
+    });
+  }
+
+  async function complete(service: ScanService, limit = 50): Promise<void> {
+    await service.start(row);
+    for (let poll = 0; poll < limit; poll += 1) {
+      if ((await service.step(row)).status !== 'scanning') return;
+    }
+    throw new Error('scan did not complete');
+  }
+
+  beforeEach(() => {
+    index = createIndex();
+    dav = fakeDav(sampleTree());
+    row = library();
+    enriched = [];
+  });
+
+  /**
+   * Why this exists: enrichment used to be reachable only from `getSong`, so a browsing
+   * client saw `duration: 0` and no artist on every track until it happened to open one —
+   * and `getArtists`, `getAlbumList2`, `getGenres` and `search3` had nothing to group on,
+   * so they were all empty for a library with 81 artists.
+   */
+  it('reads every track a cold scan indexed, so browsing needs no per-track open', async () => {
+    await complete(scanWith(20));
+
+    expect(index.songs.size).toBe(6);
+    expect(enriched).toHaveLength(6);
+    expect(enriched.map((fact) => fact.path).sort()).toEqual([...index.songs.values()].map((song) => song.path).sort());
+  });
+
+  it('passes the file facts a range read needs, not a fabricated row', async () => {
+    await complete(scanWith(20));
+
+    const first = enriched[0];
+    expect(first).toBeDefined();
+    // `size` is what makes a variable-bitrate bitrate computable, and `mtimeMs` is what
+    // the KV cache entry is validated against. Nothing else is needed, and nothing else
+    // is sent — a fabricated `SongRow` would be a copy of the schema that rots silently.
+    expect(first?.size).toBeGreaterThan(0);
+    expect(first?.mtimeMs).toBeGreaterThan(0);
+    expect(Object.keys(first ?? {}).sort()).toEqual(['id', 'mtimeMs', 'path', 'size']);
+  });
+
+  it('enriches nothing on an unchanged rescan, because nothing changed', async () => {
+    const service = scanWith(20);
+    await complete(service);
+    enriched = [];
+
+    await service.start(row);
+    await service.step(row);
+
+    expect(enriched).toEqual([]);
+  });
+
+  it('enriches only the file that changed, not the album around it', async () => {
+    await complete(scanWith(20));
+    enriched = [];
+
+    // One *track's* etag moves, and `touch` bumps its ancestors the way a WebDAV server
+    // does. The scan descends into the album because the folder moved, but the sibling
+    // track is unchanged, so it is not re-read — and therefore not re-enriched. The two
+    // untouched albums are never opened at all.
+    const tree = sampleTree();
+    const listing = tree[`${ROOT}/Blur/Holocene`]!;
+    listing[1] = { ...listing[1]!, etag: '"Holocene-1-changed"' };
+    touch(tree, 'Blur/Holocene');
+    dav.setTree(tree);
+
+    await complete(scanWith(20));
+
+    expect(enriched).toHaveLength(1);
+    expect(enriched[0]?.path).toContain('01.flac');
+  });
+
+  it('enriches at most the per-folder bound, and leaves the rest to `getSong`', async () => {
+    // The bound is on subrequests, and it is what keeps a chunk inside the 1,000 limit:
+    // an Ogg track costs a prefix read and a tail read.
+    await complete(scanWith(1));
+
+    // Each of the three albums holds two tracks, so a bound of 1 enriches one per album.
+    expect(enriched).toHaveLength(3);
+  });
+
+  it('does not fail the chunk when a track cannot be enriched', async () => {
+    // A dead origin must not cost the rows the walk already wrote. The track keeps
+    // `enriched_at = null` and `getSong` retries it.
+    await complete(
+      scanWith(20, async () => {
+        throw new Error('origin unavailable');
+      }),
+    );
+
+    expect(index.songs.size).toBe(6);
+  });
+});
+
 describe('ScanService', () => {
   let index: ReturnType<typeof createIndex>;
   let dav: ReturnType<typeof fakeDav>;
@@ -317,6 +444,8 @@ describe('ScanService', () => {
         new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch),
       timeoutMs: 1000,
       chunkFolders: 40,
+      // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
+      enrichMaxPerFolder: 0,
     });
     row = library();
   });
@@ -489,6 +618,8 @@ describe('ScanService', () => {
         new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch),
       timeoutMs: 1000,
       chunkFolders: 40,
+      // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
+      enrichMaxPerFolder: 0,
     });
 
     const tree = sampleTree();
@@ -524,6 +655,8 @@ describe('ScanService', () => {
         new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, gone.fetch),
       timeoutMs: 1000,
       chunkFolders: 40,
+      // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
+      enrichMaxPerFolder: 0,
     });
     const result = await goneService.start(row);
     expect(result.status).toBe('idle');

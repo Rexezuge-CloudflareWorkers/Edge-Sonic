@@ -90,12 +90,20 @@ class NodeDAO extends BaseDAO {
    * `parent_path = ''` rather than a sentinel column: the root is a real path
    * (the empty string) and keeping it one makes the root's own `nodes` row
    * consistent with every other folder.
+   *
+   * `AND path != ''` is what keeps the root's own row out of it. The root row is
+   * `path === parentPath === ''`, so it satisfies `parent_path = ''` like every top-level
+   * folder does, and it was returned as though it were one of them: `getIndexes` emitted
+   * a `shortcut` with an empty `name` — an unlabelled entry at the top of the `#` group,
+   * which every client renders — whose id resolved to the library root and then failed
+   * with `code 70`. This shipped. `listChildren('')` is unchanged and still returns it,
+   * which is how `getMusicDirectory` reaches the root.
    */
   public async listRoots(libraryId: string): Promise<NodeRow[]> {
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare("SELECT * FROM nodes WHERE library_id = ? AND parent_path = '' ORDER BY name_ci ASC")
+          .prepare("SELECT * FROM nodes WHERE library_id = ? AND parent_path = '' AND path != '' ORDER BY name_ci ASC")
           .bind(libraryId)
           .all<NodeRow>(),
       'nodes.listRoots',

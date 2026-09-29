@@ -218,6 +218,59 @@ describe('paths compare exactly, never lowercased', () => {
   });
 });
 
+describe("listRoots does not return the library root's own row", () => {
+  /**
+   * Seed a library whose root row exists alongside its top-level folders.
+   *
+   * The root row is `path === parentPath === ''`, which is what the scan writes for the
+   * collection itself. It is a real row and `listChildren` is right to return it for the
+   * parent `''` — but `listRoots` answers "what is at the top level for `getIndexes`",
+   * and the root is not a top-level entry, it is the thing they are all inside.
+   */
+  async function seedLibraryWithRoot(): Promise<{ userId: string; libraryId: string; nodes: NodeDAO }> {
+    const userId = await seedUser('RootsTest');
+    const libraryId = await seedLibrary(userId, 'LROOTS');
+    const nodes = new NodeDAO(handle.db);
+    await nodes.upsertMany([
+      { libraryId, path: '', parentPath: '', name: '', mtimeMs: 1, etag: null, depth: 0 },
+      { libraryId, path: 'Bon Iver', parentPath: '', name: 'Bon Iver', mtimeMs: 1, etag: null, depth: 1 },
+      { libraryId, path: 'Blur', parentPath: '', name: 'Blur', mtimeMs: 1, etag: null, depth: 1 },
+      { libraryId, path: 'Blur/Bubbley', parentPath: 'Blur', name: 'Bubbley', mtimeMs: 1, etag: null, depth: 2 },
+    ]);
+    return { userId, libraryId, nodes };
+  }
+
+  it('lists the top-level folders and not the root', async () => {
+    const { libraryId, nodes } = await seedLibraryWithRoot();
+    const roots = await nodes.listRoots(libraryId);
+
+    expect(roots.map((row) => row.name)).toEqual(['Blur', 'Bon Iver']);
+    // The row is still there — this is a filter on what "root" means, not a delete.
+    expect(await nodes.countByLibrary(libraryId)).toBe(4);
+  });
+
+  it('gives every returned row a name, because a blank one is what a client renders', async () => {
+    // `getIndexes` groups by first letter and emits each row as a `shortcut`. A row
+    // with an empty name sorts to the top of the `#` group and is rendered as an
+    // unlabelled entry, so this asserts the property the endpoint depends on rather
+    // than the predicate that happens to produce it.
+    const { libraryId, nodes } = await seedLibraryWithRoot();
+    for (const row of await nodes.listRoots(libraryId)) {
+      expect(row.name).not.toBe('');
+      expect(row.path).not.toBe('');
+    }
+  });
+
+  it('still lists the root row as a child of the root, where it belongs', async () => {
+    // `listChildren('')` is how `getMusicDirectory` reaches the library root, and the
+    // root row is legitimately a child of the parent `''`. Filtering it out of the
+    // child listing as well would make the root unreachable.
+    const { libraryId, nodes } = await seedLibraryWithRoot();
+    const children = await nodes.listChildren(libraryId, '');
+    expect(children.map((row) => row.path)).toContain('');
+  });
+});
+
 describe('cascades', () => {
   it('takes the whole index with a deleted library, and leaves users alone', async () => {
     // This is the failure a `DROP TABLE <parent>` migration causes: D1 runs every

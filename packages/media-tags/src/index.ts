@@ -61,5 +61,5 @@ export { readAudioTags,        DEFAULT_PREFIX_BYTES };
 export { parseVorbisComments, readUintBE, readUintLE, readBitsBE } from './bits';
 
 export {readFlac, hasFlacMagic} from './flac';
-export {readOpus, readVorbis, hasOggMagic} from './ogg';
+export {readOpus, readVorbis, hasOggMagic, readOggTailDuration} from './ogg';
 export {readId3v2, hasId3Magic} from './mp3';

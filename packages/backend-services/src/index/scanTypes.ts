@@ -14,6 +14,20 @@
 import type { LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import type { WebDavClient } from '@edge-sonic/webdav';
 
+/**
+ * What a range read needs to enrich a track, and nothing else.
+ *
+ * Structural rather than a `SongRow`: the scan holds the facts it just upserted, and
+ * fabricating a row to satisfy a signature would be a copy of the schema that rots
+ * silently when a column is added.
+ */
+interface ScanEnrichFacts {
+  id: string;
+  path: string;
+  size: number;
+  mtimeMs: number;
+}
+
 interface ScanNodeInput {
   libraryId: string;
   path: string;
@@ -75,6 +89,27 @@ interface ScanDeps {
   Folders descended into per chunk. Sized against the 1,000-subrequest limit.
   */
   chunkFolders: number;
+  /**
+  Fill in a changed track's duration, bitrate and text tags while the scan holds its
+  facts in hand.
+
+  Optional, and that is deliberate: the scan is a folder walk and enrichment is a
+  per-track range read, so a scan that enriched everything would multiply a cold scan's
+  subrequests by the track count. `EnrichmentService` stays the authority — the scan
+  calls the same method `getSong` does, so a row enriched here and a row enriched on
+  first play are enriched identically.
+  */
+  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts) => Promise<void>;
+  /**
+  Tracks enriched per folder, per chunk.
+
+  The bound is on **subrequests**, and it is what keeps a chunk inside the 1,000 limit:
+  an Ogg track costs a prefix read and a tail read, so this number decides whether the
+  enrichment fits. Whatever does not fit keeps `enriched_at = null` and is enriched on
+  first play instead — a track with no duration until someone opens it, rather than a
+  chunk that fails.
+  */
+  enrichMaxPerFolder: number;
 }
 
 /**
@@ -123,5 +158,5 @@ for every writer, the service's is what the operator is shown.
 */
 const LAST_ERROR_MAX = 500;
 
-export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult };
+export type { ScanDeps, ScanNodeInput, ScanNodeStore, ScanSongInput, ScanSongStore, ScanStateStore, ScanStatus, ChunkResult, ScanEnrichFacts };
 export { LAST_ERROR_MAX };

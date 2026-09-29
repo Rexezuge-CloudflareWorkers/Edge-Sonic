@@ -132,6 +132,33 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
   so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
   `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.
+- **An Ogg page is not a packet, and a granule is only a duration on the last page.**
+  Packets are delimited by the **segment table** — a packet ends where a lacing entry is
+  below 255, and one page may carry several. `libavformat` writes an Opus identification
+  header and its comment block as two packets in **one** page, so a reader that looks for
+  them only at page starts finds the first and never looks again. It shipped: no Opus file
+  reported an artist, album, genre, track or year, and since `getArtists`,
+  `getAlbumList2`, `getGenres` and `search3` all group on those columns, a library of 81
+  artists answered all four with `[]`. A packet longer than a page continues onto the
+  next one, split by that page's header, so its bytes are not adjacent and it must be
+  **reassembled** — a comment block with embedded cover art is that case, and reading
+  across the gap consumes the page header as comment data.
+  Separately, a granule read off a page that is not the end-of-stream page — or off one
+  the buffer truncated — is a *number* that is not the file's length. A 240.61 s track
+  was served as 3 s and 15329 kbps instead of 191, and a client seeks by it. Returning
+  `null` and letting `readOggTailDuration` answer from a second read is the fix; the
+  `null` was never the bug, the missing tail read was. Asserted in
+  `test/ogg-packet-layout.test.ts`, whose fixtures are written from the framing spec and
+  **decode their own lacing table back**, because the existing suite built one packet per
+  page — the reader's assumption — and so could not see either defect.
+- **A double that compensates for a bug hides it.** `test/scan-incremental.test.ts`'s
+  `listRoots` filtered `node.path !== ''` while `NodeDAO.listRoots` did not, so the
+  library root's own row reached `getIndexes` as a `shortcut` with an empty `name` — an
+  unlabelled entry at the top of the `#` group, whose id then failed with `code 70` — and
+  the suite stayed green. A double is evidence only to the extent it shares the
+  production assumptions; here it shared the *correct* behaviour and the DAO did not.
+  The DAO now runs against real `node:sqlite` for this predicate, where a wrong query and
+  a double cannot disagree.
 
 ## Test doubles must model the platform
 
@@ -146,6 +173,12 @@ from this repository's own history:
 - The FLAC fixture and the FLAC reader shared a wrong byte offset, so every duration was
   wrong by 2^16 and nothing failed. When a fixture and a reader can both be wrong the
   same way, **the fixture is written from the spec** and the offsets are spelled out.
+- The Ogg fixture and the Ogg reader shared a wrong *framing* assumption — one packet per
+  page — so no tag ever parsed and no test failed. The fix is a fixture that builds the
+  **lacing table** from the spec and then **decodes it back** (`packetStarts` in
+  `test/ogg-packet-layout.test.ts`), so the fixture is checked against the format rather
+  than against the reader it exists to catch. A fixture that only mirrors the reader's
+  assumptions cannot fail for the reader's reason.
 - `fakeDav` used to answer any `Range` with the whole file and a `Content-Range` header
   claiming a prefix. That models a server lying about what it served, and it hid the one
   bug this product exists to avoid. It truncates now, and answers `416` past the end.

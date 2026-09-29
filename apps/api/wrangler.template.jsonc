@@ -119,6 +119,18 @@
     // learn its length.
     "TAG_READ_BYTES": "131072",
 
+    // A container whose length is recorded at the *end* of the file needs a second read
+    // from the other end: an Ogg granule position lives in its final page's header, so a
+    // prefix read cannot see it. One whole Ogg page body is 255 x 255 bytes, plus a
+    // 27-byte header, so 65536 guarantees the final page's header is inside the range.
+    // Set to 0 to disable: an Ogg track then reports no duration rather than a wrong one.
+    "TAG_READ_TAIL_BYTES": "65536",
+
+    // Tracks the scan enriches per folder, per chunk. Sized against the 1,000-subrequest
+    // limit: an Ogg track costs a prefix read and a tail read, so 20 tracks across a
+    // 20-folder chunk is ~800 subrequests. What does not fit is enriched on first play.
+    "SCAN_ENRICH_MAX_PER_FOLDER": "20",
+
     // Streaming and the auth throttle.
     "STREAM_RATE_LIMIT": "600",
     "STREAM_TIMEOUT_MS": "30000",

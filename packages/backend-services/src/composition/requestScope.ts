@@ -150,6 +150,13 @@ function createRequestScope(env: RequestScopeEnv): Container {
       clientFor,
       timeoutMs: config.getWebdavTimeoutMs(),
       chunkFolders: config.getScanChunkFolders(),
+      // The scan enriches what it changed, through the same `EnrichmentService` a
+      // `getSong` uses, so browsing reports a real duration and the artist/album/genre
+      // aggregates have rows to group on.
+      enrichSong: async (library, facts) => {
+        await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts);
+      },
+      enrichMaxPerFolder: config.getScanEnrichMaxPerFolder(),
     }),
   );
 
@@ -164,6 +171,7 @@ function createRequestScope(env: RequestScopeEnv): Container {
       kv: scope.get(Tokens.KvCache),
       resolveKey: webdavKey,
       readBytes: config.getTagReadBytes(),
+      readTailBytes: config.getTagReadTailBytes(),
       timeoutMs: config.getWebdavTimeoutMs(),
     }),
   );
