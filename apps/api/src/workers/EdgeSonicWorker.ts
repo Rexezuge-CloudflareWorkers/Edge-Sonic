@@ -131,6 +131,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
 
     // `/rest/*` has no ambient identity to key on — a Subsonic client authenticates
     // inside the dispatcher — so its limits are installed before the route.
+    //
     registerRestRateLimits(app);
 
     app.use('/user/*', userAuthentication());

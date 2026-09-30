@@ -7,6 +7,7 @@
 import { Container } from '@edge-sonic/backend-runtime/di';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
+import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
@@ -24,6 +25,19 @@ import { Tokens } from './tokens';
 function createRequestScope(env: RequestScopeEnv): Container {
   const scope = new Container();
   const config = AppConfiguration.fromEnv(env);
+
+  // Publish the log level for loggers that were built at import time.
+  //
+  // `KvCache`'s and `embeddedArt`'s loggers are module-level constants, so they were
+  // constructed long before any `env` existed — which is why `LOG_LEVEL` was inert in a
+  // deployed Worker even though it was declared and shipped in the wrangler template. The
+  // only point at which `c.env` is reachable is here, so it is set here, once per scope, and
+  // read per emit.
+  //
+  // `null` deliberately clears any inherited value: two scopes in one isolate (a test
+  // driving two configurations, or a future background worker with a different env) must
+  // not inherit the other's level.
+  setLogLevel(config.getLogLevel());
 
   // Fail-soft: an absent `CACHE` binding yields a cache that misses, and every
   // read falls through to D1. That is the whole "works when KV is down"

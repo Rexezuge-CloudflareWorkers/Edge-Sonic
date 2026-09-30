@@ -15,6 +15,7 @@
  * — they defend against different things — and confusing them would be a bug.
  */
 import type { Hono } from 'hono';
+import { AppConfiguration, DEFAULT_STREAM_RATE_LIMIT } from '@edge-sonic/backend-runtime/config';
 import { rateLimit } from './rateLimit';
 
 /**
@@ -43,7 +44,10 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
   {
     path: '/rest/stream*',
     windowMs: 60_000,
-    max: 600,
+    // A literal, because this table is a module-level `const` and the environment is not
+    // in scope there. `install` replaces it with a resolver over `c.env` — see below for
+    // why that is the only honest shape and what happened when this was just the number.
+    max: Number(DEFAULT_STREAM_RATE_LIMIT),
     keyPrefix: 'stream',
     surface: 'rest',
     reason: 'Range requests multiply: one 5-minute track is a handful of seeks, so this must not be a per-request-tight budget.',
@@ -85,15 +89,32 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
 type LimitApp = Hono<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
 
 function install(app: LimitApp, def: RateLimitDef): void {
-  app.use(def.path, rateLimit({ windowMs: def.windowMs, max: def.max, keyPrefix: def.keyPrefix, surface: def.surface }));
+  app.use(
+    def.path,
+    rateLimit({
+      windowMs: def.windowMs,
+      // Read through the request's own configuration, which is the only place `env`
+      // exists at request time. The alternative — a module-level constant named
+      // `STREAM_RATE_LIMIT` — is what made the variable look configured while nothing
+      // read it.
+      max: def.keyPrefix === 'stream' ? (c) => AppConfiguration.fromEnv(c.env).getStreamRateLimit() : def.max,
+      keyPrefix: def.keyPrefix,
+      surface: def.surface,
+    }),
+  );
 }
 
 /**
  * `/rest/*`. Keyed on the client address, because a Subsonic client authenticates
  * per request and there is no ambient identity on this surface.
  *
- * Registered *after* the router, so the limiter wraps the dispatcher rather than
- * running before it.
+ * Registered **before** `app.all('/rest/*')` — so before the router, not after it. The
+ * consequence the comment used to get right is that the limiter wraps the dispatcher
+ * rather than running inside it; the sentence describing *when* was inverted, and the
+ * inversion is the kind that gets "fixed" the wrong way by a reader who trusts the prose.
+ * `test/security-headers.test.ts` asserts both registrars are callable and nothing about
+ * their position, because their position is a property of `EdgeSonicWorker`'s route order
+ * and only that file can see it.
  */
 function registerRestRateLimits(app: LimitApp): void {
   for (const def of RATE_LIMIT_DEFS) {
@@ -112,10 +133,5 @@ function registerUserRateLimits(app: LimitApp): void {
   }
 }
 
-function registerRateLimits(app: LimitApp): void {
-  registerRestRateLimits(app);
-  registerUserRateLimits(app);
-}
-
-export { RATE_LIMIT_DEFS, registerRateLimits, registerRestRateLimits, registerUserRateLimits };
+export { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits };
 export type { RateLimitDef, LimitSurface };
