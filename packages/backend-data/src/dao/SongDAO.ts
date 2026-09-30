@@ -18,7 +18,7 @@
 import { BaseDAO } from './BaseDAO';
 import type { CountRow, SongRow } from './rows';
 import { nowSeconds } from './identity';
-import { chunkArray } from './chunking';
+import { SongIdLookupDAO } from './songIdLookup';
 import { UPSERT_FILE_FACTS } from './songSql';
 import type { SongMetadataInput } from './songSql';
 import { deriveFromPath } from './pathConvention';
@@ -199,30 +199,16 @@ class SongDAO extends BaseDAO {
     return (result.results ?? []).map((row) => row.id);
   }
 
+  /**
+   * Moved to `songIdLookup.ts`.
+   *
+   * Not a refactor for its own sake: batching this query to D1's 100-parameter ceiling took
+   * it from 18 lines to 30 and pushed the file over the god-file limit, and the batching is
+   * the part that needs its reasoning read in one place — it is the query that shipped with
+   * a guard whose stated budget was ten times the real one.
+   */
   public async listIdsIn(libraryId: string, ids: readonly string[]): Promise<SongRow[]> {
-    if (ids.length === 0) return [];
-    // Chunked to stay inside SQLite's bound-parameter limit (999 by default).
-    //
-    // The order is part of the contract, not a nicety. `id IN (...)` returns rows in
-    // whatever order the index scan produces, so returning them directly shuffled every
-    // saved play queue: the client stored "Holocene, then Skinny Love" and got them back
-    // in an order that changed per request. Ids that do not resolve are **omitted** rather
-    // than substituted, so an entry for a deleted track disappears and the rest of the
-    // order is preserved.
-    const found = new Map<string, SongRow>();
-    for (const chunk of chunkArray(ids, 200)) {
-      const placeholders = chunk.map(() => '?').join(', ');
-      const result = await this.withRetry(
-        async () =>
-          await this.database
-            .prepare(`SELECT * FROM songs WHERE library_id = ? AND id IN (${placeholders})`)
-            .bind(libraryId, ...chunk)
-            .all<SongRow>(),
-        'songs.listIdsIn',
-      );
-      for (const row of result.results ?? []) found.set(row.id, row);
-    }
-    return ids.flatMap((id) => (found.has(id) ? [found.get(id)!] : []));
+    return await new SongIdLookupDAO(this.database).listIdsIn(libraryId, ids);
   }
 
   public async countByLibrary(libraryId: string): Promise<number> {

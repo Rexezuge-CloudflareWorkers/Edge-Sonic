@@ -12,6 +12,14 @@ export { NodeDAO } from './NodeDAO';
 export type { NodeInput, NodePatch } from './NodeDAO';
 export { SongDAO } from './SongDAO';
 export { chunkArray } from './chunking';
+// The measured ceiling, and the arithmetic every `IN (...)` batch size is derived from.
+// Exported because the number is a *platform* fact that keeps being assumed rather than
+// read, and a fact that is not reachable from a test cannot be defended.
+export { D1_MAX_BIND_PARAMETERS, bindChunkSize } from './sqlLimits';
+// Many rows by id, in the caller's order. Its own class because it is a different-shaped
+// question from "one row by id", and because it is the query that had to be batched to
+// D1's ceiling — which put `SongDAO` over the god-file limit.
+export { SongIdLookupDAO } from './songIdLookup';
 export type { SongUpsertInput } from './SongDAO';
 export { deriveFromPath, DERIVED_MARKER, DERIVED_VERSION } from './pathConvention';
 export type { DerivedNames } from './pathConvention';

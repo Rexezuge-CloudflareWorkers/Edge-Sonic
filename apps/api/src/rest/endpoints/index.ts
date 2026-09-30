@@ -11,6 +11,12 @@
  * rather than 404, which is the difference between "this server does not do that"
  * and "you typed the URL wrong" as far as a client is concerned.
  *
+ * `code=70` is the right answer for an endpoint that is **absent**, and the wrong one for
+ * an endpoint that is present and has nothing to report. `getOpenSubsonicExtensions` was
+ * listed here, and a client that received a failure from the capability-discovery call
+ * learned nothing it could act on. The distinction is now load-bearing: if you are adding
+ * an endpoint, decide which of the two it is before choosing a list.
+ *
  * Transcoding is a separate matter: `stream` and `download` **are** implemented and
  * simply ignore `maxBitRate`/`format`, serving the original bytes with the
  * original `Content-Type`. See `media.ts` for why lying would be worse.
@@ -78,7 +84,12 @@ const UNIMPLEMENTED: Readonly<Record<string, string>> = {
   getChatMessages: 'chat is not implemented',
   addChatMessage: 'chat is not implemented',
   getAvatar: 'avatars are not implemented',
-  getOpenSubsonicExtensions: 'no extensions are advertised',
+  // `getOpenSubsonicExtensions` is deliberately **absent** from this list. It used to be
+  // here with the reason "no extensions are advertised", which reads as "this server does
+  // not do that" — but the endpoint exists, and the protocol says a server supporting no
+  // extensions answers with an empty *list*. Answering `code=70` from the
+  // capability-discovery call told a client it could not ask the question, which is the one
+  // answer it cannot use. It is implemented in `system.ts`.
 };
 
 const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {

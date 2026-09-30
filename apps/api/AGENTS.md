@@ -232,9 +232,46 @@ An unsatisfiable range answers with the protocol envelope rather than a forwarde
 because a client parsing this surface cannot read anything else; what matters is that the
 body is not audio.
 
+## `code=70` means absent, not empty
+
+`UNIMPLEMENTED` answers `code=70`, and that is right for an endpoint this server does not
+have: videos, podcasts, last.fm, lyrics. It is **wrong** for an endpoint that exists and has
+nothing to report, and `getOpenSubsonicExtensions` was in that list — the protocol says a
+server supporting no extensions returns an empty *list*, and answering a failure from the
+**capability-discovery** call told a client it could not ask the question, which is the one
+answer it cannot use. It is implemented now and reports `[]`.
+
+`tokenInfo` is the same shape of gap from the other side: it was absent entirely, so a
+client holding a stored token — on a server that had just authenticated that token — got
+`code=70`. It reports the authenticated `username`, with `username` as an **attribute**, so
+JSON gets a record rather than `{ "username": { "#text": … } }`.
+
+The one exception to "authenticate first" is `getOpenSubsonicExtensions`, which the
+protocol requires to be **publicly accessible** because a client asking it may have no
+credentials yet. It is safe because the payload is a compile-time constant carrying no user,
+no library and no version detail, and that is asserted — the whole envelope's key set is
+pinned, so adding a version to this response fails a test rather than reaching an
+unauthenticated caller. `PUBLIC_ENDPOINTS` in `dispatch.ts` is a named one-entry set rather
+than a flag on the handler, because a per-handler "public" marker is one edit from covering
+an endpoint that reads data and nothing would say so. `tokenInfo` is deliberately **not** in
+it: its entire output is an identity, so answering it unauthenticated would be an oracle.
+
+## The serializer's third list shape
+
+A Subsonic list is `{"wrapper": {"child": [...]}}`, and a single element collapses to a bare
+object. `getOpenSubsonicExtensions` needs neither: the protocol's own JSON puts a bare
+array at the key, so it is built by hand with `array: true` rather than through `elList`.
+That flag alone was not enough — a childless flagged element serialized as `{}`, and the
+grouping step wrapped the result again as `[[]]`, so a client reading `.length` got
+`undefined` and then `1`. `serialize.ts` now collapses a lone list element back to that
+list, which is what makes `array: true` mean "render as a JSON array" rather than "render as
+an array wrapped in another array". Same rule as `listKey` seeding, one level out.
+
 ## Never
 
 - Never import `@edge-sonic/backend-data` **values** in a route (type-only is fine).
 - Never write a D1 predicate that lowercases a column. See the parent index.
+- Never batch an `IN (...)` list on a number you chose. Derive it from
+  `bindChunkSize`. See the parent index.
 - Never let a list wrapper's child name disagree with its declared list key.
 - Never mark a `5xx` with a raw error message. A D1 error names tables and columns.
