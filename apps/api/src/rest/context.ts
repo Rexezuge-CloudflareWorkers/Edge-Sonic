@@ -14,6 +14,7 @@ import type { LibraryService } from '@edge-sonic/backend-services/library';
 import type { TreeService } from '@edge-sonic/backend-services/index';
 import type { ScanService } from '@edge-sonic/backend-services/index';
 import type { EnrichmentService } from '@edge-sonic/backend-services/index';
+import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
 interface RestContext {
@@ -50,6 +51,14 @@ interface RestContext {
   readonly users: UserDAO;
   readonly playlists: PlaylistDAO;
   readonly annotations: AnnotationDAO;
+  /**
+   * The KV cache, for the endpoints that read something expensive off the origin.
+   *
+   * Never load-bearing: a miss or an open circuit means the value is recomputed from
+   * the origin, so a handler may use it to *avoid* work and must not use it to avoid
+   * answering. `getCoverArt`'s embedded-artwork path is the current caller.
+   */
+  readonly cache: KvCache;
   /**
   Streaming timeout. Separate from the metadata timeout, which is much shorter.
   */

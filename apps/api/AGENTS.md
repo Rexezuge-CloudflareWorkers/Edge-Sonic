@@ -275,3 +275,10 @@ an array wrapped in another array". Same rule as `listKey` seeding, one level ou
   `bindChunkSize`. See the parent index.
 - Never let a list wrapper's child name disagree with its declared list key.
 - Never mark a `5xx` with a raw error message. A D1 error names tables and columns.
+- Never let `getCoverArt` answer with anything but an image. It is the one `/rest`
+  endpoint consumed as bytes rather than parsed, so the Subsonic envelope is not a
+  lesser dialect there — it is the wrong shape. A `404` from the origin used to become a
+  masked `200 application/json`, which a client hands to an image decoder and fails on
+  with no diagnostic. It lives in `endpoints/coverArt.ts` because it is the one media
+  endpoint that *finds* a picture rather than forwarding one, and that is a different
+  shape of problem from `stream`.

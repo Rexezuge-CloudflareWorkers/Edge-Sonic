@@ -33,7 +33,7 @@ const KV_KEY_VERSION = 'v1';
 const KV_MAX_KEY_LENGTH = 512;
 const KV_MIN_TTL_SECONDS = 60;
 
-type KvDomainName = 'libIndex' | 'libTree' | 'songMeta' | 'authThrottle';
+type KvDomainName = 'libIndex' | 'libTree' | 'songMeta' | 'authThrottle' | 'albumArt';
 
 interface KvDomainDef {
   ttlSeconds?: number;
@@ -75,6 +75,28 @@ const KV_DOMAINS: Record<KvDomainName, KvDomainDef> = {
     maxValueBytes: 1024,
     versionScoped: false,
     description: 'Failed-authentication counters. Writes ONLY on a failure, so legitimate traffic spends nothing.',
+  },
+  // Album artwork extracted from a track's own tags.
+  //
+  // **Not version-scoped, and keyed by the source file's `mtimeMs`+`size` instead** —
+  // the `songMeta` rule, not the `libIndex` one. A rescan that finds nothing new bumps
+  // `index_version` and would orphan every cached image for no reason, whereas the
+  // thing that actually invalidates artwork is the *file* changing: re-tagging a track
+  // changes its picture without moving anything else in the library.
+  //
+  // 8 MiB because this is the one domain holding real payloads. KV's own per-value
+  // ceiling is 25 MiB, and a `put` over a domain's `maxValueBytes` is **skipped**
+  // rather than attempted — so an unusually large image costs a re-read on the next
+  // request instead of a failed write, and never an error.
+  //
+  // The free plan's 1,000 writes/day is the real constraint: a first full browse of a
+  // library larger than that exhausts the day's writes, and `KvCache` fails soft, so
+  // the remainder is simply served from the origin on every request. Slower, correct.
+  albumArt: {
+    ttlSeconds: 2_592_000,
+    maxValueBytes: 8 * 1024 * 1024,
+    versionScoped: false,
+    description: 'Album artwork bytes, keyed by the source track path and its mtime/size.',
   },
 };
 
