@@ -9,6 +9,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  albumElement,
+  albumWithSongs,
   decodeId,
   decodeLegacyPassword,
   el,
@@ -249,6 +251,41 @@ describe('envelope', () => {
       'subsonic-response': { starred2: { song: unknown } };
     };
     expect(Array.isArray(body['subsonic-response'].starred2.song)).toBe(true);
+  });
+
+  it('renders a one-item list inside a record element as an array too', async () => {
+    // The one above covers a list **wrapper**, and a wrapper declares its key, so it was
+    // always safe. This is the shape that was not: a repeated child of an element that
+    // carries attributes, which is a *record* to the serializer and therefore has no
+    // declared key of its own. `getAlbum` is the only endpoint in the product that builds
+    // one — `album` with `song` children — and it did so by spreading a builder's node and
+    // attaching children, which bypasses the declaration entirely.
+    //
+    // So the collapse is invisible at n≥2 and total at n=1, which is why the fixture album
+    // (two tracks) kept the suite green. Asserted here at both sizes, so removing the
+    // declaration fails one of them.
+    const at = async (n: number): Promise<unknown> => {
+      const album = albumWithSongs(
+        { id: 'al:1', name: 'A', songCount: n, duration: 0 },
+        Array.from({ length: n }, (_, i) => ({ id: `s:${i}`, title: `t${i}`, mediaType: 'song' as const, duration: 0, bitRate: 0, size: 0, contentType: 'audio/flac', suffix: 'flac', playCount: 0 })),
+      );
+      const body = (await (await successResponse(album, { format: 'json' })).json()) as { 'subsonic-response': { album: { song: unknown } } };
+      return body['subsonic-response'].album.song;
+    };
+    expect(Array.isArray(await at(1))).toBe(true);
+    expect(Array.isArray(await at(2))).toBe(true);
+    expect(await at(1)).toHaveLength(1);
+  });
+
+  it('leaves an album used as a list child without a song key', async () => {
+    // The counterweight to the fix. `listKey` seeds its key **unconditionally**, so
+    // declaring `song` on the shared album builder would attach an empty `"song": []` to
+    // every album in `getAlbumList2`, `getArtist` and `search2`/`search3` — a list of
+    // albums that each claim to carry no songs, which is a different wrong answer.
+    const body = (await (await successResponse(elList('albumList2', 'album', {}, [albumElement({ id: 'al:1', name: 'A', songCount: 12, duration: 3600 })]), { format: 'json' })).json()) as {
+      'subsonic-response': { albumList2: { album: Array<Record<string, unknown>> } };
+    };
+    expect(body['subsonic-response'].albumList2.album[0]).not.toHaveProperty('song');
   });
 
   it('drops null and undefined attributes but keeps zero', async () => {

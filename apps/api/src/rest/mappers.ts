@@ -50,6 +50,39 @@ function titleFromPath(song: SongRow): string {
   return stem.replace(/^\d{1,3}\s*[-._)]\s*/, '').trim() || song.name;
 }
 
+/**
+ * Album name for a row the scan has not tag-read: the containing folder's name.
+ *
+ * Lives beside `songToModel` rather than in an endpoint module because both consume it,
+ * and an endpoint importing its way up to a shared derivation is how a second copy of the
+ * path convention starts.
+ */
+function albumNameOf(song: SongRow): string {
+  if (song.album) return song.album;
+  const slash = song.dir_path.lastIndexOf('/');
+  const dir = song.dir_path.slice(slash + 1);
+  return dir.length > 0 ? dir : 'Unknown Album';
+}
+
+/**
+ * Artist name for a row with no tag: the album folder's parent, or `Unknown Artist` for a
+ * file sitting at the library root, where there is no folder to read a name from.
+ */
+function artistNameOf(song: SongRow): string {
+  if (song.artist) return song.artist;
+  if (song.album_artist) return song.album_artist;
+  const slash = song.dir_path.lastIndexOf('/');
+  const dir = slash <= 0 ? song.dir_path : song.dir_path.slice(0, slash);
+  return dir.length > 0 ? dir : 'Unknown Artist';
+}
+
+/**
+ * The key an album groups under. `dir_path` when known, else the album name.
+ */
+function albumKeyOf(song: SongRow): string {
+  return song.dir_path.length > 0 ? song.dir_path : `name:${albumNameOf(song)}`;
+}
+
 interface AnnotationLookup {
   stars: Set<string>;
   ratings: Map<string, number>;
@@ -59,8 +92,17 @@ interface AnnotationLookup {
 function songToModel(song: SongRow, library: LibraryRow, annotations?: AnnotationLookup): Song {
   const albumDir = song.dir_path;
   const albumId = albumDir.length > 0 ? encodeId(IdKind.Album, library.id, albumDir) : undefined;
-  const artistName = song.artist ?? song.album_artist ?? undefined;
-  const artistId = artistName ? encodeId(IdKind.Artist, library.id, artistName) : undefined;
+  // `artist` falls back for the same reason `album` does, four lines below — a row the
+  // scan never tag-read and whose path yields no name still has to produce a record a
+  // client can decode.
+  //
+  // It shipped as the one field in this literal with no fallback. A client whose `Song`
+  // model is `@SerialName("artist") val artistName: String` — non-nullable, no default —
+  // then throws on every track with an uninformative path, and a track at the library
+  // root is exactly that. So: the same object emitted `album` derived from the folder and
+  // `artist` absent, which is a record half-built.
+  const artistName = artistNameOf(song);
+  const artistId = encodeId(IdKind.Artist, library.id, artistName);
   return {
     id: song.id,
     mediaType: 'song',
@@ -136,7 +178,7 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
     isDir: false,
     title: titleFromPath(song),
     album: song.album ?? basenameOf(albumDir),
-    artist: song.artist ?? song.album_artist ?? undefined,
+    artist: song.artist ?? song.album_artist ?? artistNameOf(song),
     track: song.track ?? undefined,
     discNumber: song.disc ?? undefined,
     year: song.year ?? undefined,
@@ -158,5 +200,17 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
   };
 }
 
-export { toIso, fromIso, titleFromPath, guessContentType, songToModel, songToChild, basenameOf, CONTENT_TYPES };
+export {
+  toIso,
+  fromIso,
+  titleFromPath,
+  guessContentType,
+  songToModel,
+  songToChild,
+  basenameOf,
+  albumNameOf,
+  artistNameOf,
+  albumKeyOf,
+  CONTENT_TYPES,
+};
 export type { AnnotationLookup };
