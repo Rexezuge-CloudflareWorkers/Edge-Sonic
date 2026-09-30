@@ -3,8 +3,10 @@ import { t } from 'i18next';
 import { Plus, RefreshCw, UserPlus } from 'lucide-react';
 import { Button, Input, Label } from '../components/ui/controls';
 import { Badge, Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
-import { createUser, deleteUser, listLibraries, listUsers, setUserEnabled, setUserLibraries } from '../lib/api';
-import type { LibrarySummary, Notice, UserSummary } from '../types';
+import { listLibraries } from '../services/libraryService';
+import { createUser, deleteUser, listUsers, setUserEnabled, setUserLibraries } from '../services/userService';
+import type { ShowNotice } from '../hooks/useNotice';
+import type { LibrarySummary, UserSummary } from '../types';
 
 /**
  * Subsonic accounts.
@@ -13,7 +15,7 @@ import type { LibrarySummary, Notice, UserSummary } from '../types';
  * there is no field here to display and no reason to store one. The copy says so
  * explicitly, because "the field is blank" otherwise reads as a bug.
  */
-function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
+function UsersView({ showNotice }: { showNotice: ShowNotice }) {
   const [users, setUsers] = useState<UserSummary[] | null>(null);
   const [libraries, setLibraries] = useState<LibrarySummary[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -27,7 +29,7 @@ function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
       const [userList, libraryList] = await Promise.all([listUsers(), listLibraries()]);
       return { users: userList.users, libraries: libraryList.libraries };
     } catch (error) {
-      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      showNotice('error', error instanceof Error ? error.message : String(error));
       return { users: [], libraries: [] };
     }
   }, [showNotice]);
@@ -58,14 +60,14 @@ function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
       await createUser({
         username: draft.username,
         password: draft.password,
-        ...((draft.email.length > 0) && { email: draft.email }),
+        ...(draft.email.length > 0 && { email: draft.email }),
       });
       setDraft({ username: '', password: '', email: '' });
       setCreating(false);
-      showNotice({ type: 'success', text: t('users.created', 'User created.') });
+      showNotice('success', t('users.created', 'User created.'));
       await reload();
     } catch (error) {
-      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      showNotice('error', error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(null);
     }
@@ -93,7 +95,10 @@ function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
       </CardHeader>
 
       <p className="mb-4 text-xs text-[var(--color-text-muted)]">
-        {t('users.hint', 'Point a Subsonic client at this server and sign in with one of these usernames. Passwords are stored encrypted and are never shown again.')}
+        {t(
+          'users.hint',
+          'Point a Subsonic client at this server and sign in with one of these usernames. Passwords are stored encrypted and are never shown again.',
+        )}
       </p>
 
       {creating && (
@@ -106,15 +111,34 @@ function UsersView({ showNotice }: { showNotice: (notice: Notice) => void }) {
         >
           <div>
             <Label htmlFor="username">{t('users.field.username', 'Username')}</Label>
-            <Input id="username" required value={draft.username} onChange={(e) => setDraft({ ...draft, username: e.target.value })} autoComplete="off" />
+            <Input
+              id="username"
+              required
+              value={draft.username}
+              onChange={(e) => setDraft({ ...draft, username: e.target.value })}
+              autoComplete="off"
+            />
           </div>
           <div>
             <Label htmlFor="email">{t('users.field.email', 'Email (optional)')}</Label>
-            <Input id="email" type="email" value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} autoComplete="off" />
+            <Input
+              id="email"
+              type="email"
+              value={draft.email}
+              onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+              autoComplete="off"
+            />
           </div>
           <div>
             <Label htmlFor="password">{t('users.field.password', 'Password')}</Label>
-            <Input id="password" required type="password" value={draft.password} onChange={(e) => setDraft({ ...draft, password: e.target.value })} autoComplete="new-password" />
+            <Input
+              id="password"
+              required
+              type="password"
+              value={draft.password}
+              onChange={(e) => setDraft({ ...draft, password: e.target.value })}
+              autoComplete="new-password"
+            />
           </div>
           <div className="flex items-end gap-2">
             <Button type="submit" variant="primary" loading={busy === 'create'}>

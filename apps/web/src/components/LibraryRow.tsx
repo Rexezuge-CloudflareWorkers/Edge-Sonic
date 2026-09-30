@@ -4,7 +4,7 @@ import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from './ui/controls';
 import { LibraryForm } from './LibraryForm';
 import { Badge } from './ui/panels';
-import { libraryScanStatus, probeLibrary, startLibraryScan, stepLibraryScan } from '../lib/api';
+import { libraryScanStatus, probeLibrary, startLibraryScan, stepLibraryScan } from '../services/libraryService';
 import type { LibraryDraft } from '../lib/libraryDraft';
 import { describeProbe, describeScan, describeStopReason } from '../lib/probe';
 import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../types';
@@ -107,7 +107,10 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   // same reason as `lastError`: `useNotice` clears after 6 s, and a scan that pauses
   // every poll is not something an operator reads once and remembers.
   const scanPaused = describeStopReason(scan?.stoppedBy, {
-    requests: t('libraries.scanPausedRequests', 'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.'),
+    requests: t(
+      'libraries.scanPausedRequests',
+      'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.',
+    ),
     deadline: t('libraries.scanPausedDeadline', 'Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.'),
   });
 

@@ -9,6 +9,20 @@
     "users": "Users",
     "operator": "Operator"
   },
+  "common": {
+    "loading": "Loading…"
+  },
+  "errors": {
+    "pageNotFound": "Page not found",
+    "pageNotFoundDescription": "The page you requested does not exist.",
+    "languageLoadFailed": "Unable to load language.",
+    "languageSaveFailed": "Unable to save language."
+  },
+  "unauthorized": {
+    "title": "Access required",
+    "defaultMessage": "You must authenticate to access this page.",
+    "action": "Sign in with Cloudflare Access"
+  },
   "libraries": {
     "title": "Music libraries",
     "hint": "A library is a WebDAV origin plus a folder inside it. Subsonic clients see each library as a music folder.",
