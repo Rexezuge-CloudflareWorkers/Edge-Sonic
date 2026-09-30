@@ -180,6 +180,10 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
  * ranged read of the file's first bytes, cached in D1 and KV, and it is bounded by
  * "one per song the client actually opens" rather than "one per indexed track" —
  * which is the only way it fits under the subrequest limit.
+ *
+ * With the `SCAN` binding the parse runs in the library's DO isolate
+ * (`ScanWorker.enrichSong`); without it the direct service runs in-fetch, which
+ * is the path the suite exercises.
  */
 async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   const id = context.params.require('id');
@@ -190,10 +194,16 @@ async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   let song = await context.songs.findById(id);
   if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
 
-  await context.enrichment.enrich(library, song);
-  // Re-read: the enrichment wrote duration, bitrate, and tags to D1, and the
-  // in-memory row still has the pre-enrichment zeros.
-  song = (await context.songs.findById(id)) ?? song;
+  const stub = context.scanStubFor(library.id);
+  if (stub) {
+    const updated = await stub.enrichSong(library.id, id);
+    if (updated) song = updated;
+  } else {
+    await context.enrichment.enrich(library, song);
+    // Re-read: the enrichment wrote duration, bitrate, and tags to D1, and the
+    // in-memory row still has the pre-enrichment zeros.
+    song = (await context.songs.findById(id)) ?? song;
+  }
 
   const annotations = await annotationsFor(context, [id]);
   return respond(context, songElement(songToModel(song, library, annotations)));

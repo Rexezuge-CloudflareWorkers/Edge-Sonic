@@ -3,6 +3,7 @@ import { UUIDUtil } from '@edge-sonic/shared/utils';
 import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
+import { getScanStub, hasScanBinding } from '../workers/scanStubs';
 
 /**
  * Read a path parameter that the route pattern guarantees exists.
@@ -107,12 +108,18 @@ async function startScan(c: UserContext): Promise<Response> {
   const service = scope.get(Tokens.LibraryService);
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  if (hasScanBinding(c.env)) {
+    return c.json(await getScanStub(c.env, library.id).startScan(library.id));
+  }
   return c.json(await scope.get(Tokens.ScanService).start(library));
 }
 
 async function scanStatus(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
+  if (hasScanBinding(c.env)) {
+    return c.json(await getScanStub(c.env, id).getStatus(id));
+  }
   return c.json(await scope.get(Tokens.ScanService).status(id));
 }
 
@@ -125,15 +132,13 @@ async function scanStatus(c: UserContext): Promise<Response> {
  *
  * ### Why this route exists
  *
- * The scan is client-driven — `/rest/getScanStatus` advances it and nothing else does,
- * because there is no cron, no queue and no Durable Object. So an operator who clicks
- * "Rescan" here was starting a scan that only progressed if some *Subsonic client*
- * happened to be polling, which is not a thing an operator can arrange or observe.
- *
- * This is the read/advance pair the operator surface was missing: `GET` for the state
- * without incurring any of the work, `POST` to do one bounded chunk of it. It is also
- * the only place `ChunkResult.stoppedBy` is readable, since the Subsonic envelope
- * carries just `scanning` and `count`.
+ * The scan is alarm-driven when the `SCAN` binding is configured — the DO advances
+ * itself and this route is a manual single-chunk trigger. Without the binding the
+ * scan is client-driven, and this route is the read/advance pair the operator
+ * surface was missing: `GET` for the state without incurring any of the work,
+ * `POST` to do one bounded chunk of it. It is also the only place
+ * `ChunkResult.stoppedBy` is readable, since the Subsonic envelope carries just
+ * `scanning` and `count`.
  */
 async function stepScan(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
@@ -141,6 +146,9 @@ async function stepScan(c: UserContext): Promise<Response> {
   const service = scope.get(Tokens.LibraryService);
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  if (hasScanBinding(c.env)) {
+    return c.json(await getScanStub(c.env, library.id).stepOnce(library.id));
+  }
   return c.json(await scope.get(Tokens.ScanService).step(library));
 }
 

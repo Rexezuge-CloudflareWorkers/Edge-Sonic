@@ -1,6 +1,10 @@
 /**
  * The worker: Hono app, route ordering, and one-shot configuration validation.
  *
+ * The scan loop and the heavy tag-picture CPU run in the per-library `ScanWorker`
+ * Durable Object when the `SCAN` binding is configured; without it the same
+ * services run in-fetch (tests, local dev). See `workers/scanStubs.ts`.
+ *
  * ### Route order is load-bearing
  *
  * ```

@@ -22,6 +22,20 @@
   "assets": {
     "directory": "./apps/web/dist/",
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SCAN",
+        "class_name": "ScanWorker",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1000000000",
+      "new_sqlite_classes": ["ScanWorker"],
+    },
+  ],
   "d1_databases": [
     {
       "binding": "DB",

@@ -202,6 +202,13 @@ async function embeddedArtFor(library: LibraryRow, kind: IdKindValue, path: stri
     .slice(0, ALBUM_ART_TRACK_LIMIT)
     .map((song) => ({ id: song.id, path: song.path, size: song.size, mtimeMs: song.mtime_ms }));
 
+  // With the `SCAN` binding the picture parse runs in the library's DO isolate;
+  // without it the direct extractor runs in-fetch, which is the path the suite
+  // exercises.
+  const stub = context.scanStubFor(library.id);
+  if (stub) {
+    return await stub.coverArt(library.id, dirPath, candidates, context.streamTimeoutMs);
+  }
   return await embeddedAlbumArt(library, dirPath, candidates, { clientFor: (row) => context.libraries.clientFor(row), cache: context.cache }, context.streamTimeoutMs);
 }
 

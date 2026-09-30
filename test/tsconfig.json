@@ -23,6 +23,12 @@
     ],
     "jsx": "react-jsx",
     "paths": {
+      "@edge-sonic/background": [
+        "../apps/background/src"
+      ],
+      "@edge-sonic/background/*": [
+        "../apps/background/src/*"
+      ],
       "@edge-sonic/shared": [
         "../packages/shared/src"
       ],

@@ -71,11 +71,13 @@ async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> 
 }
 
 /**
- * `getScanStatus` — **and the thing that advances the scan.**
+ * `getScanStatus` — read-only when the scan worker is bound, advancing otherwise.
  *
- * Polling this is what drives the chunked scan, which is why it is not a passive
- * read: with no client polling, the scan does not advance. See `ScanService` for
- * why that is acceptable and what the upgrade path is.
+ * With the `SCAN` binding the DO alarm advances the scan, so this is a passive
+ * read (`getStatus`): polling never does work, and a client that backs off
+ * keeps observing progress instead of stopping it. Without the binding (tests,
+ * local dev) it advances one chunk (`step`), which is the legacy client-driven
+ * path the suite exercises directly.
  *
  * ### A poll that returns is a poll that succeeded
  *
@@ -102,7 +104,8 @@ async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> 
 async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
-  const result = await context.scan.step(library);
+  const stub = context.scanStubFor(library.id);
+  const result = stub ? await stub.getStatus(library.id) : await context.scan.step(library);
   return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count: result.scanned }));
 }
 
@@ -123,7 +126,8 @@ async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
 async function startScan(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
-  const result = await context.scan.start(library);
+  const stub = context.scanStubFor(library.id);
+  const result = stub ? await stub.startScan(library.id) : await context.scan.start(library);
   return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count: result.scanned }));
 }
 

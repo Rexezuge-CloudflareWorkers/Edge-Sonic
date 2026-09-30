@@ -24,7 +24,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
       reportsDirectory: './coverage',
-      include: ['apps/api/src/**/*.ts', 'packages/**/src/**/*.ts'],
+      include: ['apps/api/src/**/*.ts', 'apps/background/src/**/*.ts', 'packages/**/src/**/*.ts'],
       exclude: [
         '**/*.test.ts',
         '**/*.test.tsx',
@@ -84,6 +84,7 @@ export default defineConfig({
   },
   resolve: {
     alias: [
+      { find: /^@edge-sonic\/background$/, replacement: `${srcPath('apps/background/src')}index.ts` },
       { find: /^@edge-sonic\/backend-data$/, replacement: `${srcPath('packages/backend-data/src')}index.ts` },
       { find: /^@edge-sonic\/backend-errors$/, replacement: `${srcPath('packages/backend-errors/src')}index.ts` },
       { find: /^@edge-sonic\/backend-runtime$/, replacement: `${srcPath('packages/backend-runtime/src')}index.ts` },
@@ -93,6 +94,8 @@ export default defineConfig({
       { find: /^@edge-sonic\/webdav$/, replacement: `${srcPath('packages/webdav/src')}index.ts` },
       { find: /^@edge-sonic\/shared$/, replacement: `${srcPath('packages/shared/src')}index.ts` },
       { find: '@edge-sonic/backend-data', replacement: srcPath('packages/backend-data/src') },
+      { find: '@edge-sonic/background', replacement: srcPath('apps/background/src') },
+      { find: 'cloudflare:workers', replacement: `${srcPath('test/mocks')}cloudflare-workers.ts` },
       { find: '@edge-sonic/backend-errors', replacement: srcPath('packages/backend-errors/src') },
       { find: '@edge-sonic/backend-runtime', replacement: srcPath('packages/backend-runtime/src') },
       { find: '@edge-sonic/backend-services', replacement: srcPath('packages/backend-services/src') },

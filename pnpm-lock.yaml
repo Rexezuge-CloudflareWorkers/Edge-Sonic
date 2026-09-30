@@ -137,6 +137,9 @@ importers:
       '@edge-sonic/backend-services':
         specifier: workspace:*
         version: link:../../packages/backend-services
+      '@edge-sonic/background':
+        specifier: workspace:*
+        version: link:../background
       '@edge-sonic/media-tags':
         specifier: workspace:*
         version: link:../../packages/media-tags
@@ -155,6 +158,40 @@ importers:
       jose:
         specifier: 6.2.12
         version: 6.2.12
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.2
+        version: 26.6.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+
+  apps/background:
+    dependencies:
+      '@edge-sonic/backend-data':
+        specifier: workspace:*
+        version: link:../../packages/backend-data
+      '@edge-sonic/backend-errors':
+        specifier: workspace:*
+        version: link:../../packages/backend-errors
+      '@edge-sonic/backend-runtime':
+        specifier: workspace:*
+        version: link:../../packages/backend-runtime
+      '@edge-sonic/backend-services':
+        specifier: workspace:*
+        version: link:../../packages/backend-services
+      '@edge-sonic/media-tags':
+        specifier: workspace:*
+        version: link:../../packages/media-tags
+      '@edge-sonic/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@edge-sonic/subsonic':
+        specifier: workspace:*
+        version: link:../../packages/subsonic
+      '@edge-sonic/webdav':
+        specifier: workspace:*
+        version: link:../../packages/webdav
     devDependencies:
       '@types/node':
         specifier: 26.6.2
@@ -353,6 +390,9 @@ importers:
       '@edge-sonic/backend-services':
         specifier: workspace:*
         version: link:../packages/backend-services
+      '@edge-sonic/background':
+        specifier: workspace:*
+        version: link:../apps/background
       '@edge-sonic/media-tags':
         specifier: workspace:*
         version: link:../packages/media-tags
