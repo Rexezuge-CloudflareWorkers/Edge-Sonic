@@ -1,85 +1,64 @@
-type Factory<T> = (container: Container) => T;
-
-// Branded token so `scope.get(Tokens.X)` infers `X` without an explicit
-// generic at call sites. The brand is optional (and `unknown`-compatible) so
-// `Token<Service>` remains assignable to `Token<unknown>` for Map storage.
+/**
+ * A request's registry of already-constructed services.
+ *
+ * ### What this is, precisely
+ *
+ * A `Map<symbol, unknown>` with a fluent setter. `bindValue` is the only registration
+ * this codebase uses — all twenty-two bindings in `createRequestScope` and
+ * `createScanWorkerScope` — so the container's *factory* tier is unreachable and the
+ * "Factory + Singleton scopes" claim in the old header was describing a capability the
+ * composition root never used.
+ *
+ * That capability was deleted rather than kept. Every other member was also dead:
+ * `bind` had no caller, so `get`'s factory lookup, its "no binding for token" throw, its
+ * invocation and its memoization were all unreachable; `resolve` was not a transient
+ * resolver at all, because with an empty factory map it is an alias for `get`; `has`,
+ * `createChild` and `dispose` had no callers. That was 23 of 33 instrumented statements.
+ *
+ * ### Why it is a container and not a plain map
+ *
+ * Because the reachability check is worth keeping. `Tokens` is `satisfies
+ * Record<string, Token<unknown>>`, so a *misspelled* token name is a compile error — but
+ * a correctly-spelled token that was never bound is not, and the only runtime diagnostic
+ * for that was the throw on the unreachable line. It is asserted instead, which is a
+ * stronger guarantee: the test reads the registry and fails for a token nothing binds, at
+ * import time of the test run rather than at 3am on a request.
+ *
+ * ### Why the DAO tokens are thunks
+ *
+ * `Tokens.SongDAO` is typed `Token<() => Promise<SongDAO>>` and called as a thunk, so the
+ * DAO is built on first use and a request that never touches songs never opens the
+ * connection. Laziness is the point; singleton identity is deliberately *not* preserved
+ * across two `get` calls for a thunk token, because the value cached by `bindValue` is the
+ * thunk, not its result.
+ */
 type Token<T = unknown> = (string | symbol) & { readonly __type?: T };
 
-/**
- * Minimal dependency-injection container (Factory + Singleton scopes).
- *
- * Composition roots (`createRequestScope`, `RepoWorkerFactory`, tests) wire
- * concrete implementations once; handlers resolve via `scope.get(Tokens.X)`.
- * Prefer constructor injection of `I*` ports at registration time over
- * inline `scope.get()` in business logic.
- */
 class Container {
-  private readonly factories = new Map<Token<unknown>, Factory<unknown>>();
-  private readonly singletons = new Map<Token<unknown>, unknown>();
-  private disposed = false;
-
-  public bind<T>(token: Token<T>, factory: Factory<T>): this {
-    this.assertUsable();
-    this.factories.set(token, factory);
-    return this;
-  }
+  private readonly bindings = new Map<Token<unknown>, unknown>();
+  private readonly registered = new Set<Token<unknown>>();
 
   public bindValue<T>(token: Token<T>, value: T): this {
-    this.assertUsable();
-    this.singletons.set(token, value);
+    this.bindings.set(token, value);
+    this.registered.add(token);
     return this;
-  }
-
-  public has<T>(token: Token<T>): boolean {
-    return this.singletons.has(token) || this.factories.has(token);
-  }
-
-  public get<T>(token: Token<T>): T {
-    this.assertUsable();
-    if (this.singletons.has(token)) {
-      return this.singletons.get(token) as T;
-    }
-    const factory = this.factories.get(token);
-    if (!factory) {
-      throw new Error(`DI container has no binding for token: ${String(token)}`);
-    }
-    const instance = (factory as Factory<T>)(this);
-    this.singletons.set(token, instance);
-    return instance;
   }
 
   /**
-  Resolve without memoizing — for request-scoped objects.
+  The token's value, or a throw naming it.
+  *
+  * The throw is the reachability check, and it names the token: a correct token that was
+  * never bound used to produce `undefined` flowing into a service and a `TypeError` several
+  * frames away, with nothing saying which registration was missing. `Symbol(X)` is the
+  * useful part — every real token is a `Symbol('Name')`, so the message carries the name.
   */
-  public resolve<T>(token: Token<T>): T {
-    this.assertUsable();
-    const factory = this.factories.get(token);
-    return factory ? (factory as Factory<T>)(this) : this.get(token);
-  }
-
-  public createChild(): Container {
-    this.assertUsable();
-    const child = new Container();
-    for (const [token, value] of this.singletons) {
-      child.bindValue(token, value);
+  public get<T>(token: Token<T>): T {
+    if (!this.registered.has(token)) {
+      throw new Error(`DI container has no binding for token: ${String(token)}`);
     }
-    for (const [token, factory] of this.factories) {
-      child.bind(token, factory);
-    }
-    return child;
-  }
-
-  // Release memoized singletons (Workers isolation / test teardown).
-  public dispose(): void {
-    this.factories.clear();
-    this.singletons.clear();
-    this.disposed = true;
-  }
-
-  private assertUsable(): void {
-    if (this.disposed) throw new Error('DI container has been disposed.');
+    return this.bindings.get(token) as T;
   }
 }
 
 export { Container };
-export type { Factory, Token };
+export type { Token };

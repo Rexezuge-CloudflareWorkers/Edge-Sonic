@@ -28,7 +28,6 @@ interface LibraryStore {
   findBySlug(slug: string): Promise<LibraryRow | null>;
   list(): Promise<LibraryRow[]>;
   listForUser(userId: string): Promise<LibraryRow[]>;
-  countForUser(userId: string): Promise<number>;
   create(input: {
     slug: string;
     baseUrl: string;
@@ -43,7 +42,6 @@ interface LibraryStore {
     input: { slug: string; baseUrl: string; rootPath: string; davUsername: string; displayName?: string | null },
   ): Promise<void>;
   updatePassword(id: string, passwordCiphertext: string, passwordIv: string, keyVersion: number): Promise<void>;
-  setEnabled(id: string, isEnabled: boolean): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

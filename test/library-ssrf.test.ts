@@ -180,7 +180,6 @@ describe('LibraryService', () => {
         findBySlug: async (slug) => [...rows.values()].find((row) => row.slug_ci === slug.toLowerCase()) as never,
         list: async () => [...rows.values()] as never,
         listForUser: async () => [...rows.values()] as never,
-        countForUser: async () => rows.size,
         create: async (input) => {
           const row = { id: 'L1', ...input, is_enabled: 1, created_at: 0, updated_at: 0 };
           rows.set('L1', row);
@@ -188,7 +187,6 @@ describe('LibraryService', () => {
         },
         update: async () => undefined,
         updatePassword: async () => undefined,
-        setEnabled: async () => undefined,
         delete: async (id) => {
           rows.delete(id);
         },

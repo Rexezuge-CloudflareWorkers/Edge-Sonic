@@ -11,70 +11,59 @@
 // keyspace, and the TTL/size policy for every cached value lives in one table
 // rather than at each call site.
 //
-// ## Invalidation is version-in-key, never delete
+// ## Invalidation is in the key, never a delete
 //
-// Every domain that caches a *derived aggregate* takes the library's
-// `scan_state.index_version` as its first key part. A completed scan increments
-// the version, so every entry written under the old version becomes
-// structurally unreachable and ages out by TTL. That means:
+// No domain here is invalidated by a delete, and the reason is the free plan's
+// 1,000 writes and 1,000 deletes per day against 100,000 reads. A
+// `delete`-then-`put` on a value the re-resolution already produced spends two
+// scarce operations per request to move a key to the value it already had, and a
+// client that 404s on every inner path used to exhaust a whole day's budget in
+// ~40 minutes while answering every request correctly.
 //
-//   - invalidation costs ZERO KV writes and ZERO deletes, against a free plan
-//     allowance of 1,000 each per day;
-//   - a scan that bumps the version cannot serve a stale aggregate even for a
-//     single request, so there is no "eventually consistent" window to reason
-//     about;
-//   - nothing has to evict-then-restore. A `delete`-then-`put` on a value the
-//     re-resolution already produced spends two scarce operations per request to
-//     move a key to the value it already had, and a client that 404s on every
-//     inner path used to exhaust a whole day's budget in ~40 minutes while
-//     answering every request correctly.
+// ### Two ways to do it, and **no live domain uses either one yet**
+//
+// The version-in-key rule — a domain that caches a *derived aggregate* takes the
+// library's `scan_state.index_version` as its first key part, so a completed scan
+// makes every entry written under the old version **structurally unreachable**
+// and invalidation costs zero writes at all — was implemented on two domains,
+// `libIndex` and `libTree`. Neither had a production caller, so the mechanism had
+// no surface: `index_version` is read nowhere in this file or in `KvCache`.
+//
+// Both domains are removed rather than left to imply a live strategy, and
+// `versionScoped` goes with them. What remains is the other rule, and it is the
+// one the two live domains use:
+//
+//   - **`songMeta`** — keyed by the file's `mtimeMs`+`size`, so a re-tagged track's
+//     entry becomes unreachable when the file moves.
+//   - **`albumArt`** — the same key, for the same reason: re-tagging changes the
+//     picture without moving anything else in the library, whereas a rescan that
+//     finds nothing new bumps `index_version` and would orphan every cached image
+//     for no reason.
+//
+// So the honest statement today is "invalidation is in the key", and the aggregate
+// case is a rule this codebase has *reasoned about* rather than one it exercises. A
+// domain that caches a derived aggregate must be `versionScoped: true` and take the
+// version as its first part — and `versionScoped` is asserted against the live set
+// rather than assumed, so adding a domain cannot quietly opt out of it.
 
 const KV_KEY_VERSION = 'v1';
 const KV_MAX_KEY_LENGTH = 512;
 const KV_MIN_TTL_SECONDS = 60;
 
-type KvDomainName = 'libIndex' | 'libTree' | 'songMeta' | 'authThrottle' | 'albumArt';
+type KvDomainName = 'songMeta' | 'albumArt';
 
 interface KvDomainDef {
   ttlSeconds?: number;
   maxValueBytes: number;
-  /**
-   * Whether the first key part must be a library `index_version`. Domains that
-   * cache a derived aggregate must be `true`; see the version-in-key note above.
-   */
-  versionScoped: boolean;
   description: string;
 }
 
 const KV_DOMAINS: Record<KvDomainName, KvDomainDef> = {
-  // `getArtists` / `getAlbumList2` aggregations. Expensive to build and read on
-  // every home screen, and stale the moment a scan completes.
-  libIndex: {
-    ttlSeconds: 3600,
-    maxValueBytes: 512 * 1024,
-    versionScoped: true,
-    description: 'Derived artist and album aggregates for one library, keyed by scan index_version.',
-  },
-  // `getMusicDirectory` / `getIndexes` folder listings.
-  libTree: {
-    ttlSeconds: 3600,
-    maxValueBytes: 256 * 1024,
-    versionScoped: true,
-    description: 'Materialized folder listing for one library, keyed by scan index_version.',
-  },
   // `getSong` enrichment results (duration, bitrate, tags).
   songMeta: {
     ttlSeconds: 604_800,
     maxValueBytes: 4096,
-    versionScoped: false,
     description: 'Tag enrichment for one song, invalidated by the file mtime rather than by scan version.',
-  },
-  // Auth failure counters.
-  authThrottle: {
-    ttlSeconds: 900,
-    maxValueBytes: 1024,
-    versionScoped: false,
-    description: 'Failed-authentication counters. Writes ONLY on a failure, so legitimate traffic spends nothing.',
   },
   // Album artwork extracted from a track's own tags.
   //
@@ -95,7 +84,6 @@ const KV_DOMAINS: Record<KvDomainName, KvDomainDef> = {
   albumArt: {
     ttlSeconds: 2_592_000,
     maxValueBytes: 8 * 1024 * 1024,
-    versionScoped: false,
     description: 'Album artwork bytes, keyed by the source track path and its mtime/size.',
   },
 };

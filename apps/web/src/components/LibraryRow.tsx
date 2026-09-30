@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { t } from 'i18next';
 import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from './ui/controls';
@@ -51,6 +51,23 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
   const [scan, setScan] = useState<{ status: string; lastError: string | null; stoppedBy: ChunkStopReason } | null>(null);
+  // Guards the two async handlers below, which are **event handlers, not effects**.
+  //
+  // An effect owns its own cleanup because the effect knows when the component goes away;
+  // an event handler has to be told. `rescan` makes three sequential round trips against a
+  // deliberately slow origin — a chunk is bounded by `SCAN_CHUNK_DEADLINE_MS` — so
+  // navigating to `/users` mid-chunk calls `setState` on a row that is gone. The view-level
+  // effects already do this; these two had no guard, and `apps/web/AGENTS.md` claimed a lint
+  // rule covers the gap. `react-hooks/recommended-latest` is `exhaustive-deps`,
+  // `rules-of-hooks` and `set-state-in-effect` — **none of which detects a missing
+  // cancellation guard**, so the claim was not backed by the configuration it named.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   const test = async () => {
     setProbing(true);
@@ -61,6 +78,7 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
       library.id,
       async () => {
         const result = await probeLibrary(library.id);
+        if (!alive.current) return undefined;
         setProbe(result);
         return describeProbe(result, {
           reachable: t('libraries.reachable', 'Reachable.'),
@@ -70,7 +88,9 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
       },
       t('libraries.probed', 'Probe finished.'),
     );
-    setProbing(false);
+    // Also after the await, and also guarded: `onRun` swallows its own errors, so this is
+    // the only thing that re-enables the button.
+    if (alive.current) setProbing(false);
   };
 
   /**
@@ -90,11 +110,20 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
       library.id,
       async () => {
         const started = await startLibraryScan(library.id);
+        if (!alive.current) return undefined;
         setScan({ status: started.status, lastError: started.lastError, stoppedBy: started.stoppedBy });
         const chunk = await stepLibraryScan(library.id);
+        if (!alive.current) return undefined;
         setScan({ status: chunk.status, lastError: chunk.lastError, stoppedBy: chunk.stoppedBy });
         const current = await libraryScanStatus(library.id);
-        setScan({ status: current.status, lastError: current.lastError, stoppedBy: null });
+        if (!alive.current) return undefined;
+        // The status read omits `stoppedBy` — it is a property of a chunk, not of the
+        // persisted state, and `libraryTypes` says so. Carrying the chunk's value forward
+        // is therefore the only way it survives: writing `null` here discarded it, and
+        // because this is the **last** write the settled render showed no diagnosis at all,
+        // for the one scan problem `apps/web/AGENTS.md` says exists here "because the second
+        // has an action and the first does not".
+        setScan({ status: current.status, lastError: current.lastError, stoppedBy: chunk.stoppedBy });
         return undefined;
       },
       t('libraries.scanStarted', 'Scan started.'),

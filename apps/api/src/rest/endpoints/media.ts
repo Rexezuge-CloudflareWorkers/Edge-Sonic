@@ -169,6 +169,6 @@ function headerRange(context: RestContext): string | null {
 
 const mediaEndpoints = { stream, download, getCoverArt };
 
-export { mediaEndpoints, stream, download,  passthrough, headerRange, PASSTHROUGH_HEADERS };
+export { mediaEndpoints, stream, download, passthrough };
 
 export {getCoverArt} from './coverArt';

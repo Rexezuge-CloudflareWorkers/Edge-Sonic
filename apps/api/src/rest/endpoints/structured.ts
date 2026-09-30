@@ -238,4 +238,3 @@ export {
 // `albumNameOf`/`artistNameOf`/`albumKeyOf` live in `../mappers`, beside the `songToModel`
 // that reads the same two, and are re-exported here so `lists.ts` and `search.ts` keep
 // importing the grouping helpers from one place rather than reaching into a mapper.
-export {type AnnotationLookup as StructuredAnnotationLookup, albumNameOf, artistNameOf, albumKeyOf} from '../mappers';

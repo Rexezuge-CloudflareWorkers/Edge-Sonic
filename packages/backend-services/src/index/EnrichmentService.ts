@@ -44,7 +44,6 @@
  * empty during a flapping origin and stayed at duration `0` through every `getSong`
  * after it. See `isTransientEnrichmentFailure`.
  */
-import { decryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { readAudioTags, readOggTailDuration, READER_VERSION } from '@edge-sonic/media-tags';
 import type { AudioTags } from '@edge-sonic/media-tags';
@@ -355,34 +354,6 @@ class EnrichmentService {
     });
   }
 
-  /**
-   * Fill in title/artist/album for a row the indexer created from a path but never
-   * enriched.
-   *
-   * Separate from `enrich` because the *derived* metadata is what `getArtists` and
-   * `getAlbumList2` group by, and a library that has been browsed but not scanned
-   * has rows with a path-derived title and no album at all. Callers use this when
-   * they need a groupable row and are willing to spend a read.
-   */
-  public async ensureDerived(library: LibraryRow, song: SongRow): Promise<void> {
-    if (song.title !== null || song.enriched_at !== null) return;
-    const client = await this.deps.clientFor(library);
-    try {
-      const bytes = await client.readPrefix(song.path, this.deps.readBytes, this.deps.timeoutMs);
-      const tags = readAudioTags(bytes, song.size);
-      if (tags.container === 'unknown') return;
-      await this.persist(song, tags.durationSeconds, tags.bitrateKbps, tags.sampleRate, tags.channels, tags);
-    } catch {
-      // Best effort by definition.
-    }
-  }
-
-  /**
-  Decrypt a library's WebDAV password. Exposed for the admin probe path.
-  */
-  public static async decryptLibraryPassword(row: LibraryRow, key: string): Promise<string> {
-    return await decryptData(row.password_ciphertext, row.password_iv, key);
-  }
 }
 
 export { EnrichmentService };

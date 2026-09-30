@@ -281,4 +281,4 @@ async function findCoverIn(library: LibraryRow, dirPath: string, context: RestCo
   return cover === null ? null : cover.path;
 }
 
-export { getCoverArt, PLACEHOLDER_PNG, IMAGE_CONTENT_TYPES, ARTIST_COVER_PROBE_LIMIT, ALBUM_ART_TRACK_LIMIT };
+export { getCoverArt };

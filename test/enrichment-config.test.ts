@@ -17,7 +17,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readAudioTags, readOpus, readVorbis, READER_VERSION } from '@edge-sonic/media-tags';
 import { AppConfiguration, DEFAULT_STREAM_RATE_LIMIT, DEFAULT_TAG_READ_TAIL_BYTES, MAX_PAGE_SIZE_CEILING } from '@edge-sonic/backend-runtime/config';
-import { resetBreakerForTests, KvCache } from '@edge-sonic/backend-runtime/kv';
+import { resetBreakerForTests, KvCache, KV_DOMAINS } from '@edge-sonic/backend-runtime/kv';
 import { createLogger, setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
 import { EnrichmentService } from '@edge-sonic/backend-services/index';
@@ -1287,21 +1287,36 @@ describe('KvCache domain policy', () => {
     const cache = new KvCache(store.ns);
     // KV would reject it anyway; refusing locally turns a wasted round trip into a
     // skipped one.
-    expect(await cache.putText('libIndex', ['a', 'b'], 'x'.repeat(700_000))).toBe(false);
+    expect(await cache.putText('songMeta', ['a', 'b'], 'x'.repeat(700_000))).toBe(false);
     expect(store.writes()).toBe(0);
   });
 
-  it('purges every key under a prefix, for the operator-forgets-a-library action', async () => {
-    resetBreakerForTests();
-    const store = fakeKv({ 'libIndex:v1:L1:a': '{}', 'libIndex:v1:L1:b': '{}', 'libIndex:v1:L2:c': '{}' });
+  it('names a domain no reader or writer can reach, rather than implying one that exists', async () => {
+    // `libIndex` and `libTree` were the two `versionScoped` domains — the whole
+    // version-in-key invalidation strategy, which `AGENTS.md` elevates to an invariant:
+    // "a superseded entry becomes structurally unreachable, so invalidation costs zero
+    // writes". Neither had a production caller, so the mechanism had no surface at all:
+    // `index_version` is read nowhere in `KvDomains` or `KvCache`, and the only tests
+    // naming those domains were using them as a convenient string.
+    //
+    // A documented invariant over dead domains is worse than no invariant, because the
+    // next person reads it as evidence the strategy is in force. So the domains are gone
+    // and what the header now says is the rule with **no live example**, which is what is
+    // actually true.
+    expect(Object.keys(KV_DOMAINS).sort()).toEqual(['albumArt', 'songMeta']);
+
+    // And the surviving pair are keyed by the file's own revision, not by scan version —
+    // the `songMeta` rule. A domain that caches a *derived aggregate* is the case the
+    // version-in-key rule is for, and there is none.
+    const store = fakeKv();
     const cache = new KvCache(store.ns);
-    expect(await cache.purgePrefix('libIndex', ['L1'])).toBe(2);
-    expect(store.entries().has('libIndex:v1:L2:c')).toBe(true);
+    await cache.putBytes('albumArt', ['L1', 'Bon Iver/For Emma', '1000x5000'], new Uint8Array([1, 2, 3]));
+    expect([...store.entries().keys()]).toEqual(['albumArt:v1:L1:Bon%20Iver%2FFor%20Emma:1000x5000']);
   });
 
   it('returns zero from a purge when the namespace refuses', async () => {
     resetBreakerForTests();
-    expect(await new KvCache(fakeKv({}, { failAll: true }).ns).purgePrefix('libIndex')).toBe(0);
+    expect(await new KvCache(fakeKv({}, { failAll: true }).ns).purgePrefix('songMeta')).toBe(0);
   });
 });
 

@@ -58,8 +58,6 @@ interface ScanNodeStore {
   listRoots(libraryId: string): Promise<NodeRow[]>;
   listFrontier(libraryId: string, limit: number): Promise<NodeRow[]>;
   upsertMany(inputs: readonly ScanNodeInput[]): Promise<number>;
-  patch(libraryId: string, path: string, patch: { mtimeMs?: number | null; etag?: string | null; isScanned?: boolean }): Promise<void>;
-  deleteChildrenNotIn(libraryId: string, parentPath: string, keepPaths: readonly string[]): Promise<number>;
   deleteSubtree(libraryId: string, path: string): Promise<number>;
   countByLibrary(libraryId: string): Promise<number>;
 }

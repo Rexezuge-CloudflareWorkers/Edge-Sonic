@@ -31,7 +31,6 @@ const OGG_EOS_FLAG = 0x04;
 /**
  *  A page body cannot exceed 255 segments of 255 bytes (Ogg §4.2.1).
  */
-const MAX_PAGE_BODY_BYTES = 255 * 255;
 
 /**
  * The most bytes a page header can occupy: the fixed 27 plus a 255-entry segment table.
@@ -143,5 +142,5 @@ function hasOggMagic(bytes: Uint8Array): boolean {
   return startsWith(bytes, OGG_MAGIC);
 }
 
-export { readPage, walkPages, fileGranule, hasOggMagic, startsWith, OGG_MAGIC, OGG_EOS_FLAG, MAX_PAGE_BODY_BYTES, MAX_PAGE_HEADER_BYTES };
+export { readPage, walkPages, fileGranule, hasOggMagic, startsWith, OGG_MAGIC, OGG_EOS_FLAG, MAX_PAGE_HEADER_BYTES };
 export type { OggPage };
