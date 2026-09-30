@@ -8,6 +8,7 @@
   },
   "//": "This directory is a workspace project so `pnpm -r typecheck` and `pnpm run lint` actually reach it. It sat outside the workspace in the reference project while holding roughly 200 KB of test code, so a type error in a test only surfaced when that test happened to run.",
   "dependencies": {
+    "@edge-sonic/background": "workspace:*",
     "@edge-sonic/backend-data": "workspace:*",
     "@edge-sonic/backend-errors": "workspace:*",
     "@edge-sonic/backend-runtime": "workspace:*",

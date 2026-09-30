@@ -24,6 +24,7 @@ import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
+import { getScanStub, hasScanBinding } from '../workers/scanStubs';
 import { ENDPOINTS } from './endpoints';
 import { openSubsonicExtensionsPayload } from './endpoints/system';
 import type { RestHandler } from './endpoints';
@@ -220,6 +221,7 @@ async function buildContext(
     tree: scope.get(Tokens.TreeService),
     scan: scope.get(Tokens.ScanService),
     enrichment: scope.get(Tokens.EnrichmentService),
+    scanStubFor: (libraryId: string) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId) : null),
     songs: await scope.get(Tokens.SongDAO)(),
     songIndex: await scope.get(Tokens.SongIndexDAO)(),
     users: await scope.get(Tokens.UserDAO)(),

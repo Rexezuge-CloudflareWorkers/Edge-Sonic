@@ -15,8 +15,10 @@ built to work without.
 - **Index**: D1 `nodes` (the folder tree, one row per entry) and `songs` (one row per
   track). No `albums` table: an album is a group, and grouping in SQL is how the counts
   went wrong.
-- **Scan**: client-driven and chunked. `getScanStatus` advances one chunk; nothing runs
-  on a schedule.
+- **Scan**: alarm-driven and chunked. `ScanWorker` (one Durable Object per library,
+  `apps/background`) advances one chunk per alarm; `getScanStatus` is a read-only
+  status read when the `SCAN` binding is configured and advances one chunk only
+  without it (tests, local dev).
 - **User**: `apps/api/src/user` + `apps/web`. Guarded by Cloudflare Access, never by a
   Subsonic credential.
 - **Keys**: two Secrets Store secrets, one per feature. Never merged.
@@ -563,7 +565,8 @@ shared, backend-errors, subsonic, media-tags, webdav -> 0 deps
 backend-runtime   -> layer 0 only
 backend-data      -> layer 0 only
 backend-services  -> layers 0-2 (not apps)
-apps/api          -> layers 0-3 + webdav (NOT backend-data values; type-only allowed)
+background        -> layers 0-3 (not apps/api)
+apps/api          -> layers 0-3 + background (NOT backend-data values; type-only allowed)
 ```
 
 Enforced by ESLint `no-restricted-imports` in `eslint.config.mjs`.

@@ -14,6 +14,7 @@ import type { LibraryService } from '@edge-sonic/backend-services/library';
 import type { TreeService } from '@edge-sonic/backend-services/index';
 import type { ScanService } from '@edge-sonic/backend-services/index';
 import type { EnrichmentService } from '@edge-sonic/backend-services/index';
+import type { ScanStub } from '../workers/scanStubs';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
@@ -39,6 +40,12 @@ interface RestContext {
   readonly tree: TreeService;
   readonly scan: ScanService;
   readonly enrichment: EnrichmentService;
+  /**
+   * The per-library scan worker stub, or `null` when no `SCAN` binding is
+   * configured (tests, local dev). A present stub means scan/enrich/cover CPU
+   * runs in the DO isolate; a null means the direct service runs in-fetch.
+   */
+  readonly scanStubFor: (libraryId: string) => ScanStub | null;
   readonly songs: SongDAO;
   /**
    * The aggregate reads: album pages, artist pages, genres.

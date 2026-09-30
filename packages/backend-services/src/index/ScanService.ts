@@ -6,13 +6,15 @@
  * A recursive `PROPFIND` of a real library is thousands of subrequests, and
  * Workers cap them per invocation — 50 external on the Free plan, 10,000 on Paid.
  * So the scan is **chunked**: `startScan` seeds a frontier, and each subsequent
- * `getScanStatus` poll advances one chunk.
+ * chunk advances one bounded unit of work.
  *
- * The consequence is stated rather than hidden: **with no client polling, the scan
- * does not advance.** There is no cron, no queue, and no Durable Object in v1.
+ * The consequence is stated rather than hidden: **with no advancer running, the
+ * scan does not advance.** In production the advancer is `ScanWorker`
+ * (`apps/background`, one Durable Object per library, alarm-chained). Without the
+ * `SCAN` binding the advancer is a direct `step()` call from `getScanStatus` or
+ * `POST .../scan/step` — the legacy client-driven path the suite exercises.
  * That matches how Subsonic clients already behave — they poll `getScanStatus`
- * during a scan — and the upgrade path (Cron Trigger → Queues → DO) is a change to
- * this one class.
+ * during a scan — and the DO is a change to the advancer, not to this class.
  *
  * ### Why a chunk is bounded, and why by measured requests
  *
@@ -177,8 +179,8 @@ class ScanService {
   }
 
   /**
-   * Advance one chunk. Called from `getScanStatus`, which is what makes the scan
-   * client-driven.
+   * Advance one chunk. Called from `ScanWorker.stepOnce` (alarm-driven) or, without
+   * the `SCAN` binding, directly from `getScanStatus` (client-driven).
    */
   public async step(library: LibraryRow): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(library.id);

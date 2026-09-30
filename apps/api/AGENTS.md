@@ -2,8 +2,11 @@
 
 Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 
-- `src/index.ts` — `fetch` only, via `EdgeSonicWorker` (stateless: no cron, no Durable
-  Objects, no `scheduled`).
+- `src/index.ts` — `fetch` via `EdgeSonicWorker`, plus a re-export of `ScanWorker`
+  (from `@edge-sonic/background`) so the `SCAN` Durable Object binding resolves.
+- `src/workers/scanStubs.ts` — per-library `SCAN.getByName(libraryId)` stubs (Git
+  `doStubs.ts` pattern); `hasScanBinding` gates the DO path with a direct-service
+  fallback when no binding is configured.
 - `src/workers/EdgeSonicWorker.ts` — Hono routes, no file routing, in this order:
   `securityHeaders` → `onError` → `/health` + SPA shell → `scopeMiddleware` →
   `OPTIONS *` preflight → `/rest/*` limits → `/user/*` (Access) → `/user/*` limits →
@@ -181,13 +184,15 @@ Refusals are deliberately uniform. An id for a library the caller cannot see ans
 the endpoint into an oracle for which paths exist. A position needs no such check — it is
 resolved inside the caller's own grant list, so there is no id to forge.
 
-## `getScanStatus` advances the scan, and a poll that returns is a success
+## `getScanStatus` is read-only on the DO path, and a poll that returns is a success
 
-`getScanStatus` is not a passive read. It **is** the scan: with no client polling, nothing
-advances, because there is no cron, no Durable Object and no queue. The protocol has no
-read-only scan-status method, and the operator surface has one (`GET
-/user/libraries/:id/scan`), so a client asking "how far along am I?" is doing more of the
-scan.
+With the `SCAN` binding the scan is alarm-driven: `ScanWorker` (one Durable Object
+per library) advances one chunk per alarm, and `getScanStatus` is a passive read
+(`getStatus`). Without the binding (tests, local dev) it advances one chunk
+(`step`) — the legacy client-driven path. The protocol has no read-only
+scan-status method, and the operator surface has one (`GET
+/user/libraries/:id/scan`), so a client asking "how far along am I?" observes the
+alarm loop rather than driving it.
 
 That shaped how long a poll can take. A chunk is bounded by a subrequest ceiling and a
 wall-clock deadline, and it **returns early** when it reaches either, leaving the rest of

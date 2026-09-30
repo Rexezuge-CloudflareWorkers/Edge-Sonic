@@ -96,8 +96,10 @@ nor an HTTP status.
 
 ## Scanning
 
-`index/ScanService.ts` is a state machine advanced by `getScanStatus`. No cron, no Durable
-Object, no trigger.
+`index/ScanService.ts` is a state machine advanced one chunk at a time. In
+production the advancer is `ScanWorker` (`apps/background`, one Durable Object per
+library, alarm-chained); without the `SCAN` binding the advancer is a direct
+`step()` call (tests, local dev).
 
 - A **`Depth: 0` root probe** settles "is anything new" in one subrequest: if the root
   mtime matches the stored one, the scan is over — 1 subrequest, 0 rows.

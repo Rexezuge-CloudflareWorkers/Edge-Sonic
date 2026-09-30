@@ -1,13 +1,17 @@
 {
-  "name": "@edge-sonic/api",
+  "name": "@edge-sonic/background",
   "version": "0.1.0",
   "private": true,
-  "main": "src/index.ts",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./ScanWorker": "./src/ScanWorker.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@edge-sonic/background": "workspace:*",
     "@edge-sonic/backend-data": "workspace:*",
     "@edge-sonic/backend-errors": "workspace:*",
     "@edge-sonic/backend-runtime": "workspace:*",
@@ -15,9 +19,7 @@
     "@edge-sonic/media-tags": "workspace:*",
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
-    "@edge-sonic/webdav": "workspace:*",
-    "hono": "4.13.9",
-    "jose": "6.2.12"
+    "@edge-sonic/webdav": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

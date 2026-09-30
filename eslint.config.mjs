@@ -434,6 +434,22 @@ export default tseslint.config(
         {
           patterns: [
             { group: ['@edge-sonic/api', '@edge-sonic/api/*'], message: 'backend-services must not import from apps/api' },
+            { group: ['@edge-sonic/background', '@edge-sonic/background/*'], message: 'backend-services must not import from apps/background (lower layer)' },
+          ],
+        },
+      ],
+    },
+  },
+  // Layer 5: apps/background — the per-library scan Durable Object. May import
+  // layers 0-3, never apps/api (Git RepoWorker pattern).
+  {
+    files: ['apps/background/**/*.{ts,js}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { group: ['@edge-sonic/api', '@edge-sonic/api/*'], message: 'apps/background must not import from apps/api' },
           ],
         },
       ],
