@@ -261,9 +261,16 @@ class KvCache {
   /**
    * Delete every key under a prefix.
    *
-   * Nothing in the read or scan path calls this — invalidation is version-in-key.
-   * It exists for the admin "forget this library" operation, where an operator
-   * has explicitly asked for the entries to go.
+   * ### Test-only, and it used to claim otherwise
+   *
+   * The old note said it "exists for the admin 'forget this library' operation". There is
+   * no such operation: `/user` has no route that purges, and `Apps` has no caller. The
+   * claim was doing real work — it read as a decision already taken, so the absence of a
+   * caller looked like a missing feature rather than dead code.
+   *
+   * Kept because the semantics are worth having and cheap to keep correct: the paging
+   * restart is the part that is easy to get wrong, and deleting while a positional cursor
+   * advances silently skips keys.
    */
   public async purgePrefix(domain: KvDomainName, parts: readonly string[] = []): Promise<number> {
     const ns = this.namespace;

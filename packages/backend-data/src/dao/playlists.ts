@@ -202,10 +202,6 @@ class PlaylistDAO extends BaseDAO {
     return unique.length;
   }
 
-  public async deleteById(playlistId: string): Promise<void> {
-    await this.delete(playlistId);
-  }
-
   /**
   Recompute `song_count`/`duration` from the surviving entries.
   */

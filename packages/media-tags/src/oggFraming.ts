@@ -67,7 +67,7 @@ const MAX_MATERIALIZED_BYTES = 512 * 1024;
 interface PacketSpan {
   /**
   Where this run starts in the file. Byte offsets into the *packet* are a different
-  thing entirely — see {@link LogicalPacket.fileOffsetOf}.
+  thing entirely — see {@link LogicalPacket.fileRangeFor}.
   */
   readonly fileOffset: number;
   readonly length: number;
@@ -123,10 +123,6 @@ interface LogicalPacket {
    */
   read(offset: number, length: number, maxBytes?: number): Uint8Array | null;
   /**
-   * The file offset of packet offset `offset`, or `null` when it is not in the buffer.
-   */
-  fileOffsetOf(offset: number): number | null;
-  /**
    * A file byte range that, fetched and handed back to `walkPackets`, reproduces this
    * packet.
    *
@@ -143,13 +139,6 @@ interface LogicalPacket {
    * @param fileSize The file's size, to clamp against. Omit when unknown.
    */
   fileRangeFor(through: number, fileSize?: number | null): { offset: number; length: number } | null;
-}
-
-function spanAt(spans: readonly PacketSpan[], logicalOffset: number): PacketSpan | null {
-  for (const span of spans) {
-    if (logicalOffset >= span.logicalOffset && logicalOffset < span.logicalOffset + span.length) return span;
-  }
-  return null;
 }
 
 function makeLogicalPacket(bytes: Uint8Array, spans: readonly PacketSpan[], totalLength: number | null, maxPageBody: number): LogicalPacket {
@@ -171,10 +160,6 @@ function makeLogicalPacket(bytes: Uint8Array, spans: readonly PacketSpan[], tota
         written += to - from;
       }
       return written === length ? out : null;
-    },
-    fileOffsetOf(offset: number): number | null {
-      const span = spanAt(spans, offset);
-      return span === null ? null : span.fileOffset + (offset - span.logicalOffset);
     },
     fileRangeFor(through: number, fileSize?: number | null): { offset: number; length: number } | null {
       const first = spans[0];

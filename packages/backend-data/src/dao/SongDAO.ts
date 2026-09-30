@@ -61,12 +61,6 @@ interface SongUpsertInput {
  * library for a long time. See `pathConvention.ts`.
  */
 
-interface SongQuery {
-  libraryId: string;
-  limit: number;
-  offset?: number;
-}
-
 class SongDAO extends BaseDAO {
   /**
    * The library's genres, with real counts.
@@ -81,17 +75,6 @@ class SongDAO extends BaseDAO {
    */
   public async findById(id: string): Promise<SongRow | null> {
     return await this.withRetry(async () => await this.database.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first<SongRow>(), 'songs.findById');
-  }
-
-  public async findByPath(libraryId: string, path: string): Promise<SongRow | null> {
-    return await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT * FROM songs WHERE library_id = ? AND path = ?')
-          .bind(libraryId, path)
-          .first<SongRow>(),
-      'songs.findByPath',
-    );
   }
 
   public async listByDirectory(libraryId: string, dirPath: string): Promise<SongRow[]> {
@@ -187,18 +170,6 @@ class SongDAO extends BaseDAO {
   /**
   Song ids under a directory. Used to expand a starred album.
   */
-  public async listIdsByAlbumDir(libraryId: string, dirPath: string): Promise<string[]> {
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT id FROM songs WHERE library_id = ? AND dir_path = ? ORDER BY disc ASC, track ASC')
-          .bind(libraryId, dirPath)
-          .all<{ id: string }>(),
-      'songs.listIdsByAlbumDir',
-    );
-    return (result.results ?? []).map((row) => row.id);
-  }
-
   /**
    * Moved to `songIdLookup.ts`.
    *
@@ -309,18 +280,6 @@ class SongDAO extends BaseDAO {
   /**
   Songs whose derived metadata is still missing, for tag enrichment.
   */
-  public async listEnrichmentCandidates(libraryId: string, limit: number): Promise<SongRow[]> {
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT * FROM songs WHERE library_id = ? AND duration = 0 ORDER BY mtime_ms DESC LIMIT ?')
-          .bind(libraryId, limit)
-          .all<SongRow>(),
-      'songs.listEnrichmentCandidates',
-    );
-    return result.results ?? [];
-  }
-
   /**
    * Delete songs under `dirPath` whose paths are not in `keepPaths`.
    *
@@ -376,4 +335,4 @@ class SongDAO extends BaseDAO {
 
 
 export { SongDAO };
-export type { SongUpsertInput, SongQuery };
+export type { SongUpsertInput };

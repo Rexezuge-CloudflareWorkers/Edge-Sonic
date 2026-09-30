@@ -20,7 +20,7 @@ import { KvCache, resetBreakerForTests } from '@edge-sonic/backend-runtime/kv';
 import { deadKv, fakeKv } from './helpers/fakeKv';
 
 const PART = 'lib1';
-const DOMAIN = 'libIndex' as const;
+const DOMAIN = 'songMeta' as const;
 
 describe('KvCache is a cache, not a dependency', () => {
   beforeEach(() => {
@@ -59,7 +59,7 @@ describe('KvCache is a cache, not a dependency', () => {
 
   it('treats a corrupt value as a miss rather than an error', async () => {
     // A truncated or hand-edited value must degrade to a recompute, not a 500.
-    const cache = new KvCache(fakeKv({ 'libIndex:v1:lib1:artists': '{not json' }).ns);
+    const cache = new KvCache(fakeKv({ 'songMeta:v1:lib1:artists': '{not json' }).ns);
     expect(await cache.getJson(DOMAIN, [PART, 'artists'])).toBeNull();
   });
 
@@ -125,7 +125,7 @@ describe('KV circuit breaker', () => {
     expect(store.calls.get).toBe(3);
 
     // The namespace recovers.
-    const recovered = fakeKv({ 'libIndex:v1:lib1:k': 'value' });
+    const recovered = fakeKv({ 'songMeta:v1:lib1:k': 'value' });
     const shared = new KvCache(recovered.ns);
     vi.advanceTimersByTime(5100);
 
@@ -140,7 +140,7 @@ describe('KV circuit breaker', () => {
   });
 
   it('counts a successful call as a reset', async () => {
-    const store = fakeKv({ 'libIndex:v1:lib1:k': 'v' });
+    const store = fakeKv({ 'songMeta:v1:lib1:k': 'v' });
     const cache = new KvCache(store.ns);
     // Three successes in a row must not accumulate toward the threshold.
     for (let attempt = 0; attempt < 10; attempt += 1) {
@@ -159,7 +159,7 @@ describe('cache writes are budgeted', () => {
     // The free plan allows 1,000 writes per day. A read that re-stores the value it
     // just read spends that budget for nothing, and a client that re-reads the same
     // key in a loop exhausts it.
-    const store = fakeKv({ 'libIndex:v1:lib1:artists': '{"cached":true}' });
+    const store = fakeKv({ 'songMeta:v1:lib1:artists': '{"cached":true}' });
     const cache = new KvCache(store.ns);
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await cache.getJson(DOMAIN, [PART, 'artists']);
@@ -170,7 +170,7 @@ describe('cache writes are budgeted', () => {
   it('never deletes as part of a read path', async () => {
     // Invalidation is version-in-key: a superseded entry becomes unreachable on its
     // own. Nothing here may spend a delete.
-    const store = fakeKv({ 'libIndex:v1:lib1:artists': '{}' });
+    const store = fakeKv({ 'songMeta:v1:lib1:artists': '{}' });
     const cache = new KvCache(store.ns);
     await cache.getJson(DOMAIN, [PART, 'artists']);
     await cache.getText(DOMAIN, [PART, 'artists']);

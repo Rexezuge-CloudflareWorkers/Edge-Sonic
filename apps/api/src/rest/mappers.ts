@@ -24,15 +24,6 @@ function toIso(epochSeconds: number | null | undefined): string | undefined {
   return epochSeconds === null || epochSeconds === undefined || epochSeconds <= 0 ? undefined : new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
-/**
-`2024-03-01T00:00:00.000Z` → epoch seconds, for the reverse direction.
-*/
-function fromIso(iso: string | null | undefined): number {
-  if (!iso) return 0;
-  const parsed = Date.parse(iso);
-  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
-}
-
 function suffixOfPath(path: string): string {
   const dot = path.lastIndexOf('.');
   return dot <= 0 ? '' : path.slice(dot + 1);
@@ -313,21 +304,6 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
   };
 }
 
-export {
-  toIso,
-  fromIso,
-  titleFromPath,
-  guessContentType,
-  songToModel,
-  songToChild,
-  basenameOf,
-  albumNameOf,
-  artistNameOf,
-  albumKeyOf,
-  firstLetterOf,
-  groupArtistRows,
-  artistIndexGroups,
-  CONTENT_TYPES,
-};
+export { toIso, guessContentType, songToModel, songToChild, albumNameOf, artistNameOf, albumKeyOf, groupArtistRows, artistIndexGroups };
 export type { AnnotationLookup, ArtistGroup };
 export { NO_ANNOTATIONS };

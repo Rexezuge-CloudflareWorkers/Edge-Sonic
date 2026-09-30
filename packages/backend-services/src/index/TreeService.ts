@@ -39,7 +39,6 @@ interface NodeStore {
       depth: number;
     }[],
   ): Promise<number>;
-  patch(libraryId: string, path: string, patch: { mtimeMs?: number | null; etag?: string | null; isScanned?: boolean }): Promise<void>;
   countByLibrary(libraryId: string): Promise<number>;
 }
 

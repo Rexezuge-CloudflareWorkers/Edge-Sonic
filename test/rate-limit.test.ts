@@ -23,6 +23,7 @@ import { Tokens } from '../packages/backend-services/src/composition/tokens';
 import { createRequestScope } from '../packages/backend-services/src/composition/requestScope';
 import { getRequestScope, asScopedContext } from '../packages/backend-runtime/src/di';
 import { scopeMiddleware } from '../apps/api/src/middleware/scopeMiddleware';
+import { createScanWorkerScope } from '@edge-sonic/background';
 
 /**
  * The worker's own env shape, so a handler here declares the same `AuthenticatedUserEmailAddress`
@@ -303,6 +304,42 @@ describe('the per-request scope', () => {
     const service = scope.get(Tokens.AccessAuthService);
     expect(scope.get(Tokens.AccessAuthService)).toBe(service);
     expect(typeof service.getAuthenticatedUserEmail).toBe('function');
+  });
+
+  it('binds every declared token, so a typo cannot become a runtime TypeError', () => {
+    // ### What this replaced
+    //
+    // `Tokens` is `satisfies Record<string, Token<unknown>>`, so a *misspelled* token name
+    // is a compile error — but a correctly-spelled token that was never bound is not, and
+    // nothing in the type system ties a `Token` to a registration.
+    //
+    // The only runtime diagnostic was `Container.get`'s "no binding for token" throw, and
+    // that line was **unreachable**: every one of the composition root's registrations is
+    // a `bindValue`, so the container's factory tier never ran and the throw was never
+    // reached. A token added to `tokens.ts` and not to `requestScope.ts` would have
+    // produced `undefined` flowing into a service and a `TypeError` several frames away,
+    // naming nothing. The whole factory tier — `bind`, `resolve`, `createChild`, `has`,
+    // `dispose`, and `get`'s own factory branch — was deleted as dead code, and the check
+    // it carried moved here, where it runs for every token on every test run.
+    //
+    // The *reachability* is asserted rather than hoped for: `get` throws for an unbound
+    // token, so iterating the registry proves the throw is live and the registrations
+    // complete. Without that, a `Container` that had stopped checking would make this test
+    // pass vacuously.
+    const scope = createRequestScope({ DB: {} } as never);
+    for (const [name, token] of Object.entries(Tokens)) {
+      expect(() => scope.get(token as never), `scope must bind Tokens.${name}`).not.toThrow();
+    }
+
+    // And the throw is real, so the loop above is a measurement rather than a formality.
+    expect(() => scope.get(Symbol('NeverBoundToken') as never)).toThrow(/no binding for token/);
+
+    // The background worker's composition root is a separate one, so it gets the same
+    // check — the two drift apart independently, and one of them already had.
+    const scanScope = createScanWorkerScope({ DB: {} } as never);
+    for (const [name, token] of Object.entries(Tokens)) {
+      expect(() => scanScope.get(token as never), `scan scope must bind Tokens.${name}`).not.toThrow();
+    }
   });
 });
 

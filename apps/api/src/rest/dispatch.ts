@@ -235,7 +235,7 @@ async function buildContext(
   };
 }
 
-export { dispatchRest, endpointNameFromPath, clientIpOf, assertClientVersion, PUBLIC_ENDPOINTS };
+export { dispatchRest, endpointNameFromPath, clientIpOf, PUBLIC_ENDPOINTS };
 export type { RestOutcome };
 
 export {missingParameter, successResponse, type SubsonicError as SubsonicErrorType, errorResponse} from '@edge-sonic/subsonic';
