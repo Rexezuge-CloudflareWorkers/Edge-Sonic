@@ -17,7 +17,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
-import { createHarness, ALBUM_DIR, subsonicId } from './helpers/harness';
+import { OPEN_SUBSONIC_EXTENSIONS } from '../apps/api/src/rest/endpoints/system';
+import { createHarness, ALBUM_DIR, ORIGIN, SALT, USERNAME, subsonicId } from './helpers/harness';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
 let harness: Harness;
@@ -398,15 +399,125 @@ describe('system endpoints', () => {
     expect(payload<{ valid: boolean }>(body, 'license').valid).toBe(true);
   });
 
-  it('answers getOpenSubsonicExtensions as not implemented, naming the endpoint', async () => {
-    // The envelope carries `openSubsonic: true` on every response, which is what a client
-    // uses to decide the server speaks the extended protocol. Advertising an empty
-    // extension list would be a claim this server does not honour; `code=70` is honest.
-    const { status, body } = await harness.rest('getOpenSubsonicExtensions');
-    expect(status).toBe(200);
-    const error = payload<{ code: number; message: string }>(body, 'error');
-    expect(error.code).toBe(70);
-    expect(error.message).toContain('getOpenSubsonicExtensions');
+  /**
+   * `getOpenSubsonicExtensions` — the capability-discovery call.
+   *
+   * It answered `code=70` on the reasoning that advertising an empty list "would be a claim
+   * this server does not honour". That conflated two different statements. `code=70` says
+   * *this server does not do that*; an empty list says *this server does that, and here is
+   * what it supports* — which is the truth, and the only answer a client can act on. It is
+   * the one endpoint the protocol requires to be reachable without credentials, so a client
+   * asking it before it has any is exactly the case that mattered.
+   */
+  describe('getOpenSubsonicExtensions', () => {
+    it('answers with an empty list, which is the truthful answer for this server', async () => {
+      const { status, body } = await harness.rest('getOpenSubsonicExtensions');
+      expect(status).toBe(200);
+      expect(body['subsonic-response'].status).toBe('ok');
+      // An **array**, present and empty — not an absent key. A client doing
+      // `response.openSubsonicExtensions.length` throws on `undefined` and renders nothing
+      // on `[]`, which is the repo's "an absent value is a value" rule applied to the one
+      // call a client makes to decide what else it may ask for.
+      expect(body['subsonic-response'].openSubsonicExtensions).toEqual([]);
+    });
+
+    it('is an empty array rather than a nested or absent one', async () => {
+      // The three shapes this key can take, and only one is usable. `{}` gives a client
+      // reading `.length` `undefined`; `[[]]` is an array of one empty array, so `.length`
+      // is `1` and iterating it yields nothing. `[]` is the shape the protocol's own JSON
+      // uses, and the only one a client can act on.
+      const { body } = await harness.rest('getOpenSubsonicExtensions');
+      const value = body['subsonic-response'].openSubsonicExtensions;
+      expect(Array.isArray(value)).toBe(true);
+      expect(value).toHaveLength(0);
+    });
+
+    it('advertises no extension this server does not implement', async () => {
+      // The paired half. A list that drifts from the product is *worse* than an empty one:
+      // a client reads it as a promise, calls the extension, and gets `code=70` from a
+      // server that just said it would work. So the set is asserted empty, and adding an
+      // extension is a change to `OPEN_SUBSONIC_EXTENSIONS` **and** to this line.
+      //
+      // `apiKeyAuthentication` is the one worth naming: we authenticate with `u` + `t`, not
+      // with an `apiKey` parameter, so advertising it would be a claim about a credential
+      // path this server does not have.
+      expect(OPEN_SUBSONIC_EXTENSIONS).toEqual([]);
+    });
+
+    it('answers without credentials, because the protocol requires it to be public', async () => {
+      const url = `${ORIGIN}/rest/getOpenSubsonicExtensions.view?v=1.16.1&c=edge-sonic-test&f=json`;
+      const response = await harness.fetch(url);
+      const body = (await response.json()) as SubsonicBody;
+
+      // No `u`, no `t`. Every other endpoint on this surface refuses this.
+      expect(response.status).toBe(200);
+      expect(body['subsonic-response'].status).toBe('ok');
+      expect(body['subsonic-response'].openSubsonicExtensions).toEqual([]);
+    });
+
+    it('discloses nothing about the deployment, which is what makes it safe to be public', async () => {
+      // The reason the public branch above is acceptable. The payload is a compile-time
+      // constant: no user, no library, no credential, and nothing about what this
+      // deployment holds. Asserted on the whole envelope, so a future edit that adds a
+      // version or a server name to this response fails here rather than in a client's
+      // unauthenticated hands.
+      const url = `${ORIGIN}/rest/getOpenSubsonicExtensions.view?v=1.16.1&c=edge-sonic-test&f=json`;
+      const body = (await (await harness.fetch(url)).json()) as SubsonicBody;
+      const keys = Object.keys(body['subsonic-response']).sort();
+      expect(keys).toEqual(['openSubsonic', 'openSubsonicExtensions', 'serverVersion', 'status', 'type', 'version']);
+      // And nothing in it names the library or the user.
+      expect(JSON.stringify(body)).not.toContain('Home');
+      expect(JSON.stringify(body)).not.toContain(USERNAME);
+    });
+  });
+
+  /**
+   * `tokenInfo` — who the presented credentials belong to.
+   *
+   * A client holding a stored token calls this to check it still works, so it was a
+   * `code=70` "unknown endpoint" on a server that had just authenticated the very token
+   * being asked about.
+   */
+  describe('tokenInfo', () => {
+    it('reports the authenticated username as a record, not a nested element', async () => {
+      const { status, body } = await harness.rest('tokenInfo');
+      expect(status).toBe(200);
+      // `username` is an **attribute** in the protocol, so it is a record in JSON. A child
+      // element would give `{ "username": { "#text": ... } }` and a client reading the
+      // string the schema declares would get an object — the same class of bug as
+      // `user.folder` being built as a record.
+      expect(body['subsonic-response'].tokenInfo).toEqual({ username: USERNAME });
+    });
+
+    it('reports the caller, so a client can tell whose token it is holding', async () => {
+      // The reason the endpoint exists. A client with a stored token needs to know whether
+      // it is still valid *and* whose it is, and it cannot derive the second from the
+      // username it happens to have stored — a client shared between two accounts needs to
+      // ask. The authenticated `username` is echoed, so this is a read of the caller's own
+      // identity and never of anyone else's.
+      const { body } = await harness.rest('tokenInfo', { u: USERNAME });
+      expect(body['subsonic-response'].tokenInfo).toEqual({ username: USERNAME });
+    });
+
+    it('refuses an unauthenticated call, so it is not a credential oracle', async () => {
+      // The paired half, and the reason this endpoint is *not* in `PUBLIC_ENDPOINTS`.
+      // Reporting who a token belongs to requires having accepted the token; answering
+      // without one would be an unauthenticated endpoint whose entire output is an identity.
+      const url = `${ORIGIN}/rest/tokenInfo.view?v=1.16.1&c=edge-sonic-test&f=json`;
+      const body = (await (await harness.fetch(url)).json()) as SubsonicBody;
+      expect(body['subsonic-response'].status).toBe('failed');
+      expect(body['subsonic-response'].tokenInfo).toBeUndefined();
+    });
+
+    it('still rejects a bad token rather than echoing whatever `u` was sent', async () => {
+      // The echoed username is the *authenticated* one. A request presenting a wrong token
+      // must fail at authentication and never reach the handler, or this endpoint would
+      // confirm any username to anyone.
+      const url = `${ORIGIN}/rest/tokenInfo.view?u=${USERNAME}&t=${'0'.repeat(32)}&s=${SALT}&v=1.16.1&c=edge-sonic-test&f=json`;
+      const body = (await (await harness.fetch(url)).json()) as SubsonicBody;
+      expect(body['subsonic-response'].status).toBe('failed');
+      expect(body['subsonic-response'].tokenInfo).toBeUndefined();
+    });
   });
 });
 

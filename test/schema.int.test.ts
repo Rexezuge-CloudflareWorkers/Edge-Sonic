@@ -27,6 +27,8 @@ import {
   SongDerivationDAO,
   SongIndexDAO,
   UserDAO,
+  D1_MAX_BIND_PARAMETERS,
+  bindChunkSize,
   deriveFromPath,
 } from '@edge-sonic/backend-data/dao';
 import { sqliteQueryable, queryPlan } from './helpers/sqlite';
@@ -932,6 +934,203 @@ describe('path-derived grouping', () => {
       // the stamp, so a pass can never re-derive its own output and starve the tail.
       expect(await dao.listNeedingDerivation(libraryId, 50)).toHaveLength(3);
       expect(await drain(libraryId)).toBe(3);
+    });
+  });
+
+  /**
+   * The bound-parameter ceiling: 100, measured, and enforced by the test engine.
+   *
+   * ### What shipped
+   *
+   * `songsForAlbumKeys` bound two variables per album group, so a page of 50 albums bound
+   * 101 and D1 refused it. `listArtists` bound one per artist and `listIdsIn` chunked at
+   * 200 with a comment asserting SQLite's old 999 default. The live symptom was a masked
+   * `code=0` on `getAlbumList`, which a client reports as a generic error — and it was not
+   * one client or one page size: **any** request for 50 or more albums failed, while
+   * `MAX_PAGE_SIZE` is 500, so the server was required to accept requests it could not
+   * answer. `getArtist` asked for 5,000 artists and `getCoverArt` for 500, so both were
+   * guaranteed failures on any library with 100+ artists.
+   *
+   * ### Why 523 tests were green throughout
+   *
+   * Because the engine under them was more permissive than the product. `node:sqlite` is
+   * the same engine D1 is, and that is exactly what made it convincing — but its
+   * `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 against D1's 100, so it is structurally
+   * incapable of failing this way. The double modelled *an* SQLite rather than *D1's*
+   * SQLite, which is the `fakeDav` receiver mistake one layer down. `helpers/sqlite.ts`
+   * now enforces the ceiling itself, and the tests below are what make that guard mean
+   * something.
+   */
+  describe('the bound-parameter ceiling', () => {
+    /**
+    One album per call, named so the sort order is predictable.
+    */
+    async function seedAlbum(libraryId: string, index: number): Promise<void> {
+      const name = `Artist ${String(index).padStart(4, '0')}`;
+      const album = `Album ${String(index).padStart(4, '0')}`;
+      await seedSong(libraryId, `${name}/${album}/01 track.flac`, `${name}/${album}`, {
+        title: '01 track',
+        artist: name,
+        album,
+      });
+    }
+
+    it('is 100, and the double enforces it rather than inheriting a laxer engine', async () => {
+      // Pinned because it is a measurement, not a preference. If D1's ceiling ever moves,
+      // this test is the thing that must be re-derived against a live instance — and a
+      // silent bump would otherwise raise every batch size in the product at once.
+      expect(D1_MAX_BIND_PARAMETERS).toBe(100);
+
+      // The paired half, and the reason the guard exists: this engine would *not* have
+      // caught the defect on its own. Without this assertion a future change that removed
+      // the ceiling from `helpers/sqlite.ts` would turn this whole block green-on-nothing.
+      const many: string[] = Array.from({ length: 150 }, () => 'x');
+      const sql = `SELECT ${many.map(() => '?').join(',')}`;
+      // The engine's own limit, which the double inherits and the product does not. This is
+      // the half that says *why* the guard below is needed rather than merely present.
+      expect(() => handle.raw.prepare(sql).all(...many)).not.toThrow();
+      // The D1 limit, which the double adds. Without this assertion the line above
+      // documents the hole instead of the guard, and deleting the guard stays green.
+      await expect(handle.db.prepare(sql).bind(...many).all()).rejects.toThrow(/too many SQL variables/);
+    });
+
+    it('derives every batch size from it, and the derived sizes straddle the measured edge', () => {
+      // The measured boundary: 49 album groups bind 99 variables and answer; 50 bind 101
+      // and fail. Asserted as arithmetic so the relationship is checkable by reading, and
+      // so raising `MAX_PAGE_SIZE` cannot silently re-break a query written correctly
+      // today.
+      expect(bindChunkSize(2)).toBe(49);
+      expect(bindChunkSize(1)).toBe(99);
+      expect(1 + 2 * bindChunkSize(2)).toBeLessThanOrEqual(D1_MAX_BIND_PARAMETERS);
+      expect(1 + 2 * (bindChunkSize(2) + 1)).toBeGreaterThan(D1_MAX_BIND_PARAMETERS);
+      // A caller asking for more variables per row than the ceiling allows still gets a
+      // one-row batch, rather than an empty array that would silently return nothing.
+      expect(bindChunkSize(500)).toBe(1);
+    });
+
+    it('answers a page of 500 albums, which is what MAX_PAGE_SIZE permits', async () => {
+      // The regression test for the shipped 500. 500 albums is `MAX_PAGE_SIZE`, so this is
+      // a request the server is *required* to accept — not a size invented to break it.
+      const userId = await seedUser('CeilingAlbums');
+      const libraryId = await seedLibrary(userId, 'LCA');
+      const ALBUMS = 500;
+      for (let index = 0; index < ALBUMS; index += 1) await seedAlbum(libraryId, index);
+
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: ALBUMS, offset: 0, orderBy: 'album_ci ASC' });
+
+      // Every album, complete. A silent truncation would satisfy a "does not throw"
+      // assertion and is the failure mode a chunked fetch actually has.
+      expect(albums).toHaveLength(ALBUMS);
+      expect(new Set(albums.map((song) => song.album_ci)).size).toBe(ALBUMS);
+    });
+
+    it('batches on key boundaries, so no album is split across two statements', async () => {
+      // The batch is over *keys*, never rows. A row-level split would return an album's
+      // first tracks from one statement and the rest from another, which `groupAlbums`
+      // would still merge — so the counts would be right and nothing would say why. The
+      // observable form of that bug is a duplicated or missing track, so the assertion is
+      // on the set, not the order.
+      const userId = await seedUser('CeilingKeys');
+      const libraryId = await seedLibrary(userId, 'LCK');
+      for (let index = 0; index < 60; index += 1) await seedAlbum(libraryId, index);
+      // A second track in the album that straddles the 49-key boundary, so a row-level
+      // split would have something to misplace.
+      await seedSong(libraryId, 'Artist 0049/Album 0049/02 track.flac', 'Artist 0049/Album 0049', {
+        title: '02 track',
+        artist: 'Artist 0049',
+        album: 'Album 0049',
+      });
+
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 60, offset: 0, orderBy: 'album_ci ASC' });
+
+      expect(albums).toHaveLength(61);
+      expect(new Set(albums.map((song) => song.id)).size).toBe(61);
+    });
+
+    it('produces the same rows however many statements it takes', async () => {
+      // The property that makes batching an implementation detail rather than a behaviour
+      // change. It is not free: the chunks are concatenated in the order the *key page*
+      // supplied, which is `orderBy` — `RANDOM()` for `type=random`, `mtime_ms DESC` for
+      // `type=newest` — and neither is the tuple the `SELECT *` asks to sort by. So
+      // without an explicit re-sort a small library came back sorted and a large one did
+      // not, and the same endpoint answered differently depending on how much music the
+      // user owned. `type=random` is the order that exposes it, being unrelated to the
+      // sort tuple by construction.
+      const userId = await seedUser('CeilingOrder');
+      const libraryId = await seedLibrary(userId, 'LCO');
+      for (let index = 0; index < 120; index += 1) await seedAlbum(libraryId, index);
+
+      const index = new SongIndexDAO(handle.db);
+      // 120 albums across three statements, with a key page whose order is unrelated to
+      // the sort tuple — which is what makes the re-sort load-bearing.
+      const chunked = await index.listAlbums(libraryId, { limit: 120, offset: 0, orderBy: 'RANDOM()' });
+
+      // The oracle: every row in the library, in **one** statement binding a single
+      // variable, so the comparison statement cannot itself be over the ceiling. Two pages
+      // of different sizes hold different albums and are not comparable; the whole table
+      // is.
+      const all = (await handle.db.prepare('SELECT * FROM songs WHERE library_id = ?').bind(libraryId).all<{ id: string }>()).results;
+      expect(all).toHaveLength(120);
+
+      // The set, which is the half a mis-sliced batch corrupts — a duplicated or dropped
+      // album, which a count alone would not distinguish from a correct page.
+      expect(new Set(chunked.map((song) => song.id))).toEqual(new Set(all.map((row) => row.id)));
+
+      // And the order the DAO documents is the order it returns, which is the half a
+      // re-sort could silently drop. `|`, not a space, so a column boundary cannot make
+      // two different rows compare equal.
+      const sortKey = (row: { album_artist_ci: string | null; album_ci: string | null; name_ci: string }): string =>
+        `${row.album_artist_ci ?? ''}|${row.album_ci ?? ''}|${row.name_ci}`;
+      expect(chunked.map(sortKey)).toEqual(chunked.map(sortKey).sort());
+    });
+
+    it('answers more than 100 artists, which is where getArtists and getArtist broke', async () => {
+      // `getArtists` asks for 500, `getArtist` for 5,000 and `getCoverArt` for 500. All
+      // three bound one variable per artist, so a library with 100+ artists 500'd on its
+      // front page — the endpoint a player draws first.
+      const userId = await seedUser('CeilingArtists');
+      const libraryId = await seedLibrary(userId, 'LCR');
+      const ARTISTS = 150;
+      for (let index = 0; index < ARTISTS; index += 1) await seedAlbum(libraryId, index);
+
+      const index = new SongIndexDAO(handle.db);
+      const artists = await index.listArtists(libraryId, ARTISTS, 0);
+      expect(artists).toHaveLength(ARTISTS);
+      expect(new Set(artists.map((song) => song.artist_ci)).size).toBe(ARTISTS);
+    });
+
+    it('keeps a 150-track play queue in the order it was saved', async () => {
+      // `listIdsIn` chunked at 200 against a ceiling of 100, so a saved queue of 100 tracks
+      // was a masked 500 — and the queue is the one list whose *order* is the whole point.
+      // Asserted on order and on omission together, because a re-order that dropped the
+      // unresolved ids would pass an order-only check on a shorter list.
+      const userId = await seedUser('CeilingQueue');
+      const libraryId = await seedLibrary(userId, 'LCQ');
+      const ids: string[] = [];
+      for (let index = 0; index < 150; index += 1) {
+        const path = `Artist/Album/${String(index).padStart(4, '0')} track.flac`;
+        ids.push(await seedSong(libraryId, path, 'Artist/Album', { title: `${index} track`, artist: 'Artist', album: 'Album' }));
+      }
+      // A shuffled request order and an id that resolves to nothing, which must be omitted
+      // rather than substituted.
+      const requested = ids.toReversed();
+      requested.splice(10, 0, 's:does-not-exist');
+
+      const rows = await new SongDAO(handle.db).listIdsIn(libraryId, requested);
+
+      expect(rows.map((row) => row.id)).toEqual(requested.filter((id) => id !== 's:does-not-exist'));
+    });
+
+    it('refuses to build a statement over the ceiling, so a fifth site fails here', async () => {
+      // The guard that stops this being rediscovered. `helpers/sqlite.ts` raises D1's
+      // ceiling on every statement, so a DAO that builds an `IN` list from a caller-supplied
+      // page size without batching fails **in this suite** rather than in production. Paired
+      // with the test above: without the batching, this one goes red; without the ceiling,
+      // nothing does.
+      const tooMany = Array.from({ length: D1_MAX_BIND_PARAMETERS + 1 }).fill('x');
+      await expect(handle.db.prepare(`SELECT ? AS v WHERE ? IN (${tooMany.map(() => '?').join(',')})`).bind(1, ...tooMany).all()).rejects.toThrow(
+        /too many SQL variables/,
+      );
     });
   });
 

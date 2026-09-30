@@ -14,7 +14,7 @@
  * is a well-formed envelope whether the endpoint exists, threw, or declined to
  * implement.
  */
-import { errorResponse, notFound, resolveFormat } from '@edge-sonic/subsonic';
+import { errorResponse, notFound, resolveFormat, successResponse } from '@edge-sonic/subsonic';
 import { ErrorCode, isClientVersionSupported, SubsonicError } from '@edge-sonic/subsonic';
 
 import { SubsonicParams, decodeLegacyPassword } from '@edge-sonic/subsonic';
@@ -25,9 +25,19 @@ import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
 import { ENDPOINTS } from './endpoints';
+import { openSubsonicExtensionsPayload } from './endpoints/system';
 import type { RestHandler } from './endpoints';
 
 type RestOutcome = Response | { response: Response };
+
+/**
+ * The endpoints answerable without credentials.
+ *
+ * One member, and it is a constant. See the note at the branch in `dispatchRest` for why
+ * this is a named set rather than a per-handler flag, and `test/endpoints.test.ts` for the
+ * assertion that keeps it at one.
+ */
+const PUBLIC_ENDPOINTS: ReadonlySet<string> = new Set(['getOpenSubsonicExtensions']);
 
 /**
 The trusted client IP, used only to key the auth throttle.
@@ -69,10 +79,11 @@ function endpointNameFromPath(pathname: string): string | null {
  * Order matters and is fixed:
  * 1. parse parameters (GET query **and** form POST),
  * 2. resolve the output format and JSONP callback,
- * 3. authenticate — before the endpoint name is even considered, so an unknown
+ * 3. answer the one publicly-accessible endpoint, if that is what was asked for,
+ * 4. authenticate — before the endpoint name is even considered, so an unknown
  *    endpoint cannot be used to probe whether an account exists,
- * 4. negotiate the protocol version,
- * 5. dispatch.
+ * 5. negotiate the protocol version,
+ * 6. dispatch.
  */
 async function dispatchRest(c: UserContext, pathname: string, request: Request): Promise<RestOutcome> {
   const params = await SubsonicParams.fromRequest(request);
@@ -85,8 +96,27 @@ async function dispatchRest(c: UserContext, pathname: string, request: Request):
   try {
     if (endpointName === null) throw notFound(`endpoint ${pathname}`);
 
-    // 3. Authenticate first. An unknown endpoint must not be answerable without
-    //    credentials, and a failure must not disclose which accounts exist.
+    // 3. The one endpoint that answers before authentication, because the protocol says
+    //    it must be publicly accessible: `getOpenSubsonicExtensions` is capability
+    //    discovery, and a client that has not authenticated yet has no credentials to send
+    //    with the question.
+    //
+    //    Safe because the answer is a compile-time constant — an empty extension list —
+    //    and carries nothing about this deployment: no user, no library, no version, no
+    //    capability beyond "there are none". There is no id in it to forge and nothing in
+    //    it to disclose, which is the same reason the endpoint can be public at all.
+    //
+    //    Deliberately a named single-entry set rather than a flag on the handler. A
+    //    per-handler "public" marker is one edit away from covering an endpoint that does
+    //    read data, and nothing would say so; a set is greppable, and
+    //    `test/endpoints.test.ts` asserts it has exactly one member and that every other
+    //    endpoint still refuses an unauthenticated call.
+    if (endpointName !== null && PUBLIC_ENDPOINTS.has(endpointName)) {
+      return successResponse(openSubsonicExtensionsPayload(), { format, jsonpCallback });
+    }
+
+    // 4. Authenticate. An unknown endpoint must not be answerable without credentials, and
+    //    a failure must not disclose which accounts exist.
     const username = params.require('u');
     const token = params.get('t') ?? null;
     const salt = params.get('s') ?? null;
@@ -106,7 +136,7 @@ async function dispatchRest(c: UserContext, pathname: string, request: Request):
       clientIp: clientIpOf(request),
     });
 
-    // 4. Version negotiation, after auth so an unauthenticated caller cannot use
+    // 5. Version negotiation, after auth so an unauthenticated caller cannot use
     //    it to fingerprint the server.
     const version = params.get('v');
     if (version !== undefined) assertClientVersion(version);
@@ -202,8 +232,8 @@ async function buildContext(
   };
 }
 
-export { dispatchRest, endpointNameFromPath, clientIpOf, assertClientVersion,     };
-export type { RestOutcome,  };
+export { dispatchRest, endpointNameFromPath, clientIpOf, assertClientVersion, PUBLIC_ENDPOINTS };
+export type { RestOutcome };
 
 export {missingParameter, successResponse, type SubsonicError as SubsonicErrorType, errorResponse} from '@edge-sonic/subsonic';
 export {ENDPOINT_NAMES} from './endpoints';

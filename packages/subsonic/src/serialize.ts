@@ -93,6 +93,18 @@ function childrenToJsonObject(children: readonly Node[]): Record<string, unknown
 
   const result: Record<string, unknown> = {};
   for (const [name, values] of groups) {
+    // A lone list element *is* that list, not a one-element array holding it.
+    //
+    // `childToJsonValue` already returns `[]` for an empty flagged element and the
+    // children themselves for a populated one, so the grouping step has to collapse a
+    // single occurrence back down or the caller reads `[[]]` and `[a, b]`. This is the
+    // same rule `childToJsonValue` applies one level up for an element with a single
+    // scalar child, and it is what makes `array: true` mean "render as a JSON array"
+    // rather than "render as an array, wrapped in another array".
+    if (flags.get(name) && values.length === 1 && Array.isArray(values[0])) {
+      result[name] = values[0];
+      continue;
+    }
     result[name] = flags.get(name) ? values : values.length === 1 ? values[0] : values;
   }
   return result;
@@ -126,6 +138,18 @@ function childToJsonValue(node: ElementNode): unknown {
     const only = children[0];
     if (!isElementNode(only)) return only;
   }
+
+  // An element declared as a list, with nothing in it, is an empty **array**.
+  //
+  // The third shape a Subsonic list can take, and the one the protocol's own JSON uses for
+  // `openSubsonicExtensions`: a bare `[...]` at the parent key rather than an object
+  // wrapping the repeated child. Without this, a childless flagged element serialised as
+  // `{}` (or `[{}]`, since the flag also forces the array), and a client reading
+  // `response.openSubsonicExtensions.length` got `undefined` — a throw on the capability
+  // call, which is the one call whose failure mode is a client deciding the server is
+  // broken. It is the same rule as the `listKey` seeding below, one level out: an absent
+  // value is a value.
+  if (node.array === true && children.length === 0 && attributeEntries.length === 0) return [];
 
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node.attrs ?? {})) {

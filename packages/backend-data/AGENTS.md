@@ -20,6 +20,7 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 | `dao/identity.ts` | `UserDAO` and `LibraryDAO` — the two rows with a credential                   |
 | `dao/songSql.ts` | the `songs` upsert statement                                                  |
 | `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
+| `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
 | `utils/`         | `D1Types`, `D1Utils`, `D1ErrorClassifier`, `UpdateClause`                     |
 
 `SongDAO` and `SongIndexDAO` are separate because they answer different-shaped questions.
@@ -38,6 +39,41 @@ page-then-fetch pattern readable in one place instead of duplicated five times.
 - **Paths compare exactly, never lowercased.** A WebDAV origin on Linux is
   case-sensitive, so `Album` and `album` are two folders and lowercasing the column merges
   them into one row pointing at a file that may not exist.
+- **D1 binds at most 100 parameters per statement, and every `IN (...)` size is derived from
+  that number.** It is not SQLite's default: SQLite has used 32,766 since 3.32.0, and the
+  `999` that predates it is still what most of the literature quotes — so a query written
+  against "SQLite's limit" is written against a limit this database does not have. Measured
+  on a live D1 on 2026-09-29: 99 bound variables answer, 101 raise `too many SQL variables`.
+  It shipped as a masked `code=0` on the endpoint a player draws its album list from, and
+  it was not one client or one page size. `songsForAlbumKeys` binds **two** variables per
+  album group, so **any** request for 50 or more albums failed — while `MAX_PAGE_SIZE` is
+  500, so the server was *required* to accept requests it could not answer. `listArtists`
+  binds one per artist and its three callers ask for 500, 5,000 and 500, so `getArtists`,
+  `getArtist` and `getCoverArt` were each a guaranteed failure on a library with 100+
+  artists. `listIdsIn` was the sharpest of the three: it *did* batch, at 200, under a
+  comment asserting "SQLite's limit (999 by default)" — a guard that was real and whose
+  stated budget was fiction, at twice the ceiling. Three rules:
+  - **The batch size is derived, never chosen.** `bindChunkSize(varsPerRow, reserved)` in
+    `dao/sqlLimits.ts` is the only place that arithmetic is written, and
+    `test/schema.int.test.ts` asserts *both sides* of the measured edge. A number typed
+    beside a query is a number that is wrong by the time somebody raises a page size.
+  - **Batch on key boundaries, never row boundaries.** A row-level split returns an album's
+    first tracks from one statement and the rest from another, which `groupAlbums` then
+    merges — so the counts stay right and nothing reports why.
+  - **A chunked fetch cannot inherit the `ORDER BY` it used to inherit from one statement.**
+    Chunks concatenate in the *key page's* order, which is `RANDOM()` for `type=random` and
+    `mtime_ms DESC` for `type=newest` — neither of which is the sort tuple. So
+    `songsForAlbumKeys` re-sorts, making its result a function of `keys` alone. Without
+    that, a 40-album library answers sorted and a 400-album one does not, and the same
+    endpoint behaves differently depending on how much music the user happens to own.
+- **`node:sqlite` is D1's engine but not D1's *build*, and the suite was blind because of
+  it.** The DAOs run against real SQLite precisely so a wrong predicate and a right one can
+  be told apart by the query plan — but its `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 against
+  D1's 100, so it is *structurally incapable* of failing the way D1 fails. 500+ tests were
+  green throughout a guaranteed 500. `helpers/sqlite.ts` now enforces the ceiling on every
+  statement. This is the `fakeDav` receiver mistake one layer down: a double is evidence
+  only to the extent it models the platform's constraints, and modelling *an* SQLite was
+  not the same as modelling *D1's* SQLite.
 - **Aggregate queries page over groups, then fetch every row of the groups on the page.**
   A SQL `GROUP BY` returns one *representative row* per group, so counting from it
   reports 1 for a real discography. This shipped: every album in the product reported
@@ -131,7 +167,13 @@ page-then-fetch pattern readable in one place instead of duplicated five times.
   statement that writes them are read together.
 - **An ordered id list stays ordered.** `id IN (...)` returns rows in index-scan order, so
   `listIdsIn` re-orders to the caller's list. Ids that do not resolve are omitted, not
-  substituted.
+  substituted. The re-order happens once over the *merged* result rather than per chunk, so
+  batching is invisible to the caller for the same reason it is in `songsForAlbumKeys`.
+- **A configured limit is not a bound the queries can honour.** `MAX_PAGE_SIZE` is 500, and
+  until the batching above existed a 500-album page was a request the server was obliged to
+  accept and could not answer. Same class as `SCAN_CHUNK_MAX_REQUESTS` being 1,000 on an
+  account whose ceiling was 50: both numbers are read as permissions rather than as
+  obligations on the code below them.
 - **A prune takes the whole subtree, with a trailing `/`.** A folder that disappears takes
   its `dir_path`s deeper than itself with it, so a one-level delete leaves songs indexed
   that keep appearing in every album list. The `LIKE` is escaped so a folder named `100%`

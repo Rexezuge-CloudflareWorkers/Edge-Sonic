@@ -30,8 +30,17 @@
  * `batch()` transaction semantics, or its `meta.changes` shape beyond what SQLite
  * reports — and a test that depends on any of those belongs in the pool suite, where
  * they are real.
+ *
+ * It does emulate one D1 limit, and it is the one that mattered most: **the bound-parameter
+ * ceiling**. `node:sqlite` is the same engine but not the same *build* — its
+ * `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 against D1's 100 — so it cannot fail the way D1
+ * fails, and for a long time that was the whole story of a masked `code=0` on the album
+ * list shipping through a fully green suite. `assertWithinBindCeiling` is checked on the
+ * path D1 checks it, before the statement runs, and throws with D1's own wording so a
+ * failure reads as the platform's rather than as a test helper's.
  */
 import { DatabaseSync } from 'node:sqlite';
+import { D1_MAX_BIND_PARAMETERS } from '@edge-sonic/backend-data/dao';
 import type { D1PreparedStatement, D1Queryable, D1Result } from '@edge-sonic/backend-data/utils';
 
 /**
@@ -103,6 +112,26 @@ function bindValue(value: unknown): Bindable {
 /**
 Build a `D1Queryable` over an in-memory SQLite database.
 */
+/**
+ * Reject a statement that binds more values than D1 would accept.
+ *
+ * Deliberately *not* a cap the test opts into. The defect this models was invisible for
+ * five hundred green tests because the engine under them was more permissive than the
+ * product, and a guard that only some suites enable is a guard that is off in the suite
+ * someone forgets.
+ *
+ * The count is checked where D1 checks it — on execution, not on `bind()` — because a
+ * statement is bound once and may be executed several times, and because a test that
+ * asserted at bind time would pass while a DAO that re-binds per chunk still overflowed.
+ */
+function assertWithinBindCeiling(sql: string, count: number): void {
+  if (count <= D1_MAX_BIND_PARAMETERS) return;
+  throw new SqliteError(
+    `too many SQL variables: bound ${count}, D1 allows ${D1_MAX_BIND_PARAMETERS}. ` +
+      `Statement: ${sql.slice(0, 120)}`,
+  );
+}
+
 function sqliteQueryable(path = ':memory:'): SqliteQueryable {
   const raw = new DatabaseSync(path);
   // Enforced for the lifetime of the handle, so a cascade test observes the same
@@ -118,6 +147,7 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
 
       const run = (): D1Result => {
         log.push(sql);
+        assertWithinBindCeiling(sql, values.length);
         try {
           const result = statement.run(...values.map(bindValue));
           return { success: true, meta: { changes: Number(result.changes ?? 0) } };
@@ -133,6 +163,7 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
         },
         async first<T>(): Promise<T | null> {
           log.push(sql);
+          assertWithinBindCeiling(sql, values.length);
           try {
             const row = statement.get(...values.map(bindValue));
             return (row === undefined ? null : (row as T)) as T | null;
@@ -142,6 +173,7 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
         },
         async all<T>(): Promise<{ results: T[] }> {
           log.push(sql);
+          assertWithinBindCeiling(sql, values.length);
           try {
             return { results: statement.all(...values.map(bindValue)) as T[] };
           } catch (error) {

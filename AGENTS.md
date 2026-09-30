@@ -322,6 +322,45 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   production assumptions; here it shared the *correct* behaviour and the DAO did not.
   The DAO now runs against real `node:sqlite` for this predicate, where a wrong query and
   a double cannot disagree.
+- **A double that models *an* implementation of the platform is not modelling the
+  platform.** The DAOs run against `node:sqlite` precisely so a wrong predicate and a right
+  one differ in the query plan, and that instinct was right. But D1 is SQLite with a
+  **different build**: `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 in Node's and **100** in
+  D1's. So the double was structurally incapable of failing the way the product fails — and
+  `songsForAlbumKeys` bound two variables per album group, so **any** request for 50+ albums
+  raised `too many SQL variables` and answered a masked `code=0` on the endpoint a player
+  draws its album list from. `listArtists` bound one per artist against callers asking for
+  500, 5,000 and 500, so `getArtists`, `getArtist` and `getCoverArt` were each a guaranteed
+  failure on a library with 100+ artists. 500+ tests were green throughout.
+  `listIdsIn` was the sharpest, because it *did* guard: it batched at 200 under a comment
+  reading "SQLite's limit (999 by default)" — a real guard whose stated budget was fiction,
+  at twice the ceiling. The generalization is the transferable part. Being the same
+  *engine* earned this double the trust that being the same *build* requires, and that trust
+  is what hid the bug. `helpers/sqlite.ts` now enforces the ceiling on every statement, and
+  the batch sizes are **derived** from one measured constant (`bindChunkSize`) rather than
+  chosen per query — a number typed beside a query is wrong by the time someone raises a
+  page size. Asserted: removing the batching from any of the three sites, dropping the
+  re-sort that makes a chunked fetch order-independent, raising the constant to 999, or
+  removing the double's own enforcement each turn tests red.
+- **A limit the platform imposes is not a number the code may choose.** `MAX_PAGE_SIZE` is
+  500 and D1 binds 100 parameters, so a 500-album page was a request this server was
+  *obliged* to accept and could not answer. Same shape as `SCAN_CHUNK_MAX_REQUESTS` being
+  1,000 against a 50-subrequest ceiling: a configured maximum read as a permission rather
+  than as an obligation on everything below it. A chunk bound is a claim about the code
+  beneath it, and it is only true if something measures it.
+- **`code=70` means the endpoint is absent, not that it has nothing to report.**
+  `getOpenSubsonicExtensions` sat in the `UNIMPLEMENTED` registry with the reason "no
+  extensions are advertised", so the **capability-discovery** call answered a failure —
+  the one answer a client cannot act on, from a server whose every envelope carries
+  `openSubsonic: true` and therefore sends clients looking for it. It returns `[]` now, and
+  is the sole entry in `PUBLIC_ENDPOINTS`, because the protocol requires it to be reachable
+  without credentials; safe because the payload is a compile-time constant, asserted on the
+  whole envelope's key set so a future version string cannot reach an anonymous caller.
+  `tokenInfo` was absent entirely, so a client holding a stored token got `code=70` from a
+  server that had just authenticated that token. Both were found by reading the
+  OpenSubsonic endpoint list against the registry — and nothing in the suite asserted the
+  registry covers what a real client calls, which is the same "a comment claiming an
+  invariant that nothing measured" defect as the subrequest bound.
 - **A double may disagree with production about the very column under repair.** The
   `upsertFileFacts` double in `test/scan-incremental.test.ts` wrote `artist: null,
   album: null` while the real `UPSERT_FILE_FACTS` *derived* them. That is the same
