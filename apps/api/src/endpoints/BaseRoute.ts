@@ -25,7 +25,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { BadRequestError } from '@edge-sonic/backend-errors';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
-import { getRequestScope, asScopedContext } from '@edge-sonic/backend-runtime/di';
+import { getRequestScope, asScopedContext, SCOPE_MISSING_MESSAGE } from '@edge-sonic/backend-runtime/di';
 import { toUserResponse } from '@edge-sonic/backend-services/errors';
 import type { UserErrorBody } from '@edge-sonic/backend-services/errors';
 
@@ -82,11 +82,22 @@ abstract class BaseRoute {
    * Single-scope resolution. Prefers the per-request container installed by
    * `scopeMiddleware`; falls back to a fresh scope for a call site outside the
    * middleware ordering (a unit test driving a handler directly).
+   *
+   * The `catch` is narrowed to the one condition the fallback exists for. A bare `catch`
+   * here would swallow *any* throw from `getRequestScope` — and today that function has
+   * exactly one, so behaviour is correct either way. The cost is what the fallback hides:
+   * it constructs a scope **per call site** rather than per request, which is the defect
+   * `scopeMiddleware` exists to prevent, and the message naming the actual mistake never
+   * reaches a log. Any future throw inside `getRequestScope` would silently reinstate both.
    */
   public static getScope(c: { get(key: string): unknown; env: unknown }): ReturnType<typeof createRequestScope> {
     try {
       return getRequestScope(asScopedContext(c));
-    } catch {
+    } catch (error) {
+      // Narrowed to the one condition the fallback exists for. Anything else is a real
+      // fault and propagates: a swallowed fault here is a silently re-minted scope, which
+      // costs a request its shared singletons and reports nothing.
+      if (!(error instanceof Error) || error.message !== SCOPE_MISSING_MESSAGE) throw error;
       return createRequestScope(c.env as Cloudflare.Env);
     }
   }

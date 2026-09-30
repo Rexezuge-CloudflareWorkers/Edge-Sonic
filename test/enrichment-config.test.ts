@@ -14,10 +14,11 @@
  * - `resolveKey` is the whole per-feature key policy, and its most important
  *   property is that it fails closed.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readAudioTags, readOpus, readVorbis, READER_VERSION } from '@edge-sonic/media-tags';
-import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
+import { AppConfiguration, DEFAULT_STREAM_RATE_LIMIT, DEFAULT_TAG_READ_TAIL_BYTES, MAX_PAGE_SIZE_CEILING } from '@edge-sonic/backend-runtime/config';
 import { resetBreakerForTests, KvCache } from '@edge-sonic/backend-runtime/kv';
+import { createLogger, setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
 import { EnrichmentService } from '@edge-sonic/backend-services/index';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
@@ -949,6 +950,131 @@ describe('AppConfiguration.validate', () => {
     expect(config.getAllowPrivateWebdavHosts()).toBeNull();
     expect(config.isBypassAllowed()).toBe(true);
     expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'development', ALLOW_PRIVATE_WEBDAV_HOSTS: 'false' }).getAllowPrivateWebdavHosts()).toBe(false);
+  });
+
+  it('names a malformed TAG_READ_TAIL_BYTES, which the numeric list did not check', () => {
+    // `TAG_READ_TAIL_BYTES` was absent from `validate()`'s numeric list, so a typo fell
+    // back to the 64 KB default and every Ogg track quietly reported no duration — the
+    // exact failure the header of `validate()` says the method exists to catch.
+    const warnings = AppConfiguration.fromEnv({ ENVIRONMENT: 'production', TAG_READ_TAIL_BYTES: 'banana' }).validate();
+    expect(warnings.join(' ')).toContain('TAG_READ_TAIL_BYTES');
+  });
+
+  it('does not report TAG_READ_TAIL_BYTES=0, because zero is the supported value', () => {
+    // The pair, without which the check above could be satisfied by reusing
+    // `isValidPositiveInt` — which would report `0` as invalid and generate a permanent
+    // warning about the one value the setting documents as correct. "0 disables the second
+    // read, which is a supported configuration and not a degraded one."
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production', TAG_READ_TAIL_BYTES: '0' }).validate()).toEqual([]);
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production', TAG_READ_TAIL_BYTES: '65536' }).validate()).toEqual([]);
+  });
+
+  it('reports a page size above what one request can answer, because that is a failed request', () => {
+    // `MAX_PAGE_SIZE` is raised the same way `SCAN_CHUNK_MAX_REQUESTS` is meant to be, and
+    // the two behave differently: the scan ceiling is a budget the chunk spends and leaves
+    // the remainder of, while a page size is a promise to **answer**. Past a certain size
+    // a page is not slower, it is unservable — so the clamp is reported rather than applied
+    // quietly, and the report names what was configured rather than what survived.
+    const config = AppConfiguration.fromEnv({ ENVIRONMENT: 'production', MAX_PAGE_SIZE: '5000' });
+    expect(config.validate().join(' ')).toMatch(/MAX_PAGE_SIZE=5000/);
+    // Clamped, and the clamp is what a caller actually receives. Asserted against the
+    // **constant** rather than a literal: the ceiling is derived from platform limits, and
+    // a copy here would pass on the day the derivation changed and be wrong after.
+    expect(config.getMaxPageSize()).toBe(MAX_PAGE_SIZE_CEILING);
+    // And the default is not clamped — the whole point is that the ceiling bites only when
+    // an operator has raised the number past it.
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production' }).getMaxPageSize()).toBe(500);
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production' }).validate()).toEqual([]);
+  });
+});
+
+describe('LOG_LEVEL, which was declared and inert', () => {
+  afterEach(() => setLogLevel(null));
+
+  it('lets a module-scope logger emit at the configured level', () => {
+    // ### The defect
+    //
+    // Both of this product's loggers are module-level constants — `KvCache.ts` and
+    // `embeddedArt.ts` each call `createLogger('…')` at import time. In a Worker `env` does
+    // not exist at module scope, so a level resolved in the constructor could only ever come
+    // from `process.env`, which workerd does not have. The level was therefore permanently
+    // `info`, `minLevel` permanently `1`, and `logger.debug` could not emit **at all** in a
+    // deployed Worker.
+    //
+    // `LOG_LEVEL` was declared in `ServiceEnv`, shipped as `"info"` in the wrangler
+    // template, and did nothing. An operator who set `LOG_LEVEL=debug` to diagnose the
+    // outage the knob exists for got silence — and the coverage report proved it rather
+    // than suggesting it: every `console.*` call sat in an arm reachable only at
+    // `minLevel <= 0`, which is exactly which lines were uncovered.
+    //
+    // This logger is constructed at module scope here too, so it is the same case: setting
+    // the level afterwards has to be enough.
+    const logger = createLogger('ScopeTest');
+    const seen: string[] = [];
+    const spies = (['debug', 'info', 'warn', 'error'] as const).map((level) =>
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+        // The message is its own argument, not folded into the prefix — that is the whole
+        // reason this file's emit is written the way it is, so the assertion records both.
+        seen.push(`${level}|${String(args[0])}|${String(args[1])}`);
+      }),
+    );
+
+    try {
+      setLogLevel('debug');
+      logger.debug('d');
+      logger.info('i');
+      expect(seen).toContain('debug|[DEBUG] [ScopeTest]|d');
+
+      seen.length = 0;
+      setLogLevel('error');
+      logger.debug('d');
+      logger.info('i');
+      logger.warn('w');
+      logger.error('e');
+      // Everything below the level is dropped, and the one at it survives.
+      expect(seen).toEqual(['error|[ERROR] [ScopeTest]|e']);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it('reports an unrecognised level rather than silently falling back', () => {
+    // `validate()` is the only place a typo becomes visible. `"DEBUG"` in caps would
+    // otherwise be a log level an operator cannot see, which is the same outcome as not
+    // having the setting at all.
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production', LOG_LEVEL: 'verbose' }).validate().join(' ')).toContain('LOG_LEVEL');
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production', LOG_LEVEL: 'debug' }).validate()).toEqual([]);
+    // Case is normalized on read, because `resolveLogLevel` accepts it and a warning about
+    // a working setting is its own kind of wrong.
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'production', LOG_LEVEL: 'DEBUG' }).getLogLevel()).toBe('debug');
+  });
+});
+
+describe('the limits an operator can actually set', () => {
+  it('honours TAG_READ_TAIL_BYTES=0 as "disable the second read", not as "use the default"', () => {
+    // The defect: `getTagReadTailBytes` read through `positiveInt`, whose contract is
+    // `parsed > 0`. So `0` did not disable the tail read — it became
+    // `Number(DEFAULT_TAG_READ_TAIL_BYTES)`, and the operator got a 64 KB ranged read per
+    // Ogg track for ever, with nothing saying the setting had been overridden by the very
+    // default it names.
+    //
+    // `EnvParser.nonNegativeInt` is the method that honours `>= 0`, and it had **no callers
+    // anywhere in the repository** — the helper for this value existing, unused, in the same
+    // layer, is the fingerprint of the mistake.
+    expect(AppConfiguration.fromEnv({ TAG_READ_TAIL_BYTES: '0' }).getTagReadTailBytes()).toBe(0);
+    // A positive value is still honoured, and an absent one is still the default — the
+    // change is about the boundary, not about ignoring the variable.
+    expect(AppConfiguration.fromEnv({ TAG_READ_TAIL_BYTES: '4096' }).getTagReadTailBytes()).toBe(4096);
+    expect(AppConfiguration.fromEnv({}).getTagReadTailBytes()).toBe(Number(DEFAULT_TAG_READ_TAIL_BYTES));
+  });
+
+  it('reads STREAM_RATE_LIMIT where the limiter runs, rather than from a table literal', () => {
+    // The variable was declared, parsed, validated and shipped in the wrangler template —
+    // and read by nothing. The limiter used a literal, so `600` lived in three places and an
+    // operator setting `STREAM_RATE_LIMIT=50` got a clean validation pass, a deployment
+    // that reported itself configured, and an unchanged limiter.
+    expect(AppConfiguration.fromEnv({ STREAM_RATE_LIMIT: '50' }).getStreamRateLimit()).toBe(50);
+    expect(AppConfiguration.fromEnv({}).getStreamRateLimit()).toBe(Number(DEFAULT_STREAM_RATE_LIMIT));
   });
 });
 

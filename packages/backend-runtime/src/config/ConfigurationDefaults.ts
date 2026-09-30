@@ -66,6 +66,31 @@ Upper bound on a single page of results, matching the protocol's own maximum.
 export const DEFAULT_MAX_PAGE_SIZE = '500';
 
 /**
+ * The largest page this server will accept, whatever `MAX_PAGE_SIZE` says.
+ *
+ * ### A limit the platform imposes is not a number the code may choose
+ *
+ * `MAX_PAGE_SIZE` was raised by an operator the same way `SCAN_CHUNK_MAX_REQUESTS` is
+ * meant to be, and the two do not behave alike. The scan ceiling is a *budget* the chunk
+ * spends and leaves the remainder of; a page size is a promise to **answer** — so raising it
+ * does not make a page slower, it makes a request unservable.
+ *
+ * A page of *N* album groups costs one grouped query plus `ceil(N / groupsPerStatement)`
+ * further statements to fetch their songs, and each of those statements binds
+ * `D1_MAX_BIND_PARAMETERS` parameters (`backend-data`'s `bindChunkSize`, which derives the
+ * 49 from the platform's 100-parameter ceiling rather than carrying the number). D1 queries
+ * are subrequests, so the page has to fit inside the same budget as everything else: on the
+ * Free plan that is **50**. Leaving headroom for the grouped query itself, for the
+ * annotation reads every list endpoint makes, and for redirect chains — also counted — caps
+ * the statement count well below 50.
+ *
+ * So the ceiling is derived from two numbers the platform sets rather than chosen to be
+ * comfortable, exactly as `bindChunkSize` is derived from the 100-parameter ceiling. The
+ * value below is what that derivation produces.
+ */
+export const MAX_PAGE_SIZE_CEILING = 2200;
+
+/**
 Default page size when a client does not send `size`.
 */
 export const DEFAULT_PAGE_SIZE = '20';

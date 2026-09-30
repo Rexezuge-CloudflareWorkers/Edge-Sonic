@@ -1,5 +1,7 @@
 import { EnvParser } from './EnvParser';
-import { DEFAULT_DEBUG_MODE, DEFAULT_SITE_URL } from './ConfigurationDefaults';
+import { isLogLevel } from '../logger';
+import type { LogLevel } from '../logger';
+import { DEFAULT_DEBUG_MODE, DEFAULT_SITE_URL, MAX_PAGE_SIZE_CEILING } from './ConfigurationDefaults';
 import { AuthConfig } from './sections/AuthConfig';
 import { AuthThrottleConfig, LibraryLimits, RequestLimits, ScanLimits } from './sections/LibraryLimits';
 
@@ -44,6 +46,20 @@ class AppConfiguration {
 
   public get authThrottle(): AuthThrottleConfig {
     return this.throttle;
+  }
+
+  /**
+  The configured log level, or `null` when unset or unrecognised.
+  *
+  * `null` rather than a fallback, because "unset" and "set to something invalid" are the
+  * same case for the emitters — they use their own default — while `validate()` names the
+  * invalid one. It is `LOG_LEVEL`, read here rather than at logger construction because
+  * both of this product's loggers are module-level constants and `env` does not exist at
+  * module scope in a Worker.
+  */
+  public getLogLevel(): LogLevel | null {
+    const raw = EnvParser.string(this.env, 'LOG_LEVEL', '').trim().toLowerCase();
+    return isLogLevel(raw) ? raw : null;
   }
 
   public getDebugMode(): boolean {
@@ -173,6 +189,39 @@ class AppConfiguration {
       if (!EnvParser.isValidPositiveInt(this.env, key)) {
         warnings.push(`Invalid configuration: ${key} must be a positive integer`);
       }
+    }
+
+    // `TAG_READ_TAIL_BYTES` is absent from the list above, so a typo'd value fell back to
+    // the 64 KB default and the Ogg duration was quietly absent for every track — the
+    // exact failure the header says this method exists to catch. Checked separately
+    // rather than by adding it to `numericKeys`, because its contract is `>= 0` and zero is
+    // a supported value (`getTagReadTailBytes`), which `isValidPositiveInt` would report as
+    // invalid. Two contracts, two checks.
+    if (!EnvParser.isValidNonNegativeInt(this.env, 'TAG_READ_TAIL_BYTES')) {
+      warnings.push('Invalid configuration: TAG_READ_TAIL_BYTES must be a non-negative integer (0 disables the Ogg tail read)');
+    }
+
+    // A page size above what one invocation can answer is a **failed** request, not a slow
+    // one, so the clamp is reported rather than applied quietly. Reported separately from
+    // the list above because the configured value *is* a valid positive integer — it is
+    // the request it implies that is unservable, and nothing else here would say so.
+    const requestedPageSize = this.requests.getRequestedMaxPageSize();
+    if (requestedPageSize > MAX_PAGE_SIZE_CEILING) {
+      warnings.push(
+        `Configuration: MAX_PAGE_SIZE=${requestedPageSize} exceeds the ${MAX_PAGE_SIZE_CEILING} this server can answer in one request; ` +
+          `it is clamped. A page is a promise to answer, not a budget to spend — raise it only with ` +
+          `limits.subrequests in the wrangler config.`,
+      );
+    }
+
+    // `LOG_LEVEL` is checked separately because it is an enum rather than a number, and
+    // because it is the one variable whose value was silently unobservable: both loggers
+    // are module-level constants, so the level was resolved before `env` existed and an
+    // operator who set `LOG_LEVEL=debug` got silence — the log level you cannot see is not
+    // a setting. `validate()` is where a typo becomes visible at all.
+    const logLevel = EnvParser.string(this.env, 'LOG_LEVEL', '').trim();
+    if (logLevel.length > 0 && !isLogLevel(logLevel.toLowerCase())) {
+      warnings.push(`Invalid configuration: LOG_LEVEL must be one of debug, info, warn, error (got ${JSON.stringify(logLevel)})`);
     }
 
     // A bypass present but inert is the dangerous direction: one edit to
