@@ -93,15 +93,20 @@ async function publishedLists(): Promise<{ folder: unknown; musicFolder: Array<{
 
 interface IndexesEnvelope {
   error?: { code: number };
-  indexes?: { index: Array<{ shortcut: Array<{ name: string }> }> };
+  indexes?: { shortcut: Array<{ name: string }> };
 }
 
 /**
-The artist roots a `getIndexes` call answered with, and the error code if it refused.
+The folder roots a `getIndexes` call answered with, and the error code if it refused.
+
+Read from the top-level `shortcut` children, where the schema puts them — not from
+inside the letter groups, which hold `artist` children. That nesting was the shape
+this helper (and the endpoint) used to assert, written from the code rather than the
+schema.
 */
 async function browse(musicFolderId: string): Promise<{ names: string[]; code: number | undefined }> {
   const envelope = (await call('getIndexes', { musicFolderId })) as IndexesEnvelope;
-  return { names: (envelope.indexes?.index ?? []).flatMap((index) => index.shortcut.map((shortcut) => shortcut.name)), code: envelope.error?.code };
+  return { names: (envelope.indexes?.shortcut ?? []).map((shortcut) => shortcut.name), code: envelope.error?.code };
 }
 
 describe('a musicFolderId is a position both surfaces publish identically', () => {

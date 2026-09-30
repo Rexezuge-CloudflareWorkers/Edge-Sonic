@@ -11,6 +11,8 @@
  * status assertion cannot see a subrequest budget being spent.
  */
 import type { DavResource } from '@edge-sonic/webdav';
+import { multistatus } from './davMultistatus';
+import type { DavEntry } from './davMultistatus';
 
 export interface FakeDavOptions {
   /**
@@ -44,6 +46,24 @@ export interface FakeDavOptions {
   assertion, and the bound this models is a decision, not a duration.
   */
   latencyMs?: number;
+  /**
+   * Status to answer every media `GET` with, leaving `PROPFIND` at its normal `207`.
+   *
+   * ### Why this exists separately from `status`
+   *
+   * `status` fails the whole server, so it models an origin that is *down*. Nothing
+   * could express an origin that will **list** a file and then refuse to serve its
+   * bytes, which is the shape a real WebDAV server produces under load — and it is the
+   * shape that matters here, because it is the one that must not be mistaken for "there
+   * is nothing there". The origin this suite was last run against answers `207` on
+   * `PROPFIND` and `503` on a ranged `GET` of a file it listed a moment earlier, so the
+   * whole library reads fine and every cover is a transparent pixel.
+   *
+   * A read that *completed* and found no picture is a different observation from a read
+   * that failed, and only the second one is worth repeating. Use `setGetStatus` to change
+   * it mid-test, which is how the recovery is expressed.
+   */
+  getStatus?: number;
 }
 
 export interface FakeDav {
@@ -77,98 +97,16 @@ export interface FakeDav {
    * ignore every change, and the failure looks like a product bug.
    */
   setTree(next: Record<string, DavEntry[]>): void;
-  reset(): void;
-}
-
-/**
-One entry in a fake library.
-*/
-export interface DavEntry {
-  readonly path: string;
-  readonly collection?: boolean;
-  readonly size?: number;
-  readonly contentType?: string;
   /**
-  Epoch milliseconds.
-  */
-  readonly mtime?: number;
-  readonly etag?: string;
-  /**
-   * The bytes the server actually returns.
+   * Make every media `GET` answer `status`, leaving `PROPFIND` at `207`. `null` restores
+   * normal serving.
    *
-   * Optional, and shorter than `size` is the interesting case: it is how a real origin
-   * answers a prefix read of a large file, and how a test models a container whose
-   * header is not at the front. Without it the fake hands back a zero buffer of
-   * `size` bytes, which is 30 MB of allocation for a fixture and a file that no
-   * decoder can read.
+   * Mutable for the same reason `setTree` is: the defect it exists for is only visible
+   * across the moment the origin recovers, and a knob fixed at construction cannot
+   * express a recovery.
    */
-  readonly body?: Uint8Array;
-  /**
-  Exclude one property from the `200` propstat, modelling a partial server.
-  */
-  readonly omit?: 'getcontentlength' | 'getcontenttype' | 'getlastmodified' | 'getetag' | 'displayname';
-}
-
-function propValue(entry: DavEntry, property: string): string | null {
-  if (entry.omit === property) return null;
-  switch (property) {
-    case 'getcontentlength': {
-      return entry.collection ? null : String(entry.size ?? 0);
-    }
-    case 'getcontenttype': {
-      return entry.contentType ?? null;
-    }
-    case 'getlastmodified': {
-      return entry.mtime === undefined ? null : new Date(entry.mtime).toUTCString();
-    }
-    case 'getetag': {
-      return entry.etag ?? null;
-    }
-    case 'displayname': {
-      return entry.path.split('/').findLast(Boolean) ?? entry.path;
-    }
-    default: {
-      return null;
-    }
-  }
-}
-
-/**
- * Build a `207` body for a set of entries.
- *
- * @param prefix A namespace prefix for every element, so a test can prove the parser
- *   matches on local name rather than on a hard-coded `D:`.
- */
-function multistatus(entries: readonly DavEntry[], options: { prefix?: string; hrefBase?: string } = {}): string {
-  const prefix = options.prefix ?? 'D';
-  const base = options.hrefBase ?? '';
-  const responses = entries.map((entry) => {
-    // No extra separator: `entry.path` is already a full request path with its
-    // leading slash, and doubling it produces `//dav/...`, which is a *different*
-    // path to `toLibraryPath` and would defeat the containment check it exists for.
-    const suffix = entry.path === '' ? '/' : entry.path.startsWith('/') ? entry.path : `/${entry.path}`;
-    const href = `${base}${suffix}`;
-    const properties = [
-      entry.collection ? `<${prefix}:resourcetype><${prefix}:collection/></${prefix}:resourcetype>` : `<${prefix}:resourcetype/>`,
-      ...(['getcontentlength', 'getcontenttype', 'getlastmodified', 'getetag', 'displayname'] as const)
-        .map((property) => {
-          const value = propValue(entry, property);
-          return value === null ? '' : `<${prefix}:${property}>${value}</${prefix}:${property}>`;
-        }),
-    ].join('');
-
-    return [
-      `<${prefix}:response>`,
-      `<${prefix}:href>${href}</${prefix}:href>`,
-      `<${prefix}:propstat>`,
-      `<${prefix}:prop>${properties}</${prefix}:prop>`,
-      `<${prefix}:status>HTTP/1.1 200 OK</${prefix}:status>`,
-      `</${prefix}:propstat>`,
-      `</${prefix}:response>`,
-    ].join('');
-  });
-
-  return `<?xml version="1.0" encoding="utf-8"?><${prefix}:multistatus xmlns:${prefix}="DAV:">${responses.join('')}</${prefix}:multistatus>`;
+  setGetStatus(status: number | null): void;
+  reset(): void;
 }
 
 /**
@@ -300,6 +238,7 @@ function withReceiverCheck(inner: typeof fetch): typeof fetch {
  */
 function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOptions = {}): FakeDav {
   let tree = initialTree;
+  let getStatus: number | null = options.getStatus ?? null;
   const propfinds: string[] = [];
   const gets: Array<{ path: string; range: string | null }> = [];
   const credentials: string[] = [];
@@ -342,6 +281,7 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
     if (request.method === 'GET') {
       const range = request.headers.get('range');
       gets.push({ path, range });
+      if (getStatus !== null) return new Response('', { status: getStatus });
       const entry = Object.values(tree).flat().find((candidate) => candidate.path === path);
       return entry === undefined ? new Response('', { status: 404 }) : serveEntry(entry, range);
     }
@@ -360,6 +300,9 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
     requestCount: () => calls,
     setTree: (next: Record<string, DavEntry[]>) => {
       tree = next;
+    },
+    setGetStatus: (next: number | null) => {
+      getStatus = next;
     },
     reset: () => {
       propfinds.length = 0;
@@ -386,4 +329,8 @@ function toResources(entries: readonly DavEntry[]): DavResource[] {
   }));
 }
 
-export { fakeDav, multistatus, toResources, withReceiverCheck };
+export { fakeDav, toResources, withReceiverCheck };
+// Re-exported so a test that only needs the `207` body does not import the transport that
+// happens to produce it, and so `DavEntry` keeps the one import path it had.
+export { multistatus } from './davMultistatus';
+export type { DavEntry } from './davMultistatus';

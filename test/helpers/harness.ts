@@ -32,7 +32,7 @@ import { fakeKv } from './fakeKv';
 import { fakeDav } from './fakeDav';
 import { migrationSql } from './migrations';
 import type { SqliteQueryable } from './sqlite';
-import type { FakeKv } from './fakeKv';
+import type { FakeKv, FakeKvOptions } from './fakeKv';
 import type { DavEntry, FakeDav } from './fakeDav';
 
 /**
@@ -143,10 +143,16 @@ export interface Harness {
  * The **file** node rows matter as much as the song rows: `getMusicDirectory` lists
  * `nodes`, so a seed with only the folders makes a correct endpoint look broken.
  */
-export async function createHarness(tree?: Record<string, DavEntry[]>): Promise<Harness> {
+/**
+ * @param kv Options for the cache double. Present because a double that settles
+ *   instantly cannot observe an **abandoned** promise — see `FakeKvOptions.deferPuts`,
+ *   which exists because the artwork cache was written without `await` and the suite could
+ *   not see it.
+ */
+export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeKvOptions = {}): Promise<Harness> {
   const db = sqliteQueryable();
   db.raw.exec(MIGRATION);
-  const cache = fakeKv();
+  const cache = fakeKv({}, kv);
   const dav = fakeDav(tree ?? {});
 
   const userSecret = await encryptData(PASSWORD, TEST_KEY);

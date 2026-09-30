@@ -33,7 +33,7 @@ type TestApp = Hono<TestEnv>;
 
 const ORIGIN_URL = 'https://edge-sonic.test';
 
-const OK = { windowMs: 60_000, max: 2, keyPrefix: 'test' };
+const OK = { windowMs: 60_000, max: 2, keyPrefix: 'test', surface: 'user' as const };
 
 /**
  * A minimal app with the limiter installed, so the whole middleware contract — not
@@ -180,7 +180,7 @@ describe('the bucket', () => {
   it('caps tracked buckets, so a rotating key cannot grow the map without limit', () => {
     // An attacker rotating the key would otherwise pin memory for the isolate's life.
     for (let index = 0; index < 5200; index += 1) {
-      rateLimit({ windowMs: 60_000, max: 1, keyPrefix: `p${index}` });
+      rateLimit({ windowMs: 60_000, max: 1, keyPrefix: `p${index}`, surface: 'user' });
     }
     // `cleanup` only runs at request time, so drive a few to trigger it.
     const app = limitedApp(1);
@@ -229,10 +229,10 @@ describe('the opts guard', () => {
     // A zero or negative `max` would install a bucket that is either unlimited or
     // permanently tripped — and the failure would otherwise show up as "the rate limit
     // does not work" long after the typo.
-    expect(() => rateLimit({ windowMs: 0, max: 1, keyPrefix: 'x' })).toThrow(/windowMs/);
-    expect(() => rateLimit({ windowMs: 1000, max: 0, keyPrefix: 'x' })).toThrow(/max/);
-    expect(() => rateLimit({ windowMs: 1000, max: 1.5, keyPrefix: 'x' })).toThrow(/max/);
-    expect(() => rateLimit({ windowMs: 1000, max: 1, keyPrefix: '  ' })).toThrow(/keyPrefix/);
+    expect(() => rateLimit({ windowMs: 0, max: 1, keyPrefix: 'x', surface: 'user' })).toThrow(/windowMs/);
+    expect(() => rateLimit({ windowMs: 1000, max: 0, keyPrefix: 'x', surface: 'user' })).toThrow(/max/);
+    expect(() => rateLimit({ windowMs: 1000, max: 1.5, keyPrefix: 'x', surface: 'user' })).toThrow(/max/);
+    expect(() => rateLimit({ windowMs: 1000, max: 1, keyPrefix: '  ', surface: 'user' })).toThrow(/keyPrefix/);
   });
 });
 

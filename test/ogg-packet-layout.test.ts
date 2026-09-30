@@ -29,7 +29,7 @@
  *    15329 kbps instead of 191, which is what a player seeks against.
  */
 import { describe, expect, it } from 'vitest';
-import { readAudioTags, readOggTailDuration, readOpus, readVorbis } from '@edge-sonic/media-tags';
+import { findPicture, materializePicture, readAudioTags, readOggTailDuration, readOpus, readVorbis } from '@edge-sonic/media-tags';
 
 const encoder = new TextEncoder();
 
@@ -41,6 +41,22 @@ function le(value: number, width: number): number[] {
   let remaining = Math.max(0, Math.floor(value));
   for (let index = 0; index < width; index += 1) {
     out.push(remaining % 256);
+    remaining = Math.floor(remaining / 256);
+  }
+  return out;
+}
+
+/**
+Big-endian bytes, for the FLAC `PICTURE` block whose fields the format spec fixes as
+big-endian. Built forwards rather than as `le(...).reverse()`: `reverse()` mutates in
+place, and a helper that silently mutated its caller's array would be a trap the next
+fixture walks into.
+*/
+function be(value: number, width: number): number[] {
+  const out: number[] = [];
+  let remaining = Math.max(0, Math.floor(value));
+  for (let index = 0; index < width; index += 1) {
+    out.unshift(remaining % 256);
     remaining = Math.floor(remaining / 256);
   }
   return out;
@@ -407,5 +423,303 @@ describe('The tail read, which is what supplies the real duration', () => {
 
   it('reports no duration for a buffer with no page in it at all', () => {
     expect(readOggTailDuration(new Uint8Array(2048), 48_000, 0)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// The live library's shape: a comment packet far larger than any bounded read.
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The page body ceiling: 255 segments of 255 bytes (Ogg §4.2.1). Every muxer in use writes
+ * pages at exactly this size, which is what makes a fetch sized from the observed page
+ * body an upper bound rather than a guess.
+ */
+const PAGE_BODY_LIMIT = 255 * 255;
+
+/**
+ * An Opus comment header built from **raw** `KEY=value` entries.
+ *
+ * `opusTags` takes a `Record<string, string>`, which cannot express the case this file
+ * exists for: a field of 1.16 MB. It also cannot express a field that is *not* valid
+ * text, and the artwork case is a field whose value is base64 spanning every page of the
+ * file.
+ */
+function opusTagsRaw(entries: readonly Uint8Array[]): number[] {
+  const vendor = encoder.encode('edge-sonic-test');
+  return [
+    ...encoder.encode('OpusTags'),
+    ...le(vendor.length, 4),
+    ...vendor,
+    ...le(entries.length, 4),
+    ...entries.flatMap((entry) => [...le(entry.length, 4), ...entry]),
+  ];
+}
+
+function commentEntry(key: string, value: string): Uint8Array {
+  return Uint8Array.from([...encoder.encode(`${key}=`), ...encoder.encode(value)]);
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) out += String.fromCharCode(byte);
+  return btoa(out);
+}
+
+/**
+ * A FLAC `PICTURE` block, big-endian fields per the format spec §8.2.
+ */
+function pictureBlock(data: Uint8Array): number[] {
+  const mime = encoder.encode('image/png');
+  return [
+    ...be(3, 4), // picture type 3, front cover
+    ...be(mime.length, 4),
+    ...mime,
+    ...be(0, 4), // no description
+    ...be(1400, 4),
+    ...be(1400, 4),
+    ...be(24, 4),
+    ...be(0, 4),
+    ...be(data.length, 4),
+    ...data,
+  ];
+}
+
+/**
+ * A PNG body big enough that its base64 is larger than any bound this server keeps.
+ *
+ * The magic is what `sniffImageType` reads, and the size is the point: 600 KiB of image is
+ * 800 KiB of base64, which puts the comment packet at over 800 KiB — past the 512 KiB that
+ * used to be the largest packet this module would reassemble, and far past the 128 KiB
+ * prefix read that has to find it.
+ */
+const IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 600 * 1024 }, () => 0x42)]);
+
+/**
+ * The *other* real cover size: 150 KiB of image, so 200 KiB of base64.
+ *
+ * This is the size that was missed. It is **under** the 256 KiB the Ogg path treats as
+ * decodable-from-the-buffer and **over** the 128 KiB prefix read, so a locator that
+ * decided on the declared length took the inline path, the read came back nothing, and it
+ * reported no artwork on a file that plainly has one. The live library has covers of both
+ * this size and the 868 KB one, so a fixture of only the larger would have left the whole
+ * middle of the range untested — which is how a threshold catches one file and misses the
+ * next.
+ */
+const MID_IMAGE_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 150 * 1024 }, () => 0x20), 0xff, 0xd9]);
+
+/**
+ * The prefix this server actually reads: `TAG_READ_BYTES`.
+ */
+const PREFIX_BYTES = 131_072;
+
+/**
+ * An Opus file laid out the way `libavformat` lays one out, with a comment packet that
+ * crosses many pages.
+ *
+ * Page 0 carries the identification header **and** the start of the comment packet, with
+ * the segment table `19` marking the packet boundary and a run of 255s after it — no
+ * terminator, because the packet continues. That is the live file's first page exactly:
+ * `nseg=255`, `body=64789`, `OpusHead` at 0, `OpusTags` at 301.
+ */
+function oggFileWithEmbeddedPicture(image: Uint8Array): { file: Uint8Array; tagsLength: number } {
+  const head = opusHead(2, 312);
+  const tags = opusTagsRaw([
+    commentEntry('TITLE', '燐光'),
+    commentEntry('ARTIST', 'Daoko'),
+    commentEntry('ALBUM', 'MementoMori (メメントモリ)'),
+    commentEntry('TRACKNUMBER', '1'),
+    commentEntry('METADATA_BLOCK_PICTURE', toBase64(Uint8Array.from(pictureBlock(image)))),
+  ]);
+
+  const pages: number[] = [];
+  let consumed = 0;
+  let sequence = 0;
+  // Page 0: the identification header, then as much of the comment packet as fits after
+  // it. 254 segments of 255 leave the packet running into the next page.
+  const firstTake = 254 * 255;
+  pages.push(
+    ...oggPageRaw([head.length, ...Array.from({ length: 254 }, () => 255)], [...head, ...tags.slice(0, firstTake)], 0x02, 0, sequence),
+  );
+  consumed += firstTake;
+  sequence += 1;
+
+  // Whole pages of a packet still running: 255 segments of 255, and no terminator.
+  while (tags.length - consumed >= PAGE_BODY_LIMIT) {
+    pages.push(...oggPageRaw(Array.from({ length: 255 }, () => 255), tags.slice(consumed, consumed + PAGE_BODY_LIMIT), 0x00, 0, sequence));
+    consumed += PAGE_BODY_LIMIT;
+    sequence += 1;
+  }
+
+  // The page that ends the packet: 255s and then the remainder, which is the only entry
+  // below 255 and so the only thing that delimits it.
+  const rest = tags.length - consumed;
+  const trailing = Math.floor(rest / 255);
+  const remainder = rest % 255;
+  pages.push(
+    ...oggPageRaw([...Array.from({ length: trailing }, () => 255), remainder], tags.slice(consumed), 0x00, 0, sequence),
+  );
+  sequence += 1;
+
+  // One audio page, so the file has an end-of-stream page a tail read can use.
+  pages.push(...oggPageWith([new Uint8Array(4096)], 0x04, 48_000 * 241 + 312, sequence));
+
+  return { file: Uint8Array.from(pages), tagsLength: tags.length };
+}
+
+describe('The live library: a comment packet larger than any bounded read', () => {
+  const { file, tagsLength } = oggFileWithEmbeddedPicture(IMAGE_BYTES);
+  const prefix = file.subarray(0, PREFIX_BYTES);
+
+  /**
+   * The fixture has to be the case, or these assertions prove nothing about it.
+   *
+   * Every one of these is a way the fixture could quietly stop testing what it exists for:
+   * a picture small enough to sit inside the prefix, a packet small enough to reassemble, a
+   * "prefix" that is really the whole file. The bug this guards was invisible for exactly
+   * that reason — the previous fixture's picture was 89,931 bytes and the live file's is
+   * 868 KB, so no assertion ever reached the bound that dropped the packet.
+   */
+  it('is over every bound it is meant to exceed', () => {
+    expect(tagsLength).toBeGreaterThan(512 * 1024);
+    expect(tagsLength).toBeGreaterThan(PREFIX_BYTES);
+    expect(prefix).toHaveLength(PREFIX_BYTES);
+    expect(file.length).toBeGreaterThan(tagsLength);
+    // The picture's own bytes are past the prefix, which is the whole premise.
+    expect(tagsLength - 200).toBeGreaterThan(PREFIX_BYTES);
+  });
+
+  it('reads every text tag out of the prefix alone, with no extra request', () => {
+    // The four text fields end within the first few hundred bytes of the packet — in this
+    // file, of the whole file. A reader that refuses the packet because it is too large
+    // reports "no tags at all" for a file whose tags it was already holding, and that is
+    // what every Opus track in the live library got: no artist, album, genre, track or
+    // year, and therefore nothing for `getArtists`/`getAlbumList2`/`getGenres` to group.
+    const tags = readAudioTags(prefix, file.length);
+    expect(tags.title).toBe('燐光');
+    expect(tags.artist).toBe('Daoko');
+    expect(tags.album).toBe('MementoMori (メメントモリ)');
+    expect(tags.track).toBe(1);
+    expect(tags.container).toBe('ogg-opus');
+  });
+
+  it('claims a page-aligned range for a picture it cannot hold, rather than nothing', () => {
+    // The Ogg path used to have no claim at all — it was `inline` or `null` — so a picture
+    // past the read produced `null`, `getCoverArt` answered its 1x1 placeholder, and the
+    // client cached a transparent pixel and never asked again.
+    const located = findPicture(prefix, file.length);
+    expect(located?.kind).toBe('ogg-comment');
+    if (located?.kind !== 'ogg-comment') return;
+    // Page-aligned, because a fetch that does not start at `OggS` cannot be re-walked.
+    expect(new TextDecoder().decode(file.subarray(located.fileOffset, located.fileOffset + 4))).toBe('OggS');
+    // And big enough to hold the base64 plus the headers threaded between its pages.
+    expect(located.fileOffset + located.fileLength).toBeGreaterThanOrEqual(file.length - 4096 - 300);
+  });
+
+  it('materialises that range into the exact image bytes', async () => {
+    // One ranged read, then the packet is re-walked and the value re-derived. Reading the
+    // range as if it were the base64 would decode page headers as data, which is why the
+    // claim is a page-aligned extent rather than a byte range.
+    const located = findPicture(prefix, file.length);
+    expect(located).not.toBeNull();
+    if (located === null) return;
+
+    let requests = 0;
+    const picture = await materializePicture(
+      located,
+      async (offset, length) => {
+        requests += 1;
+        return file.slice(offset, offset + length);
+      },
+      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
+    );
+
+    expect(requests).toBe(1);
+    expect(picture?.mimeType).toBe('image/png');
+    expect(picture?.data.length).toBe(IMAGE_BYTES.length);
+    expect(Buffer.from(picture?.data ?? new Uint8Array(0)).equals(Buffer.from(IMAGE_BYTES))).toBe(true);
+  });
+
+  it('refuses a short read rather than serving a partial cover', async () => {
+    // The failure mode this whole feature has is "a valid image that is wrong": a truncated
+    // cover renders, caches, and is never re-requested. So an origin that serves less than
+    // the packet needs is "no artwork", not a partial picture.
+    const located = findPicture(prefix, file.length);
+    if (located === null) return;
+    const picture = await materializePicture(
+      located,
+      async (offset, length) => file.slice(offset, offset + Math.floor(length / 2)),
+      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
+    );
+    expect(picture).toBeNull();
+  });
+
+  it('claims a fetch for a cover under the inline threshold but past the prefix', async () => {
+    // The size the live library actually has most of, and the one the length-based
+    // threshold missed: 200 KiB of base64 is under the 256 KiB "decode it from here" bar
+    // and over the 128 KiB prefix, so `read` returns nothing and the only correct answer
+    // is the fetch. Deciding on the declared length rather than on whether the bytes are
+    // present reported **no artwork** for these files — a valid, cacheable, invisible
+    // wrong answer.
+    const mid = oggFileWithEmbeddedPicture(MID_IMAGE_BYTES);
+    const midPrefix = mid.file.subarray(0, PREFIX_BYTES);
+    const base64Length = toBase64(Uint8Array.from(pictureBlock(MID_IMAGE_BYTES))).length;
+    // The premise: small enough to look inline, too large to be in the buffer.
+    expect(base64Length).toBeLessThan(256 * 1024);
+    expect(base64Length).toBeGreaterThan(PREFIX_BYTES);
+
+    const located = findPicture(midPrefix, mid.file.length);
+    expect(located?.kind).toBe('ogg-comment');
+    if (located?.kind !== 'ogg-comment') return;
+    const picture = await materializePicture(
+      located,
+      async (offset, length) => mid.file.slice(offset, offset + length),
+      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
+    );
+    expect(picture?.mimeType).toBe('image/jpeg');
+    expect(Buffer.from(picture?.data ?? new Uint8Array(0)).equals(Buffer.from(MID_IMAGE_BYTES))).toBe(true);
+  });
+
+  it('claims a fetch when the file size is missing, rather than reporting no artwork', async () => {
+    // A row that reached the reader without a usable `size` produced a zero-length range,
+    // and a zero-length range is indistinguishable from "this file has no picture" — so a
+    // missing size silently cost every cover in that album. The origin truncates a range
+    // at end-of-file, and a short answer is refused on the way back, so over-asking is the
+    // safe direction.
+    for (const size of [0, null]) {
+      const located = findPicture(prefix, size);
+      expect(located?.kind).toBe('ogg-comment');
+      if (located?.kind !== 'ogg-comment') return;
+      expect(located.fileLength).toBeGreaterThan(0);
+    }
+  });
+
+  it('decodes a small picture in place when the whole file is already in the buffer', () => {
+    // No prefix at all: the packet is whole, so the value is decodable where it lies and no
+    // request is warranted. This is the case a `read` bound with no fallback breaks, and the
+    // case a fixture that is *always* a prefix would never see.
+    const mid = oggFileWithEmbeddedPicture(MID_IMAGE_BYTES);
+    const located = findPicture(mid.file, mid.file.length);
+    expect(located?.kind).toBe('inline');
+    if (located?.kind !== 'inline') return;
+    expect(located.picture.mimeType).toBe('image/jpeg');
+    expect(Buffer.from(located.picture.data).equals(Buffer.from(MID_IMAGE_BYTES))).toBe(true);
+  });
+
+  it('still claims the 868 KB cover even with the whole file in hand', () => {
+    // Deliberate: decoding 1.16 MB of base64 to answer a question a 1.16 MB fetch answers
+    // identically is the copy the threshold exists to avoid. The claim is not a failure to
+    // find the picture, and `materializePicture` turns it back into the same bytes.
+    const located = findPicture(file, file.length);
+    expect(located?.kind).toBe('ogg-comment');
+    if (located?.kind !== 'ogg-comment') return;
+    const picture = materializePicture(
+      located,
+      async (offset, length) => file.slice(offset, offset + length),
+      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
+    );
+    return picture.then((resolved) => {
+      expect(Buffer.from(resolved?.data ?? new Uint8Array(0)).equals(Buffer.from(IMAGE_BYTES))).toBe(true);
+    });
   });
 });

@@ -439,10 +439,18 @@ describe('EnrichmentService', () => {
     expect(applied[0]!.metadata.bitrate).toBe(0);
   });
 
-  it('records a WebDAV failure without failing the caller', async () => {
+  it('does not record an unreachable origin, so a recovered origin is retried', async () => {
     // A `getSong` that throws because it could not read a duration is worse than one
     // that reports 0: the first is a server error the user cannot act on, the second is
-    // a track with an unknown length.
+    // a track with an unknown length. So the caller never fails — but the failure is
+    // also not *recorded*, which is the opposite trade from the unreadable-container
+    // case above, and deliberate.
+    //
+    // It shipped the other way round: every read failure stamped `enriched_at`, so four
+    // tracks of a live library caught a flapping origin and reported duration `0` for
+    // ever — the stamp said "already read", and `shouldEnrich` trusted it. A failure
+    // with no HTTP status says nothing about the file, so it leaves the row untouched
+    // and the next call tries again.
     const { service, applied, library } = makeEnrichment();
     const failing = fakeDav({}, { failAll: true });
     const withFailingOrigin = new EnrichmentService({
@@ -462,12 +470,68 @@ describe('EnrichmentService', () => {
     const tags = await withFailingOrigin.enrich(library, makeSong() as never);
 
     expect(tags).toBeNull();
+    // Nothing was written, so nothing claims to have been read.
+    expect(applied).toHaveLength(0);
+
+    // And the recovery is the assertion that matters: the same revision of the same
+    // file enriches normally once the origin answers again.
+    const recovered = await service.enrich(library, makeSong() as never);
+
+    expect(recovered?.durationSeconds).toBe(180);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.metadata.duration).toBe(180);
+  });
+
+  it('does not record a transient 503 on the prefix read', async () => {
+    // The live shape: the origin lists the file and then refuses the bytes — `PROPFIND`
+    // answers while the ranged `GET` 503s. `setGetStatus` models exactly that split,
+    // which `failAll` cannot express and `status` gets backwards.
+    const { service, applied, dav, library } = makeEnrichment();
+    dav.setGetStatus(503);
+
+    const tags = await service.enrich(library, makeSong() as never);
+
+    expect(tags).toBeNull();
+    expect(applied).toHaveLength(0);
+
+    dav.setGetStatus(null);
+    const recovered = await service.enrich(library, makeSong() as never);
+
+    expect(recovered?.durationSeconds).toBe(180);
+    expect(applied).toHaveLength(1);
+  });
+
+  it('records a definitive 404 on the prefix read, so it is never retried', async () => {
+    // The pair, without which the two tests above pass for the wrong reason: if the
+    // failure path simply never wrote, every failure would look transient. A `404` is
+    // an answer *about the file* — this revision of it is not there — so the attempt
+    // is recorded and the next call is free.
+    //
+    // Enrichment never `PROPFIND`s; it `GET`s the path it was given. So the `404` is
+    // staged by serving an origin that has no such file, which is also what a file
+    // deleted between the scan's listing and its enrichment looks like.
+    const gone = fakeDav({});
+    const applied: Array<{ id: string; metadata: Record<string, unknown> }> = [];
+    const { library } = makeEnrichment();
+    const service = new EnrichmentService({
+      songs: {
+        findById: async () => null,
+        applyMetadata: async (id, metadata) => {
+          applied.push({ id, metadata: metadata as Record<string, unknown> });
+        },
+      },
+      clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, gone.fetch),
+      kv: new KvCache(fakeKv().ns),
+      resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
+      readBytes: 131_072,
+      timeoutMs: 1000,
+    });
+
+    const tags = await service.enrich(library, makeSong() as never);
+
+    expect(tags).toBeNull();
     expect(applied).toHaveLength(1);
     expect(applied[0]!.metadata.duration).toBe(0);
-    // And the *failure* is not cached, so a recovered origin is retried — which is the
-    // opposite trade from the unreadable-container case above, and deliberate: a
-    // transient error must not be remembered as a permanent one.
-    expect(service).toBeDefined();
   });
 
   it('survives a cache that throws, and still writes to D1', async () => {
@@ -572,16 +636,20 @@ function makeOggEnrichment(
   file: Uint8Array,
   // `readTailBytes: 0` is how a test disables the tail read, so the option does not
   // need to distinguish "absent" from "zero" — the default is only the value.
-  options: { readBytes?: number; readTailBytes?: number } = {},
+  options: { readBytes?: number; readTailBytes?: number; failOnCall?: number } = {},
 ): {
   service: EnrichmentService;
   applied: Array<{ id: string; metadata: Record<string, unknown> }>;
   library: Parameters<EnrichmentService['enrich']>[0];
   cache: FakeKv;
+  dav: ReturnType<typeof fakeDav>;
 } {
   const applied: Array<{ id: string; metadata: Record<string, unknown> }> = [];
   const cache = fakeKv();
-  const dav = fakeDav({ '/dav/A/01.opus': [{ path: '/dav/A/01.opus', size: file.length, contentType: 'audio/ogg', body: file }] });
+  const dav = fakeDav(
+    { '/dav/A/01.opus': [{ path: '/dav/A/01.opus', size: file.length, contentType: 'audio/ogg', body: file }] },
+    options.failOnCall === undefined ? {} : { failOnCall: options.failOnCall },
+  );
   const library = {
     id: 'L1',
     slug: 'home',
@@ -615,7 +683,7 @@ function makeOggEnrichment(
     readTailBytes: options.readTailBytes ?? 65_536,
     timeoutMs: 1000,
   });
-  return { service, applied, library, cache };
+  return { service, applied, library, cache, dav };
 }
 
 function opusSong(size: number): Record<string, unknown> {
@@ -683,6 +751,45 @@ describe('an Ogg duration, which the prefix read cannot supply', () => {
     expect(applied[0]?.id).toBe('s1');
     expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
     expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+  });
+
+  it('writes nothing when the tail read fails transiently, so the duration is retried', async () => {
+    // The prefix read succeeded — the tags are parsed and good — and the tail read
+    // threw. Writing the tags would stamp the row and strand the duration at `0` with
+    // the same permanence as a failed prefix read, so even the good work is discarded:
+    // the next call does both reads again.
+    //
+    // `failOnCall: 2` drops the tail read only. The count is pinned below rather than
+    // assumed, because a second request added anywhere upstream would move the failure
+    // onto the wrong read and this would assert a prefix failure while claiming a tail
+    // one — the same "a comment claiming an invariant nothing measures" defect the
+    // subrequest bound had.
+    const file = opusFile();
+    const { service, applied, library, dav } = makeOggEnrichment(file, { failOnCall: 2 });
+
+    const tags = await service.enrich(library, opusSong(file.length) as never);
+
+    expect(tags).toBeNull();
+    // Both reads were issued — the counter charges at the choke point, before the
+    // failure — but only the prefix is observable as a `GET`, because the tail threw
+    // before it was recorded. That split is what pins the failure onto the tail read
+    // rather than the prefix one.
+    expect(dav.requestCount()).toBe(2);
+    expect(dav.gets).toHaveLength(1);
+    expect(dav.gets[0]!.range).toMatch(/^bytes=0-\d+$/);
+    expect(applied).toHaveLength(0);
+
+    // Recovery, through a healthy origin: the same revision enriches fully.
+    const { service: recovered, applied: rewritten, library: sameLibrary } = makeOggEnrichment(file);
+
+    const retried = await recovered.enrich(sameLibrary, opusSong(file.length) as never);
+
+    // The return value is the prefix tags, whose duration is null by design — the
+    // duration lives in the D1 write, which is the assertion that matters.
+    expect(retried?.artist).toBe('Bon Iver');
+    expect(rewritten).toHaveLength(1);
+    expect(rewritten[0]?.metadata.duration).toBe(DURATION_SECONDS);
+    expect(rewritten[0]?.metadata.artist).toBe('Bon Iver');
   });
 });
 

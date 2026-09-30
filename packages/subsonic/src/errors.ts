@@ -97,22 +97,32 @@ class SubsonicError extends Error {
 /**
  * HTTP status for a failed response.
  *
- * 200 for everything except two cases, each of which has a reason a plain 200
- * would actively hide:
+ * **200 for every protocol error, and the body is the contract.** The protocol says a
+ * failure arrives as `status="failed"` with an `error`, and every real server sends it
+ * that way — Navidrome, Gonic, Airsonic — because a Subsonic client branches on the
+ * envelope, not on the status.
  *
- * - `40` is 401. HTTP-level tooling (proxies, WAF rules, dashboards, the
- *   Worker's own request log) can see a failed authentication only if the
- *   status reflects it. The body still carries `code=40`, so a client that
- *   branches on the envelope is unaffected.
- * - the throttled case is 429. Throttling is a transport-level condition and
- *   reporting it as a successful-looking 200 makes an attacker's failure rate
- *   indistinguishable from a client's.
+ * `40` used to be the exception, and answered 401, on the argument that proxies, WAF
+ * rules and dashboards can only see a failed authentication through the status. That
+ * argument is real and it is the wrong trade: a client that treats a non-2xx as a
+ * transport fault loses the one thing it needs, which is that the *password* is wrong.
+ * `fin` calls `.error_for_status()` before parsing anything, so a wrong password surfaced
+ * as a bare HTTP 401 with no message, on a server that had authenticated 587 tests' worth
+ * of correct credentials. An operator reading that cannot act on it, and the diagnostic
+ * the envelope was carrying is thrown away.
  *
- * Everything else stays 200 because the body is the contract.
+ * A refusal is still a refusal: it is a 200 with `code=40` and a message, which is what
+ * the client renders, and the credential throttle is unaffected because it counts on the
+ * envelope's code rather than on the status.
+ *
+ * The one exception is a **throttle**, at 429. Throttling is a transport-level condition,
+ * and a client has to be able to *back off* — which an envelope cannot express, because a
+ * client that only reads the envelope has no way to know it was throttled rather than
+ * refused. So that one is reported twice: 429, and the same failed envelope.
  */
 function httpStatusForErrorCode(code: ErrorCodeValue, throttled = false): number {
   if (throttled) return 429;
-  return code === ErrorCode.WrongCredentials ? 401 : 200;
+  return 200;
 }
 
 /**

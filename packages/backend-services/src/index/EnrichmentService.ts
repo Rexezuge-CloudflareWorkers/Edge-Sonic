@@ -35,6 +35,14 @@
  *
  * A format this module cannot read yields `null`, which is written as `0` and
  * **left alone on the next call** — see `shouldEnrich`.
+ *
+ * A failure that says nothing about the file is never written at all. A `503`, a
+ * timeout, or a reset connection is an answer about the network, and stamping
+ * `enriched_at` over one makes a transient fault permanent: the row reports duration
+ * `0` for ever, because `shouldEnrich` treats the stamp as "already read" and no
+ * later call re-reads it. It shipped — four tracks of a live library were stamped
+ * empty during a flapping origin and stayed at duration `0` through every `getSong`
+ * after it. See `isTransientEnrichmentFailure`.
  */
 import { decryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
@@ -42,6 +50,7 @@ import { readAudioTags, readOggTailDuration, READER_VERSION } from '@edge-sonic/
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { WebDavClient } from '@edge-sonic/webdav';
+import { isTransientEnrichmentFailure, shouldEnrich } from './enrichmentRetry';
 
 interface SongStore {
   findById(id: string): Promise<SongRow | null>;
@@ -130,35 +139,6 @@ interface CachedEnrichment {
   readonly container: string;
 }
 
-/**
- * A row worth another read.
- *
- * The guard is a **pair** of facts, not one. A row with `duration = 0` is either
- * *not yet read* or *unreadable by this module* — MP4/M4A puts `moov` at the end of
- * the file, so a prefix read cannot reach it. Retrying those on every `getSong`
- * would be one wasted subrequest per play, forever, for a format that needs a tail
- * read instead. So:
- *
- * - mtime moved → re-read (the file changed, it may be readable now);
- * - mtime unchanged and `enriched_at` is set → never read again;
- * - mtime unchanged and `enriched_at` is null → never scanned, read once.
- *
- * ### The second fact is the reader, and omitting it shipped
- *
- * That third rule above is only sound while the reader is fixed. What it extracts is a
- * property of the *reader* as much as of the bytes, and a reader that learns to read
- * something it previously could not leaves every row it already wrote looking current:
- * mtime matches, so nothing is re-read, and the wrong value is served for ever. It
- * shipped — a deploy carrying a corrected Ogg reader left a library reporting a 240.61 s
- * track as 3 s at 15329 kbps with no artist, album, genre, track or year, and neither a
- * `getSong` nor a full rescan repaired it.
- *
- * So `reader_version` is the other half of the condition, and a row that does not carry
- * this reader's version is re-read whatever its mtime says.
- */
-function shouldEnrich(song: SongRow): boolean {
-  return song.enriched_at === null || song.reader_version !== READER_VERSION;
-}
 
 class EnrichmentService {
   constructor(private readonly deps: EnrichmentDeps) {}
@@ -247,9 +227,14 @@ class EnrichmentService {
       const client = await this.deps.clientFor(library, onRequest);
       const bytes = await client.readPrefix(facts.path, this.deps.readBytes, this.deps.timeoutMs);
       tags = readAudioTags(bytes, facts.size);
-    } catch {
-      // Recorded as an attempt so the next call does not retry a format this
-      // server cannot read.
+    } catch (error) {
+      // Recorded as an attempt so the next call does not retry a file this
+      // server cannot read — but only when the failure *is* about the file.
+      // A transient one leaves the row exactly as it found it, because stamping
+      // `enriched_at` over a `503` is what made four tracks of a live library
+      // report duration `0` for ever: the stamp said "already read", and nothing
+      // ever re-read them.
+      if (isTransientEnrichmentFailure(error)) return null;
       await write(null, null, null, null, null);
       return null;
     }
@@ -262,7 +247,15 @@ class EnrichmentService {
     // The prefix read cannot see the final page of an Ogg stream, so `durationSeconds`
     // is null there by design rather than by failure. One tail-anchored read resolves
     // it, reusing the sample rate and pre-skip the prefix read already established.
-    const duration = tags.durationSeconds ?? (await this.resolveTailDuration(library, facts, tags, onRequest));
+    const tail = tags.durationSeconds === null || tags.durationSeconds === undefined
+      ? await this.resolveTailDuration(library, facts, tags, onRequest)
+      : { duration: tags.durationSeconds, transient: false };
+    // A tail read that failed transiently leaves no trace either — not even the good
+    // prefix tags. Writing them would stamp the row and strand the duration at `0`
+    // with the same permanence as the prefix case above; the next call simply does
+    // both reads again, which is one extra prefix read against a retry that works.
+    if (tail.transient) return null;
+    const duration = tail.duration;
 
     const entry: CachedEnrichment = {
       mtimeMs: facts.mtimeMs,
@@ -286,19 +279,29 @@ class EnrichmentService {
   /**
    * The duration of a container whose length is recorded at the **end** of the file.
    *
-   * Best effort, and `null` is a real answer: a WebDAV error, a missing binding, or a
-   * tail that does not contain the final page all leave the duration unknown, and the
-   * row is written as `0`. That is the honest value — the alternative is a confident
-   * wrong one, and a client seeks by it. A 240.61 s track was served as 3 s and
-   * 15329 kbps instead of 191 because the prefix read's truncated page was taken for the
-   * file's last.
+   * Best effort. `duration: null` is a real answer: a tail that does not contain the
+   * final page leaves the duration unknown, and the row is written as `0`. That is the
+   * honest value — the alternative is a confident wrong one, and a client seeks by it.
+   * A 240.61 s track was served as 3 s and 15329 kbps instead of 191 because the prefix
+   * read's truncated page was taken for the file's last.
+   *
+   * `transient: true` is the third answer, and it means "do not write": the tail read
+   * failed in a way that says nothing about the file, so even the good prefix tags stay
+   * out of D1 — writing them would stamp the row and strand the duration at `0`. A
+   * result object rather than a `null`-or-sentinel union, because `null` is the *other*
+   * answer and the two must not merge.
    */
-  private async resolveTailDuration(library: LibraryRow, facts: EnrichFacts, tags: AudioTags, onRequest?: () => void): Promise<number | null> {
+  private async resolveTailDuration(
+    library: LibraryRow,
+    facts: EnrichFacts,
+    tags: AudioTags,
+    onRequest?: () => void,
+  ): Promise<{ duration: number | null; transient: boolean }> {
     const tailBytes = this.deps.readTailBytes ?? 0;
-    if ((tailBytes <= 0) || tags.sampleRate === null || facts.size === 0) return null;
+    if ((tailBytes <= 0) || tags.sampleRate === null || facts.size === 0) return { duration: null, transient: false };
     // Only Ogg records its length this way. MP4 puts `moov` at the end and needs a
     // different parse, so this does not pretend to cover it.
-    if (tags.container !== 'ogg-opus' && tags.container !== 'ogg-vorbis') return null;
+    if (tags.container !== 'ogg-opus' && tags.container !== 'ogg-vorbis') return { duration: null, transient: false };
 
     try {
       const client = await this.deps.clientFor(library, onRequest);
@@ -306,9 +309,9 @@ class EnrichmentService {
       // The granule includes the pre-skip and the duration must not, and the pre-skip is
       // in the identification header at the *front* of the file — which the prefix read
       // already read, and which is why it is carried on `AudioTags` rather than re-read.
-      return readOggTailDuration(bytes, tags.sampleRate, tags.preskip ?? 0);
-    } catch {
-      return null;
+      return { duration: readOggTailDuration(bytes, tags.sampleRate, tags.preskip ?? 0), transient: false };
+    } catch (error) {
+      return { duration: null, transient: isTransientEnrichmentFailure(error) };
     }
   }
 
@@ -382,5 +385,6 @@ class EnrichmentService {
   }
 }
 
-export { EnrichmentService, shouldEnrich };
+export { EnrichmentService };
+export { shouldEnrich } from './enrichmentRetry';
 export type { EnrichmentDeps, CachedEnrichment, EnrichFacts };

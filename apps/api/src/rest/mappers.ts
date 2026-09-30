@@ -14,8 +14,8 @@
  *   folder).
  */
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { encodeId, IdKind } from '@edge-sonic/subsonic';
-import type { Child, Song } from '@edge-sonic/subsonic';
+import { artistElement, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
+import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
 
 /**
 Epoch seconds → the ISO-8601 form the protocol uses for `created`.
@@ -81,6 +81,92 @@ function artistNameOf(song: SongRow): string {
  */
 function albumKeyOf(song: SongRow): string {
   return song.dir_path.length > 0 ? song.dir_path : `name:${albumNameOf(song)}`;
+}
+
+/**
+ * The sort letter for index grouping, shared by the tag view and the folder view.
+ *
+ * A leading article is kept in the display name and stripped only from the
+ * grouping letter, which is what every client does with `ignoredArticles`. An
+ * empty or non-alphabetic first character sorts under `#` rather than into the
+ * empty string, which would produce an unnamed group at the top of the list.
+ *
+ * One function rather than one per endpoint, because two groupings that disagree
+ * on the letter put the same artist under `A` in one browse and `#` in the other.
+ */
+function firstLetterOf(name: string): string {
+  const trimmed = name.trim();
+  const first = [...trimmed].at(0);
+  if (first === undefined) return '#';
+  const upper = first.toUpperCase();
+  return /^[A-Z]$/.test(upper) ? upper : '#';
+}
+
+interface ArtistGroup {
+  readonly name: string;
+  readonly albums: Set<string>;
+  readonly songs: number;
+}
+
+/**
+ * Song rows → artist groups, sorted by grouping key.
+ *
+ * The same grouping feeds `getArtists` and the artist half of `getIndexes`, so it
+ * lives here rather than in either endpoint: two copies are free to disagree about
+ * which name wins, and the disagreement shows up as an artist under two spellings.
+ *
+ * A real tag wins over a path-derived name, so the first row carrying a tag names
+ * the group: a library half-enriched groups under the true name rather than under
+ * a guess.
+ */
+function groupArtistRows(rows: readonly SongRow[]): ArtistGroup[] {
+  const byName = new Map<string, { name: string; albums: Set<string>; songs: number }>();
+  for (const row of rows) {
+    const name = row.artist ?? artistNameOf(row);
+    const key = name.toLowerCase();
+    const existing = byName.get(key);
+    if (existing) {
+      existing.albums.add(albumKeyOf(row));
+      existing.songs += 1;
+    } else if (row.artist === null) {
+      byName.set(key, { name, albums: new Set([albumKeyOf(row)]), songs: 1 });
+    } else {
+      byName.set(key, { name: row.artist, albums: new Set([albumKeyOf(row)]), songs: 1 });
+    }
+  }
+  return [...byName].sort(([a], [b]) => a.localeCompare(b)).map(([, group]) => group);
+}
+
+/**
+ * Artist groups → the letter-bucketed `index` elements both browses publish.
+ *
+ * One construction, because the attribute set is the contract: `getArtists` and
+ * `getIndexes` publish the same `id` for the same artist, or a client drilling
+ * from one into `getArtist` lands on `code=70`. The `starred` decoration is the
+ * caller's — the folder view does not annotate — so it arrives as a set rather
+ * than as a second construction.
+ */
+function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], starred: ReadonlySet<string> = new Set()): ElementNode[] {
+  const buckets = new Map<string, ElementNode[]>();
+  for (const group of groups) {
+    const id = encodeId(IdKind.Artist, library.id, group.name);
+    const letter = firstLetterOf(group.name);
+    const node = artistElement({
+      id,
+      name: group.name,
+      albumCount: group.albums.size,
+      ...(starred.has(id) && { starred: undefined }),
+    });
+    const existing = buckets.get(letter);
+    if (existing) {
+      existing.push(node);
+    } else {
+      buckets.set(letter, [node]);
+    }
+  }
+  return [...buckets]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, artists]) => elList('index', 'artist', { name }, artists));
 }
 
 interface AnnotationLookup {
@@ -211,6 +297,9 @@ export {
   albumNameOf,
   artistNameOf,
   albumKeyOf,
+  firstLetterOf,
+  groupArtistRows,
+  artistIndexGroups,
   CONTENT_TYPES,
 };
-export type { AnnotationLookup };
+export type { AnnotationLookup, ArtistGroup };
