@@ -6,10 +6,11 @@ import { LibraryForm } from '../components/LibraryForm';
 import { LibraryRow } from '../components/LibraryRow';
 import type { RunAction } from '../components/LibraryRow';
 import { Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
-import { createLibrary, deleteLibrary, listLibraries, updateLibrary } from '../lib/api';
+import { createLibrary, deleteLibrary, listLibraries, updateLibrary } from '../services/libraryService';
+import type { ShowNotice } from '../hooks/useNotice';
 import { toPatch } from '../lib/libraryDraft';
 import type { LibraryDraft } from '../lib/libraryDraft';
-import type { LibrarySummary, Notice } from '../types';
+import type { LibrarySummary } from '../types';
 
 /**
  * A row action in flight: `'create'`, or a library id.
@@ -28,7 +29,7 @@ type BusyKey = string | null;
  * are labelled with the shape they must take rather than just their names. The
  * server validates both again; this only saves a round trip.
  */
-function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void }) {
+function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
   const [libraries, setLibraries] = useState<LibrarySummary[] | null>(null);
   const [busy, setBusy] = useState<BusyKey>(null);
   const [creating, setCreating] = useState(false);
@@ -42,7 +43,7 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
       const { libraries: loaded } = await listLibraries();
       return loaded;
     } catch (error) {
-      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      showNotice('error', error instanceof Error ? error.message : String(error));
       // An unreachable user API is shown as an empty list plus the notice, rather than
       // an error screen: the operator can still read what is cached in the page and the
       // notice says what went wrong.
@@ -80,10 +81,11 @@ function LibrariesView({ showNotice }: { showNotice: (notice: Notice) => void })
     setBusy(id);
     try {
       const override = await action();
-      showNotice(override ?? { type: 'success', text: success });
+      if (override) showNotice(override.type, override.text);
+      else showNotice('success', success);
       await reload();
     } catch (error) {
-      showNotice({ type: 'error', text: error instanceof Error ? error.message : String(error) });
+      showNotice('error', error instanceof Error ? error.message : String(error));
     } finally {
       setBusy(null);
     }

@@ -7,18 +7,37 @@ users, and granting them access. It speaks only to `/user/*`, which is behind Cl
 Access — it has no Subsonic credential and could not use one.
 
 - `src/main.tsx` — `BrowserRouter` → `SpaApp`.
-- `src/views/` — `LibrariesView`, `UsersView`. Data loading, wiring, and the notice
-  contract; no request shapes.
-- `src/components/` — `LibraryRow`, `LibraryForm`, and the `layout/` and `ui/`
-  primitives. Presentational, plus the row's own action state.
-- `src/hooks/useNotice.ts` — the transient status message, whose timer is cleared on
-  replace so a fast sequence of messages does not leave an earlier timeout cutting a
-  later one short.
-- `src/lib/api.ts` — the typed client for `/user/*`, and the only module that knows a
-  request shape.
+- `src/SpaApp.tsx` — thin composition root: `useCurrentUser` + `useSpaLanguage` +
+  `useNotice` hook slices, `AppHeader`/`NoticeBar`, then `SpaViewRouter`. No data
+  fetching in the shell and none in the router either — each view owns its own
+  loading.
+- `src/components/layout/SpaViewRouter.tsx` — the route switch (`/`, `/libraries`,
+  `/users`, `*` localized 404 `Card`). Props are the already-composed hook slices;
+  routes render speculatively because the views answer an unreachable API with an
+  empty list plus a notice.
+- `src/components/layout/` — `AppHeader` (always rendered; shows the session email
+  once `/me` answers, else the operator label), `AppPage` (`wide`/`narrow`/`hero`
+  container; `wide` is `max-w-5xl` for this surface, not the reference `max-w-7xl`),
+  `NoticeBar`, `Unauthorized` (exported for a future explicit gate; Access enforces
+  the surface at the edge, so no route gates on the session today).
+- `src/hooks/` — `useNotice` (`showNotice(type, text)` + `clearNotice` for the
+  dismissible banner; timeout from `lib/constants`), `useCurrentUser`
+  (inflight-deduped `GET /user/me`, `authorized` tri-state), `useSpaLanguage`
+  (detection precedence, `<html lang>` sync, manual-change flow; English-only, but
+  the shape a second locale plugs into).
+- `src/lib/api.ts` — generic transport primitives only (`apiGet/Post/Patch/Put/
+  Delete`, `BackendError`, `buildQuery`, `unwrapList`). Domain calls live in
+  `src/services/*` (`libraryService`, `userService`); no component reaches for
+  `fetch` directly.
+- `src/types.ts` — thin facade over `libraryTypes.ts` + `userTypes.ts` (plus
+  `CurrentUser` and `Notice`), so existing `from '../types'` imports keep working.
+- `src/lib/locale.ts` — `normalizeLocale`/`resolveLocale` delegating to the single
+  `i18n` canonicalizer (no duplicated logic).
 - `src/lib/probe.ts`, `src/lib/libraryDraft.ts` — the decisions, not the markup. See
   below for why they are not in a component.
-- `src/i18n.ts` — i18next, English-only for now.
+- `src/i18n.ts` — i18next, English-only for now (`SUPPORTED_LANGUAGES` is `['en']`;
+  `validate:locales` guards key/placeholder parity and bundle-dir parity when a
+  second locale ships).
 
 ## Rebuild before deploying
 
@@ -132,5 +151,5 @@ is what the bundle actually contains. The parent index says Title Case; that doe
 match the file, and following it means re-casing every existing string whenever a key is
 added. Worth settling in one place rather than drifting.
 
-No component reaches for `fetch` directly: the typed client in `src/lib/api.ts` is the
-only thing that knows a request shape.
+No component reaches for `fetch` directly: the primitives in `src/lib/api.ts` plus
+the per-domain `src/services/*` are the only things that know a request shape.
