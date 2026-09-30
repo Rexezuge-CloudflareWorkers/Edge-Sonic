@@ -399,7 +399,40 @@ describe('ratings', () => {
     expect(album?.name).toBe('For Emma, Forever Ago');
     expect(album?.songCount).toBe(2);
   });
+
+  it('refuses a rating naming a track in a library the user cannot see, and writes nothing', async () => {
+    await refusedAnnotationWritesNothing('setRating', { id: FORBIDDEN, rating: '5' }, 'ratings');
+  });
 });
+
+/**
+ * Every annotation write is a `stars`/`ratings`/`bookmarks`/`play_counts`/`now_playing`
+ * row, and **none of those tables has a foreign key to `songs`** — only to `users`. So a
+ * write whose grant check was discarded is not caught by the schema, and the read paths
+ * filter the row back out by library, which makes the result invisible as well as
+ * unauthorized.
+ *
+ * The grant check was `void`ed at three of the four sites, and the fourth (`savePlayQueue`)
+ * was already fixed. A `void`ed `requireForUser` **starts** the check and discards its
+ * rejection: `requireForUser` throws, the promise is abandoned, the write proceeds, and
+ * the rejection lands as an unhandled one. So each case asserts two things — the wire
+ * answer, which the discarded rejection used to let through as a success — and the row
+ * count, which is the half that matters, because a fix that only produces `code=70` while
+ * still writing would pass the first assertion.
+ */
+async function refusedAnnotationWritesNothing(endpoint: string, params: Record<string, string>, table: string): Promise<void> {
+  const { body } = await harness.rest(endpoint, params);
+  expect(payload<{ code: number }>(body, 'error').code, `${endpoint} must refuse`).toBe(70);
+
+  const stored = await harness.db.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
+  expect(stored?.n, `${endpoint} must not write to ${table}`).toBe(0);
+}
+
+/**
+ * An id in a library the caller has no grant on. `L-other` is a syntactically valid
+ * library, so the only thing standing between this and a row is the grant check.
+ */
+const FORBIDDEN = subsonicId('s', 'secret.flac', 'L-other');
 
 describe('scrobbling', () => {
   it('counts a play only for a submission, and not for a "now playing" notice', async () => {
@@ -437,6 +470,96 @@ describe('scrobbling', () => {
   it('answers now playing with an empty list when nothing is playing', async () => {
     const { body } = await harness.rest('getNowPlaying');
     expect(payload<{ entry: unknown[] }>(body, 'nowPlaying').entry).toEqual([]);
+  });
+
+  it('refuses a scrobble naming a track in a library the user cannot see, and records nothing', async () => {
+    // `scrobble` guards **two** writes from one loop: the play count for a submission and
+    // the single `now_playing` row for the batch. Both are asserted, because the batch
+    // row is written outside the loop — a fix that awaited the check inside the loop but
+    // left the `setNowPlaying` unguarded would pass a play-count-only assertion while
+    // still publishing the track to `getNowPlaying`.
+    await refusedAnnotationWritesNothing('scrobble', { id: FORBIDDEN, submission: 'true' }, 'play_counts');
+    await refusedAnnotationWritesNothing('scrobble', { id: FORBIDDEN, submission: 'false' }, 'now_playing');
+  });
+});
+
+describe('starred items', () => {
+  it('stars and unstars a song, an album and an artist', async () => {
+    const album = subsonicId('al', ALBUM_DIR);
+    const artist = subsonicId('ar', 'Bon Iver');
+    for (const params of [{ id: SKINNY_LOVE }, { albumId: album }, { artistId: artist }] as Record<string, string>[]) {
+      await harness.rest('star', params);
+    }
+
+    const { body } = await harness.rest('getStarred2');
+    const starred = payload<{ song: Array<{ id: string }>; album: Array<{ id: string }> }>(body, 'starred2');
+    expect(starred.song.map((entry) => entry.id)).toContain(SKINNY_LOVE);
+    expect(starred.album.map((entry) => entry.id)).toContain(album);
+
+    await harness.rest('unstar', { id: SKINNY_LOVE });
+    const after = await harness.rest('getStarred2');
+    expect(payload<{ song: Array<{ id: string }> }>(after.body, 'starred2').song.map((entry) => entry.id)).not.toContain(SKINNY_LOVE);
+  });
+
+  it('refuses to star anything in a library the user cannot see, and writes nothing', async () => {
+    // All three id parameters go through the same `collectTargets` loop, so one
+    // authorization bug covered three endpoints — which is why the count assertion is
+    // repeated per parameter rather than trusting one of them.
+    await refusedAnnotationWritesNothing('star', { id: FORBIDDEN }, 'stars');
+    await refusedAnnotationWritesNothing('star', { albumId: subsonicId('al', 'other', 'L-other') }, 'stars');
+    await refusedAnnotationWritesNothing('star', { artistId: subsonicId('ar', 'other', 'L-other') }, 'stars');
+  });
+
+  it('reports a starred artist through getArtists, because the client reads it there', async () => {
+    // `getStarred` deliberately does not expand a starred artist into its albums — a
+    // client asking for starred items expects a page, not a discography — so the artist
+    // star is reachable only through `getArtists`, which is documented as reporting
+    // `starred` on the artist element itself.
+    //
+    // It did not. The mapper published `starred: undefined`, and `undefined` is dropped by
+    // **both** serializers, so the attribute was absent in XML and the key was absent in
+    // JSON while the star itself was stored correctly. A client asking "which artists are
+    // starred" got the right list and no way to tell which entries were starred — and
+    // nothing reported it, because the write worked and only the read was wrong.
+    const artist = subsonicId('ar', 'Bon Iver');
+    await harness.rest('star', { artistId: artist });
+
+    const { body } = await harness.rest('getArtists');
+    const groups = payload<{ index: Array<{ artist: Array<{ id: string; starred?: string }> }> }>(body, 'artists').index;
+    const bonIver = groups.flatMap((group) => group.artist).find((entry) => entry.id === artist);
+
+    expect(bonIver, 'the starred artist is present in getArtists').toBeDefined();
+    // A **timestamp**, not `true`: `created` on a song is the same kind of value, so a
+    // client that decodes this field as an instant gets one. An absent field would be the
+    // old behaviour, and `true` would be a different wrong answer.
+    expect(bonIver?.starred).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+
+    // And unstarred artists stay absent, so "every artist is starred" cannot pass this.
+    const unstarred = groups.flatMap((group) => group.artist).find((entry) => entry.id !== artist);
+    expect(unstarred?.starred).toBeUndefined();
+  });
+});
+
+describe('bookmarks', () => {
+  it('creates a bookmark, reports it, and deletes it', async () => {
+    await harness.rest('createBookmark', { id: SKINNY_LOVE, position: '42000' });
+
+    const created = await harness.rest('getBookmarks');
+    const bookmarks = payload<{ bookmark: Array<{ id: string; position: number }> }>(created.body, 'bookmarks').bookmark;
+    expect(bookmarks.map((entry) => entry.id)).toContain(SKINNY_LOVE);
+    // `position` is milliseconds into the track, and it is a **scalar** in the schema, so
+    // it must serialize as the number rather than as a record.
+    expect(bookmarks[0]?.position).toBe(42_000);
+
+    // Deleting a bookmark the client no longer has is success, not `code=70` — it is
+    // syncing state, and a client discarding local state is the ordinary case.
+    await harness.rest('deleteBookmark', { id: SKINNY_LOVE });
+    const after = await harness.rest('getBookmarks');
+    expect(payload<{ bookmark: Array<{ id: string }> }>(after.body, 'bookmarks').bookmark).toEqual([]);
+  });
+
+  it('refuses a bookmark in a library the user cannot see, and writes nothing', async () => {
+    await refusedAnnotationWritesNothing('createBookmark', { id: FORBIDDEN, position: '0' }, 'bookmarks');
   });
 });
 

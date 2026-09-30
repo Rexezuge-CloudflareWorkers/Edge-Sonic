@@ -100,12 +100,17 @@ function flacWithCover(cover: Uint8Array): Uint8Array {
  *   passthrough prefers the origin's type, so a mismatched fixture reports the
  *   embedded picture's type and looks like the sidecar was ignored.
  */
-function originTree(options: { sidecar?: { name: string; bytes: Uint8Array } | null; trackBytes?: Uint8Array } = {}): Record<string, DavEntry[]> {
+function originTree(options: { sidecar?: { name: string; bytes: Uint8Array } | null; trackBytes?: Uint8Array; mtime?: number } = {}): Record<string, DavEntry[]> {
   const track = options.trackBytes ?? flacWithCover(COVER);
+  // The key the artwork cache is built from is the track's own revision — mtime **and**
+  // size — so a caller staging two fixtures must vary one of them or the second is
+  // answered from the first's cache entry. That is the mechanism under test below, not
+  // an incidental detail of the helper.
+  const mtime = options.mtime ?? 1000;
   const entries: DavEntry[] = [
-    { path: ALBUM_PATH, collection: true, mtime: 1000, etag: '"b"' },
-    { path: `${ALBUM_PATH}/01.flac`, size: track.length, contentType: 'audio/flac', mtime: 1000, etag: '"c"', body: track },
-    { path: `${ALBUM_PATH}/02.flac`, size: track.length, contentType: 'audio/flac', mtime: 1000, etag: '"d"', body: track },
+    { path: ALBUM_PATH, collection: true, mtime, etag: '"b"' },
+    { path: `${ALBUM_PATH}/01.flac`, size: track.length, contentType: 'audio/flac', mtime, etag: '"c"', body: track },
+    { path: `${ALBUM_PATH}/02.flac`, size: track.length, contentType: 'audio/flac', mtime, etag: '"d"', body: track },
   ];
   const sidecar = options.sidecar === undefined ? { name: 'cover.jpg', bytes: COVER } : options.sidecar;
   if (sidecar !== null) {
@@ -382,5 +387,89 @@ describe('getCoverArt with embedded artwork', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toMatch(/^image\//);
     expect(await response.text()).not.toContain('subsonic-response');
+  });
+
+  it('serves a cached cover in every format it extracted, not only the five it could re-recognise', async () => {
+    // The cache had its own magic-byte table, separate from the extractor's, and it was
+    // missing four of the families `sniffImageType` knows. So extraction and
+    // re-identification answered **different questions** for the same bytes: the first
+    // request resolved the picture correctly through `resolveImageBytes`, wrote it to KV,
+    // and every request after that re-derived the media type from the cached bytes with
+    // the shorter table, got `null`, and served the 1×1 transparent placeholder instead.
+    //
+    // The symptoms of that are the worst ones available. The key is the tracks' own
+    // revisions, so nothing about the library could undo it for the length of the TTL;
+    // the client got a `200` and a decodable image on **both** requests, so it cached the
+    // second one too and never asked again. And the suite was green, because
+    // `test/embedded-art.test.ts` asserts TIFF, AVIF and HEIF through `resolveImageBytes`
+    // — the path that already worked — so the only place the two tables could disagree was
+    // the one place nothing reached. That is this repository's own rule: a fixture holding
+    // only the case that passes cannot see the cases that do not.
+    //
+    // So each format is asserted on **both** requests. The first is what the extractor
+    // already did and would have passed before the fix; the second is the one that goes
+    // red, and it is the second because the defect only ever lived in the cache path.
+    // `revision` makes each fixture's cache key its own. Two formats of the same byte
+    // length would otherwise share a key — the artwork cache keys on the track's mtime
+    // and size, which is exactly what the test below is about — and the second would be
+    // answered out of the first's cache entry before the assertion could see anything.
+    const formats = [
+      { name: 'tiff (little-endian)', revision: 3001, mimeType: 'image/tiff', bytes: Uint8Array.from([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00]) },
+      { name: 'tiff (big-endian)', revision: 3002, mimeType: 'image/tiff', bytes: Uint8Array.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08]) },
+      { name: 'avif', revision: 3003, mimeType: 'image/avif', bytes: Uint8Array.from([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]) },
+      { name: 'heif', revision: 3004, mimeType: 'image/heif', bytes: Uint8Array.from([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0]) },
+    ];
+
+    for (const format of formats) {
+      // The picture block declares a MIME of its own, and `resolveImageBytes` ignores it in
+      // favour of the bytes' magic — which is what makes this fixture unambiguous about
+      // which of the two answers reached the response.
+      harness.dav.setTree(originTree({ sidecar: null, trackBytes: flacWithCover(format.bytes), mtime: format.revision }));
+      await harness.db.db.prepare('UPDATE songs SET mtime_ms = ? WHERE dir_path = ?').bind(format.revision, ALBUM_DIR).run();
+
+      const first = await coverFor(subsonicId('al', ALBUM_DIR));
+      expect(first.status, `${format.name}: extraction`).toBe(200);
+      expect(first.headers.get('content-type'), `${format.name}: extraction`).toBe(format.mimeType);
+      expect([...new Uint8Array(await first.arrayBuffer())], `${format.name}: extraction`).toEqual([...format.bytes]);
+
+      // The cached read, and nothing else may have answered it: holding the origin's
+      // request count proves the second answer came out of the cache rather than a second
+      // lucky extraction. Without this the test would also pass against a cache that
+      // silently stored nothing — which is the failure the un-awaited write beside this one
+      // already produced once.
+      const readsAfterFirst = harness.dav.requestCount();
+      const second = await coverFor(subsonicId('al', ALBUM_DIR));
+      expect(second.status, `${format.name}: cached`).toBe(200);
+      expect(second.headers.get('content-type'), `${format.name}: cached`).toBe(format.mimeType);
+      expect([...new Uint8Array(await second.arrayBuffer())], `${format.name}: cached`).toEqual([...format.bytes]);
+      expect(harness.dav.requestCount(), `${format.name}: the cached read re-read the origin`).toBe(readsAfterFirst);
+    }
+  });
+
+  it('refuses a cached entry whose bytes are not an image, rather than serving them as one', async () => {
+    // The pair for the test above, without which it would also pass against a cache path
+    // that simply trusted whatever it had stored. Re-deriving the media type from the
+    // bytes is what makes a cached entry safe to serve at all: the type is never stored
+    // beside the value, because a key holding both is two things that can disagree, and
+    // the disagreement is a cover served with a `Content-Type` its bytes do not have —
+    // which several clients refuse outright. So an entry that is not an image has to
+    // become the placeholder, not reach a decoder.
+    //
+    // Poisoned through the namespace rather than through a fixture, because **no code path
+    // writes one**: `resolveImageBytes` refuses a non-image before it can be stored. That
+    // is the point of the assertion — the reader has to hold when the writer is already
+    // careful, and only a poisoned entry can ask it to.
+    await (await coverFor(subsonicId('al', ALBUM_DIR))).arrayBuffer();
+    const artKey = [...harness.cache.entries().keys()].find((key) => key.startsWith('albumArt:'));
+    expect(artKey, 'the first request cached the artwork').toBeDefined();
+    await harness.cache.ns.put(artKey!, ' binary');
+
+    const response = await coverFor(subsonicId('al', ALBUM_DIR));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toMatch(/^image\//);
+    // The placeholder, not the poisoned bytes echoed back under an image media type.
+    expect(await response.text()).not.toContain('binary');
+    // And it was served without the origin, so the refusal is the reader's.
+    expect(harness.dav.requestCount()).toBeGreaterThan(0);
   });
 });

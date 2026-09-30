@@ -25,7 +25,7 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
   if (library.length === 0) return respond(context, elList('bookmarks', 'bookmark', {}));
 
   const rows = await context.annotations.listBookmarks(context.user.id);
-  const annotations = await annotationsFor(context, rows.map((row) => row.song_id));
+  const annotations = await annotationsFor(context, rows.length > 0);
   const nodes: ElementNode[] = [];
   for (const row of rows) {
     const decoded = safeDecode(row.song_id, IdKind.Song);
@@ -57,7 +57,12 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
 async function createBookmark(context: RestContext): Promise<EnvelopeResponse> {
   const id = context.params.require('id');
   const decoded = decodeId(id, IdKind.Song);
-  void context.libraries.requireForUser(context.user.id, decoded.libraryId);
+  // Awaited, before the write. `void` started the grant check and discarded its
+  // rejection, so the bookmark was written for a library the caller cannot see; the
+  // `bookmarks` table has no foreign key to `songs` to catch it, and `getBookmarks`
+  // filters by library, so the row was invisible and permanent. The same defect the
+  // play queue had at `savePlayQueue` below.
+  await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   const position = context.params.int('position', 0, { min: 0 });
   const comment = context.params.get('comment');
   await context.annotations.createBookmark(context.user.id, id, position, comment ?? null);
@@ -109,7 +114,7 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
     });
   }
 
-  const annotations = await annotationsFor(context, queue.map((song) => song.id));
+  const annotations = await annotationsFor(context, queue.length > 0);
   return respond(
     context,
     elList(

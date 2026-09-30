@@ -12,10 +12,9 @@ import { decodeId, el, elList, IdKind, songElement, successResponse } from '@edg
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
-import { songToModel } from '../mappers';
+import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
 import {   annotationsFor, groupAlbums } from './structured';
-import type { AnnotationLookup } from '../mappers';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
@@ -37,8 +36,6 @@ const ALBUM_ORDER_BY: Readonly<Record<string, string>> = {
   byYear: 'year ASC, album_ci ASC',
   byGenre: 'genre_ci ASC, album_ci ASC',
 };
-
-const EMPTY_ANNOTATIONS: AnnotationLookup = { stars: new Set(), ratings: new Map(), playCounts: new Map() };
 
 /**
 Decode an id, or `null` when it is not of this kind or is malformed.
@@ -69,7 +66,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
         rows.push(...(await context.songs.listByAlbumDir(library.id, decoded.path)));
       }
     }
-    const annotations = await annotationsFor(context, starredIds);
+    const annotations = await annotationsFor(context, starredIds.length > 0);
     return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, annotations)));
   }
 
@@ -89,7 +86,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random,
   });
 
-  return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, EMPTY_ANNOTATIONS)));
+  return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, NO_ANNOTATIONS)));
 }
 
 async function getAlbumList(context: RestContext): Promise<EnvelopeResponse> {
@@ -105,7 +102,7 @@ Wrap rows as song elements with one set of annotation lookups for the page.
 */
 async function songNodes(context: RestContext, library: LibraryRow, rows: readonly SongRow[]): Promise<ElementNode[]> {
   const ids = rows.map((row) => row.id);
-  const annotations = await annotationsFor(context, ids);
+  const annotations = await annotationsFor(context, ids.length > 0);
   return rows.map((row) => songElement(songToModel(row, library, annotations)));
 }
 
@@ -178,7 +175,7 @@ async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'
     }
   }
 
-  const annotations = await annotationsFor(context, [...songIds, ...albumIds]);
+  const annotations = await annotationsFor(context, songIds.length + albumIds.length > 0);
   return respond(context, elList(wrapperName, ['album', 'song'], {}, [...groupAlbums(albumRows, library, annotations), ...(await songNodes(context, library, songs))]));
 }
 

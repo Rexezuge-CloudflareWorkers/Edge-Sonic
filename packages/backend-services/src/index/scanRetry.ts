@@ -37,7 +37,7 @@
  * survives the isolate, and is cleared by `startScan`, which is the operator's escape
  * hatch and needs no surface of its own.
  */
-import { MAX_CONSECUTIVE_FAILURES } from './scanTypes';
+import { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES } from './scanTypes';
 import type { ChunkResult, ScanStatus } from './scanTypes';
 import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
 
@@ -141,7 +141,45 @@ function isAdvancing(status: ScanStatus): boolean {
   return status === 'scanning' || status === 'failed';
 }
 
-export { decideStep, idleResult, stalledResult, unableToAdvance, isAdvancing,  };
+export { decideStep, idleResult, stalledResult, unableToAdvance, isAdvancing, describeFailure, unrecordedFailure };
+export {MAX_CONSECUTIVE_FAILURES} from './scanTypes';
 export type { StepDecision };
 
-export {MAX_CONSECUTIVE_FAILURES} from './scanTypes';
+/**
+ * A failure's text, bounded to what the store will hold.
+ *
+ * Lives here because recording a failure is what this module owns — `step` and
+ * `failChunk` both call it, and they did not agree to before: a diagnosis that depends on
+ * which frame caught the error is not a diagnosis.
+ */
+function describeFailure(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, LAST_ERROR_MAX);
+}
+
+/**
+ * A `ChunkResult` for a failure that happened before any state could be read.
+ *
+ * Counts are zero because nothing was measured, not because nothing happened. The
+ * `lastError` is what an operator reads, and reporting fabricated counters beside a real
+ * reason is worse than reporting none — `total: 0` with `status: 'failed'` says "the walk
+ * could not start", which is exactly what happened, where `total: 412` would be a claim
+ * about a library this call never looked at.
+ *
+ * `status` is `failed`, never `stalled`, and the caller must not promote it: `isAdvancing`
+ * is false for `stalled`, so a terminal answer here would delete the alarm and end the
+ * scan over a fault that may be transient. The retry counter cannot be incremented on this
+ * path, so the *delay* between retries is what bounds it.
+ */
+function unrecordedFailure(lastError: string): ChunkResult {
+  return {
+    status: 'failed',
+    scanned: 0,
+    total: 0,
+    indexVersion: 0,
+    lastError,
+    foldersVisited: 0,
+    webdavRequests: 0,
+    rowsWritten: 0,
+    stoppedBy: null,
+  };
+}

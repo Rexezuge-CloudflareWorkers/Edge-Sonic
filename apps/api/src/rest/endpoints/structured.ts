@@ -29,19 +29,29 @@ function respond(context: RestContext, payload: ElementNode | null): EnvelopeRes
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
 }
 
-async function annotationsFor(context: RestContext, ids: readonly string[]): Promise<AnnotationLookup> {
-  if (ids.length === 0) return { stars: new Set(), ratings: new Map(), playCounts: new Map() };
+/**
+ * This user's annotations, for the ids about to be rendered.
+ *
+ * `ids` is a **short-circuit, not a filter.** Every branch below is a per-user query, not
+ * a per-id one, so there is nothing to narrow — and pretending otherwise is how a caller
+ * ends up passing something that looks like an id and is not. `getArtists` was passing
+ * lowercased artist *names* here, which the lookup could never contain; the argument was
+ * pure noise, and the cost of it was seven D1 reads on a page of artists. The parameter
+ * survives only as the empty-page check it actually is, which is stated in its name.
+ */
+async function annotationsFor(context: RestContext, renderingAnything: boolean): Promise<AnnotationLookup> {
+  if (!renderingAnything) return { stars: new Map(), ratings: new Map(), playCounts: new Map() };
   const [songStars, albumStars, artistStars, songRatings, albumRatings, artistRatings, playCounts] = await Promise.all([
-    context.annotations.listStarred(context.user.id, 'song'),
-    context.annotations.listStarred(context.user.id, 'album'),
-    context.annotations.listStarred(context.user.id, 'artist'),
+    context.annotations.listStarredWithTime(context.user.id, 'song'),
+    context.annotations.listStarredWithTime(context.user.id, 'album'),
+    context.annotations.listStarredWithTime(context.user.id, 'artist'),
     context.annotations.listRatings(context.user.id, 'song'),
     context.annotations.listRatings(context.user.id, 'album'),
     context.annotations.listRatings(context.user.id, 'artist'),
     context.annotations.listPlayCounts(context.user.id),
   ]);
   return {
-    stars: new Set([...songStars, ...albumStars, ...artistStars]),
+    stars: new Map([...songStars, ...albumStars, ...artistStars]),
     ratings: new Map([...songRatings, ...albumRatings, ...artistRatings]),
     playCounts,
   };
@@ -64,7 +74,7 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const rows = await context.songIndex.listArtists(library.id, limit + offset, 0);
 
   const groups = groupArtistRows(rows).slice(offset, offset + limit);
-  const annotations = await annotationsFor(context, groups.map((group) => group.name.toLowerCase()));
+  const annotations = await annotationsFor(context, groups.length > 0);
   const indexes = artistIndexGroups(library, groups, annotations.stars);
 
   return respond(context, elList('artists', 'index', { ignoredArticles: 'The El La Los Las Le Les' }, indexes));
@@ -83,7 +93,7 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const mine = all.filter((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === artistName.toLowerCase());
   if (mine.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Artist not found.');
 
-  const annotations = await annotationsFor(context, [id]);
+  const annotations = await annotationsFor(context, true);
   const albums = groupAlbums(mine, library, annotations);
   return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length }, albums));
 }
@@ -164,7 +174,7 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   const songs = await context.songs.listByAlbumDir(library.id, decoded.path);
   if (songs.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Album not found.');
 
-  const annotations = await annotationsFor(context, songs.map((song) => song.id));
+  const annotations = await annotationsFor(context, songs.length > 0);
   const ordered = [...songs].sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
 
   // `albumWithSongs`, not `albumElement` with children attached: the songs are a repeated
@@ -205,7 +215,7 @@ async function getSong(context: RestContext): Promise<EnvelopeResponse> {
     song = (await context.songs.findById(id)) ?? song;
   }
 
-  const annotations = await annotationsFor(context, [id]);
+  const annotations = await annotationsFor(context, true);
   return respond(context, songElement(songToModel(song, library, annotations)));
 }
 

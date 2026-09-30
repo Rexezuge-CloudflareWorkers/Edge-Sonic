@@ -51,7 +51,7 @@
  * is on some files and not others, so one track is not enough; a compilation with
  * none of them is not worth more than three reads to discover.
  */
-import { findPicture, id3TagSize, materializePicture } from '@edge-sonic/media-tags';
+import { findPicture, id3TagSize, materializePicture, sniffImageType } from '@edge-sonic/media-tags';
 import type { EmbeddedPicture, PictureSource } from '@edge-sonic/media-tags';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
@@ -229,7 +229,7 @@ async function embeddedAlbumArt(
     // it, an album whose tracks carry no art pays the probe on every single request,
     // for ever.
     if (cached.byteLength === 0) return null;
-    const mimeType = sniffCached(cached);
+    const mimeType = sniffImageType(cached);
     return mimeType === null ? null : { mimeType, data: cached };
   }
 
@@ -295,22 +295,23 @@ async function embeddedAlbumArt(
 }
 
 /**
- * The media type of a cached image, from its own bytes.
+ * The media type of a cached image is re-derived from its own bytes, not stored
+ * beside them: a key holding a content type as well as bytes is two things that can
+ * disagree, and the disagreement would be a cover served with the wrong
+ * `Content-Type` — which several clients refuse outright. The bytes are the only
+ * authority, and they are what was validated on the way in.
  *
- * Re-derived rather than stored beside the value: a key holding a content type as well
- * as bytes is two things that can disagree, and the disagreement would be a cover
- * served with the wrong `Content-Type` — which several clients refuse outright. The
- * bytes are the only authority, and they are what was validated on the way in.
+ * It is `sniffImageType`, not a second copy of it. This module used to carry its own
+ * magic-byte table covering PNG, JPEG, GIF, WebP and BMP, while the extractor's own
+ * `resolveImageBytes` called the shared one — which also knows TIFF in both byte
+ * orders, AVIF and HEIF. So a TIFF cover was extracted correctly, cached, and then
+ * re-sniffed to `null` on the next request and answered with the transparent
+ * placeholder for the whole 30-day TTL of a key that only the file's own revision can
+ * invalidate. It is the "a placeholder that is a valid success is the worst possible
+ * answer" defect arriving from the other direction: the first request was right, and
+ * the cache turned the right answer into a grey box. The suite stayed green because
+ * `test/embedded-art.test.ts` asserted those formats through the path that already
+ * worked — the same class as a fixture holding only the case that passes.
  */
-function sniffCached(data: Uint8Array): string | null {
-  const isPng = data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
-  if (isPng) return 'image/png';
-  if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg';
-  if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) return 'image/gif';
-  if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return 'image/webp';
-  if (data[0] === 0x42 && data[1] === 0x4d) return 'image/bmp';
-  return null;
-}
-
-export { embeddedAlbumArt, pictureFromFile, artKey, sniffCached, ART_TRACK_LIMIT, ART_PREFIX_BYTES, ART_MAX_BYTES, ART_MAX_TAG_BYTES };
+export { embeddedAlbumArt, pictureFromFile, artKey, ART_TRACK_LIMIT, ART_PREFIX_BYTES, ART_MAX_BYTES, ART_MAX_TAG_BYTES };
 export type { ArtSource, EmbeddedArtDeps, ResolvedArt };

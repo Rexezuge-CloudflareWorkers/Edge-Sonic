@@ -71,11 +71,12 @@ import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
-import { derivePending } from './deriveBackfill';
+import { backfill, settle } from './scanPrelude';
 import { ScanBudget, stopReason } from './scanBudget';
-import { decideStep, idleResult, MAX_CONSECUTIVE_FAILURES, stalledResult, unableToAdvance } from './scanRetry';
+import { describeFailure, MAX_CONSECUTIVE_FAILURES, unrecordedFailure } from './scanRetry';
 import type { ChunkResult, ScanDeps } from './scanTypes';
-import { LAST_ERROR_MAX } from './scanTypes';
+
+
 
 class ScanService {
   constructor(private readonly deps: ScanDeps) {}
@@ -183,65 +184,48 @@ class ScanService {
    * the `SCAN` binding, directly from `getScanStatus` (client-driven).
    */
   public async step(library: LibraryRow): Promise<ChunkResult> {
-    const state = await this.deps.scanState.ensure(library.id);
-    const budget = this.budget();
-
-    // ### The derived grouping is backfilled here, ahead of everything
+    // ### The `try` opens here, not below
     //
-    // Ahead of `decideStep` deliberately, and that placement is the whole fix. A fully
-    // scanned library is `idle`, and `idle` returns without touching the walk at all — so
-    // a backfill placed after the status check would never run for exactly the libraries
-    // that need it, which is what the first attempt at this did.
+    // It used to open after the frontier read, which left five awaited calls — `ensure`,
+    // `derivePending`, `listFrontier`, `fail`, `complete` — able to reject *outside* it.
+    // A rejection there propagates out of `step`, and in production the only caller is
+    // `ScanWorker.alarm`, which had no handler of its own: the alarm was consumed, the
+    // re-arm never ran, and D1's `scan_state.status` was still `scanning`. So
+    // `getStatus` answered `scanning: true` for ever — which every client reads as *keep
+    // polling* — while nothing was scheduled to answer. Nothing reconciles the two
+    // stores: the alarm lives in DO storage, the status in D1, and `getAlarm()` is called
+    // from nowhere. `startScan` was the only recovery and it runs at client startup, not
+    // while browsing.
     //
-    // It is here because nothing else can reach these rows. Every writer of `album` /
-    // `artist` is gated on the file having *changed*, and that gating is correct: it is
-    // what makes a rescan of an unchanged library cost one subrequest. The consequence is
-    // that a library nobody has touched since it was indexed never derives its grouping
-    // and the aggregates answer `[]` for ever. It shipped: 113 rows, every one indexed
-    // before the deploy, every one with `album_ci` NULL.
-    const derivedRows = this.deps.derivation ? await derivePending(this.deps.derivation, library.id, budget) : 0;
-
-    // Whether a `failed` scan may run again is a state-machine decision, and it is not
-    // an obvious one: `failed` used to be terminal, and treating it as terminal is what
-    // left a library of eighty albums at one scanned folder for the life of a
-    // deployment. See `scanRetry.ts` for the whole account.
-    const decision = decideStep(state);
-    if (decision === 'stalled') return stalledResult(state, derivedRows);
-    if (decision === 'idle') return idleResult(state, 'idle', derivedRows);
-
-    const frontier = await this.deps.nodes.listFrontier(library.id, this.deps.chunkFolders);
-    if (frontier.length === 0) {
-      // An empty frontier normally means the scan is done, and `complete` is right.
-      //
-      // The exception is a chunk *entered from* a failed state, where there is nothing
-      // left to retry — and completing would claim a library is fully walked when the
-      // walk stopped. `start` seeds the frontier with the library root, so a scan that
-      // failed in its own root probe is the case that lands here.
-      if (state.status === 'failed') {
-        return await unableToAdvance(state, async (error) => await this.deps.scanState.fail(library.id, error), derivedRows);
-      }
-      const indexVersion = await this.deps.scanState.complete(library.id, state.scanned_count);
-      return {
-        status: 'idle',
-        scanned: state.scanned_count,
-        total: state.total_count,
-        indexVersion,
-        lastError: null,
-        foldersVisited: 0,
-        webdavRequests: 0,
-        // The backfill's rows, not zero. This path is reached by a library that is
-        // already fully walked, which is the *usual* case for a library being repaired,
-        // so reporting `0` here would report the repair as no work at all.
-        rowsWritten: derivedRows,
-        stoppedBy: null,
-      };
-    }
-
-    let rowsWritten = derivedRows;
-    let scanned = state.scanned_count;
+    // A failure that cannot be recorded is also a failure nobody can diagnose, so the
+    // whole body is inside the guard: a transient D1 error becomes one counted retry with
+    // a `last_error` an operator can read, and `isAdvancing('failed')` keeps the chain
+    // armed so the retry budget — not an unbounded loop — is what bounds it.
+    // Declared outside the `try` because the `catch` reads them, and because `state` being
+    // `null` **is** the signal for "the fault happened before any state was read" — a
+    // second boolean for the same fact would be free to disagree with it.
+    let state: ScanStateRow | null = null;
+    let budget: ScanBudget | undefined;
+    let derivedRows = 0;
+    let rowsWritten = 0;
+    let scanned = 0;
     let foldersVisited = 0;
 
     try {
+      state = await this.deps.scanState.ensure(library.id);
+      budget = this.budget();
+      derivedRows = await backfill(this.deps, library.id, budget);
+
+      const frontier = await this.deps.nodes.listFrontier(library.id, this.deps.chunkFolders);
+      const settled = await settle(this.deps, library, state, derivedRows, frontier);
+      // A `ChunkResult` means the chunk is already answered — `stalled`, `idle`, or
+      // `unableToAdvance` — and every one of those reasons is a return, not a value to
+      // carry on from. `null` means there is a frontier to walk.
+      if (settled !== null) return settled;
+
+      rowsWritten = derivedRows;
+      scanned = state.scanned_count;
+
       for (const folder of frontier) {
         // One `PROPFIND` is the cost of the next unit of work, and it is checked
         // *before* it is issued. A folder skipped here stays `is_scanned = 0` and
@@ -280,11 +264,40 @@ class ScanService {
         stoppedBy: stopReason(budget, foldersVisited < frontier.length),
       };
     } catch (error) {
+      // `budget` and `state` are only meaningful once `ensure` succeeded. A failure in
+      // `ensure` itself — the one call that would have to work for `failChunk` to record
+      // anything — is reported as a fresh budget over an unknown row rather than
+      // rethrown, so the *caller* cannot be left holding an unhandled rejection that
+      // skips its re-arm. `failChunk`'s own `scanState.fail` is inside the same store,
+      // so it may also fail; that is caught here and turned into a result, because a
+      // handler that rejects is the wedge this whole restructure exists to close.
+      if (budget === undefined) budget = this.budget();
+      if (state === null) {
+        const message = describeFailure(error);
+        try {
+          const consecutiveFailures = await this.deps.scanState.fail(library.id, message);
+          return consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? { ...unrecordedFailure(message), status: 'stalled' } : unrecordedFailure(message);
+        } catch (persistError) {
+          // D1 refused the fail *and* the record of the fail, so the retry counter cannot
+          // be incremented and nothing knows how many attempts have been made.
+          //
+          // Reported as `failed`, not `stalled`, and that distinction is the whole point.
+          // `stalled` is the terminal status — `isAdvancing` is false for it, so the caller
+          // deletes the alarm — which would turn one D1 blip into a scan that never resumes,
+          // with the frontier sitting intact and unread in D1. That is the shipped defect
+          // this whole restructure exists to prevent, reproduced one layer down by the
+          // obvious way to handle "cannot record". `failed` keeps the chain armed, and the
+          // inter-alarm delay is what bounds the retries here: one attempt a second against
+          // a store that is refusing writes. The counter cannot, so the delay must. It stops
+          // the moment D1 recovers, which is the correct time for it to stop.
+          return unrecordedFailure(`${message} (the failure could not be recorded: ${describeFailure(persistError)})`);
+        }
+      }
       return await this.failChunk(library, state, error, budget, { rowsWritten, scanned, foldersVisited });
     }
   }
 
-  public async status(libraryId: string): Promise<ChunkResult> {
+    public async status(libraryId: string): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(libraryId);
     return {
       // A read-only status reports `stalled` from the stored counter, so an operator
@@ -321,7 +334,7 @@ class ScanService {
     // so it is bounded to the same length the DAO persists, and the *bounded* value is
     // what is returned: reporting the untruncated string would show the operator more
     // than the database actually holds.
-    const message = (error instanceof Error ? error.message : String(error)).slice(0, LAST_ERROR_MAX);
+    const message = describeFailure(error);
     const consecutiveFailures = await this.deps.scanState.fail(library.id, message);
     const result: ChunkResult = {
       status: 'failed',

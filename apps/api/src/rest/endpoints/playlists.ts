@@ -100,7 +100,7 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
 
   const joined = await context.playlists.listEntrySongs(playlist.id);
   const rows = joined.filter((song) => song.library_id === library.id);
-  const annotations = await annotationsFor(context, rows.map((song) => song.id));
+  const annotations = await annotationsFor(context, rows.length > 0);
 
   // The protocol names a playlist's songs `entry`, not `song`. Both spellings appear
   // in the wild, but `entry` is what the schema specifies and what every client

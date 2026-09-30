@@ -28,6 +28,18 @@ import { createScanWorkerScope } from './ScanWorkerFactory';
  */
 const SCAN_ALARM_DELAY_MS = 1000;
 
+/**
+ * The alarm the chain re-arms itself with after a fault it could not record.
+ *
+ * `SCAN_ALARM_DELAY_MS` and nothing else, and the reasoning is the point: a failure that
+ * could not be written to `scan_state` has no `consecutive_failures` to bound it, so the
+ * rate is what does the bounding. One attempt a second against a store that is refusing
+ * writes is cheap, and it stops the instant the store recovers — which is the only moment
+ * it should stop, because the alternative (`stalled`, and therefore no alarm) is a
+ * permanent end to a scan over a transient fault.
+ */
+const RETRY_ARM_DELAY_MS = SCAN_ALARM_DELAY_MS;
+
 interface EnrichFactsInput {
   readonly id: string;
   readonly path: string;
@@ -66,6 +78,9 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
   public async startScan(libraryId: string): Promise<ChunkResult> {
     const library = await this.libraryFor(libraryId);
     if (library === null) throw new Error(`Unknown library "${libraryId}".`);
+    // Unconditional, and it must be: `start` is what *seeds* the frontier and clears the
+    // retry counter, so this is the one entry point that legitimately re-points the object
+    // at a different library.
     await this.ctx.storage.put('libraryId', libraryId);
     const scope = this.scope();
     const result = await scope.get(Tokens.ScanService).start(library);
@@ -90,24 +105,74 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
   public async stepOnce(libraryId: string): Promise<ChunkResult> {
     const library = await this.libraryFor(libraryId);
     if (library === null) throw new Error(`Unknown library "${libraryId}".`);
-    await this.ctx.storage.put('libraryId', libraryId);
+    await this.rememberLibrary(libraryId);
+    return await this.runChunk(library);
+  }
+
+  public override async alarm(): Promise<void> {
+    // Wrapped whole, because an alarm handler that rejects is a permanent wedge.
+    //
+    // It used to have no handler at all. Cloudflare retries a throwing alarm a bounded
+    // number of times and then drops it, and every one of those retries was a chance for
+    // the *same* fault to throw again — so the chain ended with D1 still recording
+    // `scanning` and nothing scheduled to advance it. `getStatus` reports
+    // `scanning: true` for ever, and every client reads that as *keep polling*, so the
+    // symptom is a scan that looks alive and never moves. Nothing reconciled the two
+    // stores: the alarm lives in DO storage, the status in D1, and `getAlarm()` is
+    // called from nowhere in this repository.
+    //
+    // So the handler cannot reject, and a failure is recorded rather than discarded —
+    // `isAdvancing('failed')` is true, so `armIfAdvancing` keeps the chain armed and
+    // `consecutive_failures` bounds it. That is the difference between a bounded retry
+    // and an unbounded one, and the reason the catch is here rather than around
+    // `ScanService.step` alone: this is the code that owns the alarm, so this is where
+    // re-arming is decided.
+    try {
+      const libraryId = await this.ctx.storage.get<string>('libraryId');
+      if (!libraryId) return;
+      const library = await this.libraryFor(libraryId);
+      if (library === null) {
+        await this.ctx.storage.deleteAlarm();
+        return;
+      }
+      await this.runChunk(library);
+    } catch (error) {
+      console.error('[ScanWorker] alarm failed; the chain stays armed for a bounded retry', error);
+      // Re-arm unconditionally, and after the same delay a normal chunk would use. The
+      // chunk's own failure already records `last_error` and counts against the retry
+      // budget; this arm exists so a fault *outside* `step` — storage, the library lookup —
+      // cannot silently end the chain. `RETRY_ARM_DELAY_MS` bounds the rate here, because
+      // the counter that bounds the retries does not exist on this path.
+      await this.ctx.storage.setAlarm(Date.now() + RETRY_ARM_DELAY_MS);
+    }
+  }
+
+  /**
+   * One chunk of the walk, with the alarm re-armed from its result.
+   *
+   * `stepOnce` and `alarm` share this because they are one loop: a manual step is a
+   * chunk of the same walk, not a second implementation of it, and having them diverge
+   * is how the two started disagreeing about whether a chunk was `idle`.
+   */
+  private async runChunk(library: LibraryRow): Promise<ChunkResult> {
     const scope = this.scope();
     const result = await scope.get(Tokens.ScanService).step(library);
     await this.armIfAdvancing(result);
     return result;
   }
 
-  public override async alarm(): Promise<void> {
-    const libraryId = await this.ctx.storage.get<string>('libraryId');
-    if (!libraryId) return;
-    const library = await this.libraryFor(libraryId);
-    if (library === null) {
-      await this.ctx.storage.deleteAlarm();
-      return;
-    }
-    const scope = this.scope();
-    const result = await scope.get(Tokens.ScanService).step(library);
-    await this.armIfAdvancing(result);
+  /**
+   * Persist the library this object scans, only when it has changed.
+   *
+   * `stepOnce` used to `put` it unconditionally on every call — one storage write per
+   * operator step for a value that is almost always identical — while `alarm` correctly
+   * read it. Reading first also removes a race: the write used to land between `alarm`'s
+   * read and its `step`, so two interleaved entries could each proceed on the value they
+   * happened to read.
+   */
+  private async rememberLibrary(libraryId: string): Promise<void> {
+    const current = await this.ctx.storage.get<string>('libraryId');
+    if (current !== libraryId) await this.ctx.storage.put('libraryId', libraryId);
   }
 
   /**
