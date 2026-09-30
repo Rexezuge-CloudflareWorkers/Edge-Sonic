@@ -5,7 +5,7 @@
  * `getSong` cannot drift apart on field presence because neither of them names
  * a field: they hand a `Song`/`Album` here.
  *
- * Two rules worth stating:
+ * Three rules worth stating:
  *
  * - `undefined` is dropped and `0` is kept. A `duration` of `0` means "the tag
  *   has not been read yet", which clients tolerate; a *missing* `duration` is
@@ -14,6 +14,12 @@
  *   the storage layout of someone's WebDAV bucket to every authenticated
  *   client, and nothing in the protocol needs it back — IDs already carry the
  *   path for the server to use.
+ * - **An album is two elements, not one.** `albumElement` is an album as a *list
+ *   child* (`getAlbumList2`, `getArtist`, `search2`/`search3`); `albumWithSongs`
+ *   is `getAlbum`'s payload, which carries a repeated `song` child and therefore
+ *   has to declare it. They share `albumAttrs` so the two cannot disagree about
+ *   which fields an album has — see the two functions for why the list lives in
+ *   one and not the other.
  */
 import { el, elList } from './nodes';
 import type { ElementNode } from './nodes';
@@ -81,8 +87,17 @@ function songElement(song: Song): ElementNode {
   });
 }
 
-function albumElement(album: Album): ElementNode {
-  return el('album', {
+/**
+ * The attribute set every album element carries.
+ *
+ * Separate from the element because `getAlbum`'s payload is an album **and its songs**,
+ * which is a different node shape from the album-as-a-list-child the other endpoints
+ * build — see `albumWithSongs`. One function behind both is what keeps them from
+ * drifting: they were two literals, and `getAlbum` had already dropped `created` from
+ * its copy.
+ */
+function albumAttrs(album: Album): Attrs {
+  return {
     id: album.id,
     name: album.name,
     title: album.name,
@@ -98,7 +113,41 @@ function albumElement(album: Album): ElementNode {
     playCount: album.playCount,
     userRating: album.userRating,
     isDir: true,
-  });
+  };
+}
+
+function albumElement(album: Album): ElementNode {
+  return el('album', albumAttrs(album));
+}
+
+/**
+ * `getAlbum`'s payload: an album **with its songs**.
+ *
+ * ### Why this is not `albumElement` with children bolted on
+ *
+ * The songs are a *repeated child of a record element*, and a repeated child has to
+ * declare itself as one. `childrenToJsonObject` collapses a single occurrence to a bare
+ * object, so an undeclared list renders as `{"song": {...}}` for a one-track album and
+ * `{"song": [{...}, {...}]}` for a multi-track one — the shape changing with the data.
+ *
+ * It shipped. A client whose `Album` model is `@SerialName("song") val songs: List<Song>`
+ * decodes that field with plain kotlinx.serialization, which rejects an object, so every
+ * single-track album failed to open with `Expected JsonArray, but had JsonObject ... at
+ * path: $.song`. Nothing in the product could tell a wrong shape from a wrong record.
+ * The test suite never saw it because the fixture album holds two tracks — a collapse is
+ * invisible at n≥2 — and both `getAlbum` tests asserted album *attributes*, never
+ * `album.song`.
+ *
+ * `elList` states it, for the same reason it is a parameter rather than inferred: an
+ * element carrying attributes is a record to every serializer, and the serializer cannot
+ * tell a record's scalar child from a record's list child, so the builder that knows
+ * says so. `listKey` also seeds `song: []`, which is unreachable here (`getAlbum` throws
+ * `code=70` for an album with no songs) and is why the declaration must **not** move up
+ * into `albumAttrs`/`albumElement`: seeding happens unconditionally, so every album in
+ * `getAlbumList2`, `getArtist` and `search2`/`search3` would carry an empty `song` key.
+ */
+function albumWithSongs(album: Album, songs: readonly Song[]): ElementNode {
+  return elList('album', 'song', albumAttrs(album), songs.map((song) => songElement(song)));
 }
 
 function artistElement(artist: Artist): ElementNode {
@@ -220,6 +269,7 @@ function scanStatusElement(status: ScanStatus): ElementNode {
 export {
   songElement,
   albumElement,
+  albumWithSongs,
   artistElement,
   directoryElement,
   musicFolderElement,

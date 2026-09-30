@@ -14,44 +14,19 @@
  * ids are derived from `dir_path` and never from the album name: the name is
  * precisely the part that is allowed to change.
  */
-import { albumElement, artistElement, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
-import type { ElementNode } from '@edge-sonic/subsonic';
+import { albumElement, albumWithSongs, artistElement, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import type { AnnotationLookup } from '../mappers';
-import { songToModel } from '../mappers';
+import { albumKeyOf, albumNameOf, artistNameOf, songToModel, toIso } from '../mappers';
 import { resolveLibrary } from './libraries';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
 function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
-
-/**
-Album name for a row the scan has not tag-read: the containing folder's name.
-*/
-function albumNameOf(song: SongRow): string {
-  if (song.album) return song.album;
-  const slash = song.dir_path.lastIndexOf('/');
-  const dir = song.dir_path.slice(slash + 1);
-  return dir.length > 0 ? dir : 'Unknown Album';
-}
-
-function artistNameOf(song: SongRow): string {
-  if (song.artist) return song.artist;
-  if (song.album_artist) return song.album_artist;
-  const slash = song.dir_path.lastIndexOf('/');
-  const dir = slash <= 0 ? song.dir_path : song.dir_path.slice(0, slash);
-  return dir.length > 0 ? dir : 'Unknown Artist';
-}
-
-/**
-The key an album groups under. `dir_path` when known, else the album name.
-*/
-function albumKeyOf(song: SongRow): string {
-  return song.dir_path.length > 0 ? song.dir_path : `name:${albumNameOf(song)}`;
 }
 
 async function annotationsFor(context: RestContext, ids: readonly string[]): Promise<AnnotationLookup> {
@@ -157,6 +132,43 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
 }
 
 /**
+ * The album record, from its songs.
+ *
+ * **One function, because it is one album.** `getAlbum` and every album *list*
+ * (`getArtist`, `getAlbumList2`, `search2`/`search3`) publish the same `id`, the same
+ * name and the same `created`, read from the same first track. They were two literals,
+ * and they had already diverged: `getAlbum`'s copy omitted `created` while the lists
+ * emitted it.
+ *
+ * That is not cosmetic. A client whose `Album` model is
+ * `@SerialName("created") val createdAt: Instant` — non-nullable, no default — throws
+ * `MissingFieldException` on **every** `getAlbum`, for every album, because the key is
+ * absent. The protocol types `created` as optional, so the omission was legal and the
+ * breakage was invisible from here: a correct-looking response that one strict client
+ * cannot read at all.
+ *
+ * @param songs The album's tracks, already ordered — the first one supplies the
+ *   album-level fields, and it is also what `getAlbum` publishes as `track 1`.
+ */
+function albumModel(songs: readonly SongRow[], library: LibraryRow, annotations: AnnotationLookup, id: string): Album {
+  const first = songs[0];
+  return {
+    id,
+    name: albumNameOf(first),
+    artist: first.artist ?? first.album_artist ?? undefined,
+    artistId: encodeId(IdKind.Artist, library.id, first.artist ?? first.album_artist ?? artistNameOf(first)),
+    songCount: songs.length,
+    duration: songs.reduce((total, song) => total + song.duration, 0),
+    year: first.year ?? undefined,
+    genre: first.genre ?? undefined,
+    coverArt: id,
+    created: toIso(first.created_at),
+    ...(annotations.stars.has(id) && { starred: toIso(first.mtime_ms) }),
+    ...(annotations.ratings.has(id) && { userRating: annotations.ratings.get(id) }),
+  };
+}
+
+/**
  * Group songs into album elements.
  *
  * **The key is `dir_path`, not the album name.** A starred album resolves back to
@@ -175,27 +187,11 @@ function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations:
     }
   }
 
-  const starred = new Set(annotations.stars);
   return [...groups]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, songs]) => {
-      const first = songs[0];
-      const id = encodeId(IdKind.Album, library.id, key.startsWith('name:') ? key : key);
       songs.sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
-      return albumElement({
-        id,
-        name: albumNameOf(first),
-        artist: first.artist ?? first.album_artist ?? undefined,
-        artistId: encodeId(IdKind.Artist, library.id, first.artist ?? first.album_artist ?? artistNameOf(first)),
-        songCount: songs.length,
-        duration: songs.reduce((total, song) => total + song.duration, 0),
-        year: first.year ?? undefined,
-        genre: first.genre ?? undefined,
-        coverArt: id,
-        created: first.created_at > 0 ? new Date(first.created_at * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z') : undefined,
-        ...(starred.has(id) && { starred: new Date(first.mtime_ms).toISOString() }),
-        ...(annotations.ratings.has(id) && { userRating: annotations.ratings.get(id) }),
-      });
+      return albumElement(albumModel(songs, library, annotations, encodeId(IdKind.Album, library.id, key)));
     });
 }
 
@@ -213,25 +209,11 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
 
   const annotations = await annotationsFor(context, songs.map((song) => song.id));
   const ordered = [...songs].sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
-  const first = ordered[0];
-  const album = {
-    id,
-    name: albumNameOf(first),
-    artist: first.artist ?? first.album_artist ?? undefined,
-    artistId: encodeId(IdKind.Artist, library.id, first.artist ?? first.album_artist ?? artistNameOf(first)),
-    songCount: ordered.length,
-    duration: ordered.reduce((total, song) => total + song.duration, 0),
-    year: first.year ?? undefined,
-    genre: first.genre ?? undefined,
-    coverArt: id,
-    ...(annotations.stars.has(id) && { starred: new Date(first.mtime_ms).toISOString() }),
-    ...(annotations.ratings.has(id) && { userRating: annotations.ratings.get(id) }),
-  };
 
-  // `albumElement` builds the attribute set from the domain model; the songs are
-  // children, so they are attached afterwards rather than by reshaping the model
-  // into an attrs object.
-  return respond(context, { ...albumElement(album), children: ordered.map((song) => songElement(songToModel(song, library, annotations))) });
+  // `albumWithSongs`, not `albumElement` with children attached: the songs are a repeated
+  // child of a record element, and an undeclared one collapses to a bare object for a
+  // single-track album. See the builder for the failure that shipped.
+  return respond(context, albumWithSongs(albumModel(ordered, library, annotations, id), ordered.map((song) => songToModel(song, library, annotations))));
 }
 
 /**
@@ -272,11 +254,11 @@ export {
   getAlbum,
   getSong,
   groupAlbums,
-  albumNameOf,
-  artistNameOf,
-  albumKeyOf,
+  albumModel,
   annotationsFor,
 };
 
-
-export {type AnnotationLookup as StructuredAnnotationLookup} from '../mappers';
+// `albumNameOf`/`artistNameOf`/`albumKeyOf` live in `../mappers`, beside the `songToModel`
+// that reads the same two, and are re-exported here so `lists.ts` and `search.ts` keep
+// importing the grouping helpers from one place rather than reaching into a mapper.
+export {type AnnotationLookup as StructuredAnnotationLookup, albumNameOf, artistNameOf, albumKeyOf} from '../mappers';

@@ -309,6 +309,53 @@ describe('the play queue', () => {
   });
 });
 
+describe('getAlbum', () => {
+  it('publishes its songs as an array, at one track and at two', async () => {
+    // The single-track case is the one that shipped broken. `getAlbum` attached the songs
+    // as plain children of the album element, and the serializer collapses a single
+    // undeclared child to a bare object — so the JSON shape changed with the data, and a
+    // client whose `Album` model is `song: List<Song>` threw
+    // `Expected JsonArray, but had JsonObject ... at path: $.song` on every one-track
+    // album. The fixture album holds two tracks, which is why nothing caught it: a
+    // collapse is invisible at n≥2.
+    //
+    // Both sizes are asserted because one of them passing is not evidence about the
+    // other — a fix that special-cased the single case would satisfy one and not two.
+    const two = payload<{ song: unknown }>((await harness.rest('getAlbum', { id: ALBUM })).body, 'album').song;
+    expect(Array.isArray(two)).toBe(true);
+    expect(two).toHaveLength(2);
+
+    await harness.db.db.prepare('DELETE FROM songs WHERE id = ?').bind(HOLOCENE).run();
+    const one = payload<{ song: unknown }>((await harness.rest('getAlbum', { id: ALBUM })).body, 'album').song;
+    expect(Array.isArray(one)).toBe(true);
+    expect(one).toHaveLength(1);
+  });
+
+  it('renders the same XML it always did', async () => {
+    // The declaration is a JSON concern. XML has no collapse — a repeated element is
+    // repeated — so this guards against the fix quietly changing the other format rather
+    // than claiming it was broken.
+    const response = await harness.fetch(harness.restUrl('getAlbum', { id: ALBUM, f: 'xml' }));
+    const xml = await response.text();
+    expect(xml.match(/<song /g)).toHaveLength(2);
+  });
+
+  it('publishes the same album as getArtist does', async () => {
+    // Two literals built the same album and had already diverged: `getAlbum`'s omitted
+    // `created` while the lists emitted it. A client whose `Album` model is
+    // `@SerialName("created") val createdAt: Instant` — non-nullable, no default — then
+    // failed on **every** `getAlbum`, not just the one-track ones, which is the failure
+    // the single-track report was masking.
+    //
+    // Asserted as an equality of key sets rather than spot-checking `created`, because the
+    // next field to drift should fail here too.
+    const fromAlbum = payload<Record<string, unknown>>((await harness.rest('getAlbum', { id: ALBUM })).body, 'album');
+    const fromArtist = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getArtist', { id: ARTIST })).body, 'artist').album[0];
+    expect(Object.keys(fromAlbum).filter((key) => key !== 'song').sort()).toEqual(Object.keys(fromArtist).filter((key) => key !== 'song').sort());
+    expect(fromAlbum.created).toBe(fromArtist.created);
+  });
+});
+
 describe('ratings', () => {
   it('stores a rating and averages it into the album and song', async () => {
     await harness.rest('setRating', { id: SKINNY_LOVE, rating: '5' });

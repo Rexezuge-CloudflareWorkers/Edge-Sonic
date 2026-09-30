@@ -73,6 +73,44 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   element's name is the JSON key its wrapper declares. A client doing
   `response.starred2.song.map(...)` throws on an absent key and renders an empty screen
   on `[]`.
+- **A repeated child of a *record* element is a list too, and it is invisible at n≥2.**
+  `elList` states the repeated child's name, and a **wrapper** always goes through it — so
+  the empty case and the one-item case were both covered. A record element has no
+  `listKey` of its own, and `childrenToJsonObject` collapses a single undeclared child to
+  a bare object: `getAlbum` attached its songs to the album element and rendered
+  `{"song": {...}}` for a one-track album and `{"song": [{...}, {...}]}` for a two-track
+  one. **The shape changed with the data.** It shipped, and a client whose `Album` model
+  is `@SerialName("song") val songs: List<Song>` throws
+  `Expected JsonArray, but had JsonObject ... at path: $.song` on every single-track
+  album. Two things hid it, and each is its own rule:
+  - **A fixture with two items cannot see a collapse.** The suite's album holds two
+    tracks, so the array path rendered everywhere it was looked at, and the two `getAlbum`
+    tests asserted album *attributes* — never `album.song`. Assert **both** sizes, or the
+    guard is a fixture rather than a rule. `test/subsonic-protocol.test.ts` and
+    `test/endpoints.test.ts` both do.
+  - **The declaration cannot move into the shared builder.** `listKey` seeds its key
+    *unconditionally*, so putting `song` on the album builder would attach an empty
+    `"song": []` to every album in `getAlbumList2`/`getArtist`/`search2` — a different
+    wrong answer, and one that only the paired assertion catches. So an album is **two**
+    elements: `albumElement` (a list child) and `albumWithSongs` (`getAlbum`'s payload),
+    over one `albumAttrs`.
+
+  A repeated child is declared wherever it is attached; the wrapper's `listKey` only ever
+  described the wrapper.
+- **The same album, built once.** `getAlbum` and every album *list* publish the same `id`,
+  name and `created`, read from the same first track — and they were two literals, which
+  had already diverged: `getAlbum`'s omitted `created`. A client declaring
+  `@SerialName("created") val createdAt: Instant` (no `?`, no default) then failed on
+  **every** `getAlbum`, and the one-track report above was only the first failure to
+  surface. `albumModel` is the single construction; `test/endpoints.test.ts` asserts the
+  two endpoints publish the same attribute **key set**, so the next field to drift fails
+  there rather than on a client.
+- **A non-nullable field with no default is a *missing-key* failure.** It is not caught by
+  checking the types of the fields that *are* present, and kotlinx.serialization raises
+  `MissingFieldException` only *after* the loop over present keys — so a second defect in
+  the same response hides behind the first. `test/client-decoding.test.ts` models
+  required-vs-defaulted from the client's own declaration for this reason: a decoder that
+  only checks types passes forever against a response missing a key.
 - **A scalar the schema says is a scalar is not a record.** `user.folder` is typed
   `Array of int`, so each entry is the bare position; `musicFolder` has a `name` beside
   its `id` and is a record. Building `folder` as `el('folder', { id })` renders
