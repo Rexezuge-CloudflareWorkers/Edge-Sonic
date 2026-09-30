@@ -14,13 +14,13 @@
  * ids are derived from `dir_path` and never from the album name: the name is
  * precisely the part that is allowed to change.
  */
-import { albumElement, albumWithSongs, artistElement, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { albumElement, albumWithSongs, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import type { AnnotationLookup } from '../mappers';
-import { albumKeyOf, albumNameOf, artistNameOf, songToModel, toIso } from '../mappers';
+import { albumKeyOf, albumNameOf, artistIndexGroups, artistNameOf, groupArtistRows, songToModel, toIso } from '../mappers';
 import { resolveLibrary } from './libraries';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
@@ -51,7 +51,10 @@ async function annotationsFor(context: RestContext, ids: readonly string[]): Pro
  * `getArtists` — every artist, grouped by index letter.
  *
  * Aggregated from `songs` in one indexed pass rather than by walking folders,
- * because the tag view's whole point is that it is not the folder view.
+ * because the tag view's whole point is that it is not the folder view. The
+ * grouping itself is `groupArtistRows` in `../mappers`, shared with the artist
+ * half of `getIndexes` — one grouping, or the two browses disagree about who is
+ * whom.
  */
 async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
@@ -60,55 +63,9 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
 
   const rows = await context.songIndex.listArtists(library.id, limit + offset, 0);
 
-  // The display name is captured **per group, while grouping** rather than recovered
-  // afterwards with `rows.find(...)`.
-  //
-  // That `find` was inside the loop over artists, so it was O(artists × rows) — a
-  // quadratic scan over a `SELECT *` of the artist's whole catalogue, run on the
-  // endpoint a client calls to draw its main screen. A 5,000-track library with 400
-  // artists is millions of string comparisons to produce a list a client shows once.
-  const byName = new Map<string, { name: string; albums: Set<string>; songs: number }>();
-  for (const row of rows) {
-    const name = row.artist ?? artistNameOf(row);
-    const key = name.toLowerCase();
-    const existing = byName.get(key);
-    if (existing) {
-      existing.albums.add(albumKeyOf(row));
-      existing.songs += 1;
-    } else {
-      // A real tag over a path-derived name, so the first row carrying a tag wins: a
-      // library half-enriched groups under the true name rather than under a guess.
-      if (row.artist === null) {byName.set(key, { name, albums: new Set([albumKeyOf(row)]), songs: 1 });}
-      else {byName.set(key, { name: row.artist, albums: new Set([albumKeyOf(row)]), songs: 1 });}
-    }
-  }
-
-  const annotations = await annotationsFor(context, [...byName.keys()]);
-  const buckets = new Map<string, ElementNode[]>();
-  // Sorted by the grouping key, sliced for the page, and the name each group needs is
-  // read off the entry rather than recovered with a `rows.find(...)` — which is what
-  // removed the quadratic scan this loop used to do per artist.
-  const page = [...byName].sort(([a], [b]) => a.localeCompare(b)).slice(offset, offset + limit);
-  for (const [, group] of page) {
-    const id = encodeId(IdKind.Artist, library.id, group.name);
-    const letter = /^[A-Z]/i.test(group.name) ? group.name[0].toUpperCase() : '#';
-    const node = artistElement({
-      id,
-      name: group.name,
-      albumCount: group.albums.size,
-      ...(annotations.stars.has(id) && { starred: undefined }),
-    });
-    const existing = buckets.get(letter);
-    if (existing) {
-      existing.push(node);
-    } else {
-      buckets.set(letter, [node]);
-    }
-  }
-
-  const indexes = [...buckets]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, artists]) => elList('index', 'artist', { name }, artists));
+  const groups = groupArtistRows(rows).slice(offset, offset + limit);
+  const annotations = await annotationsFor(context, groups.map((group) => group.name.toLowerCase()));
+  const indexes = artistIndexGroups(library, groups, annotations.stars);
 
   return respond(context, elList('artists', 'index', { ignoredArticles: 'The El La Los Las Le Les' }, indexes));
 }

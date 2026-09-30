@@ -307,13 +307,36 @@ describe('envelope', () => {
     expect(body).toContain('<error code="70" message="Album not found."/>');
   });
 
-  it('returns 401 for a credential failure, keeping code=40 in the body', async () => {
-    // Both signals are correct: HTTP-level tooling can see the failure, and a client
-    // that reads the envelope still gets "wrong username or password".
+  it('answers a credential failure with 200 and code=40', async () => {
+    // The envelope is the contract, so a protocol failure is a 200 — including
+    // `code=40`, which used to be a 401. Every real server (Navidrome, Gonic, Airsonic)
+    // sends 200 here, and a client that treats a non-2xx as a transport fault cannot tell
+    // a wrong password from a broken network: `fin` calls `.error_for_status()` before it
+    // parses, so it reported a bare `401 Unauthorized` with no message on a server whose
+    // credentials were simply wrong.
     const response = errorResponse(new SubsonicError(ErrorCode.WrongCredentials), { format: 'json' });
-    expect(response.status).toBe(401);
-    const body = (await response.json()) as { 'subsonic-response': { status: string; error: { code: number } } };
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { 'subsonic-response': { status: string; error: { code: number; message: string } } };
+    expect(body['subsonic-response'].status).toBe('failed');
     expect(body['subsonic-response'].error.code).toBe(40);
+    expect(body['subsonic-response'].error.message.length).toBeGreaterThan(0);
+  });
+
+  it('answers 429 only for a throttle, since a client has to be able to back off', async () => {
+    // The one non-200 on this surface, and the reason it is the exception: throttling is a
+    // transport condition, and a client that reads only the envelope cannot tell "you are
+    // being throttled" from "you are wrong". Both are reported — 429 *and* a valid failed
+    // envelope — because a client that only looks at one of them still needs the other.
+    const throttled = errorResponse(new SubsonicError(ErrorCode.Generic, 'Too many requests.'), { format: 'json' }, true);
+    expect(throttled.status).toBe(429);
+    const body = (await throttled.json()) as { 'subsonic-response': { status: string; error: { code: number } } };
+    expect(body['subsonic-response'].status).toBe('failed');
+    expect(body['subsonic-response'].error.code).toBe(ErrorCode.Generic);
+
+    // …and unthrottled it is a plain 200, so the status reports the transport condition
+    // rather than the protocol one.
+    const plain = errorResponse(new SubsonicError(ErrorCode.Generic), { format: 'json' });
+    expect(plain.status).toBe(200);
   });
 
   it('is never cached', async () => {

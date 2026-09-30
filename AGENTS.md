@@ -185,6 +185,18 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the same defect as the subrequest bound that lived in a comment. Asserted in
   `test/music-folder-index.test.ts`, paired with the shape assertions because shapes
   alone pass again on two surfaces that disagree.
+- **A repeated child lives where the schema puts it, and the suite reads the schema.**
+  `getIndexes` nested the folders as `shortcut` children *inside* the letter `index`
+  groups; the schema puts `shortcut` directly under `indexes` and `artist` under
+  `index`. No client reads `index.shortcut`, so the whole alphabetical browse was empty
+  on a client that works everywhere else — and the suite asserted the wrong shape,
+  because the assertion was written from the code rather than the schema. The folders
+  are top-level `shortcut` children now, the letter groups hold the same artists
+  `getArtists` publishes — one grouping (`groupArtistRows` in `rest/mappers.ts`), one
+  letter function, one element constructor, or the two browses disagree about who is
+  whom and which letter they are under — and the test drills an id from `getIndexes`
+  into `getArtist`, because shapes alone pass again on two surfaces that disagree.
+  Asserted in `test/worker.int.test.ts`, which goes red on the old placement.
 - **A limit that claims to key on an identity runs after the middleware that sets it.**
   The rate limiter prefers `c.get('AuthenticatedUserEmailAddress')` over the client address, so registering it
   before `userAuthentication` makes it fall back to `ip:…` — silently, and with a comment
@@ -459,6 +471,35 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   deployment whose aggregates stayed empty. The double now calls `deriveFromPath` and
   stamps `DERIVED_VERSION` — because a double is evidence only to the extent it models
   the platform, and *which* platform matters as much as modelling it.
+- **A failure that says nothing about the file earns no stamp.** `enriched_at` means
+  "already read", and `shouldEnrich` trusts it — so writing it over a `503`, a timeout,
+  or a reset connection makes a transient fault permanent: the row reports duration `0`
+  for ever, and no `getSong`, rescan, or re-index re-reads it. It shipped: four tracks
+  of a live library caught a flapping origin during the scan and stayed at duration `0`
+  with no tags. `isTransientEnrichmentFailure` (`index/enrichmentRetry.ts`) is the split —
+  `408`/`429`/`5xx` or no status at all leaves the row untouched — and it covers the
+  tail read too, where even good prefix tags are discarded rather than written without
+  their duration. Asserted in `test/enrichment-config.test.ts`, paired with the `404`
+  case proving a definitive failure still stamps, without which the fix is just "never
+  write".
+- **"We looked and there is nothing" and "we could not look" are different
+  observations, and only the first is worth remembering.** The artwork negative cache
+  used to be written whenever the probe found nothing — including when the probe threw —
+  so one `503` became "no artwork" for 30 days under a key the file's own revisions
+  could never invalidate. `embeddedAlbumArt` writes the zero-length entry only when a
+  read actually completed (`examined`). Asserted in `test/cover-art-embedded.test.ts`,
+  paired with the completed-read case for the same reason as above.
+- **An unawaited promise is not a cheaper version of an awaited one, it is a different
+  one.** The artwork cache was the only KV write in the product issued as `void
+  deps.cache.putBytes(...)`, and work a Workers handler does not await is not guaranteed
+  to run — so the cover cache never populated, and every cell of an album grid re-read
+  the origin at up to two ranged reads each against a 50-subrequest ceiling. Same defect
+  as voiding `requireForUser`, one level down. Both writes are awaited now, and the
+  double can tell the difference: `fakeKv`'s `put` used to settle on the microtask queue,
+  so an abandoned write still landed in time and the suite proved a cache that production
+  never filled. `deferPuts` holds every write until released, so the ordering — the
+  response must not resolve before its write settles — is asserted rather than assumed.
+  Asserted in `test/cover-art-embedded.test.ts`, which goes red on the `void` version.
 
 ## Test doubles must model the platform
 
@@ -479,6 +520,12 @@ from this repository's own history:
   `test/ogg-packet-layout.test.ts`), so the fixture is checked against the format rather
   than against the reader it exists to catch. A fixture that only mirrors the reader's
   assumptions cannot fail for the reader's reason.
+- `fakeDav` used to fail as a whole — `status` or `failAll` — so no test could stage an
+  origin that **lists a file and then refuses its bytes**. That split is the live shape:
+  a `207` on `PROPFIND` with a `503` on the ranged `GET`, which is what poisoned both
+  the artwork negative cache and four enrichment rows. `setGetStatus` fails the `GET`s
+  while the listings still succeed, and it is mutable mid-test because the defect is
+  only visible across the moment the origin recovers.
 - `fakeDav` used to answer any `Range` with the whole file and a `Content-Range` header
   claiming a prefix. That models a server lying about what it served, and it hid the one
   bug this product exists to avoid. It truncates now, and answers `416` past the end.

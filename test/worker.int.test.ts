@@ -83,14 +83,39 @@ describe('the Subsonic envelope', () => {
 });
 
 describe('authentication', () => {
-  it('rejects a wrong token with 401 and code=40 in the body', async () => {
-    // Both signals are correct: the status is what HTTP-level tooling reads, and the
-    // envelope is what a client reads. A client that only reads the body still says
-    // "wrong password" rather than "server error".
+  it('rejects a wrong token with code=40, over HTTP 200', async () => {
+    // 200 with a failed envelope, which is what every real Subsonic server sends and what
+    // a client actually parses. It was 401, on the argument that HTTP-level tooling can
+    // only see a failed authentication through the status — and that cost a real client
+    // the one thing it needs: `fin` calls `.error_for_status()` before parsing anything,
+    // so a wrong password arrived as a bare `401 Unauthorized` with no message and no
+    // code, on a server whose every other answer was correct. The envelope is the
+    // contract; the status is not part of it.
     const { status, body } = await rest('ping', { t: '0'.repeat(32) });
-    expect(status).toBe(401);
+    expect(status).toBe(200);
     expect(body['subsonic-response'].status).toBe('failed');
     expect(body['subsonic-response'].error?.code).toBe(40);
+    // And the message survives, because that is what the user is shown.
+    expect(typeof body['subsonic-response'].error?.message).toBe('string');
+  });
+
+  it('answers every protocol error with 200, whatever the code', async () => {
+    // The general rule, walked rather than spot-checked: a non-2xx on this surface is a
+    // client bug, not information. `code=40` used to be the exception, and an exception
+    // here is a client that cannot read half its errors.
+    const failures = await Promise.all([
+      rest('ping', { t: '0'.repeat(32) }),
+      rest('ping', { u: 'nobody' }),
+      rest('noSuchEndpoint'),
+      rest('getSong', { id: 'not-a-real-id' }),
+      rest('getCoverArt'),
+      rest('getAlbum', { id: 'al:0-bm90LWEtcmVhbC1pZA==' }),
+    ]);
+    for (const { status, body } of failures) {
+      expect(status).toBe(200);
+      expect(body['subsonic-response'].status).toBe('failed');
+      expect(typeof body['subsonic-response'].error?.code).toBe('number');
+    }
   });
 
   it('reports an unknown user as code=40, not as a distinct code', async () => {
@@ -274,13 +299,30 @@ describe('browsing', () => {
     expect(folders).toEqual([{ id: 0, name: 'Home' }]);
   });
 
-  it('serves getIndexes from the index, with no WebDAV request', async () => {
+  it('serves getIndexes with folder shortcuts and tag-index artists, with no WebDAV request', async () => {
     // The origin is unreachable in this environment, so a request that succeeded proves
     // it never left the process.
+    //
+    // The shape is the schema's, not a choice: `shortcut` is a direct child of
+    // `indexes`, and each `index` group holds `artist` children. It shipped with the
+    // folders nested as `shortcut` children *inside* the letter groups, which no
+    // client reads — `index.artist` came back absent and the whole alphabetical
+    // browse was empty on a client that works everywhere else — and the assertion
+    // below was written from that code rather than from the schema, so it agreed.
     const { body } = await rest('getIndexes');
-    const indexes = (body['subsonic-response'].indexes as { index: Array<{ name: string; shortcut: Array<{ name: string }> }> }).index;
-    const shortcutNames = indexes.flatMap((index) => index.shortcut.map((shortcut) => shortcut.name));
-    expect(shortcutNames).toContain('Bon Iver');
+    const indexes = body['subsonic-response'].indexes as {
+      shortcut: Array<{ id: string; name: string }>;
+      index: Array<{ name: string; artist: Array<{ id: string; name: string }> }>;
+    };
+    expect(indexes.shortcut.map((shortcut) => shortcut.name)).toContain('Bon Iver');
+    const artists = indexes.index.flatMap((group) => group.artist);
+    expect(artists.map((artist) => artist.name)).toContain('Bon Iver');
+
+    // And the round trip, which is the point of publishing the id: an artist read
+    // from `getIndexes` drills into `getArtist` instead of answering `code=70`.
+    const bonIver = artists.find((artist) => artist.name === 'Bon Iver')!;
+    const drilled = await rest('getArtist', { id: bonIver.id });
+    expect((drilled.body['subsonic-response'].artist as { name: string }).name).toBe('Bon Iver');
   });
 
   it('serves getMusicDirectory with files as children and no WebDAV request', async () => {

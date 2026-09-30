@@ -31,7 +31,7 @@
  * which is why this library reported no artist, album, genre, track or year for any Opus
  * file, and therefore had nothing to group.
  */
-import { parseVorbisComments, readUintLE } from './bits';
+import { parseVorbisCommentSource, readUintLE } from './bits';
 import { EMPTY_TAGS } from './types';
 import { fileGranule,  readPage, startsWith, walkPackets, walkPages, OGG_EOS_FLAG, OGG_MAGIC } from './oggFraming';
 import type { AudioTags } from './types';
@@ -54,13 +54,25 @@ function readOpus(bytes: Uint8Array, fileSize: number | null): AudioTags {
   let comments: CommentFields | null = null;
 
   walkPackets(bytes, (packet) => {
-    if (startsWith(packet, OPUS_HEAD, 0)) {
-      channels = packet[9] ?? null;
-      preskip = readUintLE(packet, 10, 2) ?? 0;
-    } else if (startsWith(packet, OPUS_TAGS, 0)) {
+    const head = packet.read(0, OPUS_HEAD.length);
+    if (head !== null && startsWith(head, OPUS_HEAD, 0)) {
+      const identification = packet.read(0, 12);
+      channels = identification?.[9] ?? null;
+      preskip = (identification === null ? null : readUintLE(identification, 10, 2)) ?? 0;
+      return;
+    }
+    const tags = packet.read(0, OPUS_TAGS.length);
+    if (tags !== null && startsWith(tags, OPUS_TAGS, 0)) {
       // The comment block for Opus starts 8 bytes in; there is no vendor-length
-      // wrapper beyond the standard one `parseVorbisComments` reads itself.
-      comments = parseVorbisComments(packet, 8);
+      // wrapper beyond the standard one the walk reads itself.
+      //
+      // Read from the packet **index** rather than from a concatenated buffer, because
+      // the comment packet of a real track is 1,158,339 bytes — an embedded cover, base64
+      // encoded — and concatenating it (or refusing to, which is what a bound on packet
+      // size means) is what left every Opus file in the live library with a null title,
+      // artist, album, genre, track and year. The list is sequential, so the tags in front
+      // of that cover are read and the cover itself is skipped over as an extent.
+      comments = parseVorbisCommentSource(packet, OPUS_TAGS.length);
     }
   });
 
@@ -96,7 +108,8 @@ function readVorbis(bytes: Uint8Array, fileSize: number | null): AudioTags {
   let comments: CommentFields | null = null;
 
   walkPackets(bytes, (packet) => {
-    if (startsWith(packet, VORBIS_ID_MAGIC, 0)) {
+    const id = packet.read(0, VORBIS_ID_MAGIC.length);
+    if (id !== null && startsWith(id, VORBIS_ID_MAGIC, 0)) {
       // The identification header after `\x01vorbis` is, in order (Vorbis I spec
       // §4.2.1): vorbis_version u32, audio_channels u8, audio_sample_rate u32,
       // bitrate_maximum i32, bitrate_nominal i32, bitrate_minimum i32, blocksize u8,
@@ -108,14 +121,19 @@ function readVorbis(bytes: Uint8Array, fileSize: number | null): AudioTags {
       // out as a large positive value instead of an error. A client then seeks to the
       // wrong offset and the track appears to end early.
       const at = 7;
-      channels = packet[at + 4] ?? null;
-      sampleRate = readUintLE(packet, at + 5, 4);
+      const identification = packet.read(0, at + 17);
+      if (identification === null) return;
+      channels = identification[at + 4] ?? null;
+      sampleRate = readUintLE(identification, at + 5, 4);
       // `bitrate_nominal` is the middle of the three bitrate fields, and -1
       // means "unknown", which must not become a bitrate of -1.
-      const nominal = readUintLE(packet, at + 13, 4);
+      const nominal = readUintLE(identification, at + 13, 4);
       nominalBitrate = nominal !== null && nominal > 0 ? Math.round(nominal / 1000) : null;
-    } else if (startsWith(packet, VORBIS_COMMENT_MAGIC, 0)) {
-      comments = parseVorbisComments(packet, 7);
+      return;
+    }
+    const comment = packet.read(0, VORBIS_COMMENT_MAGIC.length);
+    if (comment !== null && startsWith(comment, VORBIS_COMMENT_MAGIC, 0)) {
+      comments = parseVorbisCommentSource(packet, VORBIS_COMMENT_MAGIC.length);
     }
   });
 
@@ -144,11 +162,13 @@ function detectOggCodec(bytes: Uint8Array): 'vorbis' | 'opus' {
   // pages are what delimit it.
   let codec: 'vorbis' | 'opus' | null = null;
   walkPackets(bytes, (packet) => {
-    if (startsWith(packet, OPUS_HEAD, 0)) {
+    const head = packet.read(0, OPUS_HEAD.length);
+    if (head !== null && startsWith(head, OPUS_HEAD, 0)) {
       codec = 'opus';
       return false;
     }
-    if (!startsWith(packet, VORBIS_ID_MAGIC, 0)) {
+    const id = packet.read(0, VORBIS_ID_MAGIC.length);
+    if (id === null || !startsWith(id, VORBIS_ID_MAGIC, 0)) {
       return;
     }
 

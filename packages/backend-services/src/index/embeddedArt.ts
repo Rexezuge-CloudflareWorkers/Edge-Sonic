@@ -39,19 +39,19 @@
  * Two subrequests in the worst case, per album:
  *
  * 1. A bounded prefix read. FLAC's metadata block table and ID3v2's frame headers are
- *    both at the front, so this is enough to *locate* a picture without reading it.
+ *    both at the front, so this is enough to *locate* a picture without reading it. For
+ *    Ogg the same read walks the comment packet and either decodes the picture from it
+ *    or measures the page-aligned fetch that would reproduce it.
  * 2. One exact range read for the image itself, when the picture is past the prefix —
- *    which for FLAC is the normal case, because `PICTURE` is conventionally last.
- *
- * An Ogg file needs neither: `walkPackets` already reassembles the comment packet, so
- * the base64 `METADATA_BLOCK_PICTURE` decodes from the prefix. One subrequest.
+ *    which for FLAC is the normal case, because `PICTURE` is conventionally last, and
+ *    for Ogg is the fetch the first read sized.
  *
  * The probe is capped at {@link ART_TRACK_LIMIT} tracks, mirroring the artist cover
  * path's own `ARTIST_COVER_PROBE_LIMIT`. Real libraries have albums where the picture
  * is on some files and not others, so one track is not enough; a compilation with
  * none of them is not worth more than three reads to discover.
  */
-import { findPicture, id3TagSize, resolveImageBytes } from '@edge-sonic/media-tags';
+import { findPicture, id3TagSize, materializePicture } from '@edge-sonic/media-tags';
 import type { EmbeddedPicture, PictureSource } from '@edge-sonic/media-tags';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
@@ -84,6 +84,18 @@ const ART_PREFIX_BYTES = 128 * 1024;
  * TIFF, and a 1400×1400 JPEG is a few hundred kilobytes.
  */
 const ART_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * The largest **fetch** this module will issue for one picture.
+ *
+ * Distinct from {@link ART_MAX_BYTES} because for Ogg the bytes on the wire are not the
+ * image: the cover is carried as base64, so 868 KB of PNG is 1,158,199 bytes of text, and
+ * that text is split across 18 Ogg pages whose headers have to be fetched and stripped as
+ * well. The bound covers the expansion and the headers rather than assuming the image's
+ * own bound is enough — a fetch refused for being "too big" is the placeholder, which is
+ * the answer a client cannot act on.
+ */
+const ART_MAX_FETCH_BYTES = 16 * 1024 * 1024;
 
 /**
  * The largest ID3v2 tag this server will read in full, for the second attempt.
@@ -127,17 +139,19 @@ interface ResolvedArt {
 
 /**
  * Turn a located picture into bytes, spending the second request only if it is needed.
+ *
+ * Delegates to `materializePicture` rather than implementing the two claim kinds here,
+ * because the Ogg one needs the Ogg framing — a claim about a comment packet's
+ * page-aligned extent is not a range of image bytes, and a caller that only knew how to
+ * fetch a range and sniff it had no way to satisfy it. The bounds are still decided here,
+ * where the cost is budgeted.
  */
 async function materialize(client: WebDavClient, source: ArtSource, located: PictureSource, timeoutMs: number): Promise<EmbeddedPicture | null> {
-  if (located.kind === 'inline') return located.picture;
-  if (located.length === 0 || located.length > ART_MAX_BYTES) return null;
-  const data = await client.readRange(source.path, located.offset, located.length, timeoutMs);
-  // A short read means the origin served less than the block declared — a truncated
-  // file, or a server that ignored the `Range` and sent the head instead. Either way the
-  // bytes are not the image, and a partial image handed to a client is a cover that
-  // "loaded" and renders as a grey box, so it is refused rather than served.
-  if (data.byteLength !== located.length) return null;
-  return resolveImageBytes(data);
+  return await materializePicture(
+    located,
+    async (offset, length) => await client.readRange(source.path, offset, length, timeoutMs),
+    { maxImageBytes: ART_MAX_BYTES, maxFetchBytes: ART_MAX_FETCH_BYTES },
+  );
 }
 
 /**
@@ -145,12 +159,13 @@ async function materialize(client: WebDavClient, source: ArtSource, located: Pic
  *
  * Two reads at most, and the second is conditional on a fact the first read established
  * rather than on a guess: for an ID3 tag larger than the prefix, the picture is
- * somewhere past it and the tag's own size field says how far.
+ * somewhere past it and the tag's own size field says how far. For Ogg it is the comment
+ * packet's own page geometry, which the first read has already measured.
  */
 async function pictureFromFile(client: WebDavClient, source: ArtSource, timeoutMs: number): Promise<EmbeddedPicture | null> {
   const head = await client.readPrefix(source.path, ART_PREFIX_BYTES, timeoutMs);
 
-  const located = findPicture(head);
+  const located = findPicture(head, source.size);
   if (located !== null) {
     const picture = await materialize(client, source, located, timeoutMs);
     if (picture !== null) return picture;
@@ -167,7 +182,7 @@ async function pictureFromFile(client: WebDavClient, source: ArtSource, timeoutM
   if (tagEnd <= head.length || tagEnd > ART_MAX_TAG_BYTES) return null;
 
   const tag = await client.readRange(source.path, 0, tagEnd, timeoutMs);
-  const retry = findPicture(tag);
+  const retry = findPicture(tag, source.size);
   return retry === null ? null : await materialize(client, source, retry, timeoutMs);
 }
 
@@ -219,10 +234,15 @@ async function embeddedAlbumArt(
   }
 
   const client = await deps.clientFor(library);
+  // Whether any candidate was actually **read**. Not "did we look", which is always true,
+  // but "did a read complete" — and the difference is the whole point of the negative
+  // cache below.
+  let examined = false;
   for (const source of sources) {
     let picture: EmbeddedPicture | null;
     try {
       picture = await pictureFromFile(client, source, timeoutMs);
+      examined = true;
     } catch (error) {
       // One unreadable track is not a failed request. The next candidate may well have
       // the picture, and if none does the answer is "no artwork" — which is what a
@@ -235,15 +255,42 @@ async function embeddedAlbumArt(
     if (picture === null || picture.data.byteLength === 0) continue;
     const mimeType = picture.mimeType;
     if (mimeType === null) continue;
-    // Fire-and-forget: a cache write that fails must not fail the request that already
-    // has the bytes in hand. `KvCache` fails soft, and the next request re-reads.
-    void deps.cache.putBytes('albumArt', key, picture.data);
+    // **Awaited, not fire-and-forget.** The reasoning that produced `void` here was that
+    // "a cache write that fails must not fail the request that already has the bytes in
+    // hand" — and `KvCache` already guarantees that: `putBytes` fails soft and returns
+    // `false`, so awaiting it cannot throw. What `void` actually cost is the write
+    // itself, because a promise a request handler does not await is not guaranteed to run
+    // at all.
+    //
+    // It did not run. `albumArt` was the only cache write in the product issued this way,
+    // and against a live origin it populated nothing: a request for an album's cover read
+    // the track, served the image, and left the cache empty, so the next cell of an album
+    // grid did it again. Each cover costs up to two ranged reads against a **50**
+    // external-subrequest Free-plan ceiling, so a grid is not a slow endpoint — it is a
+    // failing one. This is the same defect as voiding `requireForUser`: an unawaited
+    // promise is not a cheaper version of an awaited one, it is a different one.
+    await deps.cache.putBytes('albumArt', key, picture.data);
     return { mimeType, data: picture.data };
   }
 
-  // Cached under the same key, so the next request for this exact revision of this
-  // album skips the probe entirely. `void` for the same reason as above.
-  void deps.cache.putBytes('albumArt', key, new Uint8Array(0));
+  // Cached under the same key, so the next request for this exact revision of this album
+  // skips the probe entirely — **but only when a read actually completed.**
+  //
+  // This is the negative cache's other half, and it shipped without it: an origin that
+  // answered `503` once had "this album has no artwork" written for it, which is a
+  // 30-day entry. Nothing re-reads it, because the key is the tracks' revisions and those
+  // have not changed — so one transient fault cost the album its cover until the file moved
+  // or the entry aged out. It is not hypothetical: the library this was found on answers
+  // `503` intermittently, so covers were being poisoned faster than they were being filled.
+  //
+  // A transport failure and "there is no picture" are different observations, and only one
+  // of them is worth remembering. Not caching is cheap — the negative entry exists so an
+  // album that genuinely has no art does not re-probe on every request — while caching the
+  // wrong one is a correct-looking, invisible, permanent loss.
+  // Awaited for the reason the positive write is, and it matters more here: this entry is
+  // the one that makes a cover *stay* missing, so a write that silently never happened is
+  // the cheapest possible outcome and the hardest to notice.
+  if (examined) await deps.cache.putBytes('albumArt', key, new Uint8Array(0));
   return null;
 }
 

@@ -201,7 +201,13 @@ than wrong, because a client seeks by it.
 - A `WEBDAV` failure or an unreadable container resolves to "no enrichment" and is
   **recorded as an attempt**, so a format this server cannot read is not retried on every
   play. A transient error is deliberately *not* recorded, so a recovered origin is
-  retried.
+  retried. The split is `isTransientEnrichmentFailure` in `index/enrichmentRetry.ts`,
+  beside `shouldEnrich` because the two are one decision — what "already read" means and
+  what earns the stamp — and it covers the tail read too: a prefix whose tags parsed and
+  a tail that 503'd writes nothing, not even the good tags, because writing them would
+  strand the duration at `0` with the same permanence. It shipped the other way round:
+  every failure stamped the row, and four tracks of a live library caught a flapping
+  origin during the scan and reported duration `0` for ever.
 - It is best-effort about the cache and authoritative about D1: a dead `CACHE` costs
   latency and nothing else.
 
@@ -236,11 +242,14 @@ written, and one unavailable origin must not discard them.
 `errors/ErrorMapper.ts` has two dialects, and the split is **by surface, not by
 convenience**:
 
-- `toSubsonicError` → the protocol envelope, HTTP 200, except `code=40` which is 401.
-  `NotFoundError` becomes `70`; `UnauthorizedError` becomes `50` and **never** `40`,
+- `toSubsonicError` → the protocol envelope, HTTP 200 for every protocol error,
+  including `code=40`. `NotFoundError` becomes `70`; `UnauthorizedError` becomes `50`
+  and **never** `40`,
   because a request that authenticated fine and was then refused is a different thing, and
   reporting it as 40 sends a user with valid credentials to re-enter their password. A
   5xx is masked completely: the cause is logged, and a D1 error names tables and columns.
+  The one exception is a  `429` emitted by the rate limiter, which keeps its status so a
+  client backs off — still in the envelope on `/rest`, so the dialect does not split.
 - `toUserResponse` → `{Exception:{Type,Message}}` with the status the SPA reads. A 4xx
   keeps its message; a 5xx is masked to the generic one.
 

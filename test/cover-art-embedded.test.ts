@@ -30,7 +30,7 @@
  * - The cache key carries the track's `mtime_ms`, so re-tagging a track re-reads it.
  * - A cover request never answers with a Subsonic envelope, whatever the origin does.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHarness, ALBUM_DIR, LIBRARY_ID, subsonicId } from './helpers/harness';
 import { NodeDAO } from '@edge-sonic/backend-data/dao';
 import type { Harness } from './helpers/harness';
@@ -228,6 +228,65 @@ describe('getCoverArt with embedded artwork', () => {
     expect(harness.dav.requestCount()).toBe(afterFirst);
   });
 
+  it('does not answer before its cache write has settled, so the write is not abandoned', async () => {
+    // The cache test above passes either way, which is the whole problem. `fakeKv`'s `put`
+    // is an `async` function with no `await` in it, so it settles on the microtask queue —
+    // an unawaited write lands in time, every time, and the omission is invisible.
+    //
+    // It shipped: `albumArt` was the only write in the product issued as
+    // `void deps.cache.putBytes(...)`, and a promise a request handler does not await is
+    // not guaranteed to run at all. Against a live origin it populated nothing: each
+    // request for a cover read the track, served the image, and left the cache empty, so
+    // every cell of an album grid did it again — up to two ranged reads each, against a
+    // **50** external-subrequest Free-plan ceiling. That is an endpoint that fails, not one
+    // that is slow, and the suite was green throughout.
+    //
+    // So the double is made slow on purpose. `deferPuts` holds every write until the test
+    // releases it, which is the only way to tell a *completed* promise from an
+    // *abandoned* one — the same reason `withReceiverCheck` exists for `fetch`, and the
+    // same reason `latencyMs` exists for the scan's deadline.
+    //
+    // The assertion is ordering, not content: while the write is held, the response must
+    // not have resolved. It is what an `await` buys and what a `void` cannot, and it holds
+    // for the negative entry too — which is the one that makes a cover *stay* missing.
+    const held = await createHarness(originTree({ sidecar: null }), { deferPuts: true });
+    globalThis.fetch = held.dav.fetch;
+    try {
+      await held.db.db.prepare('DELETE FROM nodes WHERE path = ?').bind(COVER_NODE).run();
+
+      const inFlight = held.fetch(held.restUrl('getCoverArt', { id: subsonicId('al', ALBUM_DIR) }));
+      let answered = false;
+      void inFlight.then(() => {
+        answered = true;
+      });
+
+      // Let the handler reach the write, and prove it did: `calls.put` is the choke point,
+      // so a handler that never wrote would never trip it and this would time out rather
+      // than pass vacuously.
+      await vi.waitFor(() => {
+        expect(held.cache.calls.put).toBeGreaterThan(0);
+      });
+      await Promise.resolve();
+      expect(answered).toBe(false);
+
+      await held.cache.releasePuts();
+      const served = await inFlight;
+      expect([...new Uint8Array(await served.arrayBuffer())]).toEqual([...COVER]);
+
+      // And the bytes are actually in there, so the test is not merely observing a handler
+      // that blocks on something it never did. `putBytes` hands KV an `ArrayBuffer`, which
+      // is why this reads `.byteLength` rather than `.length` — an `ArrayBuffer` has no
+      // `.length`, so `value.length > 0` is `undefined > 0` and silently filters the entry
+      // out. A green assertion that measured nothing is the failure mode this file exists
+      // to catch, so it does not get to commit one.
+      const stored = [...held.cache.entries().values()].map((value) => (typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value)));
+      expect(stored.map((value) => value.byteLength)).toContain(COVER.length);
+    } finally {
+      globalThis.fetch = originalFetch;
+      held.close();
+    }
+  });
+
   it('re-reads the origin when the track changes, because the key carries its mtime and size', async () => {
     // The `reader_version` rule one level up: a re-tagged file changes its picture
     // without anything else in the library moving, so a cached entry has to become
@@ -254,6 +313,54 @@ describe('getCoverArt with embedded artwork', () => {
     await first.arrayBuffer();
     const afterFirst = harness.dav.requestCount();
     expect(afterFirst).toBeGreaterThan(0);
+
+    const second = await coverFor(subsonicId('al', ALBUM_DIR));
+    await second.arrayBuffer();
+    expect(harness.dav.requestCount()).toBe(afterFirst);
+  });
+
+  it('does not cache a transport failure as "this album has no artwork"', async () => {
+    // The negative cache is written whenever no picture is found, and it used to be
+    // written whenever the *probe* found nothing — including when the probe threw. So one
+    // `503` from the origin became "no artwork" for that album for the length of the TTL,
+    // and nothing could undo it: the key is the tracks' revisions, and those had not
+    // changed. It is not a hypothetical. The library this was found on answers `503` on
+    // ranged reads while still listing the file, so covers were being poisoned faster than
+    // they were being filled, and the symptom — a transparent tile — is identical to the
+    // one that has no cause a client can report.
+    //
+    // "We looked and there is nothing" and "we could not look" are different observations,
+    // and only the first is worth remembering. Not caching is cheap; caching the wrong one
+    // is a correct-looking, invisible, permanent loss.
+    harness.dav.setTree(originTree({ sidecar: null }));
+    harness.dav.setGetStatus(503);
+
+    const failed = await coverFor(subsonicId('al', ALBUM_DIR));
+    expect(failed.status).toBe(200);
+    expect((await failed.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    const whileBroken = harness.dav.requestCount();
+    expect(whileBroken).toBeGreaterThan(0);
+
+    // The origin recovers. Nothing about the album changed, so the cached negative would
+    // still be in force — and the cover would stay a placeholder for ever.
+    harness.dav.setGetStatus(null);
+
+    const recovered = await coverFor(subsonicId('al', ALBUM_DIR));
+    expect([...new Uint8Array(await recovered.arrayBuffer())]).toEqual([...COVER]);
+    expect(harness.dav.requestCount()).toBeGreaterThan(whileBroken);
+  });
+
+  it('still caches the negative answer when a read *did* complete and found nothing', async () => {
+    // The pair, without which the test above passes for the wrong reason: if the negative
+    // cache were simply removed, the previous test would also go green. The bound the
+    // first test defends is "a completed read with no picture", and this is that — and it
+    // has to be a *completed* read, because the fixture hands back a real `206` full of
+    // audio bytes, which is exactly what the broken origin in the test above never did.
+    harness.dav.setTree(originTree({ sidecar: null, trackBytes: AUDIO_ONLY }));
+
+    const first = await coverFor(subsonicId('al', ALBUM_DIR));
+    expect((await first.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    const afterFirst = harness.dav.requestCount();
 
     const second = await coverFor(subsonicId('al', ALBUM_DIR));
     await second.arrayBuffer();

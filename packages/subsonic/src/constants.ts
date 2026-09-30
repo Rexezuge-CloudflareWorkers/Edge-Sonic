@@ -57,7 +57,9 @@ const DEFAULT_FORMAT: ResponseFormat = 'xml';
  * branch on `status="failed"` rather than on the HTTP status. A 400 with a
  * correct body is reported to the user as "server error", losing the one piece
  * of information they need. So the envelope is authoritative and the status
- * follows it. The single exception is `code=40` (see `httpStatusForErrorCode`).
+ * follows it — for **every** protocol error, `code=40` included, because a client
+ * that treats a non-2xx as a transport fault cannot tell a wrong password from
+ * a broken network. The one exception is a throttle (see `httpStatusForErrorCode`).
  */
 const PROTOCOL_ERROR_HTTP_STATUS = 200;
 

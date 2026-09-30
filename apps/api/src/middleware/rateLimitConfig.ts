@@ -85,7 +85,7 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
 type LimitApp = Hono<{ Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmailAddress: string } }>;
 
 function install(app: LimitApp, def: RateLimitDef): void {
-  app.use(def.path, rateLimit({ windowMs: def.windowMs, max: def.max, keyPrefix: def.keyPrefix }));
+  app.use(def.path, rateLimit({ windowMs: def.windowMs, max: def.max, keyPrefix: def.keyPrefix, surface: def.surface }));
 }
 
 /**

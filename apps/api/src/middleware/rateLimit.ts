@@ -1,5 +1,6 @@
 import type { Next } from 'hono';
 import { RateLimitedError } from '@edge-sonic/backend-errors';
+import { errorResponse, ErrorCode, resolveFormat, SubsonicError } from '@edge-sonic/subsonic';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 
@@ -92,6 +93,7 @@ function rateLimit(opts: {
   windowMs: number;
   max: number;
   keyPrefix: string;
+  surface: 'rest' | 'user';
 }): (c: RateLimitContext, next: Next) => Promise<Response | void> {
   if (!Number.isSafeInteger(opts.windowMs) || opts.windowMs <= 0) {
     throw new Error(`Invalid rateLimit windowMs: ${String(opts.windowMs)} (must be a positive integer)`);
@@ -126,9 +128,29 @@ function rateLimit(opts: {
       }
       if (existing.count >= opts.max) {
         const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
-        // The canonical error type, so the wire envelope cannot drift from the mapping
-        // every other user error goes through. Hand-building the JSON here is how this
-        // response came to be the one user error in a second dialect.
+        // One surface, one dialect — and this middleware installs on **both**.
+        //
+        // `/rest` answers in the Subsonic envelope, which is what makes the 429 usable: a
+        // Subsonic client parses `subsonic-response` and nothing else, so a 429 carrying
+        // the user API's `{error:{…}}` body reaches it as "server error" and it retries
+        // immediately, which is the opposite of what a throttle is for. `throttled: true`
+        // is also the only thing that has ever reached `errorResponse`'s throttle branch —
+        // it was dead, so the status on this surface was whatever the envelope said.
+        //
+        // `/user` keeps the canonical error type, so its wire body cannot drift from the
+        // mapping every other user error goes through.
+        if (opts.surface === 'rest') {
+          const throttled = errorResponse(
+            new SubsonicError(ErrorCode.Generic, `Too many requests. Retry after ${retryAfter}s.`),
+            { format: resolveFormat(c.req.query('f')), jsonpCallback: c.req.query('callback') ?? null },
+            true,
+          );
+          // The interval travels on the header as well as in the message: a client that
+          // only reads the status has no other way to know how long to wait, and one that
+          // retries immediately is the failure a throttle exists to prevent.
+          throttled.headers.set('Retry-After', String(retryAfter));
+          return throttled;
+        }
         const limited = new RateLimitedError();
         return c.json(BaseRoute.toErrorBody(limited.getErrorCode(), limited.getErrorMessage()), limited.getErrorCode() as 429, {
           // A client that is told "slow down" without being told how long to wait
