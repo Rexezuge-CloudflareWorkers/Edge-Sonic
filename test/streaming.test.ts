@@ -250,9 +250,19 @@ describe('getCoverArt', () => {
     expect(response.headers.get('content-type')).toBe('image/jpeg');
   });
 
-  it('answers a missing cover with the protocol error, not with an empty image', async () => {
-    // A `200` with zero bytes is the worst answer: a client caches it and never asks
-    // again, so adding a cover later never shows up.
+  it('answers a missing cover with the protocol error when the folder itself does not exist', async () => {
+    // **This only covers the input that cannot reach the no-cover path**, and the comment
+    // used to claim it covered both. A nonexistent artist folder makes
+    // `TreeService.children` throw `NotFoundError` off the origin's `404`, which the error
+    // mapper turns into `code=70` — so this asserts a *missing directory*, not a missing
+    // picture.
+    //
+    // The two are different branches. An artist that **exists** but whose albums have no
+    // image does not throw: the folder is in D1, `findCover` returns `null`, and the
+    // endpoint serves the placeholder. So the assertion this test was making — "a
+    // `200` with zero bytes is the worst answer" — was never actually made about a
+    // missing cover. The real one is in `test/cover-art-embedded.test.ts`, against an
+    // album that exists and has no artwork in any form.
     const { body } = await harness.rest('getCoverArt', { id: subsonicId('ar', 'No Such Artist') });
     expect(body['subsonic-response'].error?.code).toBe(70);
   });

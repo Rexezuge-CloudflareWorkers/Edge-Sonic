@@ -87,32 +87,29 @@ function parseYear(value: string): number | null {
 }
 
 /**
- * Parse a `VORBIS_COMMENT` / `OpusTags` payload (vendor string and framing
- * already stripped by the caller).
+ * Walk a `VORBIS_COMMENT` / `OpusTags` comment list, calling `visit` with each
+ * normalized key and its raw value.
  *
  * Length-prefixed strings, little-endian 32-bit. The `vendor_length` and
  * `comment_count` are read defensively: a bogus count would otherwise make this
  * loop walk off the end of the buffer, which the per-field bounds check catches,
  * but it is cheaper to bound the loop too.
+ *
+ * The walk is factored out because there are now **two** readers of this list and
+ * they must not disagree about where a comment ends. `parseVorbisComments` takes the
+ * fields it knows by name; `findVorbisComment` takes the one whose value is not a
+ * field at all — `METADATA_BLOCK_PICTURE`, a base64 FLAC picture block, which is
+ * artwork rather than text. A second copy of this loop would be free to disagree
+ * with the first over the framing, and a disagreement about where a length-prefixed
+ * list ends is invisible until a picture silently decodes to the wrong bytes.
  */
-function parseVorbisComments(bytes: Uint8Array, offset: number): CommentFields {
-  const fields: CommentFields = {
-    title: null,
-    artist: null,
-    album: null,
-    albumArtist: null,
-    genre: null,
-    year: null,
-    track: null,
-    disc: null,
-  };
-
+function walkVorbisCommentList(bytes: Uint8Array, offset: number, visit: (key: string, value: string) => boolean | void): void {
   const vendorLength = readUintLE(bytes, offset, 4);
-  if (vendorLength === null) return fields;
+  if (vendorLength === null) return;
   let cursor = offset + 4 + vendorLength;
 
   const count = readUintLE(bytes, cursor, 4);
-  if (count === null) return fields;
+  if (count === null) return;
   cursor += 4;
 
   // A real library has tens of comments per file; the cap is a bound on a
@@ -130,10 +127,29 @@ function parseVorbisComments(bytes: Uint8Array, offset: number): CommentFields {
 
     const equals = comment.indexOf('=');
     if (equals <= 0) continue;
-    const key = normalizeCommentKey(comment.slice(0, equals));
     const value = comment.slice(equals + 1);
     if (value.length === 0) continue;
+    if (visit(normalizeCommentKey(comment.slice(0, equals)), value) === false) return;
+  }
+}
 
+/**
+ * Parse a `VORBIS_COMMENT` / `OpusTags` payload (vendor string and framing
+ * already stripped by the caller).
+ */
+function parseVorbisComments(bytes: Uint8Array, offset: number): CommentFields {
+  const fields: CommentFields = {
+    title: null,
+    artist: null,
+    album: null,
+    albumArtist: null,
+    genre: null,
+    year: null,
+    track: null,
+    disc: null,
+  };
+
+  walkVorbisCommentList(bytes, offset, (key, value) => {
     switch (key) {
       case 'TITLE': {
         fields.title ??= value;
@@ -174,10 +190,30 @@ function parseVorbisComments(bytes: Uint8Array, offset: number): CommentFields {
         break;
       }
     }
-  }
+  });
 
   return fields;
 }
 
-export { readUintBE, readUintLE, readBitsBE, parseVorbisComments, normalizeCommentKey };
+/**
+ * The first value for one comment key, or `null`.
+ *
+ * For the key whose value is not text. `METADATA_BLOCK_PICTURE` is how an Ogg file
+ * carries artwork: the value is a base64-encoded FLAC `PICTURE` block, so it is
+ * artwork in a comment list and this module has to reach the list to find it.
+ */
+function findVorbisComment(bytes: Uint8Array, offset: number, wanted: string): string | null {
+  const target = normalizeCommentKey(wanted);
+  // A box rather than a `let`: the assignment happens inside a callback, and a
+  // narrowed-to-`null` local would be reported as unreachable at the return.
+  const box: { value: string | null } = { value: null };
+  walkVorbisCommentList(bytes, offset, (key, value) => {
+    if (key !== target) return;
+    box.value = value;
+    return false;
+  });
+  return box.value;
+}
+
+export { readUintBE, readUintLE, readBitsBE, parseVorbisComments, findVorbisComment, walkVorbisCommentList, normalizeCommentKey };
 export type { CommentFields };

@@ -11,3 +11,5 @@ export type { ScanDeps, ScanNodeInput, ScanSongInput, ScanDerivationStore } from
 export { MAX_CONSECUTIVE_FAILURES, isAdvancing } from './scanRetry';
 export { EnrichmentService, shouldEnrich } from './EnrichmentService';
 export type { EnrichmentDeps } from './EnrichmentService';
+export { embeddedAlbumArt, pictureFromFile, ART_TRACK_LIMIT, ART_PREFIX_BYTES, ART_MAX_BYTES, ART_MAX_TAG_BYTES } from './embeddedArt';
+export type { ArtSource, EmbeddedArtDeps, ResolvedArt } from './embeddedArt';

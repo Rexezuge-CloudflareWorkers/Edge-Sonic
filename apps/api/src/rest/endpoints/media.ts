@@ -1,5 +1,8 @@
 /**
- * Media retrieval: `stream`, `download`, `getCoverArt`.
+ * Media retrieval: `stream` and `download`.
+ *
+ * `getCoverArt` lives in `./coverArt` — it is the one media endpoint that is not a
+ * passthrough, since it has to *find* a picture that may not exist as a file at all.
  *
  * ### No transcoding, and no pretending
  *
@@ -21,14 +24,16 @@
  * `Content-Range` intact. This is the one endpoint where "don't be clever" is the
  * entire implementation.
  */
-import { decodeId, encodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
+import { decodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
 import type { IdKindValue } from '@edge-sonic/subsonic';
-import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { guessContentType } from '../mappers';
+import { getCoverArt } from './coverArt';
 
 type PassthroughResponse = { response: Response };
+
+export type { PassthroughResponse };
 
 /**
 Response headers forwarded from the origin. Everything else is dropped.
@@ -147,137 +152,6 @@ async function download(context: RestContext): Promise<PassthroughResponse> {
 }
 
 /**
- * `getCoverArt` — an album, artist, or song's cover image.
- *
- * The id may be any of the three, so the folder is resolved first and the probe
- * order is fixed (`cover`, `folder`, `front`, …). A request for a song id resolves
- * to that song's *album* directory, which is why a client can pass whatever id it
- * happens to be holding.
- *
- * `size` is **ignored**. Resizing needs an image decoder, and this server has none;
- * sending the original is honest, and a client that asked for 300px can scale it.
- * Claiming to have resized while sending the original would just be a lie with more
- * steps.
- */
-async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
-  const id = context.params.require('id');
-  // The prefix is not checked here: `getCoverArt` legitimately accepts a song, an
-  // album, an artist, or a directory id, and all four resolve to a folder.
-  const decoded = decodeId(id);
-  TreeService.assertPath(decoded.path);
-  const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
-  context.libraries.assertReachable(library);
-
-  const folder = await resolveCoverFolder(library, decoded.kind, decoded.path, context);
-  if (folder === null) {
-    // A missing cover is `404` with a tiny generated image rather than a Subsonic
-    // error: every client has a placeholder path for "artwork did not load", and a
-    // protocol envelope would be written into an `<img>` tag.
-    return { response: new Response(PLACEHOLDER_PNG, { status: 200, headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400' } }) };
-  }
-
-  const client = await context.libraries.clientFor(library);
-  const upstream = await client.get(folder, { timeoutMs: context.streamTimeoutMs });
-  const response = passthrough(upstream);
-  // The origin's `Content-Type` for an image is reliable, but a WebDAV server that
-  // reports `application/octet-stream` for a JPEG would make some clients refuse to
-  // decode it. The extension is the better signal here.
-  const declared = response.headers.get('content-type');
-  if (declared === null || declared === 'application/octet-stream') {
-    const byExtension = IMAGE_CONTENT_TYPES[folder.slice(folder.lastIndexOf('.') + 1).toLowerCase()];
-    if (byExtension) response.headers.set('content-type', byExtension);
-  }
-  // Cover art is immutable per album revision, so it is the one media response that
-  // is cacheable by a shared cache.
-  response.headers.set('Cache-Control', 'public, max-age=86400');
-  return { response };
-}
-
-const IMAGE_CONTENT_TYPES: Record<string, string> = {
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  png: 'image/png',
-  webp: 'image/webp',
-  gif: 'image/gif',
-};
-
-/**
-A 1×1 transparent PNG, for "this album has no cover".
-*/
-const PLACEHOLDER_PNG = Uint8Array.from(
-  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='),
-  (char) => char.charCodeAt(0),
-);
-
-/**
-The folder to look for a cover in, for any accepted id kind.
-*/
-async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<string | null> {
-  if (kind === IdKind.Song) {
-    const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
-    return song ? (await findCoverIn(library, song.dir_path, context)) : null;
-  }
-  if (kind === IdKind.Album) return await findCoverIn(library, path, context);
-  if (kind === IdKind.Directory) return await findCoverIn(library, path, context);
-  if (kind === IdKind.Artist) {
-    // An artist id carries the artist *name*, not a path, so the folder has to be
-    // found. Albums are searched first, because that is where the cover lives, and
-    // the artist directory is the fallback for a library that keeps one.
-    const rows = await context.songIndex.listArtists(library.id, ARTIST_COVER_ROW_LIMIT, 0);
-
-    // One probe per *album directory*, not per song row. `listArtists` returns every
-    // song on the artist page, so an artist with 300 tracks in 30 albums was 300
-    // `findCoverIn` calls — each a D1 read or a live `PROPFIND` — to look for one
-    // image. A `Set` over the directories collapses that to at most 30, and the
-    // `take` bounds it at a handful so a compilation cannot spend a whole budget of
-    // requests on a cover that is not there.
-    //
-    // The first album is not necessarily the one with art, so this is a *sample*, and
-    // the directory fallback below is what covers the rest. Probing all 30 to be sure
-    // is the trade being declined: `getCoverArt` is called once per album row a client
-    // draws, so 30 subrequests per row is a budget failure, not thoroughness.
-    const wanted = path.toLowerCase();
-    const probed = new Set<string>();
-    for (const row of rows) {
-      if (((row.artist ?? row.album_artist ?? '').toLowerCase() !== wanted) || probed.has(row.dir_path)) continue;
-      if (probed.size >= ARTIST_COVER_PROBE_LIMIT) break;
-      probed.add(row.dir_path);
-      const found = await findCoverIn(library, row.dir_path, context);
-      if (found !== null) return found;
-    }
-    const slash = path.indexOf('/');
-    return await findCoverIn(library, slash === -1 ? path : path.slice(0, slash), context);
-  }
-  return null;
-}
-
-/**
- * How many song rows an artist cover request will consider.
- *
- * A bound because `listArtists` is `SELECT *` over every track by that artist — a page
- * size of 500 on an artist with 5,000 tracks is not a cover lookup, it is a table
- * fetch. The probe limit below is what actually caps the outbound requests; this one
- * only caps the rows read to find candidate directories.
- */
-const ARTIST_COVER_ROW_LIMIT = 500;
-
-/**
- * How many album directories one artist cover request will `PROPFIND`.
- *
- * Sampled, not exhaustive, and the reason is arithmetic rather than taste: a client
- * draws one cover per album row, so probing every album of a 30-album artist is 30
- * subrequests per row drawn, against a 50-request ceiling for the whole invocation on
- * the Free plan. Missing art renders the placeholder every client already handles.
- */
-const ARTIST_COVER_PROBE_LIMIT = 3;
-
-async function findCoverIn(library: LibraryRow, dirPath: string, context: RestContext): Promise<string | null> {
-  const { children } = await context.tree.children(library, dirPath);
-  const cover = TreeService.findCover(children);
-  return cover === null ? null : cover.path;
-}
-
-/**
  * `Range` from the HTTP header, for the clients that send it there.
  *
  * The Subsonic protocol has **no** `range` parameter — clients set the header — so
@@ -295,4 +169,6 @@ function headerRange(context: RestContext): string | null {
 
 const mediaEndpoints = { stream, download, getCoverArt };
 
-export { mediaEndpoints, stream, download, getCoverArt, passthrough, headerRange, PASSTHROUGH_HEADERS, PLACEHOLDER_PNG, IMAGE_CONTENT_TYPES };
+export { mediaEndpoints, stream, download,  passthrough, headerRange, PASSTHROUGH_HEADERS };
+
+export {getCoverArt} from './coverArt';

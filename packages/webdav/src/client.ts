@@ -306,6 +306,32 @@ class WebDavClient {
     const buffer = await this.readBounded(response, Math.min(bytes, MAX_MEDIA_CHUNK_BYTES) + 1024);
     return new Uint8Array(buffer);
   }
+
+  /**
+   * Read an exact byte range from the middle of a file, for embedded artwork.
+   *
+   * The third member of this family, and it exists because the other two cannot express
+   * what artwork needs. `readPrefix` starts at zero and `readTail` ends at the file's
+   * last byte, but a FLAC `PICTURE` block sits at an offset the file's own metadata
+   * table states — routinely past 128 KiB, because `PICTURE` is conventionally the last
+   * metadata block and is as large as the image. So the range is *passed in* rather than
+   * derived from either end.
+   *
+   * Bounded for the same reason the other two are: a server that ignores `Range` answers
+   * `200` with the entire file, and a 40 MB track must not be pulled through the worker
+   * to serve 500 KB of JPEG. A body longer than the range asked for is truncated to it
+   * rather than trusted — which turns "this server ignored my Range" into a picture
+   * that fails its magic check and is reported as no artwork, instead of 500 KB of
+   * audio served as `image/jpeg`.
+   */
+  public async readRange(relativePath: string, start: number, length: number, timeoutMs?: number): Promise<Uint8Array> {
+    const from = Math.max(0, Math.floor(start));
+    const wanted = Math.max(0, Math.floor(length));
+    if (wanted === 0) return new Uint8Array(0);
+    const response = await this.get(relativePath, { range: `bytes=${from}-${from + wanted - 1}`, ...(timeoutMs && { timeoutMs }) });
+    const buffer = await this.readBounded(response, Math.min(wanted, MAX_MEDIA_CHUNK_BYTES) + 1024);
+    return new Uint8Array(buffer).subarray(0, wanted);
+  }
 }
 
 export { WebDavClient, WebDavError, basicAuthHeader, DEFAULT_TIMEOUT_MS, MAX_METADATA_BYTES, MAX_MEDIA_CHUNK_BYTES };

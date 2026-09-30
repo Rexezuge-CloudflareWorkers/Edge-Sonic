@@ -48,8 +48,12 @@ interface KvListPage {
 }
 
 interface KvNamespaceLike {
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
+  // Both widened from `string` for `albumArt`, which stores image bytes. The real
+  // binding has always accepted and returned both; the narrow signature was this
+  // file's assumption, not the platform's, and it is the same class of mistake as a
+  // test double modelling *an* implementation of the platform.
+  get(key: string): Promise<string | ArrayBuffer | null>;
+  put(key: string, value: string | ArrayBuffer, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<unknown>;
   list(options: { prefix: string; limit?: number; cursor?: string }): Promise<KvListPage>;
 }
@@ -145,8 +149,66 @@ class KvCache {
   public async getText(domain: KvDomainName, parts: readonly string[]): Promise<string | null> {
     return await this.guard(
       'get',
-      async () => (await this.namespace!.get(buildKvKey(domain, parts))) ?? null,
+      async () => {
+        const raw = await this.namespace!.get(buildKvKey(domain, parts));
+        if (raw === null || raw === undefined) return null;
+        // Only reachable if bytes were stored under a text key. Decoding is the right
+        // answer rather than throwing: the caller reads this as a cache, and a corrupt
+        // cache entry should cost a recompute, not a failed request.
+        return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      },
       null,
+    );
+  }
+
+  /**
+   * A cached binary value, or `null`.
+   *
+   * Separate from `getText` rather than a flag on it because a base64 round trip is
+   * not free: artwork is routinely 500 KB, and encoding it to text to cache it would
+   * cost a third more memory on the way in and on the way out, for every cover, on
+   * every request that missed the client's own cache.
+   */
+  public async getBytes(domain: KvDomainName, parts: readonly string[]): Promise<Uint8Array | null> {
+    return await this.guard(
+      'get',
+      async () => {
+        const raw = await this.namespace!.get(buildKvKey(domain, parts));
+        if (raw === null || raw === undefined) return null;
+        return typeof raw === 'string' ? new TextEncoder().encode(raw) : new Uint8Array(raw);
+      },
+      null,
+    );
+  }
+
+  /**
+   * Cache a binary value.
+   *
+   * @returns `false` when it was not stored — no binding, an open circuit, or a value
+   *   over the domain's `maxValueBytes`. Never throws, and a `false` is a miss the
+   *   next read re-derives from the origin.
+   */
+  public async putBytes(domain: KvDomainName, parts: readonly string[], value: Uint8Array, options?: KvPutOptions): Promise<boolean> {
+    const ns = this.namespace;
+    if (!ns) return false;
+    const definition = KV_DOMAINS[domain];
+    if (!definition) return false;
+    if (value.byteLength > definition.maxValueBytes) {
+      logger.debug(`KV put skipped for ${domain}: value exceeds ${definition.maxValueBytes} bytes.`);
+      return false;
+    }
+    const ttl = clampTtl(options?.ttlSeconds, domain);
+    return await this.guard(
+      'put',
+      async () => {
+        // A copy, and not a `subarray` view: the caller almost always passes a slice of
+        // a much larger read buffer, and handing KV a view would pin the whole buffer
+        // for as long as the entry lives.
+        const copy = value.slice();
+        await ns.put(buildKvKey(domain, parts), copy.buffer, ttl === undefined ? undefined : { expirationTtl: ttl });
+        return true;
+      },
+      false,
     );
   }
 

@@ -123,6 +123,58 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `el('folder', {}, [index])` — rather than inferred, exactly as `elList` takes a
   `listKey`. Asserted in `test/client-decoding.test.ts`, which decodes our real answers
   with a model written from the schema rather than from our own reading of it.
+- **A feature that covers one storage layout reports "nothing here" for the other, and
+  nothing distinguishes them.** `getCoverArt` found artwork by listing the album folder
+  and matching `cover`/`folder`/`front`/`album`/`albumart`/`thumb` ×
+  `jpg`/`jpeg`/`png`/`webp`. That is a complete implementation of *one* way a music
+  library stores a picture, and not the common one: Picard, beets, Metaflac, `ffmpeg` and
+  every ripped disc put the image **inside the audio file**. For such a library the
+  lookup found nothing and the endpoint served `PLACEHOLDER_PNG` — a **valid** 70-byte
+  1×1 transparent PNG, `200`, `image/png`. The client decoded an image, cached it, and
+  drew a transparent pixel. **A transparent pixel and a network fault are the same
+  observation from outside**, which is why it presented as "no cover image can be loaded"
+  and never as a failure, and why no log line anywhere would have named it. The suite was
+  green because `helpers/harness.ts` seeds a `cover.jpg` node — the one layout that
+  already worked. Three rules, and each is how the previous one would have collapsed:
+  - **A fixture holding the one case that works cannot see the cases that do not.** The
+    sidecar test and the embedded-art test are the same code path with different
+    contents, so "the cover test passes" said nothing about a library with no
+    `cover.jpg`. `test/cover-art-embedded.test.ts` **deletes the seeded node** to stand
+    the broken library up, and says so.
+  - **A placeholder that is a valid success is the worst possible answer.** `404`, or
+    `200` with zero bytes, is recoverable — a client re-asks. A valid image is cached
+    and never re-requested, so artwork that appears later is invisible until the client
+    evicts. That is why the no-artwork answer is a real, decodable image *and* why the
+    extracted bytes are cached under a key that goes stale when the file does.
+  - **A cover endpoint must never speak the Subsonic envelope.** A `404` from the origin
+    on the cover `GET` threw, was classified by `toSubsonicError`, and came back as a
+    masked `200 application/json`. A client hands that to an image decoder, it fails, and
+    the only evidence is a client-side log line — so an unreachable cover is a
+    placeholder, and the endpoint has no failure path that produces JSON.
+- **A fixture that is written from the spec must decode itself back, or it is a mirror.**
+  Extracting artwork meant reading three container formats, and every one of them is a
+  place this repository has already shipped a silent error. So `test/embedded-art.test.ts`
+  builds a FLAC metadata block table, an ID3 frame list and an Ogg **lacing table** from
+  the specifications, and then re-reads each through an independent path
+  (`decodeBlockTable`, `decodeSyncsafe`, `packetStarts`) before asserting anything about
+  the reader. It paid for itself immediately: five of its own bugs surfaced as reader
+  failures — a 4-byte Ogg granule where the spec has 8, a 36-byte `STREAMINFO` where it
+  has 34, a syncsafe *decoder* that ORed the whole value into its low byte, a
+  `packetStarts` that reported where a packet's last segment began, and a
+  `Uint8Array` image body that `Array.prototype.flat` refused to flatten, so every offset
+  after it was wrong. In every case the reader was right and the fixture was not — which
+  is the only outcome that makes the remaining assertions mean anything.
+- **Locating bytes and having bytes are different questions, and the answer is a range.**
+  A FLAC `PICTYPE` block is conventionally **last** and is as large as the image, so a
+  500 KB cover starts past any prefix worth reading. `findPicture` therefore returns
+  either `inline` (the bytes are in the buffer) or `range` (a claim about a byte range
+  the caller must fetch) — never a partial image, because a truncated cover is a cover
+  that "loaded" and renders as a grey box. And the limit is stated rather than implied:
+  a picture whose *block header* is past the prefix is not locatable at all, and the
+  answer is the placeholder. The MP3 retry exists for the one case a prefix cannot
+  answer — an `APIC` frame is normally the **last** frame, and ID3 frame headers are
+  interleaved with payloads, so there is no offset table to consult and the tag has to be
+  walked — and it is bounded by a named constant rather than attempted on every file.
 - **An id the protocol publishes twice is resolved once.** `getUser`'s `folder` and
   `getMusicFolders` are the same list — an id from one is what every `musicFolderId`
   refers to — so one module owns the list, its order and both publishers. They did not
