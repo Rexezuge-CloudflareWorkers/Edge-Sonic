@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { t } from 'i18next';
 import { HardDrive, Plus, RefreshCw } from 'lucide-react';
-import { Button } from '../components/ui/controls';
-import { LibraryForm } from '../components/LibraryForm';
-import { LibraryRow } from '../components/LibraryRow';
-import type { RunAction } from '../components/LibraryRow';
-import { Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
+import { Button } from '../components/ui/Button';
+import { Card, CardHeader, CardTitle } from '../components/ui/Card';
+import { EmptyState, LoadingSpinner } from '../components/layout/PageState';
+import { LibraryForm } from '../components/library/LibraryForm';
+import { LibraryRow } from '../components/library/LibraryRow';
+import type { RunAction } from '../components/library/LibraryRow';
 import { createLibrary, deleteLibrary, listLibraries, updateLibrary } from '../services/libraryService';
 import type { ShowNotice } from '../hooks/useNotice';
 import { toPatch } from '../lib/libraryDraft';
@@ -152,7 +153,7 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
         {libraries === null ? (
           <LoadingSpinner label={t('libraries.loading', 'Loading libraries')} />
         ) : libraries.length === 0 ? (
-          <PageState
+          <EmptyState
             icon={<HardDrive className="h-6 w-6 text-[var(--color-text-muted)]" aria-hidden="true" />}
             title={t('libraries.empty', 'No libraries yet')}
             description={t('libraries.emptyHint', 'Register a WebDAV origin to give Subsonic clients something to browse.')}

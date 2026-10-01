@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { t } from 'i18next';
 import { Plus, RefreshCw, UserPlus } from 'lucide-react';
-import { Button, Input, Label } from '../components/ui/controls';
-import { Badge, Card, CardHeader, CardTitle, LoadingSpinner, PageState } from '../components/ui/panels';
+import { Button } from '../components/ui/Button';
+import { Input, Label } from '../components/ui/Input';
+import { Badge } from '../components/ui/Badge';
+import { Card, CardHeader, CardTitle } from '../components/ui/Card';
+import { EmptyState, LoadingSpinner } from '../components/layout/PageState';
 import { listLibraries } from '../services/libraryService';
 import { createUser, deleteUser, listUsers, setUserEnabled, setUserLibraries } from '../services/userService';
 import type { ShowNotice } from '../hooks/useNotice';
@@ -175,7 +178,7 @@ function UsersView({ showNotice }: { showNotice: ShowNotice }) {
       {users === null ? (
         <LoadingSpinner label={t('users.loading', 'Loading users')} />
       ) : users.length === 0 ? (
-        <PageState
+        <EmptyState
           icon={<UserPlus className="h-6 w-6 text-[var(--color-text-muted)]" aria-hidden="true" />}
           title={t('users.empty', 'No users yet')}
           description={t('users.emptyHint', 'Create an account, then sign in to this server from any Subsonic client.')}

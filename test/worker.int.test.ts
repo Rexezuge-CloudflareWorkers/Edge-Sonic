@@ -288,6 +288,44 @@ describe('route order', () => {
     const { response } = await rest('notAnEndpoint');
     expect(response.headers.get('content-type')).toContain('application/json');
   });
+
+  it('redirects /user/ to the shell, so a completed sign-in lands on a page', async () => {
+    // The landing page's Sign In button navigates to `/user/` because that is the path
+    // inside the Cloudflare Access application. Access redirects back to whatever it
+    // interrupted, so this is where the browser arrives *after a successful sign-in* —
+    // and with no route registered it fell through to `notFound`, answering JSON
+    // `Exception{NotFound}`. That is the one screen in the product guaranteed to be
+    // reached by an operator who did exactly what the page asked of them.
+    const response = await get(`${ORIGIN}/user/`, undefined, { redirect: 'manual' });
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('/');
+  });
+
+  it('answers a redirected /user/ with the shell rather than an error', async () => {
+    // Following it, because a `Location` header with the right value still leaves the
+    // question of what `/` serves — and the two assertions together are what a client
+    // experiences.
+    //
+    // Driven as two requests rather than with `redirect: 'follow'`: the harness calls
+    // `worker.fetch` directly, and a Worker never follows its own redirects, so asking
+    // for `follow` here would test the harness rather than the route.
+    const landing = await get(`${ORIGIN}/user/`, undefined, { redirect: 'manual' });
+    const response = await get(new URL(landing.headers.get('location') ?? '/', ORIGIN).href);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(await response.text()).toBe(SPA_HTML);
+  });
+
+  it('does not let the redirect shadow a real user API route', async () => {
+    // `/user/` is registered as a GET redirect *above* `app.use('/user/*',
+    // userAuthentication())`. If the pattern were ever broadened — `/user*`, or a
+    // `*` catch-all above the middleware — `/user/me` would start answering 302 and an
+    // authenticated operator's own address would become a navigation. Pinned here
+    // because that is a routing change nothing else in the suite would notice.
+    const response = await get(`${ORIGIN}/user/me`, undefined, { redirect: 'manual' });
+    expect(response.status).not.toBe(302);
+    expect(await response.json()).toMatchObject({ email: expect.any(String) });
+  });
 });
 
 describe('browsing', () => {

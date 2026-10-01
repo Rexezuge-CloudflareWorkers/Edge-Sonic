@@ -13,7 +13,29 @@
     "pageNotFound": "Page not found",
     "pageNotFoundDescription": "The page you requested does not exist.",
     "languageLoadFailed": "Unable to load language.",
-    "languageSaveFailed": "Unable to save language."
+    "languageSaveFailed": "Unable to save language.",
+    "signInToViewLibraries": "Sign in to view libraries.",
+    "signInToViewUsers": "Sign in to view users."
+  },
+  "common": {
+    "loading": "Loading…"
+  },
+  "landing": {
+    "title": "The Subsonic API, Served From A WebDAV Library",
+    "subtitle": "Point any Subsonic client at this server and browse music you already have on WebDAV. No Transcoding, No Separate Library To Maintain.",
+    "signIn": "Sign In With Cloudflare Access",
+    "signInDidNothing": "That navigation returned here without a session. Check That A Cloudflare Access Application Covers {{path}}, And That The Worker Has {{aud}} And {{team}} Set.",
+    "subsonicApi": "Subsonic API",
+    "subsonicApiDescription": "Full Subsonic 1.16.1. Every Client You Already Have Signs In And Browses.",
+    "webdavOrigin": "Any WebDAV Origin",
+    "webdavOriginDescription": "Nextcloud, ownCloud, Or Anything Answering PROPFIND. Your Files Never Leave Home.",
+    "edgeIndex": "An Edge Index",
+    "edgeIndexDescription": "Indexed In D1 And Read By Ranged Requests. No Server Holds Your Audio."
+  },
+  "unauthorized": {
+    "title": "Access required",
+    "defaultMessage": "You must authenticate to access this page.",
+    "action": "Sign in with Cloudflare Access"
   },
   "libraries": {
     "title": "Music libraries",

@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { t } from 'i18next';
-import { Button, Input, Label } from './ui/controls';
-import type { LibraryDraft } from '../lib/libraryDraft';
-import type { LibrarySummary } from '../types';
+import { Button } from '../ui/Button';
+import { Input, Label } from '../ui/Input';
+import type { LibraryDraft } from '../../lib/libraryDraft';
+import type { LibrarySummary } from '../../types';
 
 /**
  * One form, two modes.

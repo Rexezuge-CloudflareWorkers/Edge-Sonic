@@ -12,6 +12,7 @@
  * onError                    — the Subsonic envelope for anything unhandled
  * /health                    — unauthenticated, so a probe never needs a credential
  * SPA shell                  — browser navigations only
+ * /user/ redirect            — the landing page's Sign In target, returning to `/`
  * scopeMiddleware            — one Container per request
  * OPTIONS *                  — CORS preflight, BEFORE auth (see below)
  * /user/*  auth              — Cloudflare Access
@@ -104,6 +105,27 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
     for (const route of SPA_ROUTES) {
       app.get(route, (c) => c.html(SPA_HTML));
     }
+
+    // Where the sign-in button lands, and where Access sends the browser back to.
+    //
+    // Registered here, above `scopeMiddleware` and above `/user/*` authentication,
+    // because this is not an API call — it is the completion of a navigation the SPA
+    // started. Two facts make it load-bearing rather than cosmetic:
+    //
+    // - Access redirects back to the URL it interrupted, so a *successful* sign-in
+    //   from the landing page arrives here. With no route registered, `/user/` fell
+    //   through to `notFound` and answered JSON `Exception{NotFound}` — the one screen
+    //   in the product guaranteed to be reached by an operator who did exactly what
+    //   the landing page asked of them.
+    // - `/user/*` authentication would reject it anyway, because it authenticates a
+    //   bearer and this request carries an Access cookie the Worker cannot itself
+    //   verify. The browser has the session; the Worker only sees the assertion header
+    //   Access injects for the *protected* route it intercepted, which is not what
+    //   arrives here.
+    //
+    // So it is a redirect to `/`, where the SPA mounts, reads `/user/me`, and — now
+    // that the cookie is real — renders the operator surface.
+    app.get('/user/', (c) => c.redirect('/'));
 
     app.use('*', scopeMiddleware);
 

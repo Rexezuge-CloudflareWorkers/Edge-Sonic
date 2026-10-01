@@ -127,6 +127,15 @@ Two more rules that are easy to get wrong:
   component, and a component with no test is a decision with no evidence. A pure
   function in the SPA is importable from here without a DOM harness, so "the SPA is
   not in the coverage gate" must not quietly become "the SPA has no tests at all".
+- **A 401 the server asserts is not a 401 the client renders.** `web-landing.test.tsx`
+  exists because the whole signed-out branch is invisible to the server suite:
+  `user-auth.test.ts` and `worker.int.test.ts` prove `/user/*` refuses a caller, and the
+  browser's response to that refusal — the landing page, the `Unauthorized` gate, the
+  nav disappearing — is asserted nowhere. Deleting the entire gate leaves both server
+  suites green, because `useCurrentUser`'s contract is only "set `authorized: false`".
+  So **a server-level assertion does not cover a client-level branch**, and the two need
+  separate evidence. Each guard there is paired with a mutation check, which is how one of
+  them was caught reading back its own `sessionStorage` setup instead of testing the write.
 - **A fake's input shape is part of its contract.** `EnrichmentService` decides whether
   to read a file from `enriched_at !== null`; a camelCase stand-in leaves that `undefined`,
   `undefined !== null` is true, and the service correctly concludes every row is already
@@ -189,6 +198,7 @@ answered `ping` and authenticated correctly.
 | `security-headers.test.ts`               | The header baseline, and that the `no-store` predicate names a path this router serves   |
 | `endpoint-registry.test.ts`              | The `/rest` registry as a contract: `code=70` for all 33, no name in two maps, the exact error key set |
 | `spa-decisions.test.ts`                  | The SPA's error decoder across both dialects and a non-JSON body, and `describeStopReason` |
+| `web-landing.test.tsx`                   | The signed-out surface: all three `authorized` states, and the sign-in-that-changed-nothing hint |
 
 ## Rules for writing an assertion here
 
