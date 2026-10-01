@@ -165,25 +165,52 @@ the origin's.
 - `AppConfiguration` — an injectable view over env parsing: a facade over the section
   objects (`AuthConfig`, `LibraryLimits`), one method per setting. Inject it in new
   services; mock through constructor deps.
-- `Container` — a minimal Factory + Singleton DI. `createRequestScope(env)` in
-  `backend-services/composition` is the composition root: table-driven lazy DAO wiring
-  plus service bindings, one scope per request, resolved with `scope.get(Tokens.X)`.
-  `scopeMiddleware` installs it; `BaseRoute.getScope` falls back to a fresh scope for
-  helpers and tests.
+- `Container` — a per-request registry of already-constructed services.
+  `createRequestScope(env)` in `backend-services/composition` is the composition root:
+  table-driven lazy DAO wiring plus service bindings, one scope per request, resolved with
+  `scope.get(Tokens.X)`. `scopeMiddleware` installs it; `BaseRoute.getScope` falls back to
+  a fresh scope for helpers and tests — narrowly, on the named missing-scope error only,
+  because a bare `catch` there would silently re-mint a scope **per call site**, which is
+  the defect the middleware ordering exists to prevent.
+  It used to be described as a "Factory + Singleton" DI, and the factory tier was
+  **unreachable**: all 22 registrations are `bindValue`, so `bind`, `resolve`,
+  `createChild`, `has`, `dispose` and `get`'s own factory branch had no callers (23 of 33
+  statements). That took the "no binding for token" throw with it — the only diagnostic
+  for a correctly-spelled-but-unbound token. The throw is back and is asserted for every
+  entry in `Tokens` against **both** composition roots, in `test/rate-limit.test.ts`.
 - `EnvParser` is defensive about the env shape on purpose: it is reached from fail-soft
   paths where `env` may be null or partial, and a `TypeError` there turns a default into
   a 500.
+  It has **two** integer parsers and the distinction is load-bearing, not tidiness:
+  `positiveInt` requires `> 0`, `nonNegativeInt` allows `0`. `TAG_READ_TAIL_BYTES=0`
+  disables the Ogg tail read — documented as "a supported configuration and not a degraded
+  one" — and reading it through `positiveInt` silently produced the default instead, so an
+  operator who set it got a 64 KB ranged read per Ogg track for ever. `nonNegativeInt` had
+  **no callers anywhere** at that point: the helper for that value existing, unused, in the
+  same layer, while the line beside it called the other one.
 
 ## The KV cache
 
-One namespace, one closed set of domains (`libIndex`, `libTree`, `songMeta`,
-`davRoute`), and keys of the form `domain:v1:<parts...>`.
+One namespace, one closed set of domains — `songMeta` and `albumArt`, nothing else — and
+keys of the form `domain:v1:<parts...>`.
 
-- **The library's `index_version` is part of the key.** A superseded entry becomes
-  structurally unreachable, so invalidation costs **zero** KV writes. The free plan
-  allots 1,000 writes and 1,000 deletes a day against 100,000 reads, so a design that
-  deletes-then-puts on every miss spends the whole budget in minutes while answering
-  every request correctly.
+- **Invalidation is in the key, never a delete.** A `delete`-then-`put` on a value the
+  re-resolution already produced spends two scarce operations per request to move a key to
+  the value it already had, and a client that 404s on every inner path used to exhaust a
+  whole day's budget in ~40 minutes while answering every request correctly.
+- **Both live domains key on the file's own `mtimeMs`+`size`, not on `index_version`.**
+  Re-tagging a track changes its picture and its tags without moving anything else in the
+  library, so the file's revision is what actually invalidates; a rescan that finds nothing
+  new bumps `index_version` and would orphan every cached image for no reason.
+- **The stronger rule exists and has no user.** A domain caching a *derived aggregate*
+  should take `scan_state.index_version` as its first key part, so a completed scan makes
+  every entry under the old version **structurally unreachable** and invalidation costs
+  zero writes rather than a TTL. `libIndex` and `libTree` were the two such domains and
+  neither had a production caller, so the strategy was documented over dead code — a worse
+  state than not having it, because the next reader takes it as evidence it is in force.
+  `index_version` is read nowhere in `KvDomains` or `KvCache`. A new aggregate-caching
+  domain should reintroduce it, and `test/enrichment-config.test.ts` asserts the live set
+  so one cannot be added and quietly left unversioned.
 - **`KvCache` fails soft.** A missing binding and a throwing binding are the same code
   path, and the responses are byte-identical to a warm cache; D1 is what answers.
 - **The circuit breaker is module-level**, so one outage opens it for the isolate rather

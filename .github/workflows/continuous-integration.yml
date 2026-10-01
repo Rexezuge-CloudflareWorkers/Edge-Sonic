@@ -35,6 +35,38 @@ jobs:
       - name: Check God-Files
         run: node scripts/check-god-files.mjs
 
+      # The last two steps of `pnpm run checks`, run here because each is a check that
+      # fails on a merge rather than on a developer's machine.
+      #
+      # **`validate:locales` compares every `t()` call site against the bundle**, which is
+      # the check that catches a key added to a component and forgotten everywhere else. It
+      # is not a no-op: with one shipped language the bundle-to-bundle comparison is skipped
+      # entirely, so before it read the call sites it reported `ALL OK` while
+      # `libraries.scanPausedRequests` was used and absent.
+      - name: Validate Locales
+        run: pnpm run validate:locales
+
+      # `verify-spa-shell` rejects a missing, stubbed or mismatched SPA shell, and the
+      # Worker serves the shell from the **last local build** — so a stale artifact is a
+      # deploy that serves yesterday's UI.
+      #
+      # The build is a **precondition**, not a convenience. Both `apps/web/dist/` and
+      # `apps/api/src/generated/` are gitignored, so a fresh checkout has neither, and
+      # `postinstall` runs `ensure-spa-shell-stub.mjs`, which writes a deliberately **empty**
+      # stub so `tsc` can resolve `SPA_HTML` before anyone has built. Verifying without
+      # building therefore cannot pass — it failed on the first run of this step, with
+      # precisely the message the check is designed to give.
+      #
+      # That ordering is the thing worth stating: a check whose subject is a generated
+      # artifact has to be preceded by the generation, or CI fails on a correct commit for
+      # the wrong reason. A developer running `pnpm run checks` locally has usually built
+      # already, which is why the mistake survived being written and reviewed.
+      - name: Build Web App
+        run: pnpm --filter @edge-sonic/web build
+
+      - name: Verify The SPA Shell
+        run: node scripts/verify-spa-shell.mjs
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest

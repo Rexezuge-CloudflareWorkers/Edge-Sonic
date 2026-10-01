@@ -1,14 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { fileURLToPath } from 'node:url';
-
-/**
- * Absolute path to a package's `src` directory, **with a trailing slash**.
- *
- * `fileURLToPath(new URL('packages/x/src', base))` has no trailing slash, so
- * `${path}index.ts` silently becomes `srcindex.ts` and every aliased import fails
- * to resolve with a confusing "cannot find package" error.
- */
-const srcPath = (pkg: string) => `${fileURLToPath(new URL(pkg, import.meta.url))}/`;
+import { aliasTable } from './test/helpers/aliases';
 
 export default defineConfig({
   test: {
@@ -66,69 +57,31 @@ export default defineConfig({
         // Raise these as coverage grows. Never lower them to excuse a regression in
         // code that is already covered.
         //
-        // Set from a measurement of 80/67/82/83 (statements/branches/functions/lines).
+        // Set from a measurement of 85.95/73.96/90.98/89.61, floored to whole
+        // percent (statements/branches/functions/lines).
         // The branch floor is the closest to its measured value because branch coverage
         // is the one that moves most when code is added, and a floor that a routine PR
         // trips is a floor people learn to ignore.
         //
-        // Raised from 78/65/79/80, which was the previous *measured* value rather than a
-        // number chosen to be comfortable. The probe-diagnosis change added classified
-        // failure paths that are each asserted, and a floor left where it was would have
-        // stopped the gate from noticing the difference.
-        statements: 79,
-        branches: 66,
-        functions: 81,
-        lines: 82,
+        // Raised from 78/65/79/80, then 79/66/81/82, which were each the previous
+        // *measured* value rather than numbers chosen to be comfortable. The last raise is
+        // the largest, and most of it came from **deleting** code: `Container`'s factory
+        // tier, `Provider`, `memoizeAsync`, ten orphaned DAO methods and `UpdateClause` were
+        // all uncovered, and removing them removed their statements from the denominator.
+        // That is the intended way for this number to move — a floor that has to be lowered
+        // to admit code that nobody calls is a floor measuring the wrong thing. The floors
+        // are whole percentages *below* the measurement rather than rounded to it, so a
+        // tenth of a point of jitter does not turn the gate red.
+        statements: 85,
+        branches: 73,
+        functions: 90,
+        lines: 89,
       },
     },
   },
   resolve: {
-    alias: [
-      { find: /^@edge-sonic\/background$/, replacement: `${srcPath('apps/background/src')}index.ts` },
-      { find: /^@edge-sonic\/backend-data$/, replacement: `${srcPath('packages/backend-data/src')}index.ts` },
-      { find: /^@edge-sonic\/backend-errors$/, replacement: `${srcPath('packages/backend-errors/src')}index.ts` },
-      { find: /^@edge-sonic\/backend-runtime$/, replacement: `${srcPath('packages/backend-runtime/src')}index.ts` },
-      { find: /^@edge-sonic\/backend-services$/, replacement: `${srcPath('packages/backend-services/src')}index.ts` },
-      { find: /^@edge-sonic\/subsonic$/, replacement: `${srcPath('packages/subsonic/src')}index.ts` },
-      { find: /^@edge-sonic\/media-tags$/, replacement: `${srcPath('packages/media-tags/src')}index.ts` },
-      { find: /^@edge-sonic\/webdav$/, replacement: `${srcPath('packages/webdav/src')}index.ts` },
-      { find: /^@edge-sonic\/shared$/, replacement: `${srcPath('packages/shared/src')}index.ts` },
-      { find: '@edge-sonic/backend-data', replacement: srcPath('packages/backend-data/src') },
-      { find: '@edge-sonic/background', replacement: srcPath('apps/background/src') },
-      { find: 'cloudflare:workers', replacement: `${srcPath('test/mocks')}cloudflare-workers.ts` },
-      { find: '@edge-sonic/backend-errors', replacement: srcPath('packages/backend-errors/src') },
-      { find: '@edge-sonic/backend-runtime', replacement: srcPath('packages/backend-runtime/src') },
-      { find: '@edge-sonic/backend-services', replacement: srcPath('packages/backend-services/src') },
-      { find: '@edge-sonic/subsonic', replacement: srcPath('packages/subsonic/src') },
-      { find: '@edge-sonic/media-tags', replacement: srcPath('packages/media-tags/src') },
-      { find: '@edge-sonic/webdav', replacement: srcPath('packages/webdav/src') },
-      { find: '@edge-sonic/shared', replacement: srcPath('packages/shared/src') },
-
-      // Subpath exports are listed explicitly rather than relying on a prefix rewrite.
-      // A string alias turns `@edge-sonic/backend-runtime/base` into
-      // `.../src/base`, and whether that then resolves to `index.ts` depends on
-      // `resolve.extensions` — which the Workers pool's own config sets. Naming each
-      // subpath removes that dependency instead of leaving it to a later failure.
-      { find: /^@edge-sonic\/backend-data\/dao$/, replacement: `${srcPath('packages/backend-data/src')}dao/index.ts` },
-      { find: /^@edge-sonic\/backend-data\/crypto$/, replacement: `${srcPath('packages/backend-data/src')}crypto/index.ts` },
-      { find: /^@edge-sonic\/backend-data\/utils$/, replacement: `${srcPath('packages/backend-data/src')}utils/index.ts` },
-      { find: /^@edge-sonic\/backend-runtime\/base$/, replacement: `${srcPath('packages/backend-runtime/src')}base/index.ts` },
-      { find: /^@edge-sonic\/backend-runtime\/config$/, replacement: `${srcPath('packages/backend-runtime/src')}config/index.ts` },
-      { find: /^@edge-sonic\/backend-runtime\/di$/, replacement: `${srcPath('packages/backend-runtime/src')}di/index.ts` },
-      { find: /^@edge-sonic\/backend-runtime\/kv$/, replacement: `${srcPath('packages/backend-runtime/src')}kv/index.ts` },
-      { find: /^@edge-sonic\/backend-runtime\/logger$/, replacement: `${srcPath('packages/backend-runtime/src')}logger.ts` },
-      { find: /^@edge-sonic\/backend-services\/auth$/, replacement: `${srcPath('packages/backend-services/src')}auth/index.ts` },
-      { find: /^@edge-sonic\/backend-services\/composition$/, replacement: `${srcPath('packages/backend-services/src')}composition/index.ts` },
-      { find: /^@edge-sonic\/backend-services\/errors$/, replacement: `${srcPath('packages/backend-services/src')}errors/index.ts` },
-      { find: /^@edge-sonic\/backend-services\/index$/, replacement: `${srcPath('packages/backend-services/src')}index/index.ts` },
-      { find: /^@edge-sonic\/backend-services\/library$/, replacement: `${srcPath('packages/backend-services/src')}library/index.ts` },
-      { find: /^@edge-sonic\/shared\/utils$/, replacement: `${srcPath('packages/shared/src')}utils/index.ts` },
-      { find: /^@edge-sonic\/shared\/i18n$/, replacement: `${srcPath('packages/shared/src')}i18n/index.ts` },
-      { find: /^@edge-sonic\/shared\/constants$/, replacement: `${srcPath('packages/shared/src')}constants/index.ts` },
-      // The `@/` alias is deliberately absent. `apps/api` uses relative imports
-      // because the Workers integration pool bundles the worker with Miniflare,
-      // whose resolver knows nothing about tsconfig `paths` — an alias here would
-      // pass typecheck and Vite, and fail only in `pnpm run test:integration`.
-    ],
+    // One table, shared with `test/integration/vitest.config.mts` — see
+    // `test/helpers/aliases.ts` for why the two are no longer maintained by hand.
+    alias: aliasTable(),
   },
 });
