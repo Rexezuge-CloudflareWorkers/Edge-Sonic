@@ -84,11 +84,15 @@ function field<T>(envelope: SubsonicBody['subsonic-response'], key: string): T {
 
 /**
 The two published folder lists, read the way a client reads them.
+
+`folder` and `musicFolder` are `undefined` rather than `[]` when the user has no grants:
+an item key with no items is absent, which is the shape the reference server answers and
+the shape every other empty list on this surface takes.
 */
 async function publishedLists(): Promise<{ folder: unknown; musicFolder: Array<{ id: unknown; name: string }> }> {
   const user = field<{ folder: unknown }>(await call('getUser'), 'user');
-  const folders = field<{ musicFolder: Array<{ id: unknown; name: string }> }>(await call('getMusicFolders'), 'musicFolders');
-  return { folder: user.folder, musicFolder: folders.musicFolder };
+  const folders = field<{ musicFolder?: Array<{ id: unknown; name: string }> }>(await call('getMusicFolders'), 'musicFolders');
+  return { folder: user.folder, musicFolder: folders.musicFolder ?? [] };
 }
 
 interface IndexesEnvelope {
@@ -189,13 +193,18 @@ describe('a musicFolderId is a position both surfaces publish identically', () =
     }
   });
 
-  it('reports a user with no grants as an empty list, not an absent key', async () => {
+  it('reports a user with no grants consistently on both surfaces', async () => {
     expect(await publishedLists()).toEqual({ folder: [0], musicFolder: [{ id: 0, name: 'Home' }] });
 
     await harness.db.db.prepare('DELETE FROM user_libraries').run();
-    // The position list is empty because the grant is, and both surfaces say so in the
-    // shape a client iterates: `folder` is `[]` and `musicFolder` is `[]`.
-    expect(await publishedLists()).toEqual({ folder: [], musicFolder: [] });
+    // The position list is empty because the grant is, and **both** surfaces report that
+    // the same way: the wrapper is present and carries no items. They agreed before by
+    // both emitting `[]`; they agree now by both omitting the key. What this test is for is
+    // the agreement, not the spelling — the thing it protects is that an id read from
+    // `getUser` is the id `getMusicFolders` publishes, and an empty list on one surface and
+    // a populated one on the other would be exactly the disagreement it exists to catch.
+    // Both are absent, on both surfaces: an item key with no items is not `[]`.
+    expect(await publishedLists()).toEqual({ folder: undefined, musicFolder: [] });
   });
 });
 

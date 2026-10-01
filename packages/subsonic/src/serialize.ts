@@ -125,14 +125,6 @@ function childName(node: Node): string {
   return isElementNode(node) ? node.name : '#text';
 }
 
-/**
-The declared list keys, normalized to an array.
-*/
-function listKeysOf(node: ElementNode): readonly string[] {
-  if (node.listKey === undefined) return [];
-  return typeof node.listKey === 'string' ? [node.listKey] : node.listKey;
-}
-
 function childToJsonValue(node: ElementNode): unknown {
   const children = (node.children ?? []).filter((child) => child !== null && child !== undefined && child !== false);
   const attributeEntries = Object.entries(node.attrs ?? {}).filter(([, value]) => isPresent(value));
@@ -166,15 +158,30 @@ function childToJsonValue(node: ElementNode): unknown {
   for (const [key, value] of Object.entries(node.attrs ?? {})) {
     if (isPresent(value)) result[key] = value;
   }
-  // A list wrapper with a declared key always carries that key, even with no children:
-  // `{"starred2": {}}` makes a client reading `.song.map(...)` throw, where
-  // `{"starred2": {"song": []}}` renders an empty screen. The values are seeded *before*
-  // the children are merged over them, so a non-empty list still wins — and a child
-  // whose name is not declared replaces its seed rather than adding a second key.
-  for (const key of listKeysOf(node)) result[key] = [];
-  // An element with attributes and no children is a leaf whose value lives in
-  // the attributes; merging children over attributes cannot collide because
-  // Subsonic never uses the same name for both.
+  // **A declared list key that has no items is absent, not `[]`.**
+  //
+  // So there is nothing to seed. A child carrying that name is already rendered as an
+  // array by `childrenToJsonObject` above — `elList` flags it, and a single flagged child
+  // collapses to a list rather than to a bare object — and a key no child carries has no
+  // items to report. The unconditional seed this replaces rendered
+  // `{"starred2":{"song":[],"album":[]}}` where Navidrome renders `{"starred2":{}}`.
+  //
+  // It was a deliberate reversal of that, on the strength of a real shipped incident: a
+  // client whose model was `song: List<Song>` threw on the absent key and rendered an
+  // empty screen on `[]`. The reasoning was sound and the conclusion was still wrong,
+  // because it treated the symptom. The throw is a client that cannot tolerate an absent
+  // optional field, and Navidrome — the most widely deployed implementation, and the one
+  // clients are written against — has always answered `{}`. Emitting `[]` made this
+  // server the only one doing so, which is the more expensive half of the trade: a client
+  // that works against Navidrome and not against this one fails here and nowhere else.
+  //
+  // `array: true` is unaffected and still means "always an array", because that is a bare
+  // list at a key rather than a record wrapping one — see the `node.array` branch above,
+  // and `getOpenSubsonicExtensions`, which must render `[]` when it has no extensions.
+  //
+  // An element with attributes and no children is a leaf whose value lives in the
+  // attributes; merging children over attributes cannot collide because Subsonic never
+  // uses the same name for both.
   Object.assign(result, childrenToJsonObject(children));
   return result;
 }

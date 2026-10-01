@@ -278,14 +278,39 @@ describe('envelope', () => {
     expect(parsed['subsonic-response'].artist.name).toBe(String.raw`quote " and \ backslash`);
   });
 
-  it('renders an empty list as [], not as an absent key', async () => {
-    // Subsonic's own server omits the key entirely when a list is empty, and a client
-    // written against it then does `response.starred2.song.map(...)` and throws. Emitting
-    // `[]` renders an empty screen instead.
+  it('renders an empty list as an absent key, matching the reference server', async () => {
+    // Subsonic's own server omits the key when a list is empty, and so does Navidrome —
+    // measured on the same library: `{"starred2":{}}` against the
+    // `{"starred2":{"song":[],"album":[]}}` this used to emit.
+    //
+    // It was the other way round on purpose. A client whose model is
+    // `@SerialName("song") val songs: List<Song>` throws `MissingFieldException` on the
+    // absent key, and `[]` renders an empty screen instead — a real incident, recorded in
+    // this repository's own history.
+    //
+    // That fix aimed at the symptom. The throw is a client that cannot tolerate an absent
+    // optional field, and every field here is optional in the schema; answering differently
+    // from the implementation clients are written against is the more expensive half of the
+    // trade, because such a client works against Navidrome and fails only here. Being right
+    // about the shape and wrong about the ecosystem is not the same as being right.
+    //
+    // Paired with the tests below, because a rule about the empty case alone would also
+    // pass for an implementation that renders nothing at all as an array.
     const body = (await (await successResponse(elList('starred2', 'song', {}, []), { format: 'json' })).json()) as {
-      'subsonic-response': { starred2: { song: unknown[] } };
+      'subsonic-response': { starred2: Record<string, unknown> };
     };
-    expect(body['subsonic-response'].starred2.song).toEqual([]);
+    expect(body['subsonic-response'].starred2).not.toHaveProperty('song');
+  });
+
+  it('declares only the list keys it has items for', async () => {
+    // The paired half. `starred2` carries albums *and* songs, so a user who has starred only
+    // songs gets `song` and nothing for `album`. The previous behaviour seeded every
+    // declared key, which is why one assertion could cover both halves at once and neither
+    // was distinguishable from the other.
+    const body = (await (await successResponse(elList('starred2', ['album', 'song'], {}, [el('song', { id: 's:1' })]), { format: 'json' })).json()) as {
+      'subsonic-response': { starred2: Record<string, unknown> };
+    };
+    expect(Object.keys(body['subsonic-response'].starred2)).toEqual(['song']);
   });
 
   it('renders a one-item list as an array, not as a bare object', async () => {
@@ -293,6 +318,18 @@ describe('envelope', () => {
       'subsonic-response': { starred2: { song: unknown } };
     };
     expect(Array.isArray(body['subsonic-response'].starred2.song)).toBe(true);
+  });
+
+  it('renders a declared array with no items as [], which is the exception', async () => {
+    // `array: true` is a bare list at a key rather than a record wrapping one, so it has no
+    // "absent" reading: `getOpenSubsonicExtensions` must answer `[]` with no extensions, or
+    // a client reading `.length` gets `undefined` on the capability call — the one call
+    // whose failure mode is a client concluding the server is broken. The two shapes are
+    // not interchangeable, and this is the case that separates them.
+    const body = (await (await successResponse({ name: 'openSubsonicExtensions', array: true }, { format: 'json' })).json()) as {
+      'subsonic-response': { openSubsonicExtensions: unknown };
+    };
+    expect(body['subsonic-response'].openSubsonicExtensions).toEqual([]);
   });
 
   it('renders a one-item list inside a record element as an array too', async () => {

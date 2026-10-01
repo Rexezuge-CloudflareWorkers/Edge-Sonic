@@ -55,28 +55,29 @@ function el(
 }
 
 /**
- * Build a list element: a wrapper whose `listKey` is **always** a JSON array.
+ * Build a list element: a wrapper whose repeated child is **always** a JSON array.
  *
  * ### Why `listKey` is a parameter and not inferred
  *
- * Two things have to be true of a Subsonic list in JSON, and only one of them is
- * visible from the children:
+ * One thing has to be true of a Subsonic list in JSON that cannot be read off the
+ * children: a single element must render as an array rather than a bare object.
  *
- * 1. a repeated child renders as an array rather than a bare object, and
- * 2. an **empty** list renders as `[]` rather than being absent.
+ * With no children there is no name to infer from, and the *empty* case needs no
+ * declaration at all — an empty list renders as an absent key. Navidrome answers
+ * `{"starred2":{}}` for a user who has starred nothing, and so does this.
  *
- * (1) can be inferred from the children. (2) cannot: with no children there is no name
- * to infer. Omitting the key then produces `{"starred2": {}}` for a user who has
- * starred nothing, and a client that reads `response.starred2.song.map(...)` throws
- * instead of rendering an empty screen.
- *
- * So the name is stated. A caller that omits it gets a wrapper that renders only its
- * attributes — correct for the endpoints whose payload is optional rather than
- * required, and never a silently wrong shape for the ones that are.
+ * That inverts what the parameter used to be for. It was declared so an empty list would
+ * render as `[]`, on the grounds that a client reading `response.starred2.song.map(...)`
+ * throws on an absent key. That fixed the symptom rather than the cause: the throw is a
+ * client that cannot tolerate an absent optional field, and emitting `[]` made this server
+ * the only implementation answering differently from the one clients are written against.
  *
  * @param name The wrapper element, e.g. `albumList2`.
- * @param listKey The repeated child element, e.g. `album`. Omit only when an empty
- *   list should render as an absent key.
+ * @param listKey The repeated child element, e.g. `album`. Only that child is flagged:
+ *   `playQueue` and `bookmarks` mix a repeated element with scalar siblings, and flagging
+ *   those turned `playQueue.current` into a one-element array where the schema says a song
+ *   id. A wrapper holding several kinds of repeated child — `starred2` is `album` *and*
+ *   `song` — takes both, and gets one list per kind rather than a merged one.
  */
 function elList(
   name: string,
