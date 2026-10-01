@@ -8,19 +8,15 @@
  * "albums by file structure" — the albums *are* directories. They stay separate
  * endpoints because clients send both.
  */
-import { decodeId, el, elList, IdKind, songElement, successResponse } from '@edge-sonic/subsonic';
+import { decodeId, el, elList, IdKind, songElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
 import { annotationsFor, groupAlbums } from './structured';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 /**
 How each album-list type maps onto a `songs` query.

@@ -18,7 +18,27 @@ import { artistElement, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
 import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
 
 /**
-Epoch seconds → the ISO-8601 form the protocol uses for `created`.
+Epoch seconds → the ISO-8601 form the protocol uses for `created` and `changed`.
+
+### One formatter, because the wire format is part of the protocol
+
+`toIso` strips the milliseconds, so an epoch second renders as `2024-03-01T00:00:00Z`.
+`playlists.ts` had its own `isoOrUndefined`, identical except that it kept `.000Z` — so
+`playlist.created` and `song.created`, the same field name on the same wire, had two
+different spellings, and a client decoding one as a `LocalDateTime` accepted the other only
+by luck.
+
+`state.ts` had the body inlined **three** more times, for `bookmark.created`,
+`bookmark.changed` and `playQueue.changed`. Four copies of an epoch conversion is four
+places for the milliseconds rule to differ, and the repo's own record of this defect class
+is `getAlbum`'s omitted `created`: two literals for one field, and a client whose model
+declares `@SerialName("created") val createdAt: Instant` with no default fails on
+**every** call.
+
+Returns `undefined` for absent and for non-positive: an epoch of `0` is "no time known",
+not 1970, and rendering it would publish a date the row does not claim. Every caller that
+has already established the value is non-null uses the `!` form rather than inventing a
+second helper with a different contract.
 */
 function toIso(epochSeconds: number | null | undefined): string | undefined {
   return epochSeconds === null || epochSeconds === undefined || epochSeconds <= 0 ? undefined : new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -211,7 +231,12 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
     id: song.id,
     mediaType: 'song',
     title: titleFromPath(song),
-    album: song.album ?? basenameOf(albumDir),
+    // `albumNameOf`, not `basenameOf(albumDir)`. The two disagree for a track sitting at
+    // the library root: `basenameOf('')` is `undefined`, so `getSong` omitted `album`
+    // entirely while `getAlbum`/`getAlbumList2` published `"Unknown Album"` for the same
+    // row. One derivation, one answer — which is the rule `albumModel` already exists to
+    // enforce and which this literal was quietly exempt from.
+    album: albumNameOf(song),
     albumId,
     artist: artistName,
     artistId,
@@ -236,12 +261,6 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
     // rather than an annotation that is either present or absent.
     playCount: annotations?.playCounts.get(song.id) ?? 0,
   };
-}
-
-function basenameOf(path: string): string | undefined {
-  if (path.length === 0) return undefined;
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? path : path.slice(slash + 1);
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -281,7 +300,9 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
     parent: parentId,
     isDir: false,
     title: titleFromPath(song),
-    album: song.album ?? basenameOf(albumDir),
+    // The same derivation as `songToModel`, and the same reasoning: a child and its parent
+    // record describing one track cannot disagree about which album it is on.
+    album: albumNameOf(song),
     artist: song.artist ?? song.album_artist ?? artistNameOf(song),
     track: song.track ?? undefined,
     discNumber: song.disc ?? undefined,

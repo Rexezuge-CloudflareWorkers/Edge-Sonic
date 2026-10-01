@@ -8,17 +8,12 @@
  * systems are deliberately not connected: an operator's Access identity must not be
  * usable as a streaming credential.
  */
-import { ErrorCode,  SubsonicError,   elList, successResponse, userElement } from '@edge-sonic/subsonic';
-import type { ElementNode } from '@edge-sonic/subsonic';
+import { ErrorCode,  SubsonicError,   elList, userElement } from '@edge-sonic/subsonic';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 import { userFolderElementsFor } from './libraries';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 /**
  * `getUsers` — every account, admin only.

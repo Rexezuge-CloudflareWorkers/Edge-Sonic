@@ -17,20 +17,16 @@
  * at the index. What is *not* acceptable is silently shipping a full-table scan
  * across every library, which is what dropping the `library_id` predicate would do.
  */
-import { el, elList, encodeId, IdKind, songElement, successResponse } from '@edge-sonic/subsonic';
+import { el, elList, encodeId, IdKind, songElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
 import { annotationsFor, groupAlbums } from './structured';
 import { albumKeyOf, artistNameOf } from '../mappers';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 
 interface SearchSpec {
