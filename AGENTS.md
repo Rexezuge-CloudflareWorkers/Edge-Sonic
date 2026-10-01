@@ -452,6 +452,13 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   1,000 against a 50-subrequest ceiling: a configured maximum read as a permission rather
   than as an obligation on everything below it. A chunk bound is a claim about the code
   beneath it, and it is only true if something measures it.
+  The variable form of it was still live: `MAX_PAGE_SIZE` is env-raisable, and past a
+  certain size a page is not *slow*, it is unservable — one grouped query plus
+  `ceil(N / groupsPerStatement)` more, and D1 queries are subrequests. So it is clamped to
+  `MAX_PAGE_SIZE_CEILING`, whose own docstring derives the number from the two platform
+  limits rather than picking a comfortable one, and `validate()` **reports the clamp**
+  rather than applying it quietly. Raising a number in `ConfigurationDefaults` is an
+  encouraged operation, so an un-clamped maximum is a defect waiting for an operator.
 - **`code=70` means the endpoint is absent, not that it has nothing to report.**
   `getOpenSubsonicExtensions` sat in the `UNIMPLEMENTED` registry with the reason "no
   extensions are advertised", so the **capability-discovery** call answered a failure —
@@ -462,9 +469,12 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   whole envelope's key set so a future version string cannot reach an anonymous caller.
   `tokenInfo` was absent entirely, so a client holding a stored token got `code=70` from a
   server that had just authenticated that token. Both were found by reading the
-  OpenSubsonic endpoint list against the registry — and nothing in the suite asserted the
-  registry covers what a real client calls, which is the same "a comment claiming an
-  invariant that nothing measured" defect as the subrequest bound.
+  OpenSubsonic endpoint list against the registry — and **nothing in the suite asserted the
+  registry covers what a real client calls**, which is the same "a comment claiming an
+  invariant that nothing measured" defect as the subrequest bound. That gap is now closed:
+  `test/endpoint-registry.test.ts` asserts the registry's shape, all 33 `code=70` answers
+  through the real dispatcher, and the exact error key set of each — so the next endpoint
+  that lands in the wrong map fails a test rather than answering.
 - **A double may disagree with production about the very column under repair.** The
   `upsertFileFacts` double in `test/scan-incremental.test.ts` wrote `artist: null,
   album: null` while the real `UPSERT_FILE_FACTS` *derived* them. That is the same
@@ -502,6 +512,63 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   never filled. `deferPuts` holds every write until released, so the ordering — the
   response must not resolve before its write settles — is asserted rather than assumed.
   Asserted in `test/cover-art-embedded.test.ts`, which goes red on the `void` version.
+
+- **A second implementation of a thing you already wrote is a defect, not a duplication.**
+  `embeddedArt` re-derived the media type of a cached image with its own magic-byte table
+  while the extractor that *wrote* those bytes called `sniffImageType`, which knows four
+  more families. So a TIFF cover was extracted correctly and then served as the 1x1
+  transparent placeholder on every request after the first, for the TTL, under a key only
+  the file's revision can invalidate — the client got a `200` and a decodable image on both
+  requests, so it cached the placeholder and never asked again. The generalisation is what
+  matters: extraction answered one question and re-identification answered a *different*
+  one about the same bytes, and the suite could not see it because the formats were asserted
+  through the path that already worked. One answer per question, and the second answer must
+  be the first one's callee rather than its twin.
+- **A value the protocol declares as a timestamp cannot be published from a `Set`.**
+  `getArtists` decorated a starred artist with `starred: undefined`, and `undefined` is
+  dropped by **both** serializers — so no attribute in XML and no key in JSON, for a star
+  that was stored correctly. `getStarred` deliberately does not expand artist stars, so
+  `getArtists` was the only surface that reports them and it reported nothing. The lookup
+  was a `Set<string>`, which made `undefined` the only value the mapper could produce: a
+  type making the wrong answer the only available one *is* a field saying it is missing.
+  `AnnotationLookup.stars` is a `Map` of id to epoch second, and `stars.starred_at` was
+  already stored and already the sort key — it was simply never selected.
+- **The reported state and the scheduled work are two stores, and they must be reconciled.**
+  `ScanWorker.alarm` had no handler and `ScanService.step` had five awaited calls outside
+  its own `try`, so a D1 error in any of them rejected `step`, the re-arm never ran, the
+  alarm was consumed, and D1 still recorded `scanning` — which `getStatus` reports as *keep
+  polling*, for ever, with nothing scheduled to answer. `getAlarm()` is called from nowhere
+  in this repository, so the two stores were never compared. A handler that can reject is a
+  permanent wedge, and `stalled` is the wrong answer for a failure it could not record: it
+  is the terminal status, so `isAdvancing` is false for it and the chain is deleted — the
+  same wedge reached by handling "cannot record" the obvious way.
+- **A variable can be declared, parsed, validated, templated and read by nothing.**
+  Five were, and they fail in three distinguishable ways, which is why one rule does not
+  cover them. `STREAM_RATE_LIMIT` was inert: the limiter used a literal, so `600` lived in
+  three places and an operator setting `50` got a clean validation pass and an unchanged
+  limiter. `LOG_LEVEL` was inert for a structural reason — **both loggers are module-level
+  constants**, so the level was resolved before `env` existed and `logger.debug` could never
+  emit in a deployed Worker; the coverage report proved it rather than suggesting it, since
+  every `console.*` call sat in an arm reachable only at `minLevel <= 0`. And
+  `TAG_READ_TAIL_BYTES=0` was *reachable but inverted*: it read through a parser whose
+  contract is `> 0`, so the documented "0 disables the second read" became the default.
+  That parser's `>= 0` sibling had **no callers anywhere** in the repository — the helper
+  for that value existing, unused, in the same layer, while the line beside it called the
+  other one.
+- **An endpoint registry nothing asserts is not a contract.** `ENDPOINT_NAMES` and
+  `UNIMPLEMENTED` were imported by no test file, so 33 endpoints' `code=70` answers were
+  correct by luck and a name in both maps — routed by whichever was assigned last — was
+  invisible. `AGENTS.md` below records this gap as *found and not fixed*; it is fixed, in
+  `test/endpoint-registry.test.ts`, which asserts the registry's shape rather than any one
+  endpoint's behaviour.
+- **A shared builder is the point; a copy is a decision deferred until it disagrees.**
+  Nine endpoint modules each carried `respond(context, payload)` and
+  `type EnvelopeResponse = ReturnType<typeof successResponse>`. Eight were identical and
+  the ninth had already diverged — `annotations.ts` hardcoded `successResponse(null, ...)`,
+  so its handlers could not return a body at all. Same for `toIso`, which existed five times
+  in two spellings (`song.created` kept `.000Z`, `playlist.created` did not), and for the
+  album name, where `getSong` omitted `album` for a root-level track while `getAlbum`
+  published `"Unknown Album"` for the same row.
 
 ## Test doubles must model the platform
 

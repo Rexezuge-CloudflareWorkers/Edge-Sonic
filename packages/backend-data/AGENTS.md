@@ -20,13 +20,32 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 | `dao/identity.ts` | `UserDAO` and `LibraryDAO` — the two rows with a credential                   |
 | `dao/songSql.ts` | the `songs` upsert statement                                                  |
 | `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
+| `dao/songIdLookup.ts` | `IN (...)` id lookups, scoped to one library and across all of them    |
 | `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
-| `utils/`         | `D1Types`, `D1Utils`, `D1ErrorClassifier`, `UpdateClause`                     |
+| `utils/`         | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                     |
 
 `SongDAO` and `SongIndexDAO` are separate because they answer different-shaped questions.
 `SongDAO` owns one row; `SongIndexDAO` pages over a **group**, which means it runs two
 statements — see the aggregation rule below. Keeping them apart is what makes the
 page-then-fetch pattern readable in one place instead of duplicated five times.
+
+### Two readings of "the songs with these ids"
+
+`SongIdLookupDAO` has a library-scoped `listIdsIn` and a cross-library
+`listIdsAcrossLibraries`, deliberately as **two methods** rather than one with a nullable
+`libraryId`. The scoped one is right for almost every caller: an id from a library the
+caller cannot see must not resolve, and that is an authorization guarantee the shared method
+cannot make.
+
+The cross-library one is for the two **per-user** records — the play queue and a playlist's
+entries — whose ids come from whatever libraries that user was granted. Both resolved
+`libraries[0]` and filtered, so with two grants every entry from the second silently
+vanished: a playlist that lost songs, a queue that shortened itself, a `createPlaylist` that
+stored fewer tracks than it was given, and no error on any path. `getBookmarks`, which
+iterates all libraries, disagreed with both.
+
+So the invariant is: **a per-user record is not scoped to one library**, and narrowing it is
+a silent data loss rather than a filter.
 
 ## The rules that keep getting broken
 

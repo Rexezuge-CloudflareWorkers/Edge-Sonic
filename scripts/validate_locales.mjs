@@ -7,15 +7,55 @@
  * `loadLanguage`). Key order drift vs en is warn-only (keeps diffs reviewable
  * without failing the run).
  *
+ * ### Why it also reads the call sites
+ *
+ * Everything above is a comparison **between bundles**, so with one shipped language the
+ * whole per-tag body is skipped by `if (tag === 'en') continue` and the script reports
+ * `ALL OK` having checked nothing about the application. It could not see that
+ * `libraries.scanPausedRequests` was used and absent: the string in the bundle did not
+ * exist to be wrong *about* anything.
+ *
+ * So the keys are checked against the other direction too — every `t('…')` call site under
+ * `apps/web/src` must resolve. That is a check the bundle-to-bundle comparison cannot
+ * express, and it is the one that catches a key added to a component and forgotten
+ * everywhere else. A key present in the bundle and never referenced is reported too, so
+ * the bundle does not accumulate entries nothing renders.
+ *
  * Usage: `pnpm run validate:locales` from the repo root.
  */
-import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const LOCALES_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'web', 'src', 'locales');
-const WEB_I18N_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'apps', 'web', 'src', 'i18n.ts');
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const WEB_SRC = join(REPO_ROOT, 'apps', 'web', 'src');
+const LOCALES_DIR = join(WEB_SRC, 'locales');
+const WEB_I18N_FILE = join(WEB_SRC, 'i18n.ts');
 const PLACEHOLDER = /\{\{[^}]+\}\}/g;
+
+/** Every `.ts`/`.tsx` under `apps/web/src`, skipping `locales/`. */
+function sourceFiles(dir) {
+  const out = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) {
+      if (entry === 'locales' || entry === 'generated') continue;
+      out.push(...sourceFiles(full));
+    } else if (/\.tsx?$/.test(entry)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/**
+ * `t('a.b.c')` and `t('a.b.c', 'default')`.
+ *
+ * Only the first string argument is a key. A dynamic key (`t(\`libraries.${x}\`)`) cannot
+ * be checked and is reported as such rather than silently passed, because a script that
+ * cannot see it should say so instead of reporting coverage it does not have.
+ */
+const T_CALL = /\bt\(\s*(['"])([a-zA-Z0-9_.]+)\1/g;
 
 function flatten(node, prefix, out) {
   for (const [key, value] of Object.entries(node)) {
@@ -135,6 +175,35 @@ for (const [tag, bundle] of bundles) {
   console.log(
     `${tag}: keys=${keys.length} missing=${missingCount} extra=${extraCount} empty=${empty.length} ph_mismatch=${phMismatches.length} [${status}]`,
   );
+}
+
+// ### Call sites against the bundle
+const usedKeys = new Map();
+const dynamicCalls = [];
+for (const file of sourceFiles(WEB_SRC)) {
+  const source = readFileSync(file, 'utf8');
+  const where = relative(REPO_ROOT, file);
+  for (const match of source.matchAll(T_CALL)) {
+    const key = match[2];
+    if (!enByKey.has(key)) {
+      fail(`${where}: t('${key}') is not in the en bundle — it renders as the inline default and is untranslatable`);
+    }
+    if (!usedKeys.has(key)) usedKeys.set(key, where);
+  }
+  // A key assembled at runtime cannot be verified, so it is named rather than passed over.
+  for (const match of source.matchAll(/\bt\(\s*`/g)) {
+    dynamicCalls.push(where);
+  }
+}
+
+const unused = enKeys.filter((key) => !usedKeys.has(key));
+for (const key of unused) warn(`en bundle: ${key} is never referenced by a t() call`);
+
+console.log(
+  `call sites: referenced=${usedKeys.size} unused=${unused.length} dynamic=${dynamicCalls.length} [${dynamicCalls.length === 0 ? 'OK' : 'UNVERIFIED'}]`,
+);
+if (dynamicCalls.length > 0) {
+  for (const where of [...new Set(dynamicCalls)]) warn(`${where}: a t() call builds its key dynamically and cannot be checked`);
 }
 
 console.log(failed ? 'FAILURES PRESENT' : 'ALL OK');

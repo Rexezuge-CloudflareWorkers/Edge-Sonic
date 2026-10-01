@@ -35,6 +35,23 @@ jobs:
       - name: Check God-Files
         run: node scripts/check-god-files.mjs
 
+      # The last two steps of `pnpm run checks`, run here because each is a check that
+      # fails on a merge rather than on a developer's machine:
+      #
+      # - `verify-spa-shell` rejects a missing, stubbed or mismatched SPA shell, and the
+      #   Worker serves the shell from the *last local build* — so a stale artifact is a
+      #   deploy that serves yesterday's UI.
+      # - `validate:locales` compares every `t()` call site against the bundle, which is
+      #   the check that catches a key added to a component and forgotten everywhere else.
+      #   It is not a no-op: with one shipped language the bundle-to-bundle comparison is
+      #   skipped entirely, so before it read the call sites it reported `ALL OK` while
+      #   `libraries.scanPausedRequests` was used and absent.
+      - name: Verify The SPA Shell
+        run: node scripts/verify-spa-shell.mjs
+
+      - name: Validate Locales
+        run: pnpm run validate:locales
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
