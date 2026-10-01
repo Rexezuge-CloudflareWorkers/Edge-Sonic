@@ -36,6 +36,16 @@ import type { SqliteQueryable } from './helpers/sqlite';
 import { migrationDrift, migrationFiles, migrationSql, readLock, sha256 } from './helpers/migrations';
 
 /**
+ * The order `getAlbumList2?type=alphabeticalByName` asks for.
+ *
+ * An **aggregate**, because `listAlbums` groups by `dir_path` — one group is one album —
+ * so the ordering must be a function of the group. A bare `album_ci` would order an album
+ * by whichever of its tracks `GROUP BY` happened to keep, which is arbitrary: the same
+ * album could sort two ways on two calls.
+ */
+const MIN_ALBUM_CI = ['MIN(album_ci) ASC'];
+
+/**
 Base64 of a 32-byte key, generated once so a file's rows stay readable.
 */
 let keyPromise: Promise<string> | null = null;
@@ -633,7 +643,7 @@ describe('path-derived grouping', () => {
     expect(row?.album_artist_ci).toBe(`bonobo${DERIVED_MARKER.toLowerCase()}`);
 
     // And the aggregate that filters on those columns now answers.
-    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' });
+    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
     expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
     const artists = await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0);
     expect(artists.map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
@@ -787,7 +797,7 @@ describe('path-derived grouping', () => {
       await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
 
       // Before: absent from the aggregate, not shown with a blank name.
-      expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' })).toEqual([]);
+      expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: MIN_ALBUM_CI })).toEqual([]);
 
       await drain(libraryId);
 
@@ -797,7 +807,7 @@ describe('path-derived grouping', () => {
       expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
 
       // The aggregate answers. This is the assertion the whole change exists for.
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: 'album_ci ASC' });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
       expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
       expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
     });
@@ -1016,7 +1026,7 @@ describe('path-derived grouping', () => {
       const ALBUMS = 500;
       for (let index = 0; index < ALBUMS; index += 1) await seedAlbum(libraryId, index);
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: ALBUMS, offset: 0, orderBy: 'album_ci ASC' });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: ALBUMS, offset: 0, orderBy: MIN_ALBUM_CI });
 
       // Every album, complete. A silent truncation would satisfy a "does not throw"
       // assertion and is the failure mode a chunked fetch actually has.
@@ -1041,7 +1051,7 @@ describe('path-derived grouping', () => {
         album: 'Album 0049',
       });
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 60, offset: 0, orderBy: 'album_ci ASC' });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 60, offset: 0, orderBy: MIN_ALBUM_CI });
 
       expect(albums).toHaveLength(61);
       expect(new Set(albums.map((song) => song.id)).size).toBe(61);
@@ -1049,21 +1059,21 @@ describe('path-derived grouping', () => {
 
     it('produces the same rows however many statements it takes', async () => {
       // The property that makes batching an implementation detail rather than a behaviour
-      // change. It is not free: the chunks are concatenated in the order the *key page*
-      // supplied, which is `orderBy` — `RANDOM()` for `type=random`, `mtime_ms DESC` for
-      // `type=newest` — and neither is the tuple the `SELECT *` asks to sort by. So
-      // without an explicit re-sort a small library came back sorted and a large one did
-      // not, and the same endpoint answered differently depending on how much music the
-      // user owned. `type=random` is the order that exposes it, being unrelated to the
-      // sort tuple by construction.
+      // change. It is not free: the chunks are concatenated in the order the **key page**
+      // supplied, which is the order the caller asked for and not anything the `SELECT *`
+      // happens to sort by. So the re-order has to be rebuilt from the key list, and this
+      // is what says it was.
+      //
+      // `type=random` is the order that exposes it, being unrelated to any sort tuple by
+      // construction: without an explicit rebuild the rows come back in the order the
+      // database emitted them, which is neither the caller's order nor stable between
+      // calls.
       const userId = await seedUser('CeilingOrder');
       const libraryId = await seedLibrary(userId, 'LCO');
       for (let index = 0; index < 120; index += 1) await seedAlbum(libraryId, index);
 
       const index = new SongIndexDAO(handle.db);
-      // 120 albums across three statements, with a key page whose order is unrelated to
-      // the sort tuple — which is what makes the re-sort load-bearing.
-      const chunked = await index.listAlbums(libraryId, { limit: 120, offset: 0, orderBy: 'RANDOM()' });
+      const chunked = await index.listAlbums(libraryId, { limit: 120, offset: 0, orderBy: ['RANDOM()'] });
 
       // The oracle: every row in the library, in **one** statement binding a single
       // variable, so the comparison statement cannot itself be over the ceiling. Two pages
@@ -1076,12 +1086,48 @@ describe('path-derived grouping', () => {
       // album, which a count alone would not distinguish from a correct page.
       expect(new Set(chunked.map((song) => song.id))).toEqual(new Set(all.map((row) => row.id)));
 
-      // And the order the DAO documents is the order it returns, which is the half a
-      // re-sort could silently drop. `|`, not a space, so a column boundary cannot make
-      // two different rows compare equal.
-      const sortKey = (row: { album_artist_ci: string | null; album_ci: string | null; name_ci: string }): string =>
-        `${row.album_artist_ci ?? ''}|${row.album_ci ?? ''}|${row.name_ci}`;
-      expect(chunked.map(sortKey)).toEqual(chunked.map(sortKey).sort());
+      // Every album is present **exactly once**. The set comparison above cannot see a
+      // duplicate: `Set` collapses it, so a batch that emitted one album twice and
+      // another not at all would still pass. The albums are one track each here, so the
+      // row count is the album count.
+      expect(chunked).toHaveLength(120);
+    });
+
+    it('pages a sorted list into consecutive pages that concatenate to the whole', async () => {
+      // The half the previous assertion dropped when it stopped pinning a sort it should
+      // never have imposed.
+      //
+      // `listAlbums` rebuilds the caller's order from its key list, because a chunked row
+      // fetch cannot inherit an `ORDER BY`. That is only true if the rebuild is faithful:
+      // if the buckets came back in *any* other order, then two pages of the same sorted
+      // list would not concatenate to the whole list — and a client paging a library
+      // would see albums it has already seen, and skip ones it has not.
+      //
+      // So the assertion is on the concatenation, not on any one page's order. That is the
+      // property a client depends on and it is the one a re-sort silently breaks while
+      // leaving every individual page looking plausible.
+      const userId = await seedUser('CeilingPaging');
+      const libraryId = await seedLibrary(userId, 'LCP');
+      for (let index = 0; index < 120; index += 1) await seedAlbum(libraryId, index);
+
+      const index = new SongIndexDAO(handle.db);
+      const whole = await index.listAlbums(libraryId, { limit: 120, offset: 0, orderBy: MIN_ALBUM_CI });
+
+      const paged: string[] = [];
+      for (let offset = 0; offset < 120; offset += 40) {
+        const page = await index.listAlbums(libraryId, { limit: 40, offset, orderBy: MIN_ALBUM_CI });
+        expect(page).toHaveLength(40);
+        paged.push(...page.map((song) => song.id));
+      }
+
+      expect(paged).toEqual(whole.map((song) => song.id));
+
+      // And the order the caller asked for, which is the whole point of the exercise.
+      // `alphabeticalByName` was returning albums ordered by *folder* — and since these
+      // folders are `Artist/Album`, that is an order no client requested and none could
+      // predict.
+      const names = whole.map((song) => song.album_ci ?? '');
+      expect(names).toEqual([...names].sort());
     });
 
     it('answers more than 100 artists, which is where getArtists and getArtist broke', async () => {
