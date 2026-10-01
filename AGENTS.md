@@ -654,6 +654,51 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   invisible. `AGENTS.md` below records this gap as *found and not fixed*; it is fixed, in
   `test/endpoint-registry.test.ts`, which asserts the registry's shape rather than any one
   endpoint's behaviour.
+- **A field the server hardcodes is a claim with nothing behind it, and the client that
+  ignores it is why it survived.** `GET /user/libraries` published `songCount: 0` — a count
+  nothing computed — and no client read it, so nothing failed and no test failed. It shipped
+  alongside the operator's real complaint: *the page shows no scan progress*. The two are one
+  defect seen from both ends, because the progress number was the field that lied. Fixed by
+  making the list carry each library's `scan` (`status`, `scanned`, `lastError`) and a real
+  `songCount` from `songs`, in one batched read per store.
+  - **`scan` is `null` for a library that has never been scanned, and that is not `idle`.**
+    `idle` means *scanned, nothing to do*; the null case is the one row an operator has to act
+    on, and folding it into `idle` renders "Up to date" for a library with nothing indexed.
+  - **`total_count` is written as `0` by `markScanning` and never updated**, so it is not a
+    denominator — a client rendering `scanned / total` shows "12 of 0". It is excluded from
+    this shape deliberately. Progress is `songCount`, which is the protocol's own unit: what
+    `getScanStatus` publishes as `count`.
+  - **The list is a read.** `ScanStateDAO.ensure` writes on first sight, so using it would make
+    every `GET` a write on a page the operator polls — and would create the row whose absence
+    carries the meaning. `listByLibraries` returns only rows that exist.
+  - **No server test could see the page-side half.** Every assertion in `user-api.test.ts` is
+    about what the server *sends*; the row held its state in `useState(null)` written only by
+    the Rescan handler, so a background-driven scan rendered nothing on a green suite. Same gap
+    as the `authorized` gate in `test/web-landing.test.tsx`.
+- **A state the client cannot represent renders as a word, and the page then polls for ever.**
+  `ScanStateSummary['status']` named three statuses; the server sends four. `failed` and
+  `stalled` are the **same stored status**, separated only by the retry counter, so a terminal
+  scan arrived as the bare word `stalled` and the operator's page had no way to know polling had
+  nothing left to buy. `storedStatus` in `scanRetry.ts` is now the one mapping, shared by
+  `ScanService.status` and the list projection, and asserted in `test/scan-progress.test.ts`.
+- **A poll's failure mode is not the manual refresh's.** An unreachable user API renders as an
+  empty list plus a notice, deliberately: the operator keeps reading the page. That is right for
+  a **load** and wrong for an **unattended poll** — the same failure would turn four libraries
+  into "No libraries yet" every few seconds, which is the one sentence on that page meaning
+  something is genuinely absent. A failed poll keeps the list and marks it stale.
+- **A bundle value and its inline default are one fact, and nothing compared them.** The header
+  rendered as `Edge--Sonic`: `brand.rest` held `"-Sonic"` while the markup rendered its own `-`
+  between two spans. Every surface was individually defensible — one well-formed key, a default
+  that matched intent, correct markup — so it passed review and reached production, and it is
+  only wrong to somebody who already knows the product's name. `scripts/validate_locales.mjs`
+  compared two *bundles* and checked that keys exist, and with one shipped language the per-tag
+  body is skipped entirely: nothing in it read what a value **is**. It now captures the optional
+  second argument of `t('key', 'default')` and **fails** on a disagreement, across all 88 call
+  sites. The same drift existed at `libraries.reachable`.
+- **A fallback string is a claim about who is looking.** The header's identity chip was
+  `userEmail ?? 'Operator'`, so every signed-out visitor saw the word "Operator" in the top
+  right of the landing page — the page asserting an identity it did not have, for somebody who
+  had not signed in. A default is not an absence.
 - **A shared builder is the point; a copy is a decision deferred until it disagrees.**
   Nine endpoint modules each carried `respond(context, payload)` and
   `type EnvelopeResponse = ReturnType<typeof successResponse>`. Eight were identical and

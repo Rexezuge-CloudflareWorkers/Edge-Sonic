@@ -113,11 +113,7 @@ function stalledResult(state: ScanStateRow, rowsWritten = 0): ChunkResult {
  * The stored reason is re-recorded rather than a new one invented: the cause has not
  * changed, and there is nothing to retry until `startScan` reseeds the frontier.
  */
-async function unableToAdvance(
-  state: ScanStateRow,
-  fail: (error: string) => Promise<number>,
-  rowsWritten = 0,
-): Promise<ChunkResult> {
+async function unableToAdvance(state: ScanStateRow, fail: (error: string) => Promise<number>, rowsWritten = 0): Promise<ChunkResult> {
   const message = state.last_error ?? 'The library root could not be read, so the scan has no folder to start from.';
   const consecutiveFailures = await fail(message);
   return idleResult(state, consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed', rowsWritten);
@@ -141,8 +137,31 @@ function isAdvancing(status: ScanStatus): boolean {
   return status === 'scanning' || status === 'failed';
 }
 
-export { decideStep, idleResult, stalledResult, unableToAdvance, isAdvancing, describeFailure, unrecordedFailure };
-export {MAX_CONSECUTIVE_FAILURES} from './scanTypes';
+/**
+ * The reported status of a stored row, without touching the network.
+ *
+ * ### Why this is a function and not an expression at the call site
+ *
+ * `failed` and `stalled` are the **same** stored status — both are written as `'failed'` by
+ * `ScanStateDAO.fail` — and they are distinguished only by the retry counter beside them.
+ * So "read the row and report its status" is not a field copy; it is a decision, and the
+ * decision is the one thing two readers must not make differently.
+ *
+ * It was inlined in `ScanService.status`, which meant the operator's library list had no
+ * honest way to report a terminal scan: it would either have had to re-derive the mapping —
+ * a second answer to the same question, free to disagree — or report `failed` and read as
+ * "still retrying" for a scan that will never be retried. That is the same failure
+ * `isAdvancing` records, one layer along: a state that reads as "keep going" where the
+ * answer is "this needs the operator".
+ */
+function storedStatus(state: ScanStateRow): ScanStatus {
+  if (state.status === 'scanning') return 'scanning';
+  if (state.status === 'failed') return state.consecutive_failures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed';
+  return 'idle';
+}
+
+export { decideStep, idleResult, stalledResult, unableToAdvance, isAdvancing, storedStatus, describeFailure, unrecordedFailure };
+export { MAX_CONSECUTIVE_FAILURES } from './scanTypes';
 export type { StepDecision };
 
 /**

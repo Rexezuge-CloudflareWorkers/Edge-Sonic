@@ -22,6 +22,6 @@ interface Notice {
   readonly text: string;
 }
 
-export type { LibrarySummary, ProbeResult, ScanStateSummary, ChunkStopReason } from './libraryTypes';
+export type { LibrarySummary, LibraryScanSummary, ProbeResult, ScanStateSummary, ScanStatus, ChunkStopReason } from './libraryTypes';
 export type { UserSummary } from './userTypes';
 export type { CurrentUser, Notice };

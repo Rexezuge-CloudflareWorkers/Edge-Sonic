@@ -22,7 +22,8 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
   the known-but-unimplemented list.
 - `src/rest/context.ts` — the per-request shape: `songs` (row state) and `songIndex`
   (the aggregate reads), plus `params`, `format`, and `pageSize`.
-- `src/user/routes.ts` — the operator API behind Access.
+- `src/user/routes.ts` — the operator API behind Access. `src/user/librarySummary.ts` — the
+  library list's projection over `libraries`, `scan_state` and `songs`.
 - `src/middleware/` — `scopeMiddleware`, `userAuth`, `rateLimit`, `rateLimitConfig`,
   `securityHeaders`. `index.ts` is the barrel the worker imports from, so the installed
   set is one list rather than one import line per middleware.
@@ -70,6 +71,31 @@ and the shared statics. It used to sit in `user/routes.ts` (previously `admin/ro
 `rest/dispatch.ts` and `middleware/userAuth.ts`; a route module owning the type that
 `/rest`, `/user`, and the auth middleware all share is what let three of those files
 re-declare their own copy, and two of the copies had already drifted.
+
+## The library list carries a scan summary, and it is a **read**
+
+`GET /user/libraries` publishes each library's `songCount` and `scan`. It carried
+`songCount: 0` before — a count the server never computed, on a field whose whole purpose is to
+be counted, with no client reading it. A claim on the wire with nothing behind it is the shape a
+later reader trusts.
+
+Three things in `librarySummary.ts` are decisions rather than code:
+
+- **`scan` is nullable, and the missing case is not `idle`.** A library with no `scan_state` row
+  has **never been scanned**; `idle` means scanned and finished. Folding the first into the
+  second renders "Up to date" for a library with nothing indexed — the answer a client reads as
+  done, on the one row the operator has to act on.
+- **The reads are batched, and there are exactly two.** `MAX_LIBRARIES` defaults to 10, so the
+  per-library form is an N+1 against a page the operator loads **and then polls**, and a D1
+  query is a subrequest spent on every tick. Batch sizes are derived from D1's measured
+  ceiling inside the DAOs.
+- **It is a read and does not `ensure`.** `ScanStateDAO.ensure` writes an `idle` row on first
+  sight, so using it here would create the very row whose absence carries the "never scanned"
+  meaning — on a `GET`, on every poll. Asserted by counting rows after two list calls.
+
+`storedStatus` (`backend-services`) supplies the status mapping, shared with `ScanService.status`,
+because `failed` and `stalled` are one stored status separated by a counter: reporting the row's
+status verbatim renders a terminal scan as one that is still being retried.
 
 ## The user rate limits come after auth
 

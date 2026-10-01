@@ -188,6 +188,14 @@ a silent data loss rather than a filter.
   `listIdsIn` re-orders to the caller's list. Ids that do not resolve are omitted, not
   substituted. The re-order happens once over the *merged* result rather than per chunk, so
   batching is invisible to the caller for the same reason it is in `songsForAlbumKeys`.
+- **A read that reports on a row must not create it.** `ScanStateDAO.ensure` writes an `idle` row
+  on first sight, so `GET /user/libraries` uses `listByLibraries` — a plain read — and reports
+  `null` for a library with no row. Two reasons, and the second is the one that would have been
+  missed: using `ensure` turns every `GET` into a write against the 5,000-rows/day allowance on
+  a page the operator **polls**; and it destroys the distinction the client depends on, because
+  the row it wrote is exactly the row whose absence means *never scanned*. The same rule as
+  `songs.countByLibraries`, which omits a library with no tracks rather than defaulting it to
+  `0` — a defaulted zero erases the difference between "nothing indexed" and "never looked at".
 - **A configured limit is not a bound the queries can honour.** `MAX_PAGE_SIZE` is 500, and
   until the batching above existed a 500-album page was a request the server was obliged to
   accept and could not answer. Same class as `SCAN_CHUNK_MAX_REQUESTS` being 1,000 on an

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from 'i18next';
 import { HardDrive, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/Button';
@@ -11,6 +11,8 @@ import { createLibrary, deleteLibrary, listLibraries, updateLibrary } from '../s
 import type { ShowNotice } from '../hooks/useNotice';
 import { toPatch } from '../lib/libraryDraft';
 import type { LibraryDraft } from '../lib/libraryDraft';
+import { isAdvancingStatus } from '../lib/scanStatus';
+import { SCAN_POLL_INTERVAL_MS } from '../lib/constants';
 import type { LibrarySummary } from '../types';
 
 /**
@@ -35,6 +37,20 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
   const [busy, setBusy] = useState<BusyKey>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  /**
+  Whether the last read reached the server.
+  `null` until the first one answers. Rendered beside the list, because a poll that failed
+  and a page that is merely quiet are the same observation from the operator's chair — the
+  scan numbers stop moving either way.
+  */
+  const [stale, setStale] = useState<boolean | null>(null);
+  /**
+  Set once a poll is in flight, so a slow response cannot be started twice.
+
+  A boolean in state would be one render behind, which is exactly long enough for two
+  intervals to overlap. The ref is not state because nothing renders from it.
+  */
+  const pollInFlight = useRef(false);
 
   // The fetch, separate from the effect that runs it, so the same code serves the
   // initial load and every refresh button without the effect having to reach into
@@ -56,6 +72,32 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
     setLibraries(await load());
   }, [load]);
 
+  /**
+   * One poll tick: re-read the list and adopt it only if it succeeded.
+   *
+   * A poll that **fails keeps what is on screen**. That is the difference from `load`, and
+   * it is not a detail: a poll runs unattended every few seconds while the operator watches a
+   * scan, so folding its failure into the documented "empty list plus a notice" would blank
+   * the page out from under them for one transient 5xx — turning a list they are reading into
+   * "No libraries yet", which is the one sentence on this page that means something is
+   * genuinely absent. `stale` is set instead, and the numbers stay visible next to a line
+   * saying they are not current.
+   */
+  const poll = useCallback(async () => {
+    if (pollInFlight.current) return;
+    pollInFlight.current = true;
+    try {
+      const { libraries: loaded } = await listLibraries();
+      setLibraries(loaded);
+      setStale(false);
+    } catch (error) {
+      showNotice('error', error instanceof Error ? error.message : String(error));
+      setStale(true);
+    } finally {
+      pollInFlight.current = false;
+    }
+  }, [showNotice]);
+
   useEffect(() => {
     // `cancelled` is what the effect actually needs and `reload` could not provide: a
     // component unmounted mid-fetch must not set state, and React 18 turns that into a
@@ -69,6 +111,29 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
       cancelled = true;
     };
   }, [load]);
+
+  /**
+   * Poll while something is scanning, and stop when nothing is.
+   *
+   * Two guards on the interval, both load-bearing:
+   *
+   * - **Only while advancing.** An idle page costs zero requests. The alternative is a timer
+   *   that fires for ever on a page nobody is watching, against a 60-request-per-minute
+   *   bucket this surface shares with probe and rescan.
+   * - **Only while visible.** A backgrounded tab is exactly the case where nobody is reading
+   *   the numbers, and a browser still runs the interval. `document.hidden` is read at tick
+   *   time rather than watched for changes, so a tab restored after an hour picks the
+   *   schedule up from the next tick without a visibility listener to leak.
+   */
+  const scanning = (libraries ?? []).some((library) => isAdvancingStatus(library.scan?.status));
+  useEffect(() => {
+    if (!scanning) return undefined;
+    const timer = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void poll();
+    }, SCAN_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [scanning, poll]);
 
   /**
    * Run an action, report its outcome, then refresh.
@@ -149,6 +214,19 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
         </p>
 
         {creating && <LibraryForm busy={busy === 'create'} onSubmit={submitCreate} onCancel={() => setCreating(false)} />}
+
+        {/*
+          Rendered only when a read has failed and the list on screen is therefore the last
+          known state rather than the current one. Muted, not the error tone, and beside the
+          list rather than replacing it: the numbers underneath are still the operator's
+          best information and a scan that was progressing has not stopped because the poll
+          missed a tick. The notice bar carries the reason.
+        */}
+        {stale === true && (
+          <p className="mb-4 text-xs text-[var(--color-text-muted)]">
+            {t('libraries.stale', 'Showing the last known state — the most recent update could not be read.')}
+          </p>
+        )}
 
         {libraries === null ? (
           <LoadingSpinner label={t('libraries.loading', 'Loading libraries')} />

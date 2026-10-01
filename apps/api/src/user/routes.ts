@@ -3,6 +3,7 @@ import { UUIDUtil } from '@edge-sonic/shared/utils';
 import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
+import { listLibrarySummaries } from './librarySummary';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
 
 /**
@@ -20,22 +21,16 @@ function requireParam(c: UserContext, name: string): string {
   return value;
 }
 
+/**
+ * The library list, with each library's indexed track count and scan state.
+ *
+ * The projection lives in `librarySummary.ts` rather than here because it is a read across
+ * three stores — `libraries`, `scan_state`, `songs` — and two decisions in particular
+ * belong to it: `songCount` was a literal `0` no client read, and `scan` is nullable because
+ * a library that has **never been scanned** is a different state from one that is `idle`.
+ */
 async function listLibraries(c: UserContext): Promise<Response> {
-  const scope = BaseRoute.getScope(c);
-  const libraries = await scope.get(Tokens.LibraryService).listAll();
-  return c.json({
-    libraries: libraries.map((library) => ({
-      id: library.id,
-      slug: library.slug,
-      displayName: library.display_name,
-      baseUrl: library.base_url,
-      rootPath: library.root_path,
-      davUsername: library.dav_username,
-      isEnabled: library.is_enabled === 1,
-      songCount: 0,
-      createdAt: library.created_at,
-    })),
-  });
+  return c.json({ libraries: await listLibrarySummaries(BaseRoute.getScope(c)) });
 }
 
 async function createLibrary(c: UserContext): Promise<Response> {

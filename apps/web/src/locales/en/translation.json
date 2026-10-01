@@ -1,13 +1,12 @@
 {
   "brand": {
     "accent": "Edge",
-    "rest": "-Sonic"
+    "rest": "Sonic"
   },
   "nav": {
     "label": "Primary",
     "libraries": "Libraries",
-    "users": "Users",
-    "operator": "Operator"
+    "users": "Users"
   },
   "errors": {
     "pageNotFound": "Page not found",
@@ -53,15 +52,21 @@
     "test": "Test",
     "rescan": "Rescan",
     "edit": "Edit",
-    "scan": "Scan",
     "scanStarted": "Scan started.",
+    "scanNever": "Not scanned yet.",
+    "scanIdle": "Up to date.",
+    "scanScanning": "Scanning.",
+    "scanFailed": "Retrying after an error.",
+    "scanStalled": "Stopped retrying. Fix the cause, then rescan.",
+    "scanTracks": "{{count}} tracks indexed",
+    "stale": "Showing the last known state — the most recent update could not be read.",
     "scanPausedRequests": "Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.",
     "scanPausedDeadline": "Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.",
     "probed": "Probe finished.",
     "probedOk": "The origin answered.",
     "updated": "Library updated.",
     "probeUnknownFailure": "The probe failed.",
-    "reachable": "Reachable",
+    "reachable": "Reachable.",
     "disabled": "disabled",
     "delete": "Delete",
     "davUser": "WebDAV user",

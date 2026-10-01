@@ -6,6 +6,41 @@
  * present at all".
  */
 
+/**
+ * One library's scan state, as `GET /user/libraries` publishes it.
+ *
+ * Nullable on the summary rather than a defaulted `idle`: a library with no `scan_state`
+ * row has **never been scanned**, which is a different state from `idle` (scanned, nothing
+ * to do) and the one that needs an operator action. `null` says it; an invented `idle`
+ * would render a library nobody has scanned as a finished one.
+ *
+ * `stoppedBy` is deliberately absent. It is a property of a *chunk*, not of stored state,
+ * so a read that did no work cannot report one — it is readable through
+ * `POST /user/libraries/:id/scan/step`, and `LibraryRow` carries the last chunk's value.
+ *
+ * `total_count` is absent for the same kind of reason and it is the one that matters here:
+ * the server writes it as `0` and never updates it, so it is not a denominator. A client
+ * rendering `scanned` against it would show "12 of 0". Progress is `songCount` below — the
+ * protocol's own unit, the same figure `getScanStatus` publishes as `count` — plus
+ * `scanned`, which counts folders visited.
+ */
+interface LibraryScanSummary {
+  readonly status: ScanStatus;
+  readonly scanned: number;
+  readonly lastError: string | null;
+}
+
+/**
+ * The scan statuses the server reports.
+ *
+ * `stalled` is not optional here and its absence was a live defect: the server sends it —
+ * `failed` and `stalled` are the same stored status, separated only by the retry counter —
+ * and the client's union named three statuses, so a terminal scan rendered as a bare word
+ * with no indication that it will never retry without an explicit rescan. It also meant the
+ * page had no way to stop polling: `stalled` is exactly the state where polling buys nothing.
+ */
+type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled';
+
 interface LibrarySummary {
   readonly id: string;
   readonly slug: string;
@@ -17,6 +52,15 @@ interface LibrarySummary {
   */
   readonly davUsername: string;
   readonly isEnabled: boolean;
+  /**
+  Tracks indexed for this library — the number an operator watches to know a scan is
+  working. It used to arrive as a literal `0` that no client read.
+  */
+  readonly songCount: number;
+  /**
+  `null` when the library has never been scanned. See `LibraryScanSummary`.
+  */
+  readonly scan: LibraryScanSummary | null;
   readonly createdAt: number;
 }
 
@@ -45,7 +89,7 @@ declared on the client and absent from the wire.
 type ChunkStopReason = 'frontier' | 'requests' | 'deadline' | null;
 
 interface ScanStateSummary {
-  readonly status: 'idle' | 'scanning' | 'failed';
+  readonly status: ScanStatus;
   readonly scanned: number;
   readonly total: number;
   readonly indexVersion: number;
@@ -60,4 +104,4 @@ interface ScanStateSummary {
   readonly stoppedBy: ChunkStopReason;
 }
 
-export type { LibrarySummary, ProbeResult, ScanStateSummary, ChunkStopReason };
+export type { LibrarySummary, LibraryScanSummary, ProbeResult, ScanStateSummary, ScanStatus, ChunkStopReason };

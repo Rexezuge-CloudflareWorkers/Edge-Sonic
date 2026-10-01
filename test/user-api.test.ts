@@ -34,8 +34,32 @@ afterEach(() => {
   harness.close();
 });
 
+/**
+ * One entry of `GET /user/libraries`, typed for the fields these tests assert.
+ *
+ * `Record<string, unknown>` was enough while the list carried only scalars, but `scan` is a
+ * nested object and an `unknown`-valued property cannot be read through. Spelled out rather
+ * than cast at the call site, so a wire change that drops `scan` is a **type** failure here
+ * instead of an `any` that silences it.
+ */
+interface LibraryWire {
+  id?: string;
+  slug?: string;
+  displayName?: string | null;
+  davUsername?: string;
+  isEnabled?: boolean;
+  songCount?: number;
+  /**
+   * The scan state each library carries. `null` — not absent — for a library that has never
+   * been scanned; a client that cannot tell the two renders an empty line where the diagnosis
+   * belongs.
+   */
+  scan?: { status?: string; scanned?: number; lastError?: string | null } | null;
+  [key: string]: unknown;
+}
+
 interface UserBody {
-  libraries?: Array<Record<string, unknown>>;
+  libraries?: LibraryWire[];
   users?: Array<Record<string, unknown>>;
   /**
    * The one error dialect this surface emits. A direct validation failure, a thrown
@@ -76,6 +100,82 @@ describe('libraries', () => {
     expect(JSON.stringify(body)).not.toContain('dav-password');
     expect(JSON.stringify(body)).not.toContain('passwordCiphertext');
     expect(JSON.stringify(body)).not.toContain('password_iv');
+  });
+
+  /**
+   * The list carries what an operator needs to see whether a scan is working, and none of it
+   * was there before: `songCount` was a literal `0` no client read, and there was no scan state
+   * at all, so the page showed a scan only after the operator clicked Rescan and never updated.
+   */
+  it('reports the indexed track count, rather than a literal zero', async () => {
+    // The harness seeds two tracks. `0` here is not "an empty library" — it is the value the
+    // route used to hardcode, and a count that is a constant is not a count at all.
+    const { body } = await call('/user/libraries');
+    expect(body.libraries?.[0]).toHaveProperty('songCount', 2);
+  });
+
+  it('reports a library that has never been scanned as null, not as idle', async () => {
+    // `idle` means "scanned, nothing to do". A library with no `scan_state` row has never
+    // been pointed at the scanner at all, and it is the one row an operator has to act on —
+    // so the two cannot share a value. Asserted as `null` rather than as an absent key
+    // because a client that cannot tell "never scanned" from "field missing" renders an
+    // empty line where the diagnosis belongs.
+    const { body } = await call('/user/libraries');
+    const library = body.libraries?.[0];
+    expect(library).toHaveProperty('scan', null);
+  });
+
+  it('reports the persisted scan state once a scan has run', async () => {
+    // The progress a client polls for: the status, the folders visited, and the reason if it
+    // stopped. `total` is absent from this shape and that is deliberate — the server writes
+    // `total_count` as 0 and never updates it, so a client rendering `scanned / total` would
+    // show "12 of 0". `songCount` is the progress number, and it is the one `getScanStatus`
+    // publishes as `count`.
+    // Seeded rather than `UPDATE`d: the harness registers a library without scanning it, so
+    // there is no row — which is the state the previous case asserts, and reusing it here
+    // would make this test pass on a query that matched nothing.
+    await harness.db.db
+      .prepare(
+        "INSERT INTO scan_state (library_id, status, scanned_count, total_count, index_version, consecutive_failures, updated_at) VALUES ('L1', 'scanning', 7, 0, 1, 0, 0)",
+      )
+      .run();
+
+    const { body } = await call('/user/libraries');
+    expect(body.libraries?.[0]?.scan).toEqual({ status: 'scanning', scanned: 7, lastError: null });
+  });
+
+  it('reports a stalled scan as stalled, not as a failure that reads as retrying', async () => {
+    // `failed` and `stalled` are the **same** stored status, separated only by the retry
+    // counter. Reporting the row's status verbatim would render a terminal scan as one that
+    // is still being retried — and the operator's page would keep polling a scan that nothing
+    // is going to advance. `MAX_CONSECUTIVE_FAILURES` is 3.
+    await harness.db.db
+      .prepare(
+        "INSERT INTO scan_state (library_id, status, scanned_count, total_count, index_version, consecutive_failures, last_error, updated_at) VALUES ('L1', 'failed', 0, 0, 1, 3, 'the origin refused the connection', 0)",
+      )
+      .run();
+
+    const { body } = await call('/user/libraries');
+    const library = body.libraries?.[0];
+    expect(library?.scan?.status).toBe('stalled');
+    // And the reason travels with it. A diagnosis that exists in the database and never
+    // reaches the screen is the same defect this surface already fixed twice.
+    expect(library?.scan?.lastError).toBe('the origin refused the connection');
+  });
+
+  it('does not create a scan_state row just to report on one', async () => {
+    // The paired guard for the `null` above. `ScanStateDAO.ensure` writes an `idle` row on
+    // first sight, and a list call that used it would turn every `GET /user/libraries` for
+    // every never-scanned library into a **write** — against the 5,000-rows/day allowance,
+    // on the request an operator's page then polls. It would also destroy the `null` that
+    // distinguishes "never scanned" from "scanned", because the row it wrote is exactly the
+    // row whose absence carries that meaning.
+    await harness.db.db.prepare('DELETE FROM scan_state').run();
+    await call('/user/libraries');
+    const { body } = await call('/user/libraries');
+    expect(body.libraries?.[0]?.scan).toBeNull();
+    const rows = await harness.db.db.prepare('SELECT COUNT(*) AS cnt FROM scan_state').first<{ cnt: number }>();
+    expect(rows?.cnt).toBe(0);
   });
 
   it('registers a library, storing the password encrypted', async () => {

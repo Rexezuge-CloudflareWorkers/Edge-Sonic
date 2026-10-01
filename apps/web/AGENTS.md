@@ -21,6 +21,9 @@ Access — it has no Subsonic credential and could not use one.
 - `src/components/library/` — `LibraryForm` + `LibraryRow`, colocated by domain rather
   than sitting at the root of `components/`.
 - `src/views/LandingView.tsx` — what a signed-out visitor sees at `/`.
+- `src/lib/scanStatus.ts` — the two scan decisions: `isAdvancingStatus` (when to keep
+  polling) and `describeScanState` (what is said). Pure, so it is testable from the root suite
+  — see `test/scan-progress.test.ts`.
 - `src/hooks/` — `useNotice` (`showNotice(type, text)` + `clearNotice` for the
   dismissible banner; timeout from `lib/constants`), `useCurrentUser`
   (inflight-deduped `GET /user/me`, `authorized` tri-state), `useSpaLanguage`
@@ -272,6 +275,90 @@ tidiness: `BaseRoute.updateLibrary` calls `setPassword` only when the field is *
 so sending `''` re-encrypts an empty password over a working one and breaks every future
 scan, with nothing in the response to say so. The trim happens before the emptiness test
 so a stray space is not mistaken for a deliberate replacement.
+
+## The library page reads its scan state from the list, and polls it
+
+The page showed **no scan state at all** until an operator clicked Rescan, and never updated
+after that. The state was `useState<… | null>(null)` in `LibraryRow`, written only by the
+rescan handler — so a scan the background worker was driving, which is the normal case,
+rendered as a row with nothing on it. The server had been answering correctly throughout:
+`GET /user/libraries` now carries each library's `status`, `scanned`, `lastError` and a real
+`songCount`. **No server test could see this**, because every assertion in `user-api.test.ts`
+is about what the server *sends* and none is about what a page load renders — the same gap
+`test/web-landing.test.tsx` records for the `authorized` gate. Hence
+`test/web-library-row.test.tsx`.
+
+Four decisions, each a place the obvious implementation is wrong:
+
+- **`songCount` is tracks, and it is the progress number.** It is the figure
+  `getScanStatus` publishes as `count`, so the operator and a Subsonic client reading the same
+  library are looking at the same number. `scan.scanned` counts **folders**, and
+  `scan_state.total_count` is written as `0` by `markScanning` and never updated — so a
+  `scanned / total` fraction renders "12 of 0". `total` is therefore absent from the wire
+  shape, deliberately.
+- **The poll is passive.** It re-reads `GET /user/libraries`, which advances nothing; the scan
+  is driven by `ScanWorker`'s alarm or by `/rest/getScanStatus`. So `SCAN_POLL_INTERVAL_MS` is
+  a *display* cadence, not a claim about scan speed, and polling faster would change nothing
+  but the request count.
+- **Polling stops, and the stop is a `stalled` case.** `/user/*` is limited to **60 requests
+  per minute** keyed on the Access identity — the same bucket probe and rescan spend — so a
+  timer that never stops spends the budget an operator needs for the actions they want to take.
+  `isAdvancingStatus` is the guard, and `idle`, `stalled` and `null` are all terminal. Each is
+  asserted, because a guard written as `status === 'scanning'` gets `null` wrong and a newly
+  registered library is the most common state a new deployment is in.
+- **A failed poll keeps the list on screen.** It does *not* reuse `load`'s documented
+  "empty list plus a notice", because a poll runs unattended: folding its failure in would
+  blank the page out from under an operator reading it and turn four libraries into "No
+  libraries yet", which is the one sentence on this page that means something is genuinely
+  absent. A `stale` line says the numbers are not current instead.
+
+`isAdvancingStatus` is a **twin** of `backend-services`' `isAdvancing`, not a delegation:
+`apps/web` ships zero `@edge-sonic/*` runtime dependencies, so the package is not reachable
+from a browser bundle. It is pinned against the same vocabulary in
+`test/scan-progress.test.ts`. Import it when the SPA gains runtime dependencies; do not add
+them for this.
+
+`stoppedBy` is **row-local** and does not survive a reload. It is a property of a chunk, not of
+stored state — the only place it exists is the response to `POST …/scan/step` — so persisting it
+would mean a column, a migration, a lock entry and a write on every chunk, for a sentence an
+operator reads once with the page open. The rescan handler no longer reads the status back
+afterwards: `onRun` reloads the list, which carries the state, and the extra round trip's only
+effect was overwriting `stoppedBy` with `null`.
+
+## `stalled` is a status the client was unable to represent
+
+`ScanStateSummary['status']` was `'idle' | 'scanning' | 'failed'`. The server sends `stalled`
+— `failed` and `stalled` are the **same** stored status, separated only by the retry counter
+(`storedStatus` in `scanRetry.ts`) — so a terminal scan rendered as the bare word `stalled`,
+and the page had no way to know that polling had nothing left to buy. It is also the one status
+whose remedy is the operator's action, which is why its label names it.
+
+## A fallback string is a claim about who is looking
+
+The header's identity chip was `userEmail ?? 'Operator'`, so **every signed-out visitor saw the
+word "Operator"** in the top right of the landing page — the page asserting an identity it did
+not have, for somebody who had not signed in. It is now gated on `signedIn === true`, the same
+test as the nav and for the same reason (while `/user/me` is in flight both are null, and the
+router is covering those frames with a spinner).
+
+## A bundle value and its inline default are one fact, and nothing compared them
+
+The header rendered as **`Edge--Sonic`**: `brand.rest` held `"-Sonic"` while the markup rendered
+its own `-` between two spans. Every individual surface was defensible — the bundle had one
+well-formed key with one well-formed value, the inline default said `"Sonic"` and matched what
+the author meant, and the markup was correct — which is why it survived review. It is only wrong
+to somebody who already knows the product is called "Edge-Sonic".
+
+So `scripts/validate_locales.mjs` now captures the optional second argument of `t('key',
+'default')` and **fails** when it disagrees with the bundle, across all 88 call sites. Everything
+else in that script compares two bundles or checks that a key exists; nothing in it read what a
+value *is*, and with one shipped language the per-tag body is skipped entirely. Verified by
+mutation: restoring `"-Sonic"` fails both the validator and the render assertion in
+`test/web-library-row.test.tsx`.
+
+`libraries.reachable` had drifted the same way (`"Reachable"` against a `"Reachable."` default)
+and was resolved to `"Reachable."`, the default. `nav.operator` and `libraries.scan` were
+**deleted** rather than left unreferenced — no caller is a second vocabulary to keep in sync.
 
 ## Style
 
