@@ -457,13 +457,29 @@ describe('the error surface', () => {
     expect(body['subsonic-response'].error?.code).toBe(70);
   });
 
-  it('distinguishes a recognised-but-unimplemented endpoint by name', async () => {
-    // A client that probes `getVideos` gets "not implemented here" rather than "you
-    // typed it wrong", which is the difference between a usable error and a confusing
-    // one in a client's log.
-    const { body } = await rest('getVideos');
-    expect(body['subsonic-response'].error?.code).toBe(70);
-    expect(body['subsonic-response'].error?.message).toContain('getVideos');
+  it('answers a retired endpoint with a status a client can stop retrying', async () => {
+    // `getVideos` is `gone`: HTTP 410 and a plain-text body, not a Subsonic envelope. A
+    // `code=70` envelope is a *protocol* answer to "give me this", which invites the client
+    // to report a server error; 410 says the endpoint is retired and there is nothing to
+    // retry. Navidrome draws the same line.
+    //
+    // The trade is stated rather than hidden: five endpoints now answer outside the envelope,
+    // and a client that parses only the envelope degrades to "could not read the response"
+    // on those. It is bounded to endpoints no client calls in a loop.
+    const response = await harness.fetch(harness.restUrl('getVideos'));
+    expect(response.status).toBe(410);
+    expect(response.headers.get('content-type')).toContain('text/plain');
+  });
+
+  it('answers an endpoint that exists with an empty wrapper, not a failure', async () => {
+    // `getLyrics` was `code=70`. A client calls it on every track and `code=70` reads as
+    // "the server failed" where the truth is "this instrumental has no lyrics". The wrapper
+    // is present and empty, so "nothing to report" stays distinguishable from "not
+    // implemented" — which is the whole reason the absent-endpoint table has four answers.
+    const { status, body } = await rest('getLyrics', { id: subsonicId('s', 'a/track.flac') });
+    expect(status).toBe(200);
+    expect(body['subsonic-response'].error).toBeUndefined();
+    expect(body['subsonic-response'].lyrics).toEqual({});
   });
 
   it('refuses a client version it cannot serve, with the code that says which side is old', async () => {
@@ -500,7 +516,11 @@ describe('user state', () => {
 
     await rest('unstar', { id: SKINNY_LOVE });
     const after = await rest('getStarred2');
-    expect((after.body['subsonic-response'].starred2 as { song: unknown[] }).song).toEqual([]);
+    // The wrapper is present and empty; the `song` key is **absent** rather than `[]`,
+    // which is the shape the reference server answers and the shape every other empty
+    // list takes. Asserted on the absence of the key, so it cannot be satisfied by an
+    // endpoint that stopped reporting the list at all.
+    expect(after.body['subsonic-response'].starred2).toEqual({});
   });
 
   it('round-trips a playlist in order', async () => {
