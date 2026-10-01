@@ -385,6 +385,87 @@ describe('envelope', () => {
     expect(['music', 'podcast', 'audiobook', 'video']).toContain(body['subsonic-response'].song.type);
   });
 
+  it('renders artists and genres as bare arrays, where the specification puts them', async () => {
+    // OpenSubsonic's `Child.artists` is `"artists": [{…}]`, not `{"artist": [{…}]}`.
+    //
+    // The wrapper and the child are the same word in two grammatical forms — `artists` and
+    // `artist` — and unlike `albumList2.album` the array belongs at the **wrapper's** key.
+    // Emitting the wrapped form is not a near miss: a client whose model is
+    // `artists: List<Artist>` reads an object there and throws, which is the same failure
+    // mode as an absent key and just as invisible from inside this repository.
+    const song: Song = {
+      id: 's:1',
+      title: 'Akane',
+      artist: 'Silent Siren',
+      albumArtist: 'SILENT SIREN',
+      genre: 'J-Rock',
+      artistId: 'ar:1',
+      samplingRate: 48_000,
+      channelCount: 2,
+      sortName: 'akane',
+      mediaType: 'song',
+      duration: 256,
+      bitRate: 200,
+      size: 1,
+      contentType: 'audio/ogg',
+      suffix: 'opus',
+    };
+    const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as {
+      'subsonic-response': { song: Record<string, unknown> };
+    };
+    const element = body['subsonic-response'].song;
+
+    expect(Array.isArray(element.artists), 'artists').toBe(true);
+    expect(element.artists).toEqual([{ id: 'ar:1', name: 'Silent Siren' }]);
+    expect(Array.isArray(element.genres), 'genres').toBe(true);
+    expect(element.genres).toEqual([{ name: 'J-Rock' }]);
+    // The album artist is its own list, and differs from the track artist here — which is the
+    // whole point of the field on a compilation.
+    expect(element.albumArtists).toEqual([{ id: 'ar:1', name: 'SILENT SIREN' }]);
+    // And the single-value forms beside them.
+    expect(element.displayArtist).toBe('Silent Siren');
+    expect(element.displayAlbumArtist).toBe('SILENT SIREN');
+    expect(element.samplingRate).toBe(48_000);
+    expect(element.channelCount).toBe(2);
+    expect(element.sortName).toBe('akane');
+  });
+
+  it('derives a sort name, dropping a leading article and only a whole-word one', async () => {
+    // `sortName` is what a client orders by, and `ignoredArticles` is the list it is told to
+    // ignore — so both come from one source. Asserted against the same article list
+    // `getIndexes` advertises.
+    const at = async (title: string): Promise<unknown> => {
+      const song: Song = { id: 's:1', title, mediaType: 'song', duration: 0, bitRate: 0, size: 1, contentType: 'audio/flac', suffix: 'flac' };
+      const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as { 'subsonic-response': { song: { sortName: unknown } } };
+      return body['subsonic-response'].song.sortName;
+    };
+
+    expect(await at('The Bird')).toBe('bird');
+    expect(await at('Akane')).toBe('akane');
+    // Not a whole word: `Theme` starts with `The` and must keep it.
+    expect(await at('Theme Song')).toBe('theme song');
+    // A bare article is the whole title and stays — there is nothing left to sort by.
+    expect(await at('The')).toBe('the');
+    // Case-insensitive, because the tag may shout.
+    expect(await at('THE GREAT ESCAPE')).toBe('great escape');
+  });
+
+  it('omits the extension lists entirely when there is nothing to name', async () => {
+    // A track whose tags were never read must not claim the server supports these fields
+    // *and* knows the answer is none — an absent key claims nothing, which is the honest state.
+    // Paired with the test above deliberately: together they say the key tracks the data,
+    // rather than that it is always present or never present.
+    const song: Song = { id: 's:1', title: '01 - untagged', mediaType: 'song', duration: 0, bitRate: 0, size: 1, contentType: 'audio/flac', suffix: 'flac' };
+    const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as {
+      'subsonic-response': { song: Record<string, unknown> };
+    };
+    for (const field of ['artists', 'albumArtists', 'genres', 'displayArtist', 'displayAlbumArtist', 'samplingRate', 'channelCount']) {
+      expect(body['subsonic-response'].song, field).not.toHaveProperty(field);
+    }
+    // `sortName` needs no tag: it is derived from the title, so it is always there.
+    expect(body['subsonic-response'].song.sortName).toBe('01 - untagged');
+  });
+
   it('publishes only the fields AlbumID3 declares', async () => {
     // `AlbumID3` has `name` and no `title`, and no `isDir`. `albumAttrs` published
     // both: `title` duplicated `name` (so every album carried two identical fields

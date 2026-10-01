@@ -28,6 +28,12 @@ interface Song {
   readonly title: string;
   readonly album?: string;
   readonly artist?: string;
+  /**
+  The album artist, where the tags distinguish it from the track artist. A compilation's
+  tracks each carry their own performer while the album carries one name, and a client sorting
+  an album grid needs the second.
+  */
+  readonly albumArtist?: string;
   readonly track?: number;
   readonly discNumber?: number;
   readonly year?: number;
@@ -53,6 +59,19 @@ interface Song {
   readonly coverArt?: string;
   readonly bookmarkPosition?: number;
   readonly mediaType: 'song';
+  /**
+  Samples per second and channel count. Both are read from the file by the tag reader and
+  stored on the row, so publishing them costs no extra WebDAV request; `undefined` means "not
+  read yet", which is what a track this client has not opened reports.
+  */
+  readonly samplingRate?: number;
+  readonly channelCount?: number;
+  /**
+  The track's sort name — the title lowercased with a leading article dropped, which is what
+  the file's own sort field holds when it has one and what a client's ordering does when it
+  does not.
+  */
+  readonly sortName?: string;
 }
 
 interface Album {
