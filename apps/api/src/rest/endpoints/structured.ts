@@ -77,10 +77,39 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
 }
 
 /**
+ * The `id` of a single media item, or the same "not found" a wrong id produces.
+ *
+ * ### Why this is not `params.require('id')`
+ *
+ * `require` raises `code=10` ("required parameter is missing"), and for most endpoints that
+ * is exactly right — Navidrome does the same for `getPlaylist`, `stream`, `download`,
+ * `scrobble` and the bookmark pair, and a client that forgot a parameter wants to be told
+ * so.
+ *
+ * The four endpoints that fetch **one item identified by its id** are the exception, and
+ * they are an exception for a reason rather than by accident: the id is the *selector*, and
+ * there is no other way to say "I want none". `getSong` with no id and `getSong` with a
+ * deleted id are the same request — resolve this identifier to a track — so they answer
+ * `code=70` for the same reason. Splitting them across two codes would make a client's
+ * error handling depend on which mistake it happened to make.
+ *
+ * Navidrome draws the line in the same place, measured endpoint by endpoint: `code=70` for
+ * these four, `code=10` for everything else that takes an id.
+ *
+ * @param what Named in the message so the client learns *which* item was not found, which
+ *   is the one piece of information it can act on.
+ */
+function requireMediaId(context: RestContext, what: string): string {
+  const id = context.params.get('id');
+  if (id === undefined || id.length === 0) throw new SubsonicError(ErrorCode.NotFound, `${what} not found.`);
+  return id;
+}
+
+/**
 `getArtist` — an artist's albums.
 */
 async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
-  const id = context.params.require('id');
+  const id = requireMediaId(context, 'Artist');
   const decoded = decodeId(id, IdKind.Artist);
   const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   const artistName = decoded.path;
@@ -185,7 +214,7 @@ function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations:
 `getAlbum` — an album's songs.
 */
 async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
-  const id = context.params.require('id');
+  const id = requireMediaId(context, 'Album');
   const decoded = decodeId(id, IdKind.Album);
   const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   TreeService.assertPath(decoded.path);
@@ -215,7 +244,7 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
  * is the path the suite exercises.
  */
 async function getSong(context: RestContext): Promise<EnvelopeResponse> {
-  const id = context.params.require('id');
+  const id = requireMediaId(context, 'Song');
   const decoded = decodeId(id, IdKind.Song);
   const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   TreeService.assertPath(decoded.path);

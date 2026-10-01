@@ -93,16 +93,28 @@ async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> 
  * only `scanning` and `count`. Which bound ended a chunk is on `ChunkResult.stoppedBy`,
  * which the operator surface reads through `POST /user/libraries/:id/scan/step`.
  *
- * `count` is the protocol's single progress number, and it reports folders
- * scanned — the number that actually moves. Reporting song count instead would
- * need a full library count on every poll.
+ * `count` is the protocol's single progress number, and it counts **songs**.
+ *
+ * It used to report `scanned_count`, which is folders. That is not the protocol's unit:
+ * `scanStatus.count` is "scanned item count" and every implementation of this protocol
+ * reports tracks — Navidrome answers 113 for the same library where this answered 1. So
+ * the one number a client has to render progress against was counting a different thing
+ * than the library it was describing, and on a library whose folders outnumbered its
+ * albums it would move at a rate unrelated to the work.
+ *
+ * Cheap in the way that matters: `COUNT(*)` scoped to one library is a single-column index
+ * scan, and the poll already reads `scan_state`. It is also a *total* rather than a
+ * *delta*, which is what makes it usable — a client rendering "N of M" wants the same
+ * number twice and gets it, instead of a delta it must accumulate across polls it may
+ * have missed.
  */
 async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
   const stub = context.scanStubFor(library.id);
   const result = stub ? await stub.getStatus(library.id) : await context.scan.step(library);
-  return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count: result.scanned }));
+  const count = await context.songs.countByLibrary(library.id);
+  return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count }));
 }
 
 /**

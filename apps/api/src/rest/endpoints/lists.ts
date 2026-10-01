@@ -8,7 +8,7 @@
  * "albums by file structure" — the albums *are* directories. They stay separate
  * endpoints because clients send both.
  */
-import { albumChildElement, albumElement, decodeId, el, elList, IdKind, songElement } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, decodeId, el, elList, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -75,8 +75,25 @@ function renderAlbums(albums: readonly Album[], wrapperName: 'albumList' | 'albu
   return wrapperName === 'albumList' ? albums.map((album) => albumChildElement(album, album.artistId)) : albums.map((album) => albumElement(album));
 }
 
+/**
+ * `getAlbumList` and `getAlbumList2`.
+ *
+ * `type` is **required** by the protocol, and the default here was a silent substitution:
+ * a client that sent none got `random`, so a request that named no list came back with a
+ * confident one. Navidrome refuses it with `code=10`, and so does this — a client asking
+ * "give me the highest-rated albums" and receiving a random page has no way to tell that
+ * the server substituted the question.
+ *
+ * An unrecognised `type` is a different failure and stays a different one. The protocol
+ * names the accepted values, so anything else is a client bug rather than a missing
+ * parameter: `code=0`, which is the protocol's generic failure, matching Navidrome.
+ * Falling back to `random` for it would answer a question nobody asked.
+ */
 async function albumList(context: RestContext, wrapperName: 'albumList' | 'albumList2'): Promise<EnvelopeResponse> {
-  const type = context.params.getOr('type', 'random');
+  const type = context.params.require('type');
+  if (!(type in ALBUM_ORDER_BY) && type !== 'starred') {
+    throw new SubsonicError(ErrorCode.Generic, `type '${type}' not implemented`);
+  }
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
   const size = context.pageSize(context.params.optionalInt('size'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
