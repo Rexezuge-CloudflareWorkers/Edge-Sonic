@@ -66,19 +66,57 @@ function extractError(payload: unknown, status: number): { message: string; type
   return { message: fallback, type: null };
 }
 
+/**
+ * Read an error body once.
+ *
+ * ### Why `text()` and then `JSON.parse`, and not `json()` with a `text()` fallback
+ *
+ * The previous shape was `response.json()` in a `try`, and `response.text()` in the
+ * `catch` — which **cannot work**. `json()` consumes the body stream before it fails to
+ * parse it, so the second read returned `''`. The intent ("not JSON — an Access login
+ * page, or a platform-level error page") described a branch that was unreachable, and the
+ * `typeof payload === 'string'` arm of `extractError` above it was reachable only by a
+ * body that was a bare JSON *string*.
+ *
+ * Reading the text first and parsing it ourselves is the only shape that can distinguish
+ * "the server sent prose" from "the server sent a page", which is the distinction the
+ * notice bar needs.
+ */
 async function readError(response: Response): Promise<{ message: string; type: string | null }> {
-  let payload: unknown = null;
+  let raw: string;
   try {
-    payload = await response.json();
+    raw = await response.text();
   } catch {
-    // Not JSON — an Access login page, or a platform-level error page.
-    try {
-      payload = await response.text();
-    } catch {
-      payload = null;
-    }
+    // The body could not be read at all — a connection reset after the headers. The
+    // status is still the one true thing about the request.
+    return extractError(null, response.status);
   }
-  return extractError(payload, response.status);
+  try {
+    return extractError(JSON.parse(raw) as unknown, response.status);
+  } catch {
+    // Not JSON. An Access login page and a proxy's HTML error page both land here, and
+    // neither is a message an operator can act on — what they need to know is that the
+    // answer did not come from this API at all. Markup is therefore reported as absent
+    // rather than quoted, because pasting a login form into a notice bar reads as the app
+    // rendering garbage, and a long one pushes every control off screen.
+    return extractError(isProbablyProse(raw) ? raw : null, response.status);
+  }
+}
+
+/**
+ * Whether a non-JSON body is text worth showing, rather than markup or a binary blob.
+ *
+ * Short, single-line, and free of tags. Deliberately conservative: the cost of wrongly
+ * refusing is the generic status sentence, and the cost of wrongly accepting is an HTML
+ * page in the notice bar.
+ */
+// eslint-disable-next-line no-control-regex -- rejecting control characters IS the test
+const CONTROL_CHARACTER = /[\u0000-\u001F\u007F]/;
+
+function isProbablyProse(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_ERROR_LENGTH || trimmed.includes('<')) return false;
+  return !CONTROL_CHARACTER.test(trimmed) && !trimmed.includes('\n');
 }
 
 async function readJson<T>(response: Response): Promise<T> {
