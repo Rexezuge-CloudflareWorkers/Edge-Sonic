@@ -22,10 +22,12 @@ import {
   isClientVersionSupported,
   isValidJsonpCallback,
   resolveFormat,
+  songElement,
   successResponse,
   SubsonicParams,
   SubsonicError,
 } from '@edge-sonic/subsonic';
+import type { Song } from '@edge-sonic/subsonic';
 
 function get(url: string): Request {
   return new Request(`https://edge-sonic.example${url}`);
@@ -207,8 +209,48 @@ describe('envelope', () => {
     expect(body).toContain('status="ok"');
     // Some clients treat any child element as a protocol violation, so the root
     // must be self-closing. The XML declaration is the only other `<`.
-    expect(body).toContain('<subsonic-response status="ok"');
     expect(body).toMatch(/<subsonic-response[^>]*\/>/);
+  });
+
+  /**
+   * The namespace, and the fact that it is `http://`.
+   *
+   * It shipped absent. Nothing here can see a missing `xmlns`: an undeclared
+   * namespace is still well-formed XML, so every parser in this repository's own
+   * tests accepted the document, and a lenient client ignores the attribute
+   * entirely. A client that resolves element names *against* the namespace —
+   * which is what the protocol's own schema tells it to do — finds no elements at
+   * all and reports an empty library.
+   *
+   * The scheme is asserted literally because "correcting" it to `https://` is
+   * indistinguishable from a fix on every client that ignores the namespace. It is
+   * an identifier: nothing resolves it. Subsonic and Navidrome both emit exactly
+   * `http://subsonic.org/restapi`.
+   */
+  it('roots the document in the protocol XML namespace', async () => {
+    const body = await (await successResponse(null, { format: 'xml' })).text();
+    expect(body).toContain('xmlns="http://subsonic.org/restapi"');
+  });
+
+  it('declares the namespace on the root only, and not in the other formats', async () => {
+    const payload = elList('albumList2', 'album', {}, [el('album', { id: 'al:1', name: 'Akane' })]);
+
+    const xml = await (await successResponse(payload, { format: 'xml' })).text();
+    // One declaration. A per-element one would be redundant rather than wrong,
+    // but it is an attribute in the output and belongs to the document, not a node.
+    expect(xml.match(/xmlns=/g)).toHaveLength(1);
+
+    // JSON and JSONP have no namespace concept, so an `xmlns` carried in `attrs`
+    // would put a field the protocol does not define in front of every client.
+    // The namespace lives in the serializer's root handling, never in `attrs`, and
+    // this is the assertion that says so.
+    for (const format of ['json', 'jsonp'] as const) {
+      // `jsonp` needs a callback name: with none it deliberately falls back to XML,
+      // which would make this assertion pass for the wrong reason.
+      const rendered = await (await successResponse(payload, { format, jsonpCallback: 'cb' })).text();
+      expect(rendered).not.toContain('xmlns');
+      expect(rendered).not.toContain('subsonic.org/restapi');
+    }
   });
 
   it('wraps JSON under the response element name', async () => {
@@ -275,6 +317,48 @@ describe('envelope', () => {
     expect(Array.isArray(await at(1))).toBe(true);
     expect(Array.isArray(await at(2))).toBe(true);
     expect(await at(1)).toHaveLength(1);
+  });
+
+  /**
+   * The attribute key set of `song`, against the schema's own enumeration.
+   *
+   * `type` and `mediaType` are different fields: the protocol types `type` as the
+   * generic container `[music/podcast/audiobook/video]` and `mediaType` as the shape
+   * `[song/album/artist]`. `songElement` wrote `mediaType`'s value into `type`, so
+   * every track published `type="song"` — a value outside `type`'s enumeration — and
+   * published no `mediaType` at all.
+   *
+   * Nothing here could see it. The attribute was syntactically valid, the tests that
+   * existed asserted *values* rather than the field set, and a lenient client drops
+   * an unknown attribute. What it cost is the field every client filters on: a
+   * player filtering `type == "music"` sees an empty library, and one reading
+   * `mediaType` to tell a song from an album reads nothing.
+   */
+  it('publishes type as the container and mediaType as the shape', async () => {
+    const song: Song = { id: 's:1', title: 'Akane', mediaType: 'song', duration: 256, bitRate: 200, size: 1, contentType: 'audio/ogg', suffix: 'opus' };
+    const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as {
+      'subsonic-response': { song: Record<string, unknown> };
+    };
+    // Read under `song`, not at the envelope: the envelope has a `type` of its own
+    // (the server name), and asserting at that level would pass against a `song`
+    // carrying any value at all.
+    expect(body['subsonic-response'].song.type).toBe('music');
+    expect(body['subsonic-response'].song.mediaType).toBe('song');
+    // The enumeration is the point; a value outside it is what shipped.
+    expect(['music', 'podcast', 'audiobook', 'video']).toContain(body['subsonic-response'].song.type);
+  });
+
+  it('publishes only the fields AlbumID3 declares', async () => {
+    // `AlbumID3` has `name` and no `title`, and no `isDir`. `albumAttrs` published
+    // both: `title` duplicated `name` (so every album carried two identical fields
+    // and a client reading the one the schema names still worked, which is why it
+    // was invisible), and `isDir: true` asserted a field the schema does not have.
+    const body = (await (await successResponse(albumElement({ id: 'al:1', name: 'Akane', songCount: 1, duration: 256 }), { format: 'json' })).json()) as {
+      'subsonic-response': { album: Record<string, unknown> };
+    };
+    expect(body['subsonic-response'].album).not.toHaveProperty('title');
+    expect(body['subsonic-response'].album).not.toHaveProperty('isDir');
+    expect(body['subsonic-response'].album.name).toBe('Akane');
   });
 
   it('leaves an album used as a list child without a song key', async () => {

@@ -8,6 +8,7 @@
  * the escaping below exists for *values* (artist names, filenames, comments),
  * which absolutely are untrusted.
  */
+import { XML_NAMESPACE } from './constants';
 import type { ElementNode, Node, Scalar } from './nodes';
 import { isElementNode } from './nodes';
 
@@ -36,13 +37,23 @@ function isPresent(value: Scalar | null | undefined): value is Scalar {
   return value !== null && value !== undefined;
 }
 
-function serializeXmlNode(node: Exclude<Node, null | undefined | false>, out: string[]): void {
+/**
+ * `isRoot` decides whether the namespace is declared, and it is true for exactly one
+ * node per document.
+ *
+ * The namespace is the document's identity, not a property of every element in it, so
+ * it goes on the root and nowhere else. A per-element declaration would be redundant
+ * rather than wrong; passing it down through `attrs` instead would put `xmlns` in the
+ * JSON and JSONP output too, where no such concept exists.
+ */
+function serializeXmlNode(node: Exclude<Node, null | undefined | false>, out: string[], isRoot = false): void {
   if (!isElementNode(node)) {
     out.push(escapeXml(String(node)));
     return;
   }
 
   out.push('<', node.name);
+  if (isRoot) out.push(' xmlns="', XML_NAMESPACE, '"');
   for (const [key, value] of Object.entries(node.attrs ?? {})) {
     if (!isPresent(value)) continue;
     out.push(' ', key, '="', escapeXml(String(value)), '"');
@@ -63,7 +74,7 @@ function serializeXmlNode(node: Exclude<Node, null | undefined | false>, out: st
 
 function serializeXml(root: ElementNode): string {
   const out: string[] = ['<?xml version="1.0" encoding="UTF-8"?>\n'];
-  serializeXmlNode(root, out);
+  serializeXmlNode(root, out, true);
   return out.join('');
 }
 

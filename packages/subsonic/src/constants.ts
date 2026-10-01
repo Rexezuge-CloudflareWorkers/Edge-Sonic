@@ -35,8 +35,27 @@ const OPEN_SUBSONIC = true;
 
 /**
 XML namespace every `subsonic-response` document is rooted in.
+
+`http://`, not `https://`. The namespace is an identifier rather than a fetchable
+address -- nothing resolves it -- so it is fixed by the schema the protocol published,
+and both Subsonic and Navidrome emit exactly this string. Changing it to `https://`
+looks like a correction and is indistinguishable from one on every client that
+ignores the namespace, right up to the client that resolves element names against
+it and finds nothing.
+
+Declared on the root element only. A per-element declaration would be redundant
+rather than wrong, and an `xmlns` carried in `attrs` would also reach the JSON and
+JSONP serializers, where the protocol has no such concept.
+
+The `http` scheme is deliberate, and the two lint rules that object to it are wrong
+here: a namespace is an *identifier*, not an address. Nothing resolves it, it is
+compared as a string against what the protocol published, and every implementation
+of this protocol -- Subsonic and Navidrome among them -- spells it `http`.
+Rewriting it to `https` would be undetectable on any client that ignores the
+namespace and fatal on the ones that resolve element names against it.
 */
-const XML_NAMESPACE = 'https://subsonic.org/restapi';
+// eslint-disable-next-line sonarjs/no-clear-text-protocols, unicorn/prefer-https -- a namespace identifier, not a fetchable URL; see above.
+const XML_NAMESPACE = 'http://subsonic.org/restapi';
 
 /**
 Path prefix the whole Subsonic surface lives under.

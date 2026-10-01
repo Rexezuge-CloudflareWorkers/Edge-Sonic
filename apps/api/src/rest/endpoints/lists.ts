@@ -8,8 +8,8 @@
  * "albums by file structure" — the albums *are* directories. They stay separate
  * endpoints because clients send both.
  */
-import { decodeId, el, elList, IdKind, songElement } from '@edge-sonic/subsonic';
-import type { ElementNode } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, decodeId, el, elList, IdKind, songElement } from '@edge-sonic/subsonic';
+import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
@@ -47,6 +47,19 @@ function safeDecodeId(id: string, kind: string): ReturnType<typeof decodeId> | n
   }
 }
 
+/**
+ * Render album models as the element type their wrapper declares.
+ *
+ * `albumList` is `Array of Child` and `albumList2` is `Array of AlbumID3` — the two
+ * spellings of the same list, answered with different element types. So the wrapper
+ * name decides, and the wrapper is the only thing that knows which it is: a grouping
+ * that picked for itself picked `AlbumID3` for both, which put `title` and `isDir` on
+ * every album in `getAlbumList2` where the schema declares neither.
+ */
+function renderAlbums(albums: readonly Album[], wrapperName: 'albumList' | 'albumList2'): ElementNode[] {
+  return wrapperName === 'albumList' ? albums.map((album) => albumChildElement(album, album.artistId)) : albums.map((album) => albumElement(album));
+}
+
 async function albumList(context: RestContext, wrapperName: 'albumList' | 'albumList2'): Promise<EnvelopeResponse> {
   const type = context.params.getOr('type', 'random');
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
@@ -63,7 +76,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
       }
     }
     const annotations = await annotationsFor(context, starredIds.length > 0);
-    return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, annotations)));
+    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbums(rows, library, annotations), wrapperName)));
   }
 
   const needsRange = type === 'byYear' || type === 'byGenre';
@@ -82,7 +95,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random,
   });
 
-  return respond(context, elList(wrapperName, 'album', {}, groupAlbums(rows, library, NO_ANNOTATIONS)));
+  return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbums(rows, library, NO_ANNOTATIONS), wrapperName)));
 }
 
 async function getAlbumList(context: RestContext): Promise<EnvelopeResponse> {
@@ -172,7 +185,11 @@ async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'
   }
 
   const annotations = await annotationsFor(context, songIds.length + albumIds.length > 0);
-  return respond(context, elList(wrapperName, ['album', 'song'], {}, [...groupAlbums(albumRows, library, annotations), ...(await songNodes(context, library, songs))]));
+  // `starred` and `starred2` declare both an `album` and a `song` key, so the wrapper is
+  // a record either way. An album in that wrapper is a `Child`, matching `starred`'s own
+  // schema — see `renderAlbums` for why the element type follows the wrapper.
+  const albumNodes = groupAlbums(albumRows, library, annotations).map((album) => albumChildElement(album, album.artistId));
+  return respond(context, elList(wrapperName, ['album', 'song'], {}, [...albumNodes, ...(await songNodes(context, library, songs))]));
 }
 
 async function getStarred(context: RestContext): Promise<EnvelopeResponse> {
