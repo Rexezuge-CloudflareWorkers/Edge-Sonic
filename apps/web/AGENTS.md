@@ -46,7 +46,10 @@ Access — it has no Subsonic credential and could not use one.
 until `vite build` runs again. `scripts/verify-spa-shell.mjs` runs in `pnpm run checks` and
 rejects a missing, stubbed, or mismatched artifact. It cannot detect a stale-but-
 self-consistent pair, which is why the rebuild is an operational duty and not only a
-checked one.
+checked one. It is in `pnpm run checks` but **not** in
+`.github/workflows/continuous-integration.yml`, which runs `pnpm -r typecheck`,
+`pnpm run lint` and `check-god-files.mjs` — so a PR can merge a stale artifact that
+`checks` would have caught locally.
 
 ## Data loading owns its own cancellation
 
@@ -80,13 +83,24 @@ worse than saying "not measured yet" — so it is excluded **visibly**, and re-i
 is meant to be a deliberate act once the components have tests.
 
 **Excluded is not untested.** What is testable without a DOM harness is exercised from
-the root suite, and `test/probe-notice.test.ts` does exactly that for `lib/probe.ts` and
-`lib/libraryDraft.ts`. That file exists because the decisions below were wrong and lived
-inside a component, where a component with no test is a decision with no evidence. The
-two `useEffect` cancellation guards are the other load-bearing logic here, and the lint
-rule that catches a missing one is on. Put a decision in a pure function under `lib/`
-and it is testable from the root suite today; the coverage `include` list is a separate,
-deliberate decision.
+the root suite: `test/probe-notice.test.ts` for `lib/probe.ts` and
+`lib/libraryDraft.ts`, and `test/spa-decisions.test.ts` for `lib/api.ts`'s error decoder
+and `describeStopReason`. That file exists because the decisions below were wrong and lived
+inside a component, where a component with no test is a decision with no evidence. Put a
+decision in a pure function under `lib/` and it is testable from the root suite today; the
+coverage `include` list is a separate, deliberate decision.
+
+**There is no lint rule that catches a missing cancellation guard.** This file claimed one
+was on. `eslint.config.mjs` applies `react-hooks.configs['recommended-latest']`, which is
+`exhaustive-deps`, `rules-of-hooks` and `set-state-in-effect` — **none** of which detects an
+un-guarded `setState` after an `await` in an event handler. The two `useEffect` guards above
+are correct because they were written that way, not because something enforces it.
+
+So an **event handler** that awaits has to own its guard explicitly, and `LibraryRow` is the
+worked example: `rescan` makes three sequential round trips against an origin slow enough
+that a chunk is bounded in seconds, and both its handlers now check a ref the mount effect
+sets. The effect form below is unaffected — an effect *can* own its cleanup, because only
+the effect knows when the component goes away.
 
 ## A diagnostic is rendered, not summarised
 

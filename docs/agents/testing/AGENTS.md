@@ -4,10 +4,17 @@ Scope: the whole suite. Parent index: `../../../AGENTS.md`.
 
 Everything runs under **Node**. There is no workerd, no pool, and no second toolchain.
 
-Thresholds (`vitest.config.mts`): **79 / 66 / 81 / 82** (statements / branches /
-functions / lines), against a measured 80 / 67 / 82 / 83. These are a **measured
-floor**, not an aspiration: lower one to make CI green and the gate stops saying
+Thresholds (`vitest.config.mts`): **85 / 73 / 90 / 89** (statements / branches /
+functions / lines), against a measured 85.95 / 73.96 / 90.98 / 89.61. These are a
+**measured floor**, not an aspiration: lower one to make CI green and the gate stops saying
 anything. Raise them as coverage grows.
+
+The floors sit *below* the measurement rather than rounded to it, so a tenth of a point of
+jitter does not turn the gate red — and the largest recent raise came from **deleting**
+code. `Container`'s unreachable factory tier, `Provider`, `memoizeAsync`, ten orphaned DAO
+methods and `UpdateClause` were all uncovered; removing them removed their statements from
+the denominator. That is the intended way for this number to move: a floor that has to be
+*lowered* to admit code nobody calls is a floor measuring the wrong thing.
 
 ## Why there is no Workers integration pool
 
@@ -96,6 +103,20 @@ Two more rules that are easy to get wrong:
 
 - **Only KV and WebDAV are doubled**, because they are exactly the two things that are
   modellable without lying. D1 is real.
+- **A double may not be free where the thing being bounded costs something.**
+  `scan-budget.test.ts` keeps its in-memory index — the chunk's *decisions* are above the
+  SQL, and `schema.int.test.ts` runs the SQL against a real planner. But it answered every
+  store call on the next microtask, so **D1 was free**, and the chunk's wall-clock deadline
+  was asserted in the one world where a deadline does nothing and looks like one that
+  works: the only way a chunk could be slow was the origin, which `fakeDav`'s `latencyMs`
+  already modelled. The store now has a latency of its own and a test stops the chunk on
+  the deadline with the origin answering instantly.
+- **A double may not disagree with production about the column under repair.**
+  That suite's `upsertFileFacts` wrote `album: null, artist: null` with no
+  `derived_version` — *verbatim* the defect the parent index records as shipped and fixed
+  in `scan-incremental.test.ts`. A double that shares an assumption with the code it tests
+  makes both look right, and this one was the suite cited as the model for budget
+  measurement.
 - **A guard needs a test that proves it has teeth.** `withReceiverCheck` is asserted twice
   in `webdav-client.test.ts`: once that the client behaves, and once that the guard
   actually rejects a method call. Without the second, the guard could be removed in a
@@ -110,6 +131,16 @@ Two more rules that are easy to get wrong:
   to read a file from `enriched_at !== null`; a camelCase stand-in leaves that `undefined`,
   `undefined !== null` is true, and the service correctly concludes every row is already
   enriched and does nothing. A test that passes while asserting nothing.
+
+- **A checker that only compares things to each other checks nothing when there is one of
+  them.** `scripts/validate_locales.mjs` compared every locale bundle against `en`, so with
+  `SUPPORTED_LANGUAGES = ['en']` its entire per-tag body was skipped by
+  `if (tag === 'en') continue` and it printed `ALL OK` having examined the application not at
+  all. It could not see `libraries.scanPausedRequests` being used and absent — the string in
+  the bundle did not exist to be wrong *about* anything. It reads the `t()` call sites now, in
+  both directions (a referenced key must exist; an unreferenced one is warned), which is the
+  comparison a bundle-to-bundle diff cannot express. It is in CI; it was not, and it is a
+  check that fails on a merge rather than on a machine.
 
 One more, and it is the same rule applied to an *expectation* rather than to a double: an
 assertion written from our own reading of the spec shares that reading with the code it
@@ -150,6 +181,14 @@ answered `ping` and authenticated correctly.
 | `endpoints.test.ts`                      | The rest of `/rest`: lists, state, users, ratings, scrobbling, the scan controls          |
 | `music-folder-index.test.ts`             | The two folder publishers agree, and a published position resolves back to its library   |
 | `client-decoding.test.ts`                | Our answers decode as a client modelling the schema's types — and the reader has teeth   |
+| `cover-art-embedded.test.ts`             | Artwork from the tracks' own tags: every extracted format re-served from cache, the negative cache, and the un-awaited write |
+| `embedded-art.test.ts`                   | The three container formats' picture locators, against fixtures written from the specs  |
+| `ogg-packet-layout.test.ts`              | The lacing table, and a fixture that decodes its own framing back before asserting on the reader |
+| `rate-limit.test.ts`                     | The token bucket, the identity key, both error dialects, and the `/rest` 429 envelope   |
+| `scan-do.test.ts`                        | The alarm chain: the `try` guard, the re-arm, and the overlap with a manual step         |
+| `security-headers.test.ts`               | The header baseline, and that the `no-store` predicate names a path this router serves   |
+| `endpoint-registry.test.ts`              | The `/rest` registry as a contract: `code=70` for all 33, no name in two maps, the exact error key set |
+| `spa-decisions.test.ts`                  | The SPA's error decoder across both dialects and a non-JSON body, and `describeStopReason` |
 
 ## Rules for writing an assertion here
 
