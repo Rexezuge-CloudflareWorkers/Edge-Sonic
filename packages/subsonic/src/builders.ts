@@ -34,6 +34,7 @@
  *   `scripts/compare-navidrome.mjs`.
  */
 import { el, elList } from './nodes';
+import { songExtensionAttrs, songExtensionChildren } from './extensions';
 import type { ElementNode } from './nodes';
 import type { Album, Artist, Child, Directory, MusicFolder, Playlist, ScanStatus, Song, SubsonicUserView } from './types';
 
@@ -70,42 +71,55 @@ function childAttrs(child: Child): Attrs {
   };
 }
 
+/**
+ * A track, as `getSong`, `getRandomSongs`, `getAlbum`'s songs and every other song list
+ * publish it.
+ *
+ * `type` and `mediaType` are two different fields, and this used to write `mediaType`'s value
+ * into `type`. The protocol types `type` as the generic container — [music/podcast/audiobook/
+ * video] — and `mediaType` as the shape — [song/album/artist]. So every track published
+ * `type="song"`, a value outside `type`'s enumeration and absent from the XSD, and published
+ * no `mediaType` at all, so a client branching on it read nothing. It was wrong in the one
+ * field every client uses to decide what a row *is*: a player filtering `type == "music"` sees
+ * an empty library.
+ *
+ * The OpenSubsonic additions come from `./extensions.ts` and are spread last, so the literal
+ * below stays the answer to "what does the Subsonic protocol declare for a track?" and the
+ * extensions stay the answer to a different question.
+ */
 function songElement(song: Song): ElementNode {
-  return el('song', {
-    id: song.id,
-    parent: song.albumId,
-    title: song.title,
-    isDir: false,
-    album: song.album,
-    artist: song.artist,
-    track: song.track,
-    discNumber: song.discNumber,
-    year: song.year,
-    genre: song.genre,
-    coverArt: song.coverArt,
-    size: song.size,
-    contentType: song.contentType,
-    suffix: song.suffix,
-    duration: song.duration,
-    bitRate: song.bitRate,
-    created: song.created,
-    starred: song.starred,
-    albumId: song.albumId,
-    artistId: song.artistId,
-    playCount: song.playCount,
-    userRating: song.userRating,
-    // `type` and `mediaType` are two different fields, and this used to write
-    // `mediaType`'s value into `type`. The protocol types `type` as the generic
-    // container -- [music/podcast/audiobook/video] -- and `mediaType` as the shape --
-    // [song/album/artist]. So every track published `type="song"`, a value outside
-    // `type`'s enumeration and absent from the XSD, and published no `mediaType` at
-    // all, so a client branching on it read nothing. It was wrong in the one field
-    // every client uses to decide what a row *is*: a player filtering `type == "music"`
-    // sees an empty library.
-    type: 'music',
-    mediaType: song.mediaType,
-    bookmarkPosition: song.bookmarkPosition,
-  });
+  return el(
+    'song',
+    {
+      id: song.id,
+      parent: song.albumId,
+      title: song.title,
+      isDir: false,
+      album: song.album,
+      artist: song.artist,
+      track: song.track,
+      discNumber: song.discNumber,
+      year: song.year,
+      genre: song.genre,
+      coverArt: song.coverArt,
+      size: song.size,
+      contentType: song.contentType,
+      suffix: song.suffix,
+      duration: song.duration,
+      bitRate: song.bitRate,
+      created: song.created,
+      starred: song.starred,
+      albumId: song.albumId,
+      artistId: song.artistId,
+      playCount: song.playCount,
+      userRating: song.userRating,
+      type: 'music',
+      mediaType: song.mediaType,
+      bookmarkPosition: song.bookmarkPosition,
+      ...songExtensionAttrs(song),
+    },
+    songExtensionChildren(song),
+  );
 }
 
 /**

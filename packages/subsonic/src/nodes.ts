@@ -31,6 +31,24 @@ interface ElementNode {
    */
   readonly array?: boolean;
   /**
+   * Render the element's children **directly** as the JSON value of this key — a bare
+   * `[...]` rather than an object wrapping the repeated child.
+   *
+   * OpenSubsonic's `Child.artists` is the case: the specification's own example is
+   * `"artists": [{"id": "ar-1", "name": "Artist 1"}]` and Navidrome emits exactly that. It is a
+   * different shape from a Subsonic list wrapper, where the wrapper's name and the child's
+   * differ — `albumList2.album` — and the value belongs under the *child's* key.
+   *
+   * Here they are the same word in two grammatical forms: the wrapper is `artists` and the
+   * child is `artist`. A client's model is a `List<Artist>` bound to `artists`, so the array
+   * belongs at the wrapper's key. `{"artist":[{…}]}` is not a near miss — a client decoding
+   * `artists` as a list reads an object there and throws.
+   *
+   * Pairs with `array: true`, which collapses the wrapper's single occurrence back to the
+   * array it already is; `array` alone would wrap the array in another array.
+   */
+  readonly jsonArray?: boolean;
+  /**
    * The repeated child element(s) this wrapper always carries in JSON.
    *
    * Declared rather than inferred so an **empty** list still renders as `[]`; see
@@ -107,5 +125,32 @@ function isElementNode(node: Node): node is ElementNode {
   return typeof node === 'object' && node !== null && 'name' in node;
 }
 
-export { el, elList, isElementNode };
+/**
+ * Build a wrapper whose children are the JSON value of this key: `{"artists": [ … ]}`.
+ *
+ * Not `elList`, because the two differ in where the array lands. `elList('artists', 'artist')`
+ * puts it under the *child's* key — `{"artists": {"artist": [ … ]}}` — which is right for a
+ * Subsonic list wrapper (`albumList2.album`) and wrong for OpenSubsonic's `artists`, where the
+ * wrapper and the child are the same word and the client's model is a list bound to the
+ * wrapper's own key.
+ *
+ * @param name The wrapper element, and the JSON key the array lands at.
+ * @param childName The repeated child element. Singular where the wrapper is plural.
+ */
+function elArray(
+  name: string,
+  childName: string,
+  attrs: Readonly<Record<string, Scalar | null | undefined>>,
+  children: readonly Node[],
+): ElementNode {
+  return {
+    name,
+    ...(Object.keys(attrs).length > 0 && { attrs }),
+    children: children.map((child) => (isElementNode(child) && child.name === childName ? { ...child, array: true } : child)),
+    array: true,
+    jsonArray: true,
+  };
+}
+
+export { el, elList, elArray, isElementNode };
 export type { ElementNode, Node, Scalar };
