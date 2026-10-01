@@ -41,6 +41,24 @@ function payload<T>(body: SubsonicBody, key: string): T {
   return (body['subsonic-response'] as Record<string, unknown>)[key] as T;
 }
 
+/**
+ * A list wrapper that is present and has nothing in it.
+ *
+ * The shape is `{wrapper: {}}` — the wrapper is always there, and an item key with no items
+ * is **absent** rather than `[]`. Navidrome answers `{"starred2":{}}`, `{"playlists":{}}`,
+ * `{"bookmarks":{}}` and `{"nowPlaying":{}}`, and so does this.
+ *
+ * The half that matters is the wrapper's *presence*. An absent wrapper leaves a client
+ * unable to tell "nothing here" from "this server does not implement that", and it is the
+ * difference between an empty screen and a failure. So the assertion is that the wrapper
+ * exists and is empty — never that the whole payload is absent.
+ */
+function expectEmptyWrapper(body: SubsonicBody, wrapper: string, endpoint: string): void {
+  const value = payload<unknown>(body, wrapper);
+  expect(value, `${endpoint}: wrapper ${wrapper} is absent`).toBeDefined();
+  expect(Object.keys(value as Record<string, unknown>), `${endpoint}: ${wrapper} is not empty`).toEqual([]);
+}
+
 describe('getAlbumList2', () => {
   it('sorts alphabetically by name by default', async () => {
     const { body } = await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '10' });
@@ -64,8 +82,11 @@ describe('getAlbumList2', () => {
       // 500s or returns an error is the failure.
       const album = payload<{ album?: Array<{ name: string }> }>(body, 'albumList2');
       expect(album, type).toBeDefined();
-      // Every response carries the key as an array, even when it is empty.
-      expect(Array.isArray(album.album), type).toBe(true);
+      // With items, the key is an array — never a bare object, which a single-item page
+      // would otherwise produce. An *empty* result has no key at all; that is asserted
+      // separately so the two cannot be confused for one another.
+      if (album.album === undefined) expect(Object.keys(album), `${type}: empty result carried a key`).toEqual([]);
+      else expect(Array.isArray(album.album), type).toBe(true);
     }
   });
 
@@ -92,7 +113,7 @@ describe('getAlbumList2', () => {
     const past = await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '10', offset: '500' });
     // An out-of-range offset is an **empty list**, not a 404: a paging client asks for
     // the next page and has to be told "there is none" in a way it can read.
-    expect(payload<{ album: unknown[] }>(past.body, 'albumList2').album).toEqual([]);
+    expectEmptyWrapper(past.body, 'albumList2', 'getAlbumList2');
   });
 
   it('refuses a type it does not implement rather than answering a different question', async () => {
@@ -202,7 +223,7 @@ describe('getGenres and getSongsByGenre', () => {
     // and a `code=70` would be reported to the user as a failure.
     const { status, body } = await harness.rest('getSongsByGenre', { genre: 'Polka' });
     expect(status).toBe(200);
-    expect(payload<{ song: unknown[] }>(body, 'songsByGenre').song).toEqual([]);
+    expectEmptyWrapper(body, 'songsByGenre', 'getSongsByGenre');
   });
 });
 
@@ -225,7 +246,7 @@ describe('getRandomSongs', () => {
     expect(payload<{ song: unknown[] }>(body, 'randomSongs').song).toHaveLength(2);
 
     const other = await harness.rest('getRandomSongs', { size: '10', genre: 'Polka' });
-    expect(payload<{ song: unknown[] }>(other.body, 'randomSongs').song).toEqual([]);
+    expectEmptyWrapper(other.body, 'randomSongs', 'getRandomSongs');
   });
 });
 
@@ -289,7 +310,7 @@ describe('getUser and getUsers', () => {
     expect(payload<{ username: string }>(body, 'user').username).toBe('bob');
     // Bob has no grants, so his folder list is empty — the admin's own folder list would
     // be wrong, and would make a client resolve his ids against the wrong libraries.
-    expect(payload<{ folder: unknown[] }>(body, 'user').folder).toEqual([]);
+    expect(payload<Record<string, unknown>>(body, 'user').folder).toBeUndefined();
   });
 
   it('lists users for an admin, and refuses a non-admin', async () => {
@@ -320,13 +341,13 @@ describe('the play queue', () => {
     expect(queue.username).toBe('ann');
   });
 
-  it('answers an unsaved queue with empty lists, not with an error', async () => {
+  it('answers an unsaved queue with an empty wrapper, not with an error', async () => {
     // A client calls this on every launch. A `code=70` would surface as a failure
-    // dialog on a fresh install.
+    // dialog on a fresh install. The wrapper is present and empty; `entry` is absent,
+    // which is the shape the reference server answers.
     const { status, body } = await harness.rest('getPlayQueue');
     expect(status).toBe(200);
-    const queue = payload<{ entry: unknown[] }>(body, 'playQueue');
-    expect(queue.entry).toEqual([]);
+    expectEmptyWrapper(body, 'playQueue', 'getPlayQueue');
   });
 
   it('refuses a queue naming a track in a library the user cannot see', async () => {
@@ -536,7 +557,7 @@ describe('scrobbling', () => {
 
   it('answers now playing with an empty list when nothing is playing', async () => {
     const { body } = await harness.rest('getNowPlaying');
-    expect(payload<{ entry: unknown[] }>(body, 'nowPlaying').entry).toEqual([]);
+    expectEmptyWrapper(body, 'nowPlaying', 'getNowPlaying');
   });
 
   it('refuses a scrobble naming a track in a library the user cannot see, and records nothing', async () => {
@@ -565,7 +586,13 @@ describe('starred items', () => {
 
     await harness.rest('unstar', { id: SKINNY_LOVE });
     const after = await harness.rest('getStarred2');
-    expect(payload<{ song: Array<{ id: string }> }>(after.body, 'starred2').song.map((entry) => entry.id)).not.toContain(SKINNY_LOVE);
+    // The song is gone, so its key is gone: an album is still starred, so `album` stays.
+    // Asserting on the *absent* key rather than on an empty array is what distinguishes
+    // "the unstar worked" from "the endpoint stopped reporting songs" — and the album key
+    // beside it is what says this is the empty case and not a broken one.
+    const afterUnstar = payload<Record<string, Array<{ id: string }>>>(after.body, 'starred2');
+    expect(afterUnstar.song).toBeUndefined();
+    expect(afterUnstar.album.map((entry) => entry.id)).toContain(album);
   });
 
   it('refuses to star anything in a library the user cannot see, and writes nothing', async () => {
@@ -622,7 +649,7 @@ describe('bookmarks', () => {
     // syncing state, and a client discarding local state is the ordinary case.
     await harness.rest('deleteBookmark', { id: SKINNY_LOVE });
     const after = await harness.rest('getBookmarks');
-    expect(payload<{ bookmark: Array<{ id: string }> }>(after.body, 'bookmarks').bookmark).toEqual([]);
+    expectEmptyWrapper(after.body, 'bookmarks', 'getBookmarks');
   });
 
   it('refuses a bookmark in a library the user cannot see, and writes nothing', async () => {
