@@ -1,22 +1,18 @@
 /**
  * System endpoints: connectivity, licensing, and scan control.
  */
-import { el, elList, scanStatusElement, successResponse } from '@edge-sonic/subsonic';
+import { el, elList, scanStatusElement } from '@edge-sonic/subsonic';
 import { isAdvancing } from '@edge-sonic/backend-services/index';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 import { musicFolderElementsFor } from './libraries';
 
 /**
 Every handler here returns a finished envelope.
 */
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
-
 /**
  * Resolve the one library a call that has no `musicFolderId` applies to.
  *

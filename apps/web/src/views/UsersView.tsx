@@ -73,10 +73,33 @@ function UsersView({ showNotice }: { showNotice: ShowNotice }) {
     }
   };
 
-  const toggleLibrary = async (user: UserSummary, libraryId: string) => {
+  /**
+   * One path for every mutation, and the reason it exists is below.
+   *
+   * `toggleLibrary`, `setUserEnabled` and `deleteUser` each `await`ed their call with **no
+   * `catch`**, and the click handlers `void`ed them. `readJson` throws a `BackendError` for
+   * any non-2xx, so a 404 on a stale library id, a 409 from the grant ceiling, or a 500
+   * produced an unhandled rejection and **no operator feedback at all** — the button looked
+   * like it had done nothing, and nothing said why.
+   *
+   * `LibrariesView` funnels all four of its mutations through one `run` with
+   * `try/catch/finally`; this view had the opposite shape for the same class of failure.
+   * `void` is how a handler says "I have handled this rejection" — so on a path with no
+   * catch it is a claim the code does not support.
+   */
+  const mutate = async (action: () => Promise<unknown>, success: string): Promise<void> => {
+    try {
+      await action();
+      await reload();
+      showNotice('success', success);
+    } catch (error) {
+      showNotice('error', error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const toggleLibrary = (user: UserSummary, libraryId: string): Promise<void> => {
     const next = user.libraryIds.includes(libraryId) ? user.libraryIds.filter((id) => id !== libraryId) : [...user.libraryIds, libraryId];
-    await setUserLibraries(user.id, next);
-    await reload();
+    return mutate(async () => await setUserLibraries(user.id, next), t('users.updated', 'Updated.'));
   };
 
   return (
@@ -193,10 +216,10 @@ function UsersView({ showNotice }: { showNotice: ShowNotice }) {
               </fieldset>
 
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => void setUserEnabled(user.id, !user.isEnabled).then(reload)}>
+                <Button size="sm" onClick={() => void mutate(async () => await setUserEnabled(user.id, !user.isEnabled), t('users.updated', 'Updated.'))}>
                   {user.isEnabled ? t('users.disable', 'Disable') : t('users.enable', 'Enable')}
                 </Button>
-                <Button size="sm" variant="danger" onClick={() => void deleteUser(user.id).then(reload)}>
+                <Button size="sm" variant="danger" onClick={() => void mutate(async () => await deleteUser(user.id), t('users.deleted', 'User deleted.'))}>
                   {t('users.delete', 'Delete')}
                 </Button>
               </div>

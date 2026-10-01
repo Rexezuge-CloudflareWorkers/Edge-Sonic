@@ -1,17 +1,14 @@
 /**
  * Per-user state the filesystem cannot hold: bookmarks and the play queue.
  */
-import { decodeId, el, elList,  IdKind, songElement,  successResponse } from '@edge-sonic/subsonic';
+import { decodeId, el, elList, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
+import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
-import { songToModel } from '../mappers';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
+import { songToModel, toIso } from '../mappers';
 import { annotationsFor } from './structured';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 /**
  * Bookmarks: a resume position and a note, per song.
@@ -46,8 +43,8 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
         el('position', {}, [row.position_ms]),
         el('username', {}, [context.username]),
         ...(row.comment ? [el('comment', {}, [row.comment])] : []),
-        el('created', {}, [new Date(row.created_at * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')]),
-        el('changed', {}, [new Date(row.updated_at * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')]),
+        el('created', {}, [toIso(row.created_at)!]),
+        el('changed', {}, [toIso(row.updated_at)!]),
       ],
     });
   }
@@ -85,7 +82,11 @@ async function deleteBookmark(context: RestContext): Promise<EnvelopeResponse> {
  * implementation would have to guess which of the two shapes it received.
  */
 async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
-  const [library] = await context.libraries.listForUser(context.user.id);
+  // Every library the caller can see, not `libraries[0]`. The queue is a **per-user** row
+  // whose ids came from whatever libraries that user was granted, so resolving one library
+  // and filtering silently dropped every entry from the others — a queue that shortened
+  // itself each time the caller's first library happened not to contain it.
+  const libraries = await context.libraries.listForUser(context.user.id);
 
   // An empty queue is reported as an **empty `playQueue` element**, not as an absent
   // one. Both were tried: the comment this replaces claimed some clients treat a
@@ -93,16 +94,24 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   // do `response.playQueue.entry.map(...)` — for those, an absent key throws and
   // `{"entry": []}` renders an empty queue. The element is what the schema describes,
   // and `elList` guarantees the array is present even with no children.
-  if (library === undefined) return respond(context, elList('playQueue', 'entry', {}, []));
+  if (libraries.length === 0) return respond(context, elList('playQueue', 'entry', {}, []));
 
   const saved = await context.annotations.listPlayQueue(context.user.id);
   if (saved.songIds.length === 0) return respond(context, elList('playQueue', 'entry', {}, []));
-  const queue = await context.songs.listIdsIn(library.id, saved.songIds);
+  // Across every granted library. `listIdsIn` is library-scoped and correct for the
+  // per-library endpoints; this row is not scoped to one, so it uses the sibling that is
+  // not. Every id in it was authorized by `savePlayQueue` before it was written.
+  const queue = await context.songs.listIdsAcrossLibraries(saved.songIds);
+  // A track whose library the caller no longer has must not be rendered, or the queue would
+  // disclose the existence of a song outside the caller's grants. Dropping it is the same
+  // rule `getBookmarks` applies.
+  const visible = new Set(libraries.map((library) => library.id));
+  const renderable: SongRow[] = queue.filter((song) => visible.has(song.library_id));
   // Every queued track was deleted or lost access since the queue was saved. The
   // position and current track are still the user's, so they are reported; only the
   // entries are gone. Spread rather than passed as extra arguments, because `elList`'s
   // signature *is* the list contract and a childless list still has to declare its key.
-  if (queue.length === 0) {
+  if (renderable.length === 0) {
     const empty: ElementNode = elList('playQueue', 'entry', {}, []);
     return respond(context, {
       ...empty,
@@ -114,7 +123,7 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
     });
   }
 
-  const annotations = await annotationsFor(context, queue.length > 0);
+  const annotations = await annotationsFor(context, renderable.length > 0);
   return respond(
     context,
     elList(
@@ -128,18 +137,34 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
         //
         // `current` is reported only when the track is still in the queue. Naming an id
         // the client cannot resolve is worse than naming none.
-        ...(saved.currentSongId !== null && queue.some((song) => song.id === saved.currentSongId) ? [el('current', {}, [saved.currentSongId])] : []),
+        ...(saved.currentSongId !== null && renderable.some((song) => song.id === saved.currentSongId) ? [el('current', {}, [saved.currentSongId])] : []),
         el('position', {}, [saved.positionMs]),
         // `username` and `changed` are part of the same element, and a client that syncs a
         // queue between devices needs to know whose queue it is and when it moved.
         el('username', {}, [context.username]),
-        ...(saved.changedAt === null ? [] : [el('changed', {}, [new Date(saved.changedAt * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z')])]),
+        ...(saved.changedAt === null ? [] : [el('changed', {}, [toIso(saved.changedAt)!])]),
         // Renamed: see the note on `getBookmarks`. The element name is the key, so a
         // `song` element here would put the queue under `playQueue.song`.
-        ...queue.map((song) => ({ ...songElement(songToModel(song, library, annotations)), name: 'entry' })),
+        ...renderable.map((song) => ({ ...songElement(songToModel(song, libraryOf(libraries, song.library_id), annotations)), name: 'entry' })),
       ],
     ),
   );
+}
+
+/**
+ * The library a song belongs to, for the `libraryId` a song record carries.
+ *
+ * `songToModel` needs the row to encode an album id, and the id is
+ * `kind:base64url(libraryId \n path)` — so a song from the caller's *second* library
+ * cannot be rendered with the first one's id. `getBookmarks` already resolves per song;
+ * this is the same derivation for the play queue.
+ */
+function libraryOf(libraries: readonly LibraryRow[], libraryId: string): LibraryRow {
+  const found = libraries.find((candidate) => candidate.id === libraryId);
+  // Unreachable for a row that survived `visible`, but a fabricated id would produce an
+  // album id pointing into the wrong library — a worse failure than a missing one.
+  if (!found) throw new SubsonicError(ErrorCode.NotFound, `No library for ${libraryId}.`);
+  return found;
 }
 
 async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {

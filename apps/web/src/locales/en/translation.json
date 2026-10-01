@@ -62,6 +62,8 @@
     "empty": "No users yet",
     "emptyHint": "Create an account, then sign in to this server from any Subsonic client.",
     "created": "User created.",
+    "updated": "Updated.",
+    "deleted": "User deleted.",
     "save": "Save",
     "cancel": "Cancel",
     "delete": "Delete",

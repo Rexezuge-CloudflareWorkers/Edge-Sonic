@@ -20,7 +20,7 @@
 import { MPEG_BITRATES, MPEG_SAMPLE_RATES } from './types';
 import { EMPTY_TAGS } from './types';
 import type { AudioTags } from './types';
-import { readUintBE } from './bits';
+import { parseIndex as parseIndexBits, parseYear as parseYearBits, readUintBE } from './bits';
 
 const ID3_MAGIC = [0x49, 0x44, 0x33]; // "ID3"
 const MPEG_FRAME_SYNC = 0xe0;
@@ -166,18 +166,25 @@ function decodeTextFrame(bytes: Uint8Array, start: number, length: number): stri
 }
 
 /**
-`3/12` or `3` → 3.
+`null`-tolerant wrappers over `bits.ts`'s shared parsers.
+
+The copies these replace were *almost* the shared ones: the shared `parseIndex` additionally
+checked `Number.isFinite` on the parsed value and the shared `parseYear` checked its match,
+which these did not. Not divergent in behaviour — both regexes guarantee digits — but two
+implementations of one rule in the same package, and this repository has already paid for
+that shape twice: `deriveBackfill` was written rather than reusing `deriveFromPath` "free to
+disagree over the separator rules and the marker", and the Ogg fixture and the Ogg reader
+shared a wrong framing assumption so no tag ever parsed and no test failed.
+
+The `null` tolerance stays here because it is an ID3 concern: a missing frame is `null` at
+the call site, not an empty string the shared parser has to defend against.
 */
 function parseIndex(value: string | null): number | null {
-  if (value === null) return null;
-  const head = value.split('/', 1)[0]?.trim() ?? '';
-  return /^\d+$/.test(head) ? Number.parseInt(head, 10) : null;
+  return value === null ? null : parseIndexBits(value);
 }
 
 function parseYear(value: string | null): number | null {
-  if (value === null) return null;
-  const match = /(\d{4})/.exec(value);
-  return match ? Number.parseInt(match[1], 10) : null;
+  return value === null ? null : parseYearBits(value);
 }
 
 function readId3v2(bytes: Uint8Array, fileSize: number | null, audioStart: number): AudioTags {

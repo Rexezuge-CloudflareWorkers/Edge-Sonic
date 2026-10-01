@@ -182,6 +182,14 @@ class SongDAO extends BaseDAO {
     return await new SongIdLookupDAO(this.database).listIdsIn(libraryId, ids);
   }
 
+  /**
+   * Songs by id across every library. See `SongIdLookupDAO.listIdsAcrossLibraries` for why
+   * this is a separate method rather than a nullable `libraryId`.
+   */
+  public async listIdsAcrossLibraries(ids: readonly string[]): Promise<SongRow[]> {
+    return await new SongIdLookupDAO(this.database).listIdsAcrossLibraries(ids);
+  }
+
   public async countByLibrary(libraryId: string): Promise<number> {
     const row = await this.withRetry(
       async () =>
