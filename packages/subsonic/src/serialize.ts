@@ -127,6 +127,15 @@ function childName(node: Node): string {
 
 function childToJsonValue(node: ElementNode): unknown {
   const children = (node.children ?? []).filter((child) => child !== null && child !== undefined && child !== false);
+
+  // A `jsonArray` wrapper's value **is** its children, not an object wrapping them. See the
+  // flag's note in `nodes.ts` for why `artists` wants `[{…}]` where `albumList2.album` wants
+  // `{"album": [{…}]}`.
+  //
+  // Ahead of the scalar-collapse branch below, which would otherwise claim a childless wrapper
+  // and answer `{}` where the schema says a list.
+  if (node.jsonArray === true) return children.map((child) => (isElementNode(child) ? childToJsonValue(child) : child));
+
   const attributeEntries = Object.entries(node.attrs ?? {}).filter(([, value]) => isPresent(value));
 
   // An element with no attributes and exactly one **scalar** child is that scalar.

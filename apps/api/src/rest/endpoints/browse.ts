@@ -16,7 +16,7 @@ import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
-import { artistIndexGroups, groupArtistRows, toIso, songToChild } from '../mappers';
+import { artistIndexGroups, groupArtistRows, IGNORED_ARTICLES, toIso, songToChild } from '../mappers';
 import { libraryName, resolveLibrary } from './libraries';
 
 function baseName(path: string): string {
@@ -37,7 +37,7 @@ function buildIndexes(roots: readonly NodeRow[], library: LibraryRow, artists: r
   // everywhere else. It shipped that way, with the suite asserting the wrong
   // shape, because the assertion was written from the code rather than the schema.
   const shortcuts = roots.map((node) => el('shortcut', { id: encodeId(IdKind.Directory, library.id, node.path), name: node.name }));
-  return elList('indexes', ['shortcut', 'index'], { lastModified, ignoredArticles: 'The El La Los Las Le Les' }, [...shortcuts, ...artists]);
+  return elList('indexes', ['shortcut', 'index'], { lastModified, ignoredArticles: IGNORED_ARTICLES }, [...shortcuts, ...artists]);
 }
 
 /**
@@ -66,7 +66,7 @@ async function getIndexes(context: RestContext): Promise<EnvelopeResponse> {
   const ifModifiedSince = context.params.int('ifModifiedSince', 0);
   const newest = roots.reduce((max, node) => Math.max(max, node.mtime_ms ?? 0), 0);
   if (ifModifiedSince > 0 && newest <= ifModifiedSince) {
-    return respond(context, elList('indexes', ['shortcut', 'index'], { lastModified: newest, ignoredArticles: 'The El La Los Las Le Les' }, []));
+    return respond(context, elList('indexes', ['shortcut', 'index'], { lastModified: newest, ignoredArticles: IGNORED_ARTICLES }, []));
   }
   const rows = await context.songIndex.listArtists(library.id, 5000, 0);
   return respond(context, buildIndexes(roots, library, artistIndexGroups(library, groupArtistRows(rows)), newest));

@@ -22,7 +22,7 @@ import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
 import type { AnnotationLookup } from '../mappers';
-import { albumKeyOf, albumNameOf, artistIndexGroups, artistNameOf, groupArtistRows, songToModel, toIso } from '../mappers';
+import { albumKeyOf, albumNameOf, artistIndexGroups, artistNameOf, groupArtistRows, IGNORED_ARTICLES, songToModel, toIso } from '../mappers';
 import { resolveLibrary } from './libraries';
 
 /**
@@ -73,7 +73,7 @@ async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const annotations = await annotationsFor(context, groups.length > 0);
   const indexes = artistIndexGroups(library, groups, annotations.stars);
 
-  return respond(context, elList('artists', 'index', { ignoredArticles: 'The El La Los Las Le Les' }, indexes));
+  return respond(context, elList('artists', 'index', { ignoredArticles: IGNORED_ARTICLES }, indexes));
 }
 
 /**

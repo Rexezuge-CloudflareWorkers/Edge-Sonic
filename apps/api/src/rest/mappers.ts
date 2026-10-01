@@ -227,10 +227,16 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
   // `artist` absent, which is a record half-built.
   const artistName = artistNameOf(song);
   const artistId = encodeId(IdKind.Artist, library.id, artistName);
+  // The album artist, for the two OpenSubsonic fields carrying it. `album_artist` preferred,
+  // `artist` as the fallback: a compilation's tracks each name their own performer while the
+  // album names one thing, and a client grouping an album grid by `displayAlbumArtist` needs
+  // the album's answer rather than each track's.
+  const albumArtist = song.album_artist ?? song.artist ?? undefined;
+  const title = titleFromPath(song);
   return {
     id: song.id,
     mediaType: 'song',
-    title: titleFromPath(song),
+    title,
     // `albumNameOf`, not `basenameOf(albumDir)`. The two disagree for a track sitting at
     // the library root: `basenameOf('')` is `undefined`, so `getSong` omitted `album`
     // entirely while `getAlbum`/`getAlbumList2` published `"Unknown Album"` for the same
@@ -240,6 +246,7 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
     albumId,
     artist: artistName,
     artistId,
+    albumArtist,
     track: song.track ?? undefined,
     discNumber: song.disc ?? undefined,
     year: song.year ?? undefined,
@@ -249,6 +256,11 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
     // which every client tolerates.
     duration: song.duration,
     bitRate: song.bitrate,
+    // Both read from the row the tag reader already filled, so publishing them costs no
+    // WebDAV request. `undefined` rather than 0 for a track not yet read: 0 is a claim about
+    // the audio, and this track's audio has not been looked at.
+    samplingRate: song.sample_rate ?? undefined,
+    channelCount: song.channels ?? undefined,
     size: song.size,
     contentType: song.content_type ?? guessContentType(song.suffix),
     suffix: song.suffix || suffixOfPath(song.path),
@@ -326,5 +338,6 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
 }
 
 export { toIso, guessContentType, songToModel, songToChild, albumNameOf, artistNameOf, albumKeyOf, groupArtistRows, artistIndexGroups };
+export { IGNORED_ARTICLES } from '@edge-sonic/subsonic';
 export type { AnnotationLookup, ArtistGroup };
 export { NO_ANNOTATIONS };
