@@ -9,7 +9,7 @@
  * cannot find an album because the index is stale can still walk to it, so the
  * folder view is the safety net for the tag view rather than a legacy path.
  */
-import { childElement, decodeId, el, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
+import { childElement, decodeId, el, elList, encodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
@@ -84,7 +84,11 @@ async function getIndexes(context: RestContext): Promise<EnvelopeResponse> {
  * and track number for the playable ones.
  */
 async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse> {
-  const id = context.params.require('id');
+  // `code=70` for an absent id, not `code=10`. The id is the selector and there is no other
+  // way to ask for no directory, so "no id" and "a directory that is not there" are the same
+  // request — see `requireMediaId` in `./structured` for where that line is drawn and why.
+  const id = context.params.get('id');
+  if (id === undefined || id.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Directory not found.');
   const decoded = decodeId(id, IdKind.Directory);
   TreeService.assertPath(decoded.path);
 
