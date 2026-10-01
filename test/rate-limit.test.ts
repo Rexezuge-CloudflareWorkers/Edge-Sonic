@@ -344,6 +344,48 @@ describe('the per-request scope', () => {
 });
 
 describe('through the real worker', () => {
+  it('answers a throttled /rest request in the Subsonic envelope, because that surface has no other dialect', async () => {
+    // ### The branch no test had ever run
+    //
+    // Every `rateLimit()` in this file used `surface: 'user'`, and the only test through
+    // the real worker spent the **user** budget. So the `/rest` throttle arm — the one that
+    // builds a `SubsonicError` and carries `throttled: true`, the flag that is the *only*
+    // thing that has ever reached `errorResponse`'s throttle branch — was dead in the suite
+    // while being live in the product.
+    //
+    // The consequence is the one the middleware's own comment names: a Subsonic client
+    // parses `subsonic-response` and nothing else, so a 429 carrying the user API's
+    // `{error:{…}}` body reaches it as "server error", it retries immediately, and the
+    // throttle is the opposite of what it is for.
+    //
+    // `getScanStatus` has the smallest reachable `/rest` budget (120/min) and needs no
+    // arguments beyond credentials: `getCoverArt` would answer an id-shaped envelope and
+    // `stream` needs a real song id.
+    const harness = await createHarness();
+    try {
+      // Through `fetch` rather than `harness.rest`, because the `Retry-After` header is
+      // half of what this asserts and `rest` returns a parsed `{status, body}`.
+      let last: Response | undefined;
+      for (let attempt = 0; attempt < 121; attempt += 1) {
+        last = await harness.fetch(harness.restUrl('getScanStatus'));
+      }
+
+      expect(last?.status, 'a throttled /rest request must keep its status so a client backs off').toBe(429);
+      const body = (await last?.json()) as { 'subsonic-response': { status: string; error?: { code: number; message: string } } };
+      const envelope = body['subsonic-response'];
+      expect(envelope.status, 'the protocol envelope, not the user dialect').toBe('failed');
+      expect(envelope.error, 'an error inside the envelope, not an `Exception` key').toBeDefined();
+      expect(body, 'and nothing in the other dialect').not.toHaveProperty('Exception');
+      // The interval travels on the header as well as in the message: a client that only
+      // reads the status has no other way to know how long to wait, and one that retries
+      // immediately is the failure a throttle exists to prevent.
+      expect(Number(last?.headers.get('retry-after'))).toBeGreaterThan(0);
+    } finally {
+      resetRateLimitForTests();
+      harness.close();
+    }
+  });
+
   it('returns 429 in the user dialect when the user budget is exhausted', async () => {
     // Through `fetch`, so the assertion covers the rate limiter, the route order, the
     // auth middleware, and the error dialect in one pass. The user budget is 60/min, so

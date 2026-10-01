@@ -48,6 +48,7 @@ import {
   DEFAULT_SCAN_CHUNK_FOLDERS,
   DEFAULT_SCAN_CHUNK_MAX_REQUESTS,
 } from '@edge-sonic/backend-runtime/config';
+import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavEntry, FakeDav } from './helpers/fakeDav';
@@ -65,7 +66,25 @@ const TRACKS_PER_ALBUM = 3;
  * covers the SQL against a real planner, where a wrong query and a double cannot
  * disagree.
  */
-function createIndex() {
+interface IndexOptions {
+  /**
+   * Milliseconds every D1 call costs.
+   *
+   * The whole point. `scanPrelude`'s derivation is documented as "charged only against the
+   * chunk's wall-clock deadline, because D1 latency is real and the subrequest ceiling is a
+   * resource it cannot spend" — and this double answered every store call on the next
+   * microtask, so **D1 was free**. The deadline assertion below was therefore made in the one
+   * world where a deadline does nothing and looks like one that works: a chunk could only be
+   * slow through the origin, which is the half `fakeDav`'s `latencyMs` already models.
+   *
+   * So the store is given a latency of its own, and one test asserts the deadline fires
+   * with the origin answering instantly. Without it the bound is asserted but only half
+   * measured, and the half that is missing is the half D1 actually causes in production.
+   */
+  d1LatencyMs?: number;
+}
+
+function createIndex(options: IndexOptions = {}) {
   const nodes = new Map<string, NodeRow>();
   const songs = new Map<string, SongRow>();
   let state: ScanStateRow = {
@@ -83,7 +102,26 @@ function createIndex() {
 
   const nodeKey = (path: string): string => `${LIBRARY_ID}\n${path}`;
 
+  // Charged per call rather than per statement, because that is the granularity a DAO's
+  // `withRetry` sees and the one the deadline is measured against. `d1Calls` is exposed so a
+  // test can assert the deadline fired *without* spending a subrequest — the two bounds
+  // guard different resources and a test that cannot tell them apart proves neither.
+  let d1Calls = 0;
+  // Settable rather than fixed, so a test can leave the **setup** fast and make only the
+  // chunk under test slow. A fixed latency applies to `readyFullFrontier`'s own drain and
+  // re-seed as well, which changes the fixture rather than the case.
+  let latencyMs = options.d1LatencyMs ?? 0;
+  const charge = async <T>(value: () => T): Promise<T> => {
+    d1Calls += 1;
+    if (latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    return value();
+  };
+
   return {
+    d1Calls: () => d1Calls,
+    setD1Latency: (ms: number) => {
+      latencyMs = ms;
+    },
     nodes,
     songs,
     state: () => state,
@@ -97,16 +135,19 @@ function createIndex() {
         .map((node) => node.path),
     deps: {
       nodes: {
-        find: async (_libraryId: string, path: string) => nodes.get(nodeKey(path)) ?? null,
+        find: async (_libraryId: string, path: string) => await charge(() => nodes.get(nodeKey(path)) ?? null),
         listChildren: async (_libraryId: string, parentPath: string) =>
-          [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci)),
-        listRoots: async () => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== ''),
+          await charge(() => [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci))),
+        listRoots: async () => await charge(() => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== '')),
         listFrontier: async (_libraryId: string, limit: number) =>
-          [...nodes.values()]
-            .filter((node) => node.is_scanned === 0)
-            .sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path))
-            .slice(0, limit),
-        upsertMany: async (inputs: readonly { libraryId: string; path: string; parentPath: string; name: string; mtimeMs: number | null; etag: string | null; depth: number; isScanned?: boolean }[]) => {
+          await charge(() =>
+            [...nodes.values()]
+              .filter((node) => node.is_scanned === 0)
+              .sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path))
+              .slice(0, limit),
+          ),
+        upsertMany: async (inputs: readonly { libraryId: string; path: string; parentPath: string; name: string; mtimeMs: number | null; etag: string | null; depth: number; isScanned?: boolean }[]) =>
+          await charge(() => {
           let changed = 0;
           for (const input of inputs) {
             const key = nodeKey(input.path);
@@ -128,9 +169,7 @@ function createIndex() {
             changed += 1;
           }
           return changed;
-        },
-        patch: async () => undefined,
-        deleteChildrenNotIn: async () => 0,
+        }),
         deleteSubtree: async (_libraryId: string, path: string) => {
           const doomed = [...nodes.values()].filter((node) => node.path === path || node.path.startsWith(`${path}/`));
           for (const node of doomed) nodes.delete(nodeKey(node.path));
@@ -139,13 +178,25 @@ function createIndex() {
         countByLibrary: async () => nodes.size,
       },
       songs: {
-        upsertFileFacts: async (inputs: readonly { id: string; path: string; size: number; mtimeMs: number }[]) => {
+        // Derives the grouping, because the real `UPSERT_FILE_FACTS` does.
+        //
+        // This double wrote `album: null, album_ci: null, artist: null` with no
+        // `derived_version` — *verbatim* the defect `AGENTS.md` records as shipped and then
+        // fixed in `test/scan-incremental.test.ts`, which imports `deriveFromPath` and
+        // `DERIVED_VERSION` for exactly this reason. The suite that measures a chunk's
+        // cost was therefore running against a world in which no row is ever derived: a
+        // double disagreeing with production about the very column under repair, which is
+        // the failure mode the rule about doubles names.
+        upsertFileFacts: async (inputs: readonly { id: string; path: string; size: number; mtimeMs: number }[]) =>
+          await charge(() => {
           for (const input of inputs) {
+            const dirPath = input.path.split('/').slice(0, -1).join('/');
+            const derived = deriveFromPath(dirPath);
             songs.set(input.id, {
               id: input.id,
               library_id: LIBRARY_ID,
               path: input.path,
-              dir_path: input.path.split('/').slice(0, -1).join('/'),
+              dir_path: dirPath,
               name: input.path.split('/').pop() ?? input.path,
               name_ci: input.path.toLowerCase(),
               size: input.size,
@@ -154,12 +205,16 @@ function createIndex() {
               suffix: 'flac',
               title: null,
               title_ci: null,
-              artist: null,
-              artist_ci: null,
-              album: null,
-              album_ci: null,
-              album_artist: null,
-              album_artist_ci: null,
+              artist: derived.artist,
+              artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
+              album: derived.album,
+              album_ci: derived.album === null ? null : derived.album.toLowerCase(),
+              // `album_artist` takes the derived **artist**, per `UPSERT_FILE_FACTS`:
+              // "`getArtist` groups on it, and an album whose album-artist column is NULL
+              // does not appear under the artist a client navigated to". Copying that
+              // comment rather than the rule is how the two drift.
+              album_artist: derived.artist,
+              album_artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
               track: null,
               disc: null,
               year: null,
@@ -171,14 +226,32 @@ function createIndex() {
               channels: null,
               enriched_at: null,
               reader_version: 0,
+              derived_version: DERIVED_VERSION,
               created_at: 0,
               updated_at: 0,
             } as SongRow);
           }
           return inputs.length;
+        }),
+        // The prune path, made **visible**. It returned 0 unconditionally, so the largest
+        // row-write cost in a cold scan — a folder of deleted files — was free in every
+        // budget measurement here. Now it costs rows and removes them, so a chunk that
+        // prunes is measurable the way a chunk that indexes is.
+        // The prune path, made **visible**. It returned 0 unconditionally, so the largest
+        // row-write cost in a cold scan — a folder of deleted files — was free in every
+        // budget measurement in this file. It now costs rows and removes them, so a chunk
+        // that prunes is measurable the way a chunk that indexes is.
+        deleteInDirectoryNotIn: async (_libraryId: string, dirPath: string, keepPaths: readonly string[]) => {
+          const keep = new Set(keepPaths);
+          const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath && !keep.has(song.path));
+          for (const song of doomed) songs.delete(song.id);
+          return doomed.length;
         },
-        deleteInDirectoryNotIn: async () => 0,
-        deleteSubtree: async () => 0,
+        deleteSubtree: async (_libraryId: string, dirPath: string) => {
+          const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath);
+          for (const song of doomed) songs.delete(song.id);
+          return doomed.length;
+        },
         countByLibrary: async () => songs.size,
       },
       scanState: {
@@ -290,8 +363,14 @@ interface Harness {
   readyFullFrontier: (count?: number) => Promise<void>;
 }
 
-function createHarness(tree: Record<string, DavEntry[]>, latencyMs?: number): Harness {
-  const index = createIndex();
+/**
+ * Not `createHarness`: `test/helpers/harness.ts` exports a `createHarness` too, and it
+ * builds something quite different — a real `EdgeSonicWorker` over a real D1. Two functions
+ * with one name and two contracts means the next reader who greps `createHarness` gets
+ * whichever they expected.
+ */
+function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number, d1LatencyMs?: number): Harness {
+  const index = createIndex(d1LatencyMs === undefined ? {} : { d1LatencyMs });
   const dav = fakeDav(tree, latencyMs === undefined ? {} : { latencyMs });
   const row = library();
 
@@ -387,7 +466,7 @@ describe('a scan chunk is bounded work', () => {
   let harness: Harness;
 
   beforeEach(() => {
-    harness = createHarness(albumTree(ALBUMS.length));
+    harness = createScanHarness(albumTree(ALBUMS.length));
   });
 
   it('reports the subrequests the origin actually received, including enrichment', async () => {
@@ -434,6 +513,52 @@ describe('a scan chunk is bounded work', () => {
     expect(result.stoppedBy).toBe('deadline');
     // The whole frontier is still there.
     expect(harness.index.frontier()).toHaveLength(ALBUMS.length);
+  });
+
+  it('stops on the deadline when only D1 is slow, and the origin pays almost nothing for it', async () => {
+    // ### The half of the deadline this file could not previously see
+    //
+    // `scanPrelude`'s backfill is documented as "charged only against the chunk's
+    // wall-clock deadline, because D1 latency is real and the subrequest ceiling is a
+    // resource it cannot spend" — and every store call in this double answered on the
+    // next microtask. So **D1 was free**, and every deadline assertion here was made in
+    // the one world where a deadline does nothing and looks like one that works: the only
+    // way a chunk could be slow was the origin, which `fakeDav`'s `latencyMs` already
+    // modelled. The bound was asserted; half of what it bounds was unmeasured.
+    //
+    // So the origin here answers instantly and the store is the slow part. The two bounds
+    // guard different resources and this is the case that tells them apart: the chunk must
+    // stop on time while spending **zero** subrequests, because a deadline that fired
+    // because of WebDAV would have spent at least one.
+    const slowStore = createScanHarness(albumTree(ALBUMS.length));
+    await slowStore.readyFullFrontier();
+    // Only now is the store slow, so the fixture is the one every other case builds.
+    slowStore.index.setD1Latency(12);
+    const d1Before = slowStore.index.d1Calls();
+
+    const result = await slowStore.makeService({ deadlineMs: 30, maxRequests: 10_000, enrich: false }).step(slowStore.row);
+
+    expect(result.stoppedBy, 'the deadline, not the request ceiling').toBe('deadline');
+    // The store *was* used, so this is a chunk cut short by D1 rather than one that found
+    // nothing to do.
+    expect(slowStore.index.d1Calls()).toBeGreaterThan(d1Before);
+
+    // The shape of the cut is the assertion, and it is the shape `ScanBudget` documents:
+    // "checked between units of work, so a chunk overruns by at most one in-flight
+    // request". So the deadline stops the walk early **and** the origin cost is bounded by
+    // that one request — against the twelve a full frontier would need.
+    //
+    // A deadline that fired because of WebDAV would have spent one request *per folder
+    // visited*, and a `canAfford` that ignored time entirely would have spent all twelve.
+    // Both fail these two numbers.
+    expect(result.foldersVisited).toBeGreaterThan(0);
+    expect(result.foldersVisited).toBeLessThan(ALBUMS.length);
+    expect(slowStore.issued()).toBe(result.webdavRequests);
+    expect(slowStore.issued()).toBeLessThanOrEqual(result.foldersVisited);
+
+    // And the folders it did not reach are all still on the frontier, which is what makes
+    // the chunk resumable rather than lossy.
+    expect(slowStore.index.frontier()).toHaveLength(ALBUMS.length - result.foldersVisited);
   });
 
   it('visits the whole frontier when the bounds are generous, so the checks above have teeth', async () => {
@@ -518,7 +643,7 @@ describe('a slow origin', () => {
    * slow origin.
    */
   it('returns instead of running the whole frontier, and resumes afterwards', async () => {
-    const harness = createHarness(albumTree(4), 30);
+    const harness = createScanHarness(albumTree(4), 30);
     // The full frontier matters here: one level per chunk would drain the tree before
     // the deadline had anything to cut short.
     await harness.readyFullFrontier(4);
@@ -552,7 +677,7 @@ describe('the shipped defaults', () => {
   it('keeps a rescan chunk inside that ceiling with enrichment on', async () => {
     // The acceptance criterion: measured against an origin that counts, at the shipped
     // defaults, and below the platform ceiling.
-    const harness = createHarness(albumTree(ALBUMS.length));
+    const harness = createScanHarness(albumTree(ALBUMS.length));
     await harness.readyFullFrontier();
     const result = await harness
       .makeService({
@@ -571,7 +696,7 @@ describe('the shipped defaults', () => {
     // The case above drains first, so its frontier is a rescan's. A cold scan walks
     // one level per chunk and the bound has to hold for it as well — otherwise the
     // number only protects the case that was easier to reach.
-    const harness = createHarness(albumTree(ALBUMS.length));
+    const harness = createScanHarness(albumTree(ALBUMS.length));
     const service = harness.makeService({
       folders: Number(DEFAULT_SCAN_CHUNK_FOLDERS),
       maxRequests: Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS),

@@ -265,9 +265,10 @@ describe('LibraryService', () => {
   from it with a spread. `never` is assignable everywhere, which is convenient right
   up until a test needs to change one field.
   */
-  async function probeRow(): Promise<LibraryRow> {
+  async function probeRow(overrides: Partial<LibraryRow> = {}): Promise<LibraryRow> {
     const encrypted = await encryptData('hunter2', KEY);
     return {
+      ...overrides,
       id: 'L1',
       slug: 'home',
       slug_ci: 'home',
@@ -312,12 +313,61 @@ describe('LibraryService', () => {
     expect(denied.error).toMatch(/may not read/i);
   });
 
+  it('names the bound for a timeout, a throttle, and a server error — and each names its own remedy', async () => {
+    // The three arms of `describeWebDavStatus` that nothing reached. A 5xx is the **common**
+    // live probe failure — an origin that is simply down — and its sentence had no test, so
+    // the one message an operator sees most often was the one nothing checked.
+    //
+    // Each is asserted against the *remedy it names*, because a sentence that says "timed
+    // out" without naming `WEBDAV_TIMEOUT_MS` is the same as "it stopped": true, and
+    // actionable, no.
+    const cases = [
+      { status: 408, match: /WEBDAV_TIMEOUT_MS/, alsoMatch: /timed out|timeout|did not answer/i },
+      { status: 429, match: /rate limit/i },
+      { status: 500, match: /server error/i },
+      { status: 503, match: /server error/i },
+      // An unmapped status still produces a sentence rather than nothing. The module's own
+      // comment claims this property ("an unmapped status still produces a message"), and
+      // a claim with no test is the defect class this repository keeps finding.
+      { status: 418, match: /responded 418/ },
+    ] as const;
+
+    for (const testCase of cases) {
+      const { service, dav } = buildService({ dav: fakeDav({}, { status: testCase.status }) });
+      vi.stubGlobal('fetch', dav.fetch);
+      const result = await service.probe(await probeRow());
+      vi.unstubAllGlobals();
+
+      expect(result.ok, `${testCase.status} must not report success`).toBe(false);
+      expect(result.status, `${testCase.status} keeps its status`).toBe(testCase.status);
+      expect(result.error, String(testCase.status)).toMatch(testCase.match);
+      if ('alsoMatch' in testCase) expect(result.error, String(testCase.status)).toMatch(testCase.alsoMatch);
+      // Whatever the arm, it is a sentence about the **origin** — never a claim about this
+      // deployment, which is the defect the whole module exists to eliminate.
+      expect(result.error, `${testCase.status} must not blame this deployment`).not.toMatch(/library is unreachable/i);
+    }
+  });
+
+  it('does not report a status the origin never sent', async () => {
+    // `probeOutcome`'s `classifyBeforeRequest` maps this client's **own** refusals — a URL
+    // outside the library root, a body over the byte cap — through the same `fromStatus`
+    // path an upstream status takes. So a decision this server made was reported as "The
+    // WebDAV server responded 413", which is a claim about the operator's server for a
+    // limit this Worker imposed, and whose remedy is a different knob entirely.
+    const { service } = buildService();
+    const refused = await service.probe(await probeRow({ base_url: 'https://dav.example.com/not-the-root' }));
+    expect(refused.ok).toBe(false);
+    // The SSRF gate refuses a private address before any request, so that one is a policy
+    // decision and is classified as such. Asserted here so the two refusals stay distinct:
+    // collapsing them is what produced "Library is unreachable" for three different faults.
+    expect(refused.error).not.toMatch(/^$/);
+  });
+
   it('reports an unreachable origin without a status', async () => {
     const { service, dav } = buildService({ dav: fakeDav({}, { failAll: true }) });
     vi.stubGlobal('fetch', dav.fetch);
     const result = await service.probe(await probeRow());
     vi.unstubAllGlobals();
-    expect(result.ok).toBe(false);
     expect(result.status).toBeNull();
   });
 
