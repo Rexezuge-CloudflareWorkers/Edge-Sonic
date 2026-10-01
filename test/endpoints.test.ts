@@ -106,11 +106,38 @@ describe('getAlbumList', () => {
     const legacy = await harness.rest('getAlbumList', { type: 'alphabeticalByName', size: '10' });
     const current = await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '10' });
 
-    const legacyName = payload<{ album: Array<{ title: string }> }>(legacy.body, 'albumList').album[0]?.title;
-    const currentName = payload<{ album: Array<{ name: string }> }>(current.body, 'albumList2').album[0]?.name;
-    // `getAlbumList` is the pre-1.4 shape, where the field is `title` rather than
-    // `name`. A client still sending it must get the same album, not an empty list.
-    expect(legacyName).toBe(currentName);
+    // Compared on **id**, which both spellings publish, and not on a field name.
+    //
+    // This used to read `title` off `getAlbumList` and `name` off `getAlbumList2` and
+    // assert they matched — which is how the two came to publish different fields for
+    // the same album in the first place. It passed *because* they disagreed: the
+    // assertion could only hold while each carried the field it was reading and neither
+    // carried the other's. `albumList` is `Array of Child` and `albumList2` is
+    // `Array of AlbumID3`, so they are meant to differ, and what they must agree on is
+    // *which albums*, not which fields name them.
+    const legacyIds = payload<{ album: Array<{ id: string }> }>(legacy.body, 'albumList').album.map((album) => album.id);
+    const currentIds = payload<{ album: Array<{ id: string }> }>(current.body, 'albumList2').album.map((album) => album.id);
+    expect(legacyIds.length).toBeGreaterThan(0);
+    expect(legacyIds).toEqual(currentIds);
+  });
+
+  it('publishes albums as a Child, which is what albumList declares', async () => {
+    // `albumList` is `Array of Child` and `albumList2` is `Array of AlbumID3`. One
+    // shared builder served both and published the union — so `getAlbumList2` carried
+    // `title` and `isDir`, neither of which `AlbumID3` declares. Nothing here could see
+    // it: a lenient client drops an unknown attribute, and `name` was published too, so
+    // every field a client actually reads kept working. It is visible only by reading
+    // the same endpoint off a reference server — `scripts/compare-navidrome.mjs`.
+    const legacy = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getAlbumList', { type: 'alphabeticalByName' })).body, 'albumList').album;
+    const current = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body, 'albumList2').album;
+
+    // A `Child` names its media `title` and declares itself a directory.
+    expect(legacy[0]).toHaveProperty('title');
+    expect(legacy[0]).toHaveProperty('isDir', true);
+    // An `AlbumID3` names it `name` and declares neither.
+    expect(current[0]).toHaveProperty('name');
+    expect(current[0]).not.toHaveProperty('title');
+    expect(current[0]).not.toHaveProperty('isDir');
   });
 });
 

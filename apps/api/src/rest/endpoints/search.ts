@@ -17,7 +17,7 @@
  * at the index. What is *not* acceptable is silently shipping a full-table scan
  * across every library, which is what dropping the `library_id` predicate would do.
  */
-import { el, elList, encodeId, IdKind, songElement } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, el, elList, encodeId, IdKind, songElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -85,10 +85,18 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
   const annotations = await annotationsFor(context, songs.length > 0);
 
   const artists = groupArtists(songs, library, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
+  const albumOffset = context.params.int('albumOffset', 0, { min: 0 });
   const albums = groupAlbums(songs, library, NO_ANNOTATIONS).slice(
-    context.params.int('albumOffset', 0, { min: 0 }),
-    context.params.int('albumOffset', 0, { min: 0 }) + context.pageSize(context.params.optionalInt('albumCount'), 20),
+    albumOffset,
+    albumOffset + context.pageSize(context.params.optionalInt('albumCount'), 20),
   );
+
+  // The same split as the album lists, for the same reason: `searchResult2` is the
+  // pre-1.4 shape and carries albums as `Child`, `searchResult3` carries them as
+  // `AlbumID3`. The wrapper is the only thing that distinguishes the two, so the
+  // wrapper is what decides the element type.
+  const albumNodes =
+    wrapperName === 'searchResult2' ? albums.map((album) => albumChildElement(album, album.artistId)) : albums.map((album) => albumElement(album));
 
   return respond(
     context,
@@ -101,7 +109,7 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
       {},
       [
         ...artists,
-        ...albums,
+        ...albumNodes,
         ...songs.map((song) => songElement(songToModel(song, library, annotations))),
       ],
     ),

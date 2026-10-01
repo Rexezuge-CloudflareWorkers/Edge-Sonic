@@ -15,7 +15,7 @@
  * precisely the part that is allowed to change.
  */
 import { albumElement, albumWithSongs, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
-import type { Album, ElementNode } from '@edge-sonic/subsonic';
+import type { Album } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
@@ -91,7 +91,7 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
 
   const annotations = await annotationsFor(context, true);
   const albums = groupAlbums(mine, library, annotations);
-  return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length }, albums));
+  return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length }, albums.map((album) => albumElement(album))));
 }
 
 /**
@@ -132,13 +132,25 @@ function albumModel(songs: readonly SongRow[], library: LibraryRow, annotations:
 }
 
 /**
- * Group songs into album elements.
+ * Group songs into album **models**.
  *
  * **The key is `dir_path`, not the album name.** A starred album resolves back to
  * its songs through this key, so a name-derived key would orphan every star the
  * first time somebody fixed a typo in a folder name.
+ *
+ * ### Models, not elements
+ *
+ * It returns `Album` values rather than protocol nodes because the two album list
+ * endpoints publish **different element types** — `getAlbumList` answers with `Child`,
+ * `getAlbumList2` with `AlbumID3` — and only the builder knows which is which. A
+ * grouping that returned elements would have to choose, and the choice would be wrong
+ * for one of them: it chose `AlbumID3` for both, which put `title` and `isDir` on every
+ * album in `getAlbumList2` where the schema declares neither.
+ *
+ * So the split is made by the caller, which knows its own wrapper, and the grouping
+ * stays the one place that decides what an album *is*.
  */
-function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations: AnnotationLookup): ElementNode[] {
+function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations: AnnotationLookup): Album[] {
   const groups = new Map<string, SongRow[]>();
   for (const row of rows) {
     const key = albumKeyOf(row);
@@ -154,7 +166,7 @@ function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations:
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([key, songs]) => {
       songs.sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
-      return albumElement(albumModel(songs, library, annotations, encodeId(IdKind.Album, library.id, key)));
+      return albumModel(songs, library, annotations, encodeId(IdKind.Album, library.id, key));
     });
 }
 

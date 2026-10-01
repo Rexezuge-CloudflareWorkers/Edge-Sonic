@@ -20,6 +20,18 @@
  *   has to declare it. They share `albumAttrs` so the two cannot disagree about
  *   which fields an album has — see the two functions for why the list lives in
  *   one and not the other.
+ * - **Only the fields the element's own schema declares.** `AlbumID3` carries
+ *   `name` and no `title`, and no `isDir`; a track's `type` is the generic
+ *   container (`music`) while `mediaType` is the shape (`song`). Each of those
+ *   three was written here by hand and none of them failed anything, which is the
+ *   point: an attribute the schema does not declare is dropped by a lenient
+ *   client and ignored by a strict one, so nothing in this repository could see it.
+ *   `title` merely duplicated `name`, `isDir: true` asserted a field `AlbumID3`
+ *   does not have, and `type="song"` wrote a `mediaType` value into the
+ *   enumeration a player filters on — so a client asking `type == "music"` saw an
+ *   empty library. The way this class of defect is caught is by reading the same
+ *   endpoint off a *reference* server and comparing attribute key sets; see
+ *   `scripts/compare-navidrome.mjs`.
  */
 import { el, elList } from './nodes';
 import type { ElementNode } from './nodes';
@@ -82,7 +94,16 @@ function songElement(song: Song): ElementNode {
     artistId: song.artistId,
     playCount: song.playCount,
     userRating: song.userRating,
-    type: song.mediaType,
+    // `type` and `mediaType` are two different fields, and this used to write
+    // `mediaType`'s value into `type`. The protocol types `type` as the generic
+    // container -- [music/podcast/audiobook/video] -- and `mediaType` as the shape --
+    // [song/album/artist]. So every track published `type="song"`, a value outside
+    // `type`'s enumeration and absent from the XSD, and published no `mediaType` at
+    // all, so a client branching on it read nothing. It was wrong in the one field
+    // every client uses to decide what a row *is*: a player filtering `type == "music"`
+    // sees an empty library.
+    type: 'music',
+    mediaType: song.mediaType,
     bookmarkPosition: song.bookmarkPosition,
   });
 }
@@ -100,7 +121,6 @@ function albumAttrs(album: Album): Attrs {
   return {
     id: album.id,
     name: album.name,
-    title: album.name,
     artist: album.artist,
     artistId: album.artistId,
     songCount: album.songCount,
@@ -112,12 +132,70 @@ function albumAttrs(album: Album): Attrs {
     starred: album.starred,
     playCount: album.playCount,
     userRating: album.userRating,
-    isDir: true,
   };
 }
 
 function albumElement(album: Album): ElementNode {
   return el('album', albumAttrs(album));
+}
+
+/**
+ * An album as `getAlbumList` publishes it — a `Child`, not an `AlbumID3`.
+ *
+ * ### Why this is a second builder rather than a flag on the first
+ *
+ * `getAlbumList` and `getAlbumList2` ask the same question and the protocol answers
+ * them with different element types: `albumList` is `Array of Child`, `albumList2` is
+ * `Array of AlbumID3`. `Child` carries `title`, `isDir` and `parent`; `AlbumID3`
+ * carries `name` and none of the three.
+ *
+ * `albumAttrs` published `title` and `isDir` for both, so every album in
+ * `getAlbumList2` carried two attributes its schema does not declare. It cost nothing
+ * in a lenient client and nothing in a strict one, and `name` was published alongside,
+ * so nothing here could tell an invented field from a deliberate one. The `title` half
+ * is load-bearing in the *other* direction: `test/endpoints.test.ts` asserted that
+ * `getAlbumList` and `getAlbumList2` agree on which album they report, and did it by
+ * reading `title` off one and `name` off the other — a test that passes for two
+ * endpoints disagreeing, because the disagreement was the field it was reading.
+ *
+ * So the split is made here, where each element's schema is known, and the parity
+ * assertion compares something both endpoints actually publish.
+ *
+ * Takes an `Album`, not a separate type: every field a `Child`-shaped album needs is
+ * already on the model, and a second model would be a second thing to keep in step
+ * with `albumModel`.
+ *
+ * @param parent The containing artist's id. `Child` declares `parent` and an album is
+ *   a directory inside one, so this is what lets a client walk album → artist without
+ *   a second request.
+ */
+function albumChildElement(album: Album, parent?: string): ElementNode {
+  return el('album', {
+    id: album.id,
+    parent,
+    isDir: true,
+    // A `Child` names its media `title`; an `AlbumID3` names it `name`. Both are
+    // published, both mean the album name, and each endpoint carries the one its own
+    // schema declares — plus `name`, which a strict client reads off `Child` too.
+    title: album.name,
+    name: album.name,
+    album: album.name,
+    artist: album.artist,
+    artistId: album.artistId,
+    songCount: album.songCount,
+    duration: album.duration,
+    year: album.year,
+    genre: album.genre,
+    coverArt: album.coverArt,
+    created: album.created,
+    playCount: album.playCount,
+    userRating: album.userRating,
+    starred: album.starred,
+    // `mediaType` is the shape — [song/album/artist] — so this is what tells a client
+    // the row is an album rather than a track. `type`, the generic container, stays
+    // absent: `Child` types it as optional and an album is not a distinct container.
+    mediaType: 'album',
+  });
 }
 
 /**
@@ -269,6 +347,7 @@ function scanStatusElement(status: ScanStatus): ElementNode {
 export {
   songElement,
   albumElement,
+  albumChildElement,
   albumWithSongs,
   artistElement,
   directoryElement,
