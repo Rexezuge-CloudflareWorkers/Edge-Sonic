@@ -53,15 +53,35 @@ describe('getAlbumList2', () => {
   });
 
   it('orders by artist, by year, and by rating without losing tracks', async () => {
-    for (const type of ['alphabeticalByArtist', 'byYear', 'byRating', 'starred', 'highest', 'frequent', 'recent', 'random']) {
+    // The protocol's own list of types. `byRating` is **not** among them — the test
+    // asserted it alongside the rest, which is how an invented parameter got in: it was
+    // only ever checked for "did not 500", and the server silently substituted a random
+    // order for it. An unrecognised type is now `code=0`, asserted below.
+    for (const type of ['alphabeticalByArtist', 'byYear', 'starred', 'highest', 'frequent', 'recent', 'random', 'byGenre']) {
       const { body } = await harness.rest('getAlbumList2', { type, size: '10' });
-      // `random` legitimately returns the album, and `byRating` returns it with no
-      // ratings, so the assertion is that the request is *answered*, not what it
-      // contains. A type that 500s or returns `code=70` is the failure.
+      // `random` legitimately returns the album and `starred` returns none, so the
+      // assertion is that the request is *answered*, not what it contains. A type that
+      // 500s or returns an error is the failure.
       const album = payload<{ album?: Array<{ name: string }> }>(body, 'albumList2');
       expect(album, type).toBeDefined();
       // Every response carries the key as an array, even when it is empty.
       expect(Array.isArray(album.album), type).toBe(true);
+    }
+  });
+
+  it('requires type, and refuses one it does not implement', async () => {
+    // `type` is a required parameter. Defaulting it answered a question nobody asked: a
+    // client that sent none got a confident random page back and had no way to tell the
+    // server had substituted the request. Navidrome refuses it with `code=10`.
+    const missing = await harness.rest('getAlbumList2', { size: '10' });
+    expect(payload<{ code: number }>(missing.body, 'error').code).toBe(10);
+
+    // A type outside the protocol's enumeration is a *different* failure from a missing
+    // one — a client bug rather than an omission — and gets the generic code. Falling back
+    // to `random` would answer a question nobody asked, which is the bug above again.
+    for (const type of ['byRating', 'bogus', 'ALPHABETICALBYNAME']) {
+      const unknown = await harness.rest('getAlbumList2', { type, size: '10' });
+      expect(payload<{ code: number }>(unknown.body, 'error').code, type).toBe(0);
     }
   });
 
@@ -75,17 +95,26 @@ describe('getAlbumList2', () => {
     expect(payload<{ album: unknown[] }>(past.body, 'albumList2').album).toEqual([]);
   });
 
-  it('falls back to a default order for a type it does not know, rather than failing', async () => {
-    // A *newer* client can send a type this server has never heard of, and a client
-    // that gets `code=70` for `byReleaseDate` reports a server error to the user. So an
-    // unrecognized type is answered with the documented default order.
+  it('refuses a type it does not implement rather than answering a different question', async () => {
+    // This used to fall back to the default order, on the argument that "a *newer* client
+    // can send a type this server has never heard of, and a client that gets an error
+    // reports a server error to the user".
     //
-    // The cost is that a typo is answered with a plausible list instead of an error. That
-    // is the right trade: the compatible failure is visible and the incompatible one is
-    // not.
+    // That argument does not survive the version gate. `assertClientVersion` refuses a
+    // client newer than 1.16.1 outright, so a type added by a *newer* protocol version can
+    // never reach this handler from a conforming client — the only caller that can send
+    // `byReleaseDate` is one that is already being refused, or one that has a typo. And the
+    // cost the comment accepted ("a typo is answered with a plausible list") is the whole
+    // problem: the client asked for the highest-rated albums and received a random page,
+    // correctly shaped, with nothing to indicate the substitution.
+    //
+    // Navidrome answers `code=0` here, which is the protocol's generic failure.
     const { status, body } = await harness.rest('getAlbumList2', { type: 'alphabeticalBySideways', size: '10' });
     expect(status).toBe(200);
-    expect(payload<{ album: Array<{ name: string }> }>(body, 'albumList2').album.map((album) => album.name)).toEqual(['For Emma, Forever Ago']);
+    expect(payload<{ code: number; message: string }>(body, 'error')).toMatchObject({ code: 0 });
+    // Named in the message, so the client learns which parameter was wrong rather than
+    // only that something was.
+    expect(payload<{ message: string }>(body, 'error').message).toContain('alphabeticalBySideways');
   });
 
   it('uses the documented default page size, not one item', async () => {
@@ -417,14 +446,25 @@ describe('ratings', () => {
     expect(payload<{ userRating?: number }>(body, 'song').userRating ?? 0).toBe(0);
   });
 
-  it('sorts by rating through getAlbumList2', async () => {
+  it('accepts the protocol rating type, which is `highest`', async () => {
+    // The test used `byRating`, which is **not** a protocol type — the protocol's is
+    // `highest`. It was only ever checked for "did not 500", so an invented parameter sat
+    // in the suite for as long as the endpoint silently substituted an order for it. An
+    // unrecognised type is now `code=0`, asserted in the getAlbumList2 block.
     await harness.rest('setRating', { id: SKINNY_LOVE, rating: '5' });
-    const { body } = await harness.rest('getAlbumList2', { type: 'byRating', size: '10' });
+    const { body } = await harness.rest('getAlbumList2', { type: 'highest', size: '10' });
     // The album is present and its own track count is right; the average is absent
     // because it aggregates every rater, and there is one.
     const album = payload<{ album: Array<{ name: string; songCount: number; averageRating?: number }> }>(body, 'albumList2').album[0];
     expect(album?.name).toBe('For Emma, Forever Ago');
     expect(album?.songCount).toBe(2);
+
+    // Known limitation, stated rather than left to be discovered: `highest` does not yet
+    // order by rating. `ratings` keys on the *encoded* album id, which embeds a base64
+    // `dir_path` and so cannot be joined to `songs` in SQL — that needs a denormalised
+    // column this schema does not have. Until it does, `highest` orders by recency
+    // alongside `newest`. Navidrome answers an empty list when nothing is rated, which is
+    // defensible and a different answer.
   });
 
   it('refuses a rating naming a track in a library the user cannot see, and writes nothing', async () => {
@@ -727,10 +767,26 @@ describe('the scan controls', () => {
     const { status, body } = await harness.rest('getScanStatus');
     expect(status).toBe(200);
     const scan = payload<{ scanning: boolean; count: number }>(body, 'scanStatus');
-    // Not scanning, and nothing counted — the honest answer for a fresh library, as
-    // opposed to a count of zero that looks like "scanned and found nothing".
     expect(scan.scanning).toBe(false);
-    expect(scan.count).toBe(0);
+    // `count` is the library's **track total**, which is what every implementation of
+    // this protocol reports — Navidrome answers 113 where this used to answer the number
+    // of folders the last poll happened to visit. It used to be 0 on a fresh library,
+    // which read as "scanned and found nothing" when the library was merely unscanned.
+    expect(scan.count).toBe(2);
+  });
+
+  it('reports a count that does not fall back when a poll does no work', async () => {
+    // The defect `count` had: it was `scanned_count`, the number of folders the last
+    // chunk visited, so it moved by however much work one poll happened to do. A client
+    // rendering progress against it watched a number that went up and came back down.
+    //
+    // Paired with the assertion above deliberately: both polls are on a finished library
+    // where no chunk runs, and the count must be the same for both. Before the fix the
+    // second was `scanned_count` and the first was not.
+    const first = payload<{ count: number }>((await harness.rest('getScanStatus')).body, 'scanStatus').count;
+    const second = payload<{ count: number }>((await harness.rest('getScanStatus')).body, 'scanStatus').count;
+    expect(second).toBe(first);
+    expect(first).toBeGreaterThan(0);
   });
 
   it('never reports on a library the caller was not granted', async () => {
@@ -822,6 +878,53 @@ describe('the scan controls', () => {
       // without an explicit `startScan`.
       expect(await reportWith(MAX_CONSECUTIVE_FAILURES)).toBe(false);
     });
+  });
+});
+
+describe('media retrieval by id', () => {
+  /**
+   * An absent `id` on an endpoint that fetches **one item by id** is `code=70`, the same
+   * answer a deleted or unresolvable id gives.
+   *
+   * It was `code=10` ("required parameter is missing"), and the two are different claims:
+   * one says the client forgot a parameter, the other says the resource is not there. For
+   * these four the id is the *selector* and there is no other way to ask for none, so
+   * "no id" and "no such track" are the same request. Splitting them across two codes
+   * makes a client's error handling depend on which mistake it made.
+   *
+   * The line is drawn by *what the endpoint does*, not by a blanket rule, so the
+   * counterweight is asserted below: every other id-taking endpoint still says `code=10`.
+   * Navidrome draws it in the same place.
+   */
+  for (const [endpoint, what] of [
+    ['getSong', 'Song'],
+    ['getAlbum', 'Album'],
+    ['getArtist', 'Artist'],
+  ] as const) {
+    it(`answers ${endpoint} with not-found when no id is sent`, async () => {
+      const { body } = await harness.rest(endpoint);
+      const error = payload<{ code: number; message: string }>(body, 'error');
+      expect(error.code, endpoint).toBe(70);
+      // Named, so the client learns *which* item was not found rather than only that
+      // something was.
+      expect(error.message, endpoint).toContain(what);
+    });
+
+    it(`answers ${endpoint} with not-found for an id that resolves to nothing`, async () => {
+      const { body } = await harness.rest(endpoint, { id: 's:not-a-real-id' });
+      expect(payload<{ code: number }>(body, 'error').code, endpoint).toBe(70);
+    });
+  }
+
+  it('still says "missing parameter" everywhere the id is one of several', async () => {
+    // The counterweight to the block above, and the reason the block is not a rule about
+    // `id`. Where an endpoint does something *other* than fetch one identified item, a
+    // forgotten parameter is a client bug and the protocol's `code=10` says so — and it is
+    // the answer that lets the client fix itself.
+    for (const endpoint of ['getPlaylist', 'stream', 'scrobble', 'createBookmark']) {
+      const { body } = await harness.rest(endpoint);
+      expect(payload<{ code: number }>(body, 'error').code, endpoint).toBe(10);
+    }
   });
 });
 
