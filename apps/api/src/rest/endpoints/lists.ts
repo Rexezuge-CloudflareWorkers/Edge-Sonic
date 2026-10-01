@@ -20,17 +20,32 @@ import { annotationsFor, groupAlbums } from './structured';
 
 /**
 How each album-list type maps onto a `songs` query.
+
+**Aggregate expressions, over a `GROUP BY dir_path`.** The group is the album's directory —
+one group is one album, which is the property the whole paging contract rests on — so the
+ordering has to be a function of the *group*, not of whichever track led it. `MIN(album_ci)`
+rather than `album_ci`, or a ten-track album would sort as its first track and a
+`GROUP BY` would pick that row arbitrarily: two calls could order the same album
+differently, and `type=alphabeticalByName` would be stable only by accident.
+
+An unknown type falls back to `random`, which is what the protocol's own default is.
+
+`frequent`, `recent` and `highest` are the three that genuinely want play counts, last-play
+times and ratings, and this server has none of them aggregated per album. They order by
+recency rather than returning nothing, because a client paging "most played" is better
+served by an ordering than by an empty list — but it is not the ordering it asked for, and
+a server that has play counts should say so here rather than quietly substitute one.
 */
-const ALBUM_ORDER_BY: Readonly<Record<string, string>> = {
-  random: 'RANDOM()',
-  newest: 'mtime_ms DESC',
-  frequent: 'mtime_ms DESC',
-  recent: 'mtime_ms DESC',
-  highest: 'mtime_ms DESC',
-  alphabeticalByName: 'album_ci ASC',
-  alphabeticalByArtist: 'album_artist_ci ASC, album_ci ASC',
-  byYear: 'year ASC, album_ci ASC',
-  byGenre: 'genre_ci ASC, album_ci ASC',
+const ALBUM_ORDER_BY: Readonly<Record<string, readonly string[]>> = {
+  random: ['RANDOM()'],
+  newest: ['MAX(mtime_ms) DESC'],
+  frequent: ['MAX(mtime_ms) DESC'],
+  recent: ['MAX(mtime_ms) DESC'],
+  highest: ['MAX(mtime_ms) DESC'],
+  alphabeticalByName: ['MIN(album_ci) ASC'],
+  alphabeticalByArtist: ['MIN(album_artist_ci) ASC', 'MIN(album_ci) ASC'],
+  byYear: ['MIN(year) ASC', 'MIN(album_ci) ASC'],
+  byGenre: ['MIN(genre_ci) ASC', 'MIN(album_ci) ASC'],
 };
 
 /**

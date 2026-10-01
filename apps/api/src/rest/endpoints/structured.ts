@@ -132,23 +132,36 @@ function albumModel(songs: readonly SongRow[], library: LibraryRow, annotations:
 }
 
 /**
- * Group songs into album **models**.
+ * Group songs into album **models**, in the order the albums first appear in `rows`.
  *
- * **The key is `dir_path`, not the album name.** A starred album resolves back to
- * its songs through this key, so a name-derived key would orphan every star the
- * first time somebody fixed a typo in a folder name.
+ * **The key is `dir_path`, not the album name.** A starred album resolves back to its
+ * songs through this key, so a name-derived key would orphan every star the first time
+ * somebody fixed a typo in a folder name.
+ *
+ * ### No sort here, and that is load-bearing
+ *
+ * This used to end in `.sort(([a], [b]) => a.localeCompare(b))` over the group keys, which
+ * re-sorted the list by **directory path** after the database had ordered it by whatever
+ * the caller asked for. `getAlbumList2?type=alphabeticalByName` therefore returned
+ * albums ordered by their folder — and since the folders here are named
+ * `Artist - Album`, that is an order no client could have predicted and none requested.
+ *
+ * The order now belongs to whoever chose it: `listAlbums` sorts in SQL and this preserves
+ * what it hands over, and a caller with no opinion (`getArtist`, `search`) gets first
+ * appearance, which is the order its own query produced. Ordering is a decision about the
+ * *list*, and a grouping has no opinion about it.
  *
  * ### Models, not elements
  *
  * It returns `Album` values rather than protocol nodes because the two album list
  * endpoints publish **different element types** — `getAlbumList` answers with `Child`,
- * `getAlbumList2` with `AlbumID3` — and only the builder knows which is which. A
- * grouping that returned elements would have to choose, and the choice would be wrong
- * for one of them: it chose `AlbumID3` for both, which put `title` and `isDir` on every
- * album in `getAlbumList2` where the schema declares neither.
+ * `getAlbumList2` with `AlbumID3` — and only the builder knows which is which. A grouping
+ * that returned elements would have to choose, and the choice would be wrong for one of
+ * them: it chose `AlbumID3` for both, which put `title` and `isDir` on every album in
+ * `getAlbumList2` where the schema declares neither.
  *
- * So the split is made by the caller, which knows its own wrapper, and the grouping
- * stays the one place that decides what an album *is*.
+ * So the split is made by the caller, which knows its own wrapper, and the grouping stays
+ * the one place that decides what an album *is*.
  */
 function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations: AnnotationLookup): Album[] {
   const groups = new Map<string, SongRow[]>();
@@ -162,12 +175,10 @@ function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations:
     }
   }
 
-  return [...groups]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, songs]) => {
-      songs.sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
-      return albumModel(songs, library, annotations, encodeId(IdKind.Album, library.id, key));
-    });
+  return [...groups].map(([key, songs]) => {
+    songs.sort((a, b) => (a.disc ?? 9999) - (b.disc ?? 9999) || (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
+    return albumModel(songs, library, annotations, encodeId(IdKind.Album, library.id, key));
+  });
 }
 
 /**
