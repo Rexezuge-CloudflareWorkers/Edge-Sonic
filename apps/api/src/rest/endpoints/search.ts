@@ -21,7 +21,7 @@ import { el, elList, encodeId, IdKind, songElement, successResponse } from '@edg
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
-import { songToModel } from '../mappers';
+import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
 import { albumKeyOf,  annotationsFor, artistNameOf, groupAlbums } from './structured';
 
@@ -31,7 +31,6 @@ function respond(context: RestContext, payload: ElementNode | null): EnvelopeRes
   return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
 }
 
-const EMPTY = { stars: new Set<string>(), ratings: new Map<string, number>(), playCounts: new Map<string, number>() };
 
 interface SearchSpec {
   readonly term: string;
@@ -71,7 +70,7 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
   const { songs } = await runSearch(context, library);
   const count = context.pageSize(context.params.optionalInt('count'), 20);
-  const annotations = await annotationsFor(context, songs.map((song) => song.id));
+  const annotations = await annotationsFor(context, songs.length > 0);
   const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, annotations)));
   return respond(context, elList('searchResult', 'song', {}, nodes));
 }
@@ -86,10 +85,10 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
 async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | 'searchResult3'): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
   const { songs } = await runSearch(context, library);
-  const annotations = await annotationsFor(context, songs.map((song) => song.id));
+  const annotations = await annotationsFor(context, songs.length > 0);
 
   const artists = groupArtists(songs, library, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
-  const albums = groupAlbums(songs, library, EMPTY).slice(
+  const albums = groupAlbums(songs, library, NO_ANNOTATIONS).slice(
     context.params.int('albumOffset', 0, { min: 0 }),
     context.params.int('albumOffset', 0, { min: 0 }) + context.pageSize(context.params.optionalInt('albumCount'), 20),
   );

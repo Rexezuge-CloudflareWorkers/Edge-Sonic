@@ -17,6 +17,40 @@ import { nowSeconds } from './identity';
 
 
 class AnnotationDAO extends BaseDAO {
+  /**
+   * The user's starred ids, with **when** each was starred.
+   *
+   * The timestamp is not a convenience. `starred` is a protocol attribute carrying an
+   * ISO-8601 instant — the same shape as `created` on a song and album — and this DAO
+   * selected only `item_id`, so the mapper had nothing to publish and reached for a
+   * literal instead. Publishing `starred: undefined` produced **no attribute in XML and
+   * no key in JSON at all**, because both serializers drop a nullish value: the star was
+   * stored correctly and was unreachable to the one client call that reports it.
+   * `getStarred` does not expand artist stars into albums, so `getArtists` is the only
+   * place an artist star is visible, and it reported nothing.
+   *
+   * The column was already written and already the sort key; it was simply never read.
+   */
+  public async listStarredWithTime(userId: string, itemType: StarItemType): Promise<Map<string, number>> {
+    const result = await this.withRetry(
+      async () =>
+        await this.database
+          .prepare('SELECT item_id, starred_at FROM stars WHERE user_id = ? AND item_type = ? ORDER BY starred_at DESC')
+          .bind(userId, itemType)
+          .all<{ item_id: string; starred_at: number }>(),
+      'annotations.listStarredWithTime',
+    );
+    return new Map((result.results ?? []).map((row) => [row.item_id, row.starred_at]));
+  }
+
+  /**
+   * Ids only, for the callers that order by recency and publish no timestamp.
+   *
+   * Deliberately **not** `listStarredWithTime` with the value discarded at the call site:
+   * `getStarred` needs the ids in `starred_at DESC` order, and selecting a column it
+   * never reads to satisfy a shared signature is how a query plan stops being the thing
+   * you think it is.
+   */
   public async listStarred(userId: string, itemType: StarItemType): Promise<string[]> {
     const result = await this.withRetry(
       async () =>

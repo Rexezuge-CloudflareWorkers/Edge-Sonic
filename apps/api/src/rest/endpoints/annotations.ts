@@ -32,15 +32,26 @@ const ID_PARAMS: readonly (readonly [string, 'song' | 'album' | 'artist'])[] = [
  *
  * An id for a library the caller cannot see is a `code=70` *before* anything is
  * written, so a partial call cannot leave half its ids starred.
+ *
+ * ### Why this is `async`, and why that is the whole point
+ *
+ * The grant check used to be `void context.libraries.requireForUser(...)`. A `void`ed
+ * promise **starts** the check and discards it, and `requireForUser` throws
+ * `NotFoundError` — so the rejection surfaced as an unhandled rejection while the write
+ * it was guarding went ahead. `stars`, `ratings`, `bookmarks`, `play_counts` and
+ * `now_playing` have a foreign key to `users` and **none to `songs`**, so a caller with no
+ * grant on another library could write rows naming ids in it; the read paths filter those
+ * back out, so nothing reported the pollution either. It is the same defect the play
+ * queue's `savePlayQueue` had, and the same rule: an unawaited authorization check is not
+ * a check.
  */
-function collectTargets(context: RestContext): Array<{ id: string; itemType: 'song' | 'album' | 'artist' }> {
+async function collectTargets(context: RestContext): Promise<Array<{ id: string; itemType: 'song' | 'album' | 'artist' }>> {
   const targets: Array<{ id: string; itemType: 'song' | 'album' | 'artist' }> = [];
   for (const [param, itemType] of ID_PARAMS) {
     for (const raw of context.params.ids(param)) {
       const decoded = decodeId(raw);
-      // The `musicFolderId` grant check is the authorization step; a forged library
-      // id fails here, before any write.
-      void context.libraries.requireForUser(context.user.id, decoded.libraryId);
+      // Awaited, before anything is written: a forged library id fails here.
+      await context.libraries.requireForUser(context.user.id, decoded.libraryId);
       targets.push({ id: raw, itemType });
     }
   }
@@ -51,17 +62,14 @@ function collectTargets(context: RestContext): Array<{ id: string; itemType: 'so
 }
 
 async function star(context: RestContext): Promise<EnvelopeResponse> {
-  const targets = collectTargets(context);
-  const at = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
-  for (const target of targets) {
+  for (const target of await collectTargets(context)) {
     await context.annotations.star(context.user.id, target.id, target.itemType);
-    void at;
   }
   return respond(context);
 }
 
 async function unstar(context: RestContext): Promise<EnvelopeResponse> {
-  for (const target of collectTargets(context)) {
+  for (const target of await collectTargets(context)) {
     await context.annotations.unstar(context.user.id, target.id, target.itemType);
   }
   return respond(context);
@@ -78,7 +86,7 @@ async function setRating(context: RestContext): Promise<EnvelopeResponse> {
   const raw = context.params.int('rating', NaN);
   if (!Number.isFinite(raw)) throw new SubsonicError(ErrorCode.MissingParameter, 'Required parameter is missing: rating');
   const rating = Math.min(5, Math.max(0, raw));
-  for (const target of collectTargets(context)) {
+  for (const target of await collectTargets(context)) {
     if (rating === 0) {
       // There is no protocol call to clear a rating, so 0 is implemented as a
       // delete-by-replacement: storing 0 would make a "no rating" item look rated.
@@ -111,7 +119,10 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
 
   for (const id of ids) {
     const decoded = decodeId(id, IdKind.Song);
-    void context.libraries.requireForUser(context.user.id, decoded.libraryId);
+    // Awaited. `void` here started the grant check and discarded its rejection, so the
+    // play it was guarding was recorded for a library the caller cannot see — see
+    // `collectTargets` for why that is invisible rather than merely wrong.
+    await context.libraries.requireForUser(context.user.id, decoded.libraryId);
     if (submission) {
       await context.annotations.recordPlay(context.user.id, id);
     }
@@ -120,15 +131,17 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
   // One row for the whole batch, holding the first id: `getNowPlaying` reports a
   // user's current track, and writing one row per scrobbled id would have the last
   // one win arbitrarily.
-  const first = decodeId(ids[0], IdKind.Song);
+  //
+  // The id is already decoded and authorized above, so it is not decoded again here —
+  // the second `decodeId` was the same throwing call on the same bytes with its result
+  // discarded.
   await context.annotations.setNowPlaying({
     userId: context.user.id,
     username: context.username,
-    songId: submission ? ids[0] : ids[0],
+    songId: ids[0],
     playerName,
     playerId,
   });
-  void first;
 
   return respond(context);
 }

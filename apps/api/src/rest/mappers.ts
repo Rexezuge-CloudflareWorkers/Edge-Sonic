@@ -143,19 +143,25 @@ function groupArtistRows(rows: readonly SongRow[]): ArtistGroup[] {
  * One construction, because the attribute set is the contract: `getArtists` and
  * `getIndexes` publish the same `id` for the same artist, or a client drilling
  * from one into `getArtist` lands on `code=70`. The `starred` decoration is the
- * caller's — the folder view does not annotate — so it arrives as a set rather
+ * caller's — the folder view does not annotate — so it arrives as a lookup rather
  * than as a second construction.
  */
-function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], starred: ReadonlySet<string> = new Set()): ElementNode[] {
+function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], starred: ReadonlyMap<string, number> = new Map()): ElementNode[] {
   const buckets = new Map<string, ElementNode[]>();
   for (const group of groups) {
     const id = encodeId(IdKind.Artist, library.id, group.name);
     const letter = firstLetterOf(group.name);
+    const starredAt = starred.get(id);
     const node = artistElement({
       id,
       name: group.name,
       albumCount: group.albums.size,
-      ...(starred.has(id) && { starred: undefined }),
+      // The epoch second the artist was starred, or nothing. It used to be
+      // `{ starred: undefined }`, which is *not* a decorated flag that decorates nothing —
+      // `undefined` is dropped by both serializers, so the attribute did not exist at all
+      // on either surface. An artist star is reachable only through here, because
+      // `getStarred` deliberately does not expand one into its albums.
+      ...(starredAt !== undefined && { starred: toIso(starredAt) }),
     });
     const existing = buckets.get(letter);
     if (existing) {
@@ -169,11 +175,32 @@ function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], 
     .map(([name, artists]) => elList('index', 'artist', { name }, artists));
 }
 
+/**
+ * This user's annotations, keyed by protocol id.
+ *
+ * `stars` is a **Map of id to the epoch second it was starred**, not a `Set`, and the
+ * value is load-bearing. `starred` is a timestamp in the protocol — the same shape as
+ * `created` on a song and an album — so an artist element can only publish it if the
+ * lookup carries it. As a `Set` the only thing an element could write was `starred:
+ * undefined`, which both serializers drop: no attribute in XML, no key in JSON, and a
+ * star that was stored correctly and reported by nothing. A `Set` makes the wrong answer
+ * the only available one, which is a type's way of saying a field is missing.
+ */
 interface AnnotationLookup {
-  stars: Set<string>;
+  stars: Map<string, number>;
   ratings: Map<string, number>;
   playCounts: Map<string, number>;
 }
+
+/**
+ * What a caller renders when it has no user's annotations to consult.
+ *
+ * One definition, because there were two of them — here and in `search.ts` — written out
+ * separately. That is the same "two literals free to disagree" shape as the album model
+ * this file already owns, and it is a `Set` versus a `Map` here, so the two versions could
+ * not have been the same type.
+ */
+const NO_ANNOTATIONS: AnnotationLookup = { stars: new Map(), ratings: new Map(), playCounts: new Map() };
 
 function songToModel(song: SongRow, library: LibraryRow, annotations?: AnnotationLookup): Song {
   const albumDir = song.dir_path;
@@ -303,3 +330,4 @@ export {
   CONTENT_TYPES,
 };
 export type { AnnotationLookup, ArtistGroup };
+export { NO_ANNOTATIONS };
