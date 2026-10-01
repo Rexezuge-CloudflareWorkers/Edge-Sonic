@@ -148,4 +148,4 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
 
 const annotationEndpoints = { star, unstar, setRating, scrobble };
 
-export { annotationEndpoints, star, unstar, setRating, scrobble, collectTargets, ID_PARAMS };
+export { annotationEndpoints };

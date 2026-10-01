@@ -141,4 +141,4 @@ const browseEndpoints = { getIndexes, getMusicDirectory };
 // repointed, so a second path to the same function would be one more place to change.
 // `firstLetterOf` moved to `../mappers` for the same reason: the tag view and the folder
 // view group by the same letter, or one browse disagrees with the other.
-export { browseEndpoints, getIndexes, getMusicDirectory, isPlayable };
+export { browseEndpoints };

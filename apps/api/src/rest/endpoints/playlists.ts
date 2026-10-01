@@ -246,4 +246,4 @@ async function deletePlaylist(context: RestContext): Promise<EnvelopeResponse> {
 
 const playlistEndpoints = { getPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist };
 
-export { playlistEndpoints, getPlaylists, getPlaylist, createPlaylist, updatePlaylist, deletePlaylist };
+export { playlistEndpoints };

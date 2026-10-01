@@ -14,7 +14,7 @@ import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
-import {   annotationsFor, groupAlbums } from './structured';
+import { annotationsFor, groupAlbums } from './structured';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
@@ -231,7 +231,6 @@ const listEndpoints = {
   getNowPlaying,
 };
 
-export { listEndpoints, getAlbumList, getAlbumList2, getRandomSongs, getSongsByGenre, getGenres, getStarred, getStarred2, getNowPlaying, ALBUM_ORDER_BY };
+export { listEndpoints, getAlbumList, getAlbumList2, getRandomSongs, getSongsByGenre, getGenres, getStarred, getStarred2, getNowPlaying };
 
 
-export {albumKeyOf, albumNameOf} from './structured';

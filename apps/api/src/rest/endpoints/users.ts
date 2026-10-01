@@ -90,7 +90,7 @@ async function respondWithUser(context: RestContext, user: UserRow): Promise<Env
 
 const userEndpoints = { getUsers, getUser };
 
-export { userEndpoints, getUsers, getUser, toView };
+export { userEndpoints, getUsers, getUser };
 
 
 export {IdKind, decodeId, el} from '@edge-sonic/subsonic';

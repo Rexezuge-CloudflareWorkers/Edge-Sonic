@@ -5,11 +5,9 @@
 // in this library" — and mixing them in one file would produce a module well
 // past the god-file limit.
 export { BaseDAO } from './BaseDAO';
-export { buildSetClause } from './UpdateClause';
-export type { SetAssignment, SetClause } from './UpdateClause';
 export { UserDAO, LibraryDAO, nowSeconds } from './identity';
 export { NodeDAO } from './NodeDAO';
-export type { NodeInput, NodePatch } from './NodeDAO';
+export type { NodeInput } from './NodeDAO';
 export { SongDAO } from './SongDAO';
 export { chunkArray } from './chunking';
 // The measured ceiling, and the arithmetic every `IN (...)` batch size is derived from.

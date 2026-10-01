@@ -408,7 +408,7 @@ describe('the cache is never load-bearing', () => {
       `songMeta:v1:${SKINNY_LOVE}`,
       JSON.stringify({ mtimeMs: 1000, readerVersion: READER_VERSION, durationSeconds: 9999, bitrateKbps: 1, sampleRate: 44_100, channels: 2, container: 'flac' }),
     );
-    await harness.cache.ns.put('libIndex:v1:nonsense:artists', 'not json at all');
+    await harness.cache.ns.put('songMeta:v1:nonsense:artists', 'not json at all');
     const poisoned = await (await get(restUrl('getSong', { id: SKINNY_LOVE }))).text();
 
     expect(poisoned).toBe(cold);

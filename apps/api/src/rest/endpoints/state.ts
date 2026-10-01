@@ -184,6 +184,6 @@ function safeDecode(id: string, kind: string) {
 
 const stateEndpoints = { getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue };
 
-export { stateEndpoints, getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue,   };
+export { stateEndpoints, getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue };
 
 export {ErrorCode, SubsonicError} from '@edge-sonic/subsonic';

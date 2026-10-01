@@ -44,14 +44,6 @@ class UserDAO extends BaseDAO {
     return result.results ?? [];
   }
 
-  public async count(): Promise<number> {
-    const row = await this.withRetry(
-      async () => await this.database.prepare('SELECT COUNT(*) AS cnt FROM users').first<{ cnt: number }>(),
-      'users.count',
-    );
-    return row?.cnt ?? 0;
-  }
-
   public async create(input: {
     username: string;
     passwordCiphertext: string;
@@ -110,13 +102,6 @@ class UserDAO extends BaseDAO {
     await this.withRetry(
       async () => await this.database.prepare('UPDATE users SET is_enabled = ?, updated_at = ? WHERE id = ?').bind(isEnabled ? 1 : 0, nowSeconds(), id).run(),
       'users.setEnabled',
-    );
-  }
-
-  public async setAdmin(id: string, isAdmin: boolean): Promise<void> {
-    await this.withRetry(
-      async () => await this.database.prepare('UPDATE users SET is_admin = ?, updated_at = ? WHERE id = ?').bind(isAdmin ? 1 : 0, nowSeconds(), id).run(),
-      'users.setAdmin',
     );
   }
 
@@ -204,18 +189,6 @@ class LibraryDAO extends BaseDAO {
     return result.results ?? [];
   }
 
-  public async countForUser(userId: string): Promise<number> {
-    const row = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT COUNT(*) AS cnt FROM user_libraries WHERE user_id = ?')
-          .bind(userId)
-          .first<{ cnt: number }>(),
-      'libraries.countForUser',
-    );
-    return row?.cnt ?? 0;
-  }
-
   public async create(input: {
     slug: string;
     baseUrl: string;
@@ -288,13 +261,6 @@ class LibraryDAO extends BaseDAO {
           .bind(passwordCiphertext, passwordIv, keyVersion, nowSeconds(), id)
           .run(),
       'libraries.updatePassword',
-    );
-  }
-
-  public async setEnabled(id: string, isEnabled: boolean): Promise<void> {
-    await this.withRetry(
-      async () => await this.database.prepare('UPDATE libraries SET is_enabled = ?, updated_at = ? WHERE id = ?').bind(isEnabled ? 1 : 0, nowSeconds(), id).run(),
-      'libraries.setEnabled',
     );
   }
 

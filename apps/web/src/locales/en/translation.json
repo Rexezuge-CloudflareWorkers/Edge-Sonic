@@ -9,19 +9,11 @@
     "users": "Users",
     "operator": "Operator"
   },
-  "common": {
-    "loading": "Loading…"
-  },
   "errors": {
     "pageNotFound": "Page not found",
     "pageNotFoundDescription": "The page you requested does not exist.",
     "languageLoadFailed": "Unable to load language.",
     "languageSaveFailed": "Unable to save language."
-  },
-  "unauthorized": {
-    "title": "Access required",
-    "defaultMessage": "You must authenticate to access this page.",
-    "action": "Sign in with Cloudflare Access"
   },
   "libraries": {
     "title": "Music libraries",
@@ -41,6 +33,8 @@
     "edit": "Edit",
     "scan": "Scan",
     "scanStarted": "Scan started.",
+    "scanPausedRequests": "Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.",
+    "scanPausedDeadline": "Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.",
     "probed": "Probe finished.",
     "probedOk": "The origin answered.",
     "updated": "Library updated.",

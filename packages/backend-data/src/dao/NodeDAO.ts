@@ -45,18 +45,11 @@ interface NodeInput {
    * reconciled is written as `1` so it leaves the frontier.
    *
    * This flag *is* the incrementality mechanism, so it belongs in the write rather
-   * than in a follow-up `patch`: a node row is written once, correctly, instead of
-   * twice — and a second write is a second spend from a 5,000/day allowance.
+   * than in a follow-up `UPDATE`: a node row is written once, correctly, instead of
+   * twice — and a second write is a second spend from a 5,000/day allowance. It used to
+   * be also patchable through a `NodeDAO.patch` that nothing called, so the second
+   * spelling existed with no user.
    */
-  isScanned?: boolean;
-}
-
-/**
-Fields a caller wants to overwrite in place.
-*/
-interface NodePatch {
-  mtimeMs?: number | null;
-  etag?: string | null;
   isScanned?: boolean;
 }
 
@@ -153,85 +146,6 @@ class NodeDAO extends BaseDAO {
     return await this.runWriteBatch(statements, 'nodes.upsertMany');
   }
 
-  /**
-   * Apply a patch to one folder.
-   *
-   * A no-op patch still issues the statement, which is why callers compare
-   * before calling: an unchanged folder must cost zero writes. The decision
-   * belongs to the caller because it needs the previous value to decide.
-   */
-  public async patch(libraryId: string, path: string, patch: NodePatch): Promise<void> {
-    const assignments: string[] = [];
-    const values: unknown[] = [];
-    if (patch.mtimeMs !== undefined) {
-      assignments.push('mtime_ms = ?');
-      values.push(patch.mtimeMs);
-    }
-    if (patch.etag !== undefined) {
-      assignments.push('etag = ?');
-      values.push(patch.etag);
-    }
-    if (patch.isScanned !== undefined) {
-      assignments.push('is_scanned = ?');
-      values.push(patch.isScanned ? 1 : 0);
-    }
-    if (assignments.length === 0) return;
-    assignments.push('updated_at = ?');
-    values.push(nowSeconds(), libraryId, path);
-
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(`UPDATE nodes SET ${assignments.join(', ')} WHERE library_id = ? AND path = ?`)
-          .bind(...values)
-          .run(),
-      'nodes.patch',
-    );
-  }
-
-  /**
-   * Delete child rows whose paths are no longer present.
-   *
-   * Called only for a folder whose mtime moved, so the cost is proportional to what
-   * changed rather than to library size. This is what stops a folder deleted on the
-   * WebDAV side from haunting `search3` forever.
-   *
-   * ### The folder's own row is always kept
-   *
-   * That is not a special case, it is load-bearing. The library root's `path` and
-   * `parent_path` are **both** the empty string — there is no path above the root —
-   * so a query of the form `parent_path = ?` matches the root's own row. Without an
-   * explicit `path <> parentPath` guard, reconciling the root deletes the root, the
-   * next `startScan` probe finds nothing stored, and the library is re-walked in
-   * full on every scan forever. The symptom is a scan that answers correctly and
-   * silently never becomes incremental.
-   */
-  public async deleteChildrenNotIn(libraryId: string, parentPath: string, keepPaths: readonly string[]): Promise<number> {
-    const prefix = parentPath === '' ? '' : `${parentPath}/`;
-    const all = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT path FROM nodes WHERE library_id = ? AND parent_path = ?')
-          .bind(libraryId, parentPath)
-          .all<{ path: string }>(),
-      'nodes.deleteChildrenNotIn.list',
-    );
-    const keep = new Set(keepPaths);
-    const doomed = (all.results ?? [])
-      .map((row) => row.path)
-      // See the method note: for the library root, `path === parentPath`, and that
-      // row is the one being reconciled, not a child.
-      .filter((path) => path !== parentPath && !keep.has(path));
-    if (doomed.length === 0) return 0;
-
-    const statements = doomed.map((path) => this.database.prepare('DELETE FROM nodes WHERE library_id = ? AND path = ?').bind(libraryId, path));
-    // `prefix` is computed for the caller's benefit in tests; the delete itself is
-    // exact-match on the child's own path, never a LIKE.
-    void prefix;
-    await this.runWriteBatch(statements, 'nodes.deleteChildrenNotIn');
-    return doomed.length;
-  }
-
   public async deleteSubtree(libraryId: string, path: string): Promise<number> {
     // Exact children plus a LIKE for deeper descendants. The LIKE is escaped so
     // a folder literally named `100%` does not match everything.
@@ -261,6 +175,5 @@ class NodeDAO extends BaseDAO {
 
 }
 
-
 export { NodeDAO };
-export type { NodeInput, NodePatch };
+export type { NodeInput };

@@ -23,7 +23,8 @@ import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
-import { albumKeyOf,  annotationsFor, artistNameOf, groupAlbums } from './structured';
+import { annotationsFor, groupAlbums } from './structured';
+import { albumKeyOf, artistNameOf } from '../mappers';
 
 type EnvelopeResponse = ReturnType<typeof successResponse>;
 
@@ -142,7 +143,6 @@ async function search3(context: RestContext): Promise<EnvelopeResponse> {
 
 const searchEndpoints = { search, search2, search3 };
 
-export { searchEndpoints, search, search2, search3, readSpec, groupArtists };
+export { searchEndpoints, search, search2, search3 };
 
 
-export {albumNameOf} from './structured';

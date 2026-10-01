@@ -32,14 +32,6 @@ class BackendError extends Error {
   }
 }
 
-function getBackendErrorType(error: unknown): string | null {
-  return error instanceof BackendError ? error.errorType : null;
-}
-
-function getBackendErrorStatus(error: unknown): number | null {
-  return error instanceof BackendError ? error.status : null;
-}
-
 interface ErrorEnvelope {
   /**
   What the server sends. `BaseRoute.toErrorBody` and `toUserResponse` both produce it,
@@ -129,18 +121,9 @@ async function apiPatch<T>(path: string, body?: unknown): Promise<T> {
   return apiPost<T>(path, body, 'PATCH');
 }
 
-async function apiPut<T>(path: string, body?: unknown): Promise<T> {
-  return apiPost<T>(path, body, 'PUT');
-}
-
 async function apiDelete<T>(path: string): Promise<T> {
   return apiPost<T>(path, undefined, 'DELETE');
 }
 
-function unwrapList<T>(data: Record<string, T[] | undefined>, key: string): T[] {
-  return data[key] ?? [];
-}
-
-export { BackendError, getBackendErrorStatus, getBackendErrorType };
-export { apiGet, apiPost, apiPatch, apiPut, apiDelete, buildQuery, unwrapList };
-export { MAX_ERROR_LENGTH };
+export { BackendError };
+export { apiGet, apiPost, apiPatch, apiDelete, buildQuery };
