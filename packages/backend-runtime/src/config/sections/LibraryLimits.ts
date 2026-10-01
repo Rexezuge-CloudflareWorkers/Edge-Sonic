@@ -4,6 +4,7 @@ import {
   DEFAULT_AUTH_FAILURE_WINDOW_SECONDS,
   DEFAULT_MAX_LIBRARIES,
   DEFAULT_MAX_PAGE_SIZE,
+  MAX_PAGE_SIZE_CEILING,
   DEFAULT_PAGE_SIZE,
   DEFAULT_SCAN_CHUNK_DEADLINE_MS,
   DEFAULT_SCAN_CHUNK_FOLDERS,
@@ -106,9 +107,21 @@ class ScanLimits {
    * The default is one whole Ogg page plus its header — 255 segments of 255 bytes is the
    * largest a conforming page body can be — so a tail of this size is guaranteed to
    * contain the final page's header wherever the file's size puts it.
+   *
+   * ### `0` reaches this method, which is why it reads through `nonNegativeInt`
+   *
+   * It read through `positiveInt`, whose contract is `parsed > 0`. So `0` did not disable
+   * the tail read — it became `Number(DEFAULT_TAG_READ_TAIL_BYTES)`, and an operator who
+   * set it got a 64 KB ranged read per Ogg track for ever, with nothing saying the setting
+   * had been overridden by the very default it names. A documented configuration the
+   * parser cannot express is a comment rather than a setting.
+   *
+   * `EnvParser.nonNegativeInt` is the method that honours `>= 0`, and it had no callers
+   * anywhere — which is the fingerprint of the mistake: the helper this line needed
+   * existed, in the same layer, unused, while this line called the one beside it.
    */
   public getTagReadTailBytes(): number {
-    return EnvParser.positiveInt(this.env, 'TAG_READ_TAIL_BYTES', DEFAULT_TAG_READ_TAIL_BYTES);
+    return EnvParser.nonNegativeInt(this.env, 'TAG_READ_TAIL_BYTES', DEFAULT_TAG_READ_TAIL_BYTES);
   }
 
   /**
@@ -130,8 +143,23 @@ class RequestLimits {
 
   /**
   Protocol maximum. A client asking for more is clamped, not refused.
+  *
+  * Clamped to {@link MAX_PAGE_SIZE_CEILING} as well, and that second clamp is the one that
+  * matters. A page is not a budget the server spends and leaves the remainder of — it is a
+  * promise to *answer* — so an operator raising `MAX_PAGE_SIZE` past what one invocation can
+  * serve turns a slow request into a failed one, which is the "a limit the platform imposes
+  * is not a number the code may choose" defect this repository has already shipped once at
+  * the default. `validate()` reports the clamp so it is never silent.
   */
   public getMaxPageSize(): number {
+    return Math.min(EnvParser.positiveInt(this.env, 'MAX_PAGE_SIZE', DEFAULT_MAX_PAGE_SIZE), MAX_PAGE_SIZE_CEILING);
+  }
+
+  /**
+  The configured page size **before** the ceiling, so `validate()` can say what it clamped
+  rather than reporting a limit the operator never asked for.
+  */
+  public getRequestedMaxPageSize(): number {
     return EnvParser.positiveInt(this.env, 'MAX_PAGE_SIZE', DEFAULT_MAX_PAGE_SIZE);
   }
 

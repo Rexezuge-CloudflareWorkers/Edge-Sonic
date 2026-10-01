@@ -327,3 +327,68 @@ describe('through the real worker', () => {
     }
   });
 });
+
+describe('a budget read from the environment', () => {
+  it('is used by the limiter when the table says to resolve it per request', async () => {
+    // `STREAM_RATE_LIMIT` was declared, parsed, validated and shipped in the wrangler
+    // template — and read by nothing. The limiter used a literal, so `600` lived in three
+    // places and an operator setting `STREAM_RATE_LIMIT=50` got a clean validation pass, a
+    // deployment that reported itself configured, and an unchanged limiter.
+    //
+    // The budget cannot be read at registration: the route table is built once in the
+    // worker's constructor, where `env` does not exist. So `max` accepts a resolver, and
+    // this asserts the resolver's value is the one that decides the outcome — the whole
+    // point of a knob being a knob.
+    const app = new Hono<TestEnv>();
+    app.use('*', rateLimit({ ...OK, max: (c) => Number((c.env as unknown as Record<string, string>).BUDGET) }));
+    app.get('/probe', (c) => c.json({ ok: true }));
+
+    // Over budget: the second request is refused.
+    const overBudget = await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '1.1.1.1' } }), { BUDGET: '1' } as never, executionContext);
+    expect(overBudget.status).toBe(200);
+    expect((await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '1.1.1.1' } }), { BUDGET: '1' } as never, executionContext)).status).toBe(429);
+    resetRateLimitForTests();
+
+    // A different budget for the same route, on a fresh bucket. If the resolver were
+    // ignored in favour of a captured value this would still be 429.
+    const other = await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '2.2.2.2' } }), { BUDGET: '50' } as never, executionContext);
+    expect(other.status).toBe(200);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      expect((await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '2.2.2.2' } }), { BUDGET: '50' } as never, executionContext)).status).toBe(200);
+    }
+  });
+
+  it('refuses to enforce a budget it could not resolve, rather than enforcing nothing', async () => {
+    // `count >= NaN` is false, so a resolver that answered a non-integer would make the
+    // bucket **unlimited** — silently disabling the very control the variable configures,
+    // and doing it in the direction nobody notices.
+    //
+    // The response is the fail-open path: the limiter is documented never to fail a request,
+    // because a limiter that 500s takes down playback. What is *not* acceptable is the other
+    // silent answer, where the request succeeds because the bucket stopped counting.
+    const app = new Hono<TestEnv>();
+    app.use('*', rateLimit({ ...OK, max: () => NaN }));
+    app.get('/probe', (c) => c.json({ ok: true }));
+
+    // Every request is answered — no 500 — because the limiter fails open.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await hit(app, { 'CF-Connecting-IP': '3.3.3.3' })).status).toBe(200);
+    }
+    // And the pair: a resolver that *throws* is handled the same way rather than becoming
+    // an unbounded bucket. Asserted separately because a `throw` and a `NaN` reach the guard
+    // by different routes, and only one of them would be caught by a `Number.isSafeInteger`
+    // check written after the call.
+    const throwing = new Hono<TestEnv>();
+    throwing.use(
+      '*',
+      rateLimit({
+        ...OK,
+        max: () => {
+          throw new Error('resolver exploded');
+        },
+      }),
+    );
+    throwing.get('/probe', (c) => c.json({ ok: true }));
+    expect((await hit(throwing, { 'CF-Connecting-IP': '4.4.4.4' })).status).toBe(200);
+  });
+});

@@ -88,17 +88,52 @@ function cleanup(now: number): void {
  * Breaking: misconfigured `opts` (non-positive windowMs/max, empty keyPrefix)
  * now throw at registration time instead of silently installing an unlimited
  * or immediately-tripping bucket. All shipped `RATE_LIMIT_DEFS` are valid.
+ *
+ * ### `max` may be a resolver, and why that is the only honest shape
+ *
+ * A budget read from the environment cannot be resolved at registration time: the route
+ * table is built once in the constructor, where `env` does not exist, so a `STREAM_RATE_LIMIT`
+ * read there would be a module-level constant wearing a variable's name. That is how the
+ * variable came to be declared, validated, shipped in the template and read by nothing while
+ * the limiter used a literal — the knob was real and the code was not reading it.
+ *
+ * A resolver is evaluated per request from `c.env`, which is also the only place the value
+ * can differ from the module-level one. The static check below is skipped for a resolver,
+ * because a limiter that throws *while being installed* takes down every route it was
+ * attached to; an unusable answer is caught per request instead, by {@link resolveBudget}.
  */
+/**
+ * The budget to enforce for this request.
+ *
+ * A resolver that throws must not produce an *unlimited* bucket: `count >= NaN` is false,
+ * so a broken resolver silently turns the limiter **off** rather than off-by-a-lot — the
+ * direction nobody notices. So the call is guarded, and a throw propagates to the
+ * limiter's own fail-open path rather than to a bucket check that no longer bounds anything.
+ *
+ * The value is only ever what the resolver returned; deciding what an *unusable* value
+ * falls back to belongs to whoever supplied the resolver, because only they know the limit's
+ * own default. `rateLimitConfig` reads `STREAM_RATE_LIMIT` through `EnvParser`, which
+ * already fails soft to `def.max`.
+ */
+function resolveBudget(max: number | ((c: RateLimitContext) => number), c: RateLimitContext): number {
+  if (typeof max === 'number') return max;
+  const resolved = max(c);
+  if (!Number.isSafeInteger(resolved) || resolved <= 0) {
+    throw new Error(`Invalid rateLimit budget: ${String(resolved)} (must be a positive integer)`);
+  }
+  return resolved;
+}
+
 function rateLimit(opts: {
   windowMs: number;
-  max: number;
+  max: number | ((c: RateLimitContext) => number);
   keyPrefix: string;
   surface: 'rest' | 'user';
 }): (c: RateLimitContext, next: Next) => Promise<Response | void> {
   if (!Number.isSafeInteger(opts.windowMs) || opts.windowMs <= 0) {
     throw new Error(`Invalid rateLimit windowMs: ${String(opts.windowMs)} (must be a positive integer)`);
   }
-  if (!Number.isSafeInteger(opts.max) || opts.max <= 0) {
+  if (typeof opts.max === 'number' && (!Number.isSafeInteger(opts.max) || opts.max <= 0)) {
     throw new Error(`Invalid rateLimit max: ${String(opts.max)} (must be a positive integer)`);
   }
   if (!opts.keyPrefix || opts.keyPrefix.trim().length === 0) {
@@ -108,6 +143,11 @@ function rateLimit(opts: {
     try {
       const now = Date.now();
       cleanup(now);
+      // Resolved by a helper so the two unusable answers — a resolver that throws, and one
+      // that answers a non-positive-integer — are rejected in one place. This `try` then
+      // fails open with `await next()`, which is the documented behaviour for anything the
+      // limiter cannot do: a request must not fail because limiting could not size itself.
+      const max = resolveBudget(opts.max, c);
       // `AuthenticatedUserEmailAddress` is the resolved Cloudflare Access identity, so a
       // bucket is per operator rather than per address. It is only set when this
       // middleware runs *after* `userAuthentication`, which is why that ordering is
@@ -126,7 +166,7 @@ function rateLimit(opts: {
         await next();
         return;
       }
-      if (existing.count >= opts.max) {
+      if (existing.count >= max) {
         const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
         // One surface, one dialect — and this middleware installs on **both**.
         //
