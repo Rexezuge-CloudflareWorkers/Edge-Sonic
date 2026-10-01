@@ -71,10 +71,103 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   1,000 writes a day against 100,000 reads.
 - **5xx bodies are masked.** `toSubsonicError` logs the cause and returns a localized
   generic message; a D1 error names tables and columns.
-- **An absent value is a value.** An empty Subsonic list serializes as `[]`, and an
-  element's name is the JSON key its wrapper declares. A client doing
-  `response.starred2.song.map(...)` throws on an absent key and renders an empty screen
-  on `[]`.
+- **An empty list is an absent key, and a list of one is an array.** This **reverses**
+  an earlier rule here, and the reversal is the finding. The rule used to be that an empty
+  list serializes as `[]`, on the strength of a real incident: a client whose model is
+  `@SerialName("song") val songs: List<Song>` throws `MissingFieldException` on an absent
+  key and rendered an empty screen on `[]`. That reasoning was sound and the conclusion
+  was still wrong, because it fixed the symptom — the throw is a client that cannot
+  tolerate an absent optional field, and **every** field here is optional in the schema.
+  Emitting `[]` made this the only implementation answering differently from Navidrome,
+  which is the more expensive half of the trade: a client written against it works there
+  and fails here and nowhere else. Being right about the shape and wrong about the
+  ecosystem is not the same as being right. So the seeding is gone rather than
+  conditional — a child carrying the declared key already renders as an array, and a key
+  no child carries has no items to report. `array: true` is the exception and is
+  load-bearing: it is a bare list at a key rather than a record wrapping one, so
+  `getOpenSubsonicExtensions` must answer `[]` on the capability call. The two shapes are
+  asserted by a test each, because neither assertion survives the other's absence.
+- **An attribute the schema does not declare is not an error, and nothing here can see
+  one.** `AlbumID3` published `title` and `isDir`; `song.type` published `mediaType`'s
+  value. A lenient client drops an unknown attribute and a strict one ignores it, so the
+  suite stayed green through all three — and `type="song"` was a value outside `type`'s
+  own enumeration, in the one field every client filters on to decide what a row *is*, so
+  a player asking `type == "music"` saw an empty library. **The only instrument that
+  finds this class is a reference server**: the fact "this attribute is not in the schema"
+  exists in the schema, and the schema is not in this repository. `scripts/
+  compare-reference.ts` reads the same call off a configured reference and compares
+  attribute key sets; committed rather than run once, because a difference reported there
+  is a difference a client hits.
+- **Two spellings of one question are answered with different element types, and one
+  builder serving both is wrong on one of them.** `getAlbumList` answers `Array of Child`
+  and `getAlbumList2` answers `Array of AlbumID3`; `searchResult2`/`searchResult3` split
+  the same way. One `albumAttrs` published the union, so every album in `getAlbumList2`
+  carried two attributes its schema does not declare. **The test that would have caught
+  it could not**, because it asserted the two endpoints agree by reading `title` off one
+  and `name` off the other — so it passed *because* they disagreed, and could only hold
+  while each carried the field it was reading and neither carried the other's. So
+  `groupAlbums` returns models and the caller picks the builder, because the wrapper is
+  the only thing that knows which element type it is; and the parity assertion compares
+  something both endpoints actually publish.
+- **One grouping, or two answers to "which tracks are this album".** `listAlbums` grouped
+  in SQL on `(album_artist_ci, album_ci)` while the caller regrouped by `dir_path`, and
+  every symptom followed from the disagreement rather than from either being wrong alone:
+  `LIMIT 5` bounded five SQL groups so a page carried between one and five albums; a
+  directory with two `album_artist` values was one album to the caller and two groups to
+  the query, so paging split it; and the ordering was chosen three times — by the query,
+  by a re-sort leading with `album_artist_ci`, and by a grouping re-sorting by directory
+  path — so `type=alphabeticalByName` returned albums in folder order, which for folders
+  named `Artist - Album` is an order no client requested and none could predict. The
+  group is `dir_path`; the tags choose the **order** as aggregates over the group, and
+  `dir_path` is the final tiebreak, because without it a page boundary between two albums
+  that tie on every term returns one twice.
+- **A chunked fetch cannot inherit an `ORDER BY`, so the order is rebuilt from the key
+  list.** This is `listIdsIn`'s trick and `songsForAlbumDirs`' now, and the failure it
+  replaced is the same one the comparator caused: re-sorting by a tuple that leads with a
+  *different* column substitutes *alphabetical by artist* for whatever was asked. Assert
+  the **concatenation** of consecutive pages, not any one page's order — a re-sort leaves
+  every individual page looking plausible.
+- **"Not implemented" is four answers, and `code=70` was right for none of them.**
+  `getLyrics`, `getShares`, `getArtistInfo`, `getArtistInfo2`, `getTopSongs` and
+  `getInternetRadioStations` answered `code=70` while being endpoints a client calls
+  routinely — `getLyrics` on every track — so `code=70` said the server had *failed* where
+  the truth was that there is nothing to report. `EMPTY_RESULT` answers each with its own
+  wrapper and no items, after validating the request: an unresolvable `id` is `code=70`
+  and an absent required parameter is `code=10`, because "the lyrics of that song do not
+  exist" and "that song has no lyrics" look identical in a response and mean opposite
+  things. `UNIMPLEMENTED` carries a `kind`: `gone` → 410, `not-implemented` → 501,
+  `not-authorized` → `code=50`, `absent` → `code=70`. **A name in two registry tables is
+  routed by whichever was assigned last and reported by neither**, and five were when
+  `EMPTY_RESULT` was introduced because the overlap test existed and did not look there.
+- **The wrapper element's name is not the endpoint's name.** Six of the seven empty-result
+  wrappers differ — `getLyrics` answers `<lyrics>`, `getTopSongs` answers `<topSongs>` —
+  and naming one after its endpoint answers `200` with the payload under the wrong key,
+  which reads as "no data" rather than "wrong key". Both names are stated.
+- **An OpenSubsonic array whose wrapper and child are the same word is a bare array.**
+  `Child.artists` is `"artists": [{…}]`, not `{"artists":{"artist":[…]}}`: a Subsonic list
+  wrapper puts the value under the *child's* key (`albumList2.album`), and here the wrapper
+  and the child are the same word in two grammatical forms, so the array belongs at the
+  **wrapper's**. `elArray` exists for it and pairs with `array: true`, which collapses the
+  wrapper's single occurrence back to the array it already is. A client whose model is
+  `artists: List<Artist>` reads an object and throws — the same failure mode as an absent
+  key, and equally invisible from here.
+- **Advertising an extension is a claim, and a default is not an absence.** The spec asks a
+  server supporting a field to return it *with an empty default* so clients can detect
+  support, which makes `bitDepth: 0` the "correct" answer for a column that does not exist.
+  So the published set is drawn from two constraints — a client branches on it when
+  rendering, and the value already exists — and `bitDepth` is excluded because
+  `media-tags` extracts it and nothing stores it. `undefined` rather than a default for
+  anything unknown, so "not read yet" is distinguishable from "read, and the answer is
+  none"; `duration` cannot afford that, which is why the rule is not applied uniformly.
+- **The XML namespace is `http://`, and its absence is invisible here.** It shipped
+  missing entirely, and an undeclared namespace is still well-formed XML, so every parser
+  in this suite accepted the document and a lenient client ignores the attribute — while a
+  client that resolves element names *against* the namespace, which is what the protocol's
+  own schema tells it to do, finds no elements at all. The constant was also `https://`,
+  where the protocol published `http://`; a namespace is an identifier and not an address,
+  so "correcting" it is undetectable on every client that ignores it and fatal on the ones
+  that resolve against it. Declared on the **root element only** — in the serializer's root
+  handling, never in `attrs`, which would put it in the JSON too.
 - **A repeated child of a *record* element is a list too, and it is invisible at n≥2.**
   `elList` states the repeated child's name, and a **wrapper** always goes through it — so
   the empty case and the one-item case were both covered. A record element has no
