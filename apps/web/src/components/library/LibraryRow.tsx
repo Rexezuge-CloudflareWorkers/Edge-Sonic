@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from 'i18next';
 import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
-import { Button } from './ui/controls';
+import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
 import { LibraryForm } from './LibraryForm';
-import { Badge } from './ui/panels';
-import { libraryScanStatus, probeLibrary, startLibraryScan, stepLibraryScan } from '../services/libraryService';
-import type { LibraryDraft } from '../lib/libraryDraft';
-import { describeProbe, describeScan, describeStopReason } from '../lib/probe';
-import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../types';
+import { libraryScanStatus, probeLibrary, startLibraryScan, stepLibraryScan } from '../../services/libraryService';
+import type { LibraryDraft } from '../../lib/libraryDraft';
+import { describeProbe, describeScan, describeStopReason } from '../../lib/probe';
+import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../../types';
 
 /**
  * Run a row action, then let the view refresh.

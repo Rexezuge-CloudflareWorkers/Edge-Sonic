@@ -11,15 +11,16 @@ Access — it has no Subsonic credential and could not use one.
   `useNotice` hook slices, `AppHeader`/`NoticeBar`, then `SpaViewRouter`. No data
   fetching in the shell and none in the router either — each view owns its own
   loading.
-- `src/components/layout/SpaViewRouter.tsx` — the route switch (`/`, `/libraries`,
-  `/users`, `*` localized 404 `Card`). Props are the already-composed hook slices;
-  routes render speculatively because the views answer an unreachable API with an
-  empty list plus a notice.
-- `src/components/layout/` — `AppHeader` (always rendered; shows the session email
-  once `/me` answers, else the operator label), `AppPage` (`wide`/`narrow`/`hero`
-  container; `wide` is `max-w-5xl` for this surface, not the reference `max-w-7xl`),
-  `NoticeBar`, `Unauthorized` (exported for a future explicit gate; Access enforces
-  the surface at the edge, so no route gates on the session today).
+- `src/components/layout/` — `AppHeader` (global, with the nav shown only for a
+  session), `AppPage` (`wide`/`narrow`/`hero` container; `wide` is `max-w-5xl` for this
+  surface, not the reference `max-w-7xl`), `NoticeBar`, `PageState` (`LoadingSpinner` +
+  `EmptyState`), `Unauthorized`, `SpaViewRouter`.
+- `src/components/ui/` — one component per file (`Card`, `Button`, `Input`, `Badge`), so
+  a change to one cannot arrive in a diff that claims to be about another. A grab-bag
+  `panels.tsx`/`controls.tsx` was the previous shape and is not to be reintroduced.
+- `src/components/library/` — `LibraryForm` + `LibraryRow`, colocated by domain rather
+  than sitting at the root of `components/`.
+- `src/views/LandingView.tsx` — what a signed-out visitor sees at `/`.
 - `src/hooks/` — `useNotice` (`showNotice(type, text)` + `clearNotice` for the
   dismissible banner; timeout from `lib/constants`), `useCurrentUser`
   (inflight-deduped `GET /user/me`, `authorized` tri-state), `useSpaLanguage`
@@ -33,8 +34,101 @@ Access — it has no Subsonic credential and could not use one.
   `CurrentUser` and `Notice`), so existing `from '../types'` imports keep working.
 - `src/lib/locale.ts` — `normalizeLocale`/`resolveLocale` delegating to the single
   `i18n` canonicalizer (no duplicated logic).
-- `src/lib/probe.ts`, `src/lib/libraryDraft.ts` — the decisions, not the markup. See
-  below for why they are not in a component.
+- `src/lib/probe.ts`, `src/lib/libraryDraft.ts`, `src/lib/signInLoop.ts` — the decisions,
+  not the markup. See below for why they are not in a component.
+- `src/lib/constants.ts` — `NOTICE_TIMEOUT_MS` and `ZERO_TRUST_AUTHENTICATION_PATH`
+  (`/user/`, the path inside the Access application that the landing page navigates to).
+
+## Three files here were documented and did not exist
+
+`src/lib/locale.ts` (delegating `normalizeLocale`/`resolveLocale` to the single `i18n`
+canonicalizer), `unwrapList` in `src/lib/api.ts`, and `Unauthorized` in
+`components/layout/` were all listed in this file and absent from the tree. Found while
+adding a landing page, and fixed as part of it — but recorded here because the failure is
+worth naming: **a documentation list of files reads exactly like an inventory, and nothing
+distinguishes the two.** The two smaller claims are the same defect as
+`ENDPOINT_NAMES` in the parent index, where a registry nothing asserted turned out to be
+correct by luck.
+
+`lib/locale.ts` and `unwrapList` were **not** added — no call site wanted them, and an
+export with no callers is a second vocabulary to keep in sync. The claims were deleted
+rather than satisfied.
+
+## `authorized` is three states, and only one of them gates
+
+`useCurrentUser` returns a tri-state, and the router branches on all three:
+
+| `authorized` | `/` | `/libraries`, `/users` |
+| ------------ | --- | ----------------------- |
+| `null` (in flight) | full-page spinner | full-page spinner |
+| `false` (refused)  | `LandingView`      | `Unauthorized`          |
+| `true`             | `LibrariesView`    | the real view          |
+
+`null` is a spinner because rendering `LandingView` during the request flashes the
+signed-out page at every signed-in operator on every load.
+
+`false` gates because **the SPA shell is public**. `EdgeSonicWorker` serves `SPA_HTML` for
+`/`, `/libraries` and `/users` *above* `app.use('/user/*', userAuthentication())`, because
+a browser navigating to a client-side route sends no API call for the worker to
+authenticate. Without the gate, `LibrariesView` calls `/user/libraries`, takes the 401, and
+renders its documented **empty list plus a notice** — the honest-looking answer to "you
+have no libraries", from a caller who is not allowed to know whether any exist.
+
+The gate is a courtesy, not a control. `/user/*` is independently guarded, so nothing is
+readable by ignoring the component.
+
+**What the gate does not cover.** A 401 raised *after* this branch — an Access session
+expiring mid-use — still renders as an empty list plus a notice, because the views cannot
+classify it. Distinguishing it needs the API to say *why* it refused, which it will not do
+for an unauthenticated caller (see below). So the signed-out landing page is a correct
+answer to "no session" and an incomplete one to "a session I cannot use".
+
+## The header is global here, and root-only in the reference
+
+`../Git` renders `TopHeader` on `/` only, because every other route there renders a
+`ContextBar` instead. This surface has two **sibling** routes with no hierarchy between
+them, so a root-only header would leave `/libraries` with no way back — hence global, with
+the **nav links** gated on `authorized === true` instead.
+
+`signedIn === true` and not `userEmail !== null`, because those two differ in two
+directions and only one of them is a gate: while `/user/me` is in flight `userEmail` is
+`null`, so the email test would flash the nav off at a signed-in operator — harmless,
+since the router is covering those frames with a spinner anyway.
+
+## A sign-in that changed nothing
+
+`/user/` is inside the Cloudflare Access application, so navigating there starts the
+login. A deployment with **no Access application in front of it** therefore loops: `/`
+serves the landing page → Sign In → `/user/` redirects to `/` → `/user/me` answers 401 →
+the same page, with a button that was pressed and did nothing. Every click is a real
+navigation and every one lands on the same page, which is the only symptom.
+
+`lib/signInLoop.ts` detects the loop — an attempt recorded in `sessionStorage` and this
+page *still* anonymous — and `LandingView` renders a muted line naming `POLICY_AUD` and
+`TEAM_DOMAIN`. Muted and beside the button, not in the error tone: the button is still
+correct, and this is the same reasoning as a scan that stops at a subrequest bound being
+rendered muted rather than red.
+
+**The client cannot be told the cause, and must not ask.** `AccessAuthService` throws one
+`UnauthorizedError` for a missing session *and* for a `TEAM_DOMAIN`/`POLICY_AUD` typo,
+because the JWT strategy fails soft at `fromJwt` and the configuration cause is discarded
+before the single throw site. That collapse is deliberate — a detailed message tells an
+unauthenticated caller which part of their token they got right. Both reach the browser as
+`401 / Exception.Type === 'Unauthorized'`, so the page names the two variables to check
+rather than asserting which is wrong. The inference it *does* make is stronger than a guess
+about the cause: the loop was witnessed.
+
+`clearSignInAttempt` runs once `authorized === true`, so an operator signed out later by an
+expired cookie is an ordinary signed-out visitor rather than a page claiming the
+deployment is broken.
+
+**`/user/` is a route, not just a constant.** Access redirects back to whatever it
+interrupted, so a *successful* sign-in arrives at `/user/` and hits the worker. With no
+route registered it fell through to `notFound` and answered JSON `Exception{NotFound}` —
+the one screen in the product guaranteed to be reached by an operator who did exactly what
+the landing page asked. `EdgeSonicWorker` registers `app.get('/user/', (c) => c.redirect('/'))`,
+above `scopeMiddleware` and above `/user/*` authentication, and `test/worker.int.test.ts`
+pins it against being widened into something that shadows `/user/me`.
 - `src/i18n.ts` — i18next, English-only for now (`SUPPORTED_LANGUAGES` is `['en']`;
   `validate:locales` guards key/placeholder parity and bundle-dir parity when a
   second locale ships).
@@ -89,6 +183,27 @@ and `describeStopReason`. That file exists because the decisions below were wron
 inside a component, where a component with no test is a decision with no evidence. Put a
 decision in a pure function under `lib/` and it is testable from the root suite today; the
 coverage `include` list is a separate, deliberate decision.
+
+`test/web-landing.test.tsx` is the first **jsdom component** test here (`// @vitest-environment
+jsdom` pragma + Testing Library, both already devDependencies at the root). It drives
+`SpaViewRouter` through all three `authorized` states, and it exists because **no server
+test can see this branch**: every assertion in `user-auth.test.ts` and `worker.int.test.ts`
+is about `/user/*` refusing a caller, and not one involves what the browser renders after
+being refused. The 401 they assert *is* the 401 that reaches `LibrariesView`. So the entire
+gate could be deleted and the server suite would stay green, because `useCurrentUser`'s
+contract is only "set `authorized: false`" and whether anything reads it is invisible to
+every test that exists.
+
+It is written the way this repository requires: every guard is paired with a case that goes
+red when the guard is removed. Verified by mutation — deleting the `/user/` route, forcing
+`signedOut = false`, stubbing `hasPriorSignInAttempt` to `false`, and dropping the
+`rememberSignInAttempt()` call each turn tests red.
+
+One of those mutations is worth recording, because the **first** version of that test
+passed against a broken guard: it seeded `sessionStorage` before clicking and then asserted
+the flag was set, so it was reading back its own setup. It now starts from an empty store
+and is paired with a case that asserts the hint is *absent* on the page that requests the
+sign-in — a guard that reads back its own arrangement is not a guard.
 
 **There is no lint rule that catches a missing cancellation guard.** This file claimed one
 was on. `eslint.config.mjs` applies `react-hooks.configs['recommended-latest']`, which is
