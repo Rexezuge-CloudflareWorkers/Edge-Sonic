@@ -14,20 +14,16 @@
  * ids are derived from `dir_path` and never from the album name: the name is
  * precisely the part that is allowed to change.
  */
-import { albumElement, albumWithSongs, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { albumElement, albumWithSongs, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 import type { AnnotationLookup } from '../mappers';
 import { albumKeyOf, albumNameOf, artistIndexGroups, artistNameOf, groupArtistRows, songToModel, toIso } from '../mappers';
 import { resolveLibrary } from './libraries';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 /**
  * This user's annotations, for the ids about to be rendered.

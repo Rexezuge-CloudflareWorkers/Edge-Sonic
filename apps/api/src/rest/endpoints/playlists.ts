@@ -13,22 +13,15 @@
  * multiple `songIndexToRemove` parameters. So the DAO removes **highest index
  * first**, which makes the result identical regardless of the order received.
  */
-import { elList, ErrorCode, playlistElement, songElement, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { elList, ErrorCode, playlistElement, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
+import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { PlaylistRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
-import { songToModel } from '../mappers';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
+import { songToModel, toIso } from '../mappers';
 import { annotationsFor } from './structured';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
-
-function isoOrUndefined(epochSeconds: number): string | undefined {
-  return epochSeconds > 0 ? new Date(epochSeconds * 1000).toISOString() : undefined;
-}
 
 function toPlaylistModel(playlist: PlaylistRow, ownerUsername: string) {
   return {
@@ -39,8 +32,8 @@ function toPlaylistModel(playlist: PlaylistRow, ownerUsername: string) {
     isPublic: playlist.is_public === 1,
     songCount: playlist.song_count,
     duration: playlist.duration,
-    created: isoOrUndefined(playlist.created_at),
-    changed: isoOrUndefined(playlist.updated_at),
+    created: toIso(playlist.created_at),
+    changed: toIso(playlist.updated_at),
   };
 }
 
@@ -68,14 +61,56 @@ function requireOwner(context: RestContext, playlist: PlaylistRow): void {
   }
 }
 
+/**
+ * A playlist element, with its **owner's** name.
+ *
+ * `owner` is a name, so it cannot be the caller's by default. `requireVisible`
+ * deliberately lets one user read another's public playlist, so publishing
+ * `context.username` here reported the *reader* as the owner of a list they had merely been
+ * allowed to see — and a client editing that playlist would have written to the wrong
+ * user's library.
+ *
+ * One batched lookup for the whole list rather than one per row: a playlist grid is one
+ * request, and an N+1 inside it is unbounded work in a request that has no subrequest
+ * ceiling of its own to stop it.
+ */
+async function playlistElements(context: RestContext, playlists: readonly PlaylistRow[]): Promise<ElementNode[]> {
+  const owners = await context.playlists.ownerNamesFor(playlists);
+  return playlists.map((playlist) => playlistElement(toPlaylistModel(playlist, owners.get(playlist.owner_user_id) ?? context.username)));
+}
+
 async function getPlaylists(context: RestContext): Promise<EnvelopeResponse> {
   const requested = context.params.get('username');
-  // Asking for another user's playlists requires the admin role, per the spec.
-  if (requested !== undefined && requested.toLowerCase() !== context.username.toLowerCase() && context.user.is_admin !== 1) {
+  // The protocol parameter is "returns all playlists for a user", so it is honoured rather
+  // than merely **authorized** and dropped. It used to be checked and then ignored:
+  // `listVisible(context.user.id)` answered the caller's own playlists plus every public
+  // one, so an admin who asked for another user's playlists received their own back and no
+  // indication that the parameter had been read.
+  const target = requested ?? context.username;
+  const isSelf = target.toLowerCase() === context.username.toLowerCase();
+  if (!isSelf && context.user.is_admin !== 1) {
     throw new SubsonicError(ErrorCode.NotAuthorized, "Only an admin may list another user's playlists.");
   }
-  const playlists = await context.playlists.listVisible(context.user.id);
-  return respond(context, elList('playlists', 'playlist', {}, playlists.map((playlist) => playlistElement(toPlaylistModel(playlist, context.username)))));
+
+  const playlists = isSelf
+    ? await context.playlists.listVisible(context.user.id)
+    // A named user's own playlists, and **not** the public ones: `username` asks for one
+    // user's playlists, so mixing in every public playlist from every user is a different
+            // answer and would make an admin's list grow with the library.
+    : await context.playlists.listForOwner(await ownerIdFor(context, target));
+  return respond(context, elList('playlists', 'playlist', {}, await playlistElements(context, playlists)));
+}
+
+/**
+ * The user id for a username, or `code=70`.
+ *
+ * `code=70` rather than `code=50` for the same reason `requireVisible` uses it: the id
+ * space must not become an oracle for which usernames exist.
+ */
+async function ownerIdFor(context: RestContext, username: string): Promise<string> {
+  const user = await context.users.findByUsername(username);
+  if (!user) throw new SubsonicError(ErrorCode.NotFound, `No such user: ${username}.`);
+  return user.id;
 }
 
 /**
@@ -95,11 +130,18 @@ async function getPlaylists(context: RestContext): Promise<EnvelopeResponse> {
  * succeeded — the client gets a failure for a playlist that was actually written.
  */
 async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow): Promise<EnvelopeResponse> {
-  const library = await resolvePlaylistLibrary(context);
-  if (library === null) throw new SubsonicError(ErrorCode.NotFound, 'No library is available for this playlist.');
+  // Every granted library, not `libraries[0]`. A playlist is a **per-user** row whose
+  // entries came from whatever libraries that user was granted, so narrowing to one
+  // silently dropped every entry from the others: no error, a shorter list, and a playlist
+  // that lost songs. `getBookmarks` iterates all libraries and disagreed with both this and
+  // `getPlayQueue`.
+  const libraries = await context.libraries.listForUser(context.user.id);
+  if (libraries.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'No library is available for this playlist.');
+  const visible = new Map(libraries.map((library) => [library.id, library]));
 
-  const joined = await context.playlists.listEntrySongs(playlist.id);
-  const rows = joined.filter((song) => song.library_id === library.id);
+  // An entry whose library the owner has since lost the grant to is dropped rather than
+  // reported: the playlist is visible, the song outside the caller's grants is not.
+  const rows = (await context.playlists.listEntrySongs(playlist.id)).filter((song) => visible.has(song.library_id));
   const annotations = await annotationsFor(context, rows.length > 0);
 
   // The protocol names a playlist's songs `entry`, not `song`. Both spellings appear
@@ -108,11 +150,16 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
   // `playlist.song`, and a client reading `playlist.song` on a one-entry playlist gets
   // an object rather than an array. So the element is renamed here rather than
   // duplicating the whole song attribute set in `builders.ts`.
+  const [element] = await playlistElements(context, [playlist]);
   return respond(
     context,
     {
-      ...playlistElement(toPlaylistModel(playlist, context.username)),
-      children: rows.map((song) => ({ ...songElement(songToModel(song, library, annotations)), name: 'entry', array: true as const })),
+      ...element,
+      children: rows.map((song) => ({
+        ...songElement(songToModel(song, visible.get(song.library_id) as LibraryRow, annotations)),
+        name: 'entry',
+        array: true as const,
+      })),
       listKey: 'entry',
     },
   );
@@ -123,31 +170,44 @@ async function getPlaylist(context: RestContext): Promise<EnvelopeResponse> {
   return await respondWithPlaylist(context, await requireVisible(context, id));
 }
 
-async function resolvePlaylistLibrary(context: RestContext) {
-  const libraries = await context.libraries.listForUser(context.user.id);
-  return libraries.length > 0 ? libraries[0] : null;
-}
 
 /**
-Resolve the song ids a client asked for, filtered to the caller's library.
-*/
+ * The song ids a client asked for, filtered to the caller's grants, in the client's order.
+ *
+ * Across **every** granted library. This resolved `libraries[0]` and looked there, so with
+ * two grants the songs in the second were treated as not found: `createPlaylist` wrote a
+ * playlist missing half its tracks, and `updatePlaylist` dropped them. Silent — the call
+ * succeeded and the id list came back shorter.
+ *
+ * The client's order is preserved by filtering *their* list rather than the DAO's: `IN
+ * (...)` does not promise result order, and a playlist whose sequence is reshuffled is
+ * worse than no playlist.
+ */
 async function resolveSongIds(context: RestContext, ids: readonly string[]): Promise<string[]> {
   if (ids.length === 0) return [];
-  const library = await resolvePlaylistLibrary(context);
-  if (library === null) return [];
-  const rows = await context.songs.listIdsIn(library.id, ids);
-  const found = new Set(rows.map((row) => row.id));
-  // Preserve the client's order. `listIdsIn` batches with `IN (...)` and SQLite
-  // does not promise result order, so filtering the caller's list is what keeps
-  // a playlist's sequence intact.
+  const visible = await grantedLibraryIds(context);
+  if (visible.size === 0) return [];
+  const rows = await context.songs.listIdsAcrossLibraries(ids);
+  const found = new Set(rows.filter((row) => visible.has(row.library_id)).map((row) => row.id));
   return ids.filter((songId) => found.has(songId));
 }
 
+/**
+ * The caller's granted library ids.
+ *
+ * An id for a library outside this set resolves to nothing, which is the authorization
+ * rule every playlist path needs and the reason the lookup cannot be a plain `IN`.
+ */
+async function grantedLibraryIds(context: RestContext): Promise<Set<string>> {
+  return new Set((await context.libraries.listForUser(context.user.id)).map((library) => library.id));
+}
+
 async function totalDurationOf(context: RestContext, ids: readonly string[]): Promise<number> {
-  const library = await resolvePlaylistLibrary(context);
-  if (library === null) return 0;
-  const rows = await context.songs.listIdsIn(library.id, ids);
-  return rows.reduce((total, row) => total + row.duration, 0);
+  if (ids.length === 0) return 0;
+  const visible = await grantedLibraryIds(context);
+  if (visible.size === 0) return 0;
+  const rows = await context.songs.listIdsAcrossLibraries(ids);
+  return rows.filter((row) => visible.has(row.library_id)).reduce((total, row) => total + row.duration, 0);
 }
 
 /**

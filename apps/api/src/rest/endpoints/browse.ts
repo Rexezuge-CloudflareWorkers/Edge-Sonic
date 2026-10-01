@@ -9,19 +9,15 @@
  * cannot find an album because the index is stale can still walk to it, so the
  * folder view is the safety net for the tag view rather than a legacy path.
  */
-import { childElement, decodeId, el, elList, encodeId, IdKind, successResponse } from '@edge-sonic/subsonic';
+import { childElement, decodeId, el, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 import { artistIndexGroups, groupArtistRows, toIso, songToChild } from '../mappers';
 import { libraryName, resolveLibrary } from './libraries';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext, payload: ElementNode | null): EnvelopeResponse {
-  return successResponse(payload, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
 
 function baseName(path: string): string {
   const slash = path.lastIndexOf('/');

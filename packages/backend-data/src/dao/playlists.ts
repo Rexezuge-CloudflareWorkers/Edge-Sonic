@@ -18,6 +18,8 @@
  */
 import { UUIDUtil } from '@edge-sonic/shared/utils';
 import { BaseDAO } from './BaseDAO';
+import { chunkArray } from './chunking';
+import { bindChunkSize } from './sqlLimits';
 import { nowSeconds } from './identity';
 import type { PlaylistEntryRow, PlaylistRow, SongRow } from './rows';
 
@@ -45,6 +47,63 @@ class PlaylistDAO extends BaseDAO {
       'playlists.listVisible',
     );
     return result.results ?? [];
+  }
+
+  /**
+   * One user's own playlists, public ones excluded.
+   *
+   * A second reading, not a variant of {@link listVisible}. That one answers "what can I
+   * see", which is `mine OR public` — and the protocol's `username` parameter asks "whose
+   * are these", which is only the first half. Using it for the parameter meant an admin
+   * asking for another user's playlists received their own plus every public playlist in the
+   * server: an answer that grows with the library and is not the one that was asked for.
+   *
+   * `LOWER(username_ci) = LOWER(?)` would be the readable form and is **wrong** here: it
+   * lowercases the column, which cannot use the index, so the authenticated hot path
+   * becomes a table scan. The parameter is lowercased and bound against the stored
+   * `username_ci`, which every writer maintains.
+   */
+  public async listForOwner(ownerUserId: string): Promise<PlaylistRow[]> {
+    const result = await this.withRetry(
+      async () =>
+        await this.database
+          .prepare('SELECT * FROM playlists WHERE owner_user_id = ? ORDER BY name ASC')
+          .bind(ownerUserId)
+          .all<PlaylistRow>(),
+      'playlists.listForOwner',
+    );
+    return result.results ?? [];
+  }
+
+  /**
+   * The display name of a playlist's owner, or `null` when the row's user is gone.
+   *
+   * `playlists.owner` is a **name**, and publishing the caller's own name in its place is
+   * what `requireVisible` used to permit: it deliberately lets one user read another's
+   * public playlist, so `getPlaylist` on one reported `owner: <the reader>`. The row carries
+   * `owner_user_id`; this resolves it. A LEFT JOIN rather than a second query per playlist,
+   * because a grid of playlist rows is one request and an N+1 here is unbounded work in it.
+   */
+  public async ownerNamesFor(playlists: readonly PlaylistRow[]): Promise<Map<string, string>> {
+    const ids = [...new Set(playlists.map((playlist) => playlist.owner_user_id))];
+    if (ids.length === 0) return new Map();
+    // Batched rather than one `IN` per row, and re-indexed by id rather than by position:
+    // an `IN` list returns rows in index-scan order, so a caller that trusted the order
+    // would attribute playlists to the wrong users.
+    const names = new Map<string, string>();
+    for (const chunk of chunkArray(ids, bindChunkSize(1, 0))) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const result = await this.withRetry(
+        async () =>
+          await this.database
+            .prepare(`SELECT id, username FROM users WHERE id IN (${placeholders})`)
+            .bind(...chunk)
+            .all<{ id: string; username: string }>(),
+        'playlists.ownerNamesFor',
+      );
+      for (const row of result.results ?? []) names.set(row.id, row.username);
+    }
+    return names;
   }
 
   public async listEntries(playlistId: string): Promise<PlaylistEntryRow[]> {

@@ -51,7 +51,7 @@
  * is on some files and not others, so one track is not enough; a compilation with
  * none of them is not worth more than three reads to discover.
  */
-import { findPicture, id3TagSize, materializePicture, sniffImageType } from '@edge-sonic/media-tags';
+import { findPicture, id3TagSize, materializePicture, READER_VERSION, sniffImageType } from '@edge-sonic/media-tags';
 import type { EmbeddedPicture, PictureSource } from '@edge-sonic/media-tags';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
@@ -194,11 +194,28 @@ async function pictureFromFile(client: WebDavClient, source: ArtSource, timeoutM
  * "no art" marker under the album's path would survive a re-tag that added a picture to
  * track 1, and the album would show no artwork until the entry aged out 30 days later.
  * Putting the probed tracks' revisions in the key makes that entry structurally
- * unreachable the moment any of them changes — the `reader_version` rule, one level up.
+ * unreachable the moment any of them changes.
+ *
+ * ### And on `READER_VERSION`, which is the other half
+ *
+ * A row's `enriched_at` plus `songs.reader_version` is what lets a **corrected reader**
+ * reach a row an older one wrote: the file genuinely has not moved, so keying only on the
+ * file's bytes makes the wrong value permanently current. This module's key had only the
+ * bytes.
+ *
+ * So a deploy carrying a fixed `flacPicture` offset, a corrected `id3Picture` terminator
+ * or a fixed `oggPicture` lacing assumption left every already-cached cover structurally
+ * reachable **with its old bytes**, and the "this album has no artwork" marker — which is
+ * written by the same path and lives for 30 days — survived it too. That is
+ * `reader_version` one level down, in the one place the module's own header cited the rule
+ * and did not apply it.
+ *
+ * `READER_VERSION` is bumped whenever a change makes a prior extraction wrong, so the
+ * entries written under the old one become unreachable rather than left to be detected.
  */
 function artKey(library: LibraryRow, dirPath: string, sources: readonly ArtSource[]): string[] {
   const revision = sources.map((source) => `${source.mtimeMs}x${source.size}`).join('.');
-  return [library.id, dirPath, revision];
+  return [library.id, dirPath, `v${READER_VERSION}`, revision];
 }
 
 /**

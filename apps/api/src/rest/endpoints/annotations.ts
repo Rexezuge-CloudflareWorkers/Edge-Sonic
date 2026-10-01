@@ -5,14 +5,10 @@
  * same three id parameters (`id`, `albumId`, `artistId`) because the protocol
  * reuses the same shape across them.
  */
-import { decodeId, ErrorCode, IdKind, SubsonicError, successResponse } from '@edge-sonic/subsonic';
+import { decodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
 import type { RestContext } from '../context';
-
-type EnvelopeResponse = ReturnType<typeof successResponse>;
-
-function respond(context: RestContext): EnvelopeResponse {
-  return successResponse(null, { format: context.format, jsonpCallback: context.jsonpCallback });
-}
+import { respond } from '../respond';
+import type { EnvelopeResponse } from '../respond';
 
 /**
  * The `(param, type)` pairs the protocol accepts for an annotation call.

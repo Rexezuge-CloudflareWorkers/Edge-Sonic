@@ -55,6 +55,47 @@ class SongIdLookupDAO extends BaseDAO {
    * tell which two are gone, and a placeholder row in their place would be a track the user
    * never queued.
    */
+  /**
+   * Songs by id, across **every** library the ids can belong to.
+   *
+   * A second reading, not a variant of {@link listIdsIn}. That one is library-scoped
+   * because almost every caller has already resolved a single library and wants a track
+   * outside it to be absent — an id from a library the caller cannot see must not resolve.
+   *
+   * Two callers cannot make that narrowing: the play queue and a playlist's entries are
+   * both *per-user* records holding ids from whatever libraries that user was granted.
+   * They resolved `libraries[0]` and filtered, so with two granted libraries every entry
+   * from the second one silently vanished — no error, a shorter list, and a playlist that
+   * lost songs. `getBookmarks`, which iterates all libraries, disagreed with both.
+   *
+   * Safe because the caller has already authorized each id: `savePlayQueue` and
+   * `createBookmark` await `requireForUser` per id before writing, and a playlist's entries
+   * were authorized when they were added. This method therefore widens the *lookup*, not
+   * the *permission*.
+   */
+  public async listIdsAcrossLibraries(ids: readonly string[]): Promise<SongRow[]> {
+    if (ids.length === 0) return [];
+    const found = new Map<string, SongRow>();
+    for (const chunk of chunkArray(ids, IDS_PER_STATEMENT)) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const result = await this.withRetry(
+        async () =>
+          await this.database
+            .prepare(`SELECT * FROM songs WHERE id IN (${placeholders})`)
+            .bind(...chunk)
+            .all<SongRow>(),
+        'songs.listIdsAcrossLibraries',
+      );
+      for (const row of result.results ?? []) found.set(row.id, row);
+    }
+    // Re-sorted to the caller's order, because an `IN` list returns rows in index-scan
+    // order and a play queue that reshuffles between polls is worse than no play queue.
+    return ids.flatMap((id) => {
+      const row = found.get(id);
+      return row === undefined ? [] : [row];
+    });
+  }
+
   public async listIdsIn(libraryId: string, ids: readonly string[]): Promise<SongRow[]> {
     if (ids.length === 0) return [];
 
