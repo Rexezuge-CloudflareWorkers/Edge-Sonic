@@ -55,6 +55,7 @@
     "scanStarted": "Scan started.",
     "scanNever": "Not scanned yet.",
     "scanIdle": "Up to date.",
+    "scanEmpty": "Scan finished with nothing indexed. Check the library root path, then rescan.",
     "scanScanning": "Scanning.",
     "scanFailed": "Retrying after an error.",
     "scanStalled": "Stopped retrying. Fix the cause, then rescan.",

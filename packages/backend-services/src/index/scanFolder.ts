@@ -22,14 +22,17 @@ import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
 /**
  * Reconcile one folder's listing: write what changed, prune what vanished.
  *
- * Two decisions per child:
+ * Two decisions per child, and they are **not the same question**:
  *
- * - **a collection whose mtime matches its stored value is written with
- *   `is_scanned = 1`**, so the scan never opens it. This is what makes a
- *   one-album change cost one request instead of one per folder.
- * - **a file is written only when its size or mtime moved.** `upsertFileFacts`
- *   deliberately leaves derived metadata alone, so a redundant write would spend
- *   a row to rewrite values that are already correct.
+ * - **Does this node row need rewriting?** Answered by the child's own mtime and
+ *   etag. `upsertFileFacts` deliberately leaves derived metadata alone, so a
+ *   redundant write would spend a row to rewrite values that are already correct.
+ * - **Does this folder need descending into?** Answered by `is_scanned` *as well
+ *   as* by the mtime — see `needsDescent` below, which is where this file's one
+ *   real defect lived.
+ *
+ * The second is what makes a one-album change cost one request instead of one per
+ * folder, so it has to be right rather than merely cheap.
  */
 async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: NodeRow, resources: readonly DavResource[], budget: ScanBudget): Promise<number> {
   // The folder's own entry, straight from this listing. Its mtime is the *fresh*
@@ -58,6 +61,29 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
     const etagMoved = known !== undefined && resource.etag !== null && known.etag !== null && known.etag !== resource.etag;
     const changed = mtimeMoved || etagMoved;
 
+    // ### `is_scanned` has two writers and one key
+    //
+    // `nodes` is written by the scan *and* by `TreeService`'s read-through browse, which
+    // materialises a folder listing on a client's first visit. Both write `mtime_ms`
+    // from the same `Depth: 1` PROPFIND, so **a matching mtime cannot say which of them
+    // wrote it** — and the two mean opposite things. The scan wrote it *after descending
+    // into that folder*; the browse wrote it having read nothing at all below it.
+    //
+    // Reading `!changed` as "already reconciled" therefore closed folders the scan had
+    // never opened. It shipped: 80 album folders, all `is_scanned = 1`, none of them ever
+    // listed, `songs` empty, `scan_state` `idle` — and "Up to date. 0 tracks indexed",
+    // because `settle` found an empty frontier and called it finished.
+    //
+    // So `is_scanned` is an **input** to this decision and not only its output, and it is
+    // the only one of the two that says "someone actually descended". The browse path
+    // writes `0` (`isScanned` is optional and `undefined` binds to `0`), so `0` and
+    // "absent" both mean *not reconciled* and both descend.
+    //
+    // This is the `reader_version` invariant one level up: a row's meaning is a function
+    // of the bytes *and* of what read them, and keying on only one makes the other
+    // unreachable.
+    const needsDescent = resource.isCollection && (known?.is_scanned !== 1 || mtimeMoved || etagMoved);
+
     nodeInputs.push({
       libraryId: library.id,
       path,
@@ -66,8 +92,8 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
       mtimeMs: resource.lastModifiedMs,
       etag: resource.etag,
       depth: path.split('/').length,
-      // A new or moved folder must be opened; an unmoved one must not.
-      isScanned: resource.isCollection ? !changed : true,
+      // A new or moved folder must be opened; an unreconciled one must be too.
+      isScanned: !needsDescent,
     });
 
     // Non-audio files are still nodes — they show in a folder listing — but never
@@ -87,6 +113,39 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
         suffix: suffixOf(name),
       });
     }
+  }
+
+  // ### A listing that placed nothing is not a listing that found nothing
+  //
+  // Everything above `continue`s on `path === null`, which is `toLibraryPath` refusing a
+  // path that is not under the library root. If that fires for *every* href, the root
+  // path and the server's href shape disagree — RFC 4918 §8.3 lets a server anchor
+  // `DAV:href` differently, and one configuration (`href_prefix_mode` on a bucket-per-
+  // volume origin) answers `207` perfectly while placing none of it.
+  //
+  // Left alone, that empties `childPaths` and `songPaths`, so the prune below concludes
+  // every existing child **vanished** and deletes the library — recursively, on both
+  // planes — then reports `idle`. "We could not place these paths" and "the operator
+  // deleted their music" were the same observation.
+  //
+  // So it throws, before a single row is written: the folder stays on the frontier, the
+  // prune never runs, and `ScanService.step`'s catch records the reason against the
+  // retry budget. Bounded to `MAX_CONSECUTIVE_FAILURES` failures, so a library nobody can
+  // fix lands on `stalled` — whose label already names the remedy — rather than looping.
+  //
+  // Counted over the entries that are **not the folder's own**, because a `Depth: 1`
+  // listing of an empty folder contains exactly one entry — itself — and that is a folder
+  // with nothing in it, not a folder we failed to read. Without the exclusion this guard
+  // fires on every empty leaf directory, which is most of them.
+  const selfEntries = resources.filter((resource) => toLibraryPath(resource.path, library.root_path) === folder.path).length;
+  const foreignEntries = resources.length - selfEntries;
+
+  if (foreignEntries > 0 && childPaths.length === 0) {
+    throw new Error(
+      `The WebDAV server listed ${foreignEntries} entries under "${folder.path || '/'}" but none could be ` +
+        'matched to the configured library root path, so nothing could be indexed and nothing was pruned. ' +
+        'Check that the root path is the prefix the server puts in its DAV:href values.',
+    );
   }
 
   let writes = 0;

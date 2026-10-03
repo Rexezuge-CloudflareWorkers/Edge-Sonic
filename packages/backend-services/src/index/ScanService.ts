@@ -136,7 +136,29 @@ class ScanService {
     // A completed scan whose root mtime still matches means nothing below it
     // moved. This comparison against the *stored* value is the entire reason a
     // rescan is free.
-    if (state.status === 'idle' && state.scanned_count > 0 && rootMtime !== null && stored?.mtime_ms === rootMtime) {
+    //
+    // ### The floor, and why "completed" is not enough on its own
+    //
+    // The stored mtime is written by two callers — the scan and `TreeService`'s
+    // read-through browse — so a match says *something* listed this root, not that
+    // anything below it was ever read. Worse, a scan that indexed nothing is
+    // indistinguishable here from a scan that finished: `scanned_count` counts
+    // folders *visited*, and a walk that visited the root and closed every child
+    // unread has `scanned_count = 1`.
+    //
+    // That combination is what made a broken library permanent rather than merely
+    // wrong. Once `complete()` recorded `idle` with a matching root mtime, this
+    // branch fired on every later `startScan` and the library could never be
+    // re-walked — the only escapes were the origin's root mtime moving or the
+    // library being deleted, which cascades the whole index away.
+    //
+    // So the short-circuit also requires that the library has tracks. One indexed
+    // read on `startScan` only — not on any chunk — and it is what makes the cheap
+    // path *safe to be wrong about*: an empty result re-walks rather than reporting
+    // a library it has no evidence is current.
+    const indexedTracks = state.status === 'idle' && state.scanned_count > 0 ? await this.deps.songs.countByLibrary(library.id) : 0;
+
+    if (state.status === 'idle' && state.scanned_count > 0 && indexedTracks > 0 && rootMtime !== null && stored?.mtime_ms === rootMtime) {
       return {
         status: 'idle',
         scanned: state.scanned_count,

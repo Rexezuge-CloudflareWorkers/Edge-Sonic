@@ -333,6 +333,25 @@ effect was overwriting `stoppedBy` with `null`.
 and the page had no way to know that polling had nothing left to buy. It is also the one status
 whose remedy is the operator's action, which is why its label names it.
 
+## `never` is not enough, and a zero count beside "up to date" is the claim that hid it
+
+`scan === null` was separated from `idle` so a never-scanned library would not render as a
+finished one. That left the **other** half uncovered, and it is the half that shipped: a
+library whose scan *finished* and indexed **zero** tracks. `songCount` is `0`, the status is
+`idle`, and the row rendered a success-toned "Up to date." next to "0 tracks indexed" — two
+claims on screen, contradicting, and the badge won. `test/scan-progress.test.ts` asserted
+`idle` + `2` and had no `idle` + `0` case, so the one untrue thing on the page could not fail
+a test.
+
+`describeScanState` now has an `empty` case: an error tone, a remedy in the label, an
+`error` notice, and `detail: null` — because rendering the count under a label denying there
+is any hands the number to the badge it contradicts.
+
+**It is gated on `idle && songCount === 0`, not on `songCount === 0`.** Zero tracks is the
+*expected* state of a library for the whole length of a first scan, and a guard written the
+second way paints every cold scan as a failure. The `it.each` over `scanning`/`failed`/
+`stalled` is there so that over-correction is caught too.
+
 ## A fallback string is a claim about who is looking
 
 The header's identity chip was `userEmail ?? 'Operator'`, so **every signed-out visitor saw the

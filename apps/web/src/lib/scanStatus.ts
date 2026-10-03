@@ -42,15 +42,25 @@ function isAdvancingStatus(status: ScanStatus | null | undefined): boolean {
 type ScanTone = 'neutral' | 'success' | 'warning' | 'error' | 'info';
 
 /**
- * The five sentences an operator can be shown about a library's index.
+ * The six sentences an operator can be shown about a library's index.
  *
  * `never` is not a tone but a state: a library that has never been scanned is the one case
  * where the operator has an action to take, and it is a different answer from every status —
  * not a variant of `idle`, which means the scan finished and found nothing to do.
+ *
+ * `empty` is the same kind of correction, and it exists because `never` alone was not
+ * enough. A library *has* a scan state, the scan *finished*, and it indexed zero tracks —
+ * and `idle` rendered that as a success-toned "Up to date." beside "0 tracks indexed". Both
+ * halves were on screen and they contradicted each other, and the badge won.
+ *
+ * That is not cosmetic. It shipped: 80 album folders on the origin, zero of them indexed,
+ * `scan_state` `idle`, and the page said the library was up to date. The zero is a
+ * measurement, so it is only ever rendered beside a claim the scan can back up.
  */
 interface ScanLabels {
   readonly never: string;
   readonly idle: string;
+  readonly empty: string;
   readonly scanning: string;
   readonly failed: string;
   readonly stalled: string;
@@ -79,6 +89,7 @@ interface ScanPresentation {
 const SCAN_LABELS: ScanLabels = {
   never: 'Not scanned yet.',
   idle: 'Up to date.',
+  empty: 'Scan finished with nothing indexed. Check the library root path, then rescan.',
   scanning: 'Scanning.',
   failed: 'Retrying after an error.',
   stalled: 'Stopped retrying. Fix the cause, then rescan.',
@@ -120,6 +131,20 @@ function describeScanState(scan: LibraryScanSummary | null, songCount: number, l
     // operator's action is the only thing that changes the outcome.
     return { tone: 'error', label: labels.stalled, detail, notice: { type: 'error', text: labels.stalled } };
   }
+
+  // A finished scan that indexed nothing. Checked **after** `scanning` and `failed`, because
+  // zero tracks is the expected state of both for the whole length of a first scan — only a
+  // *completed* scan claiming nothing is a contradiction, since completion is a claim about
+  // having read the library.
+  //
+  // `detail: null` rather than "0 tracks indexed", the same reasoning as the never-scanned
+  // case above: rendering the count under this label gives the number the badge is denying.
+  // And it is a notice, because nothing else will change it — the same argument as
+  // `stalled`, and the reason this is not merely a warning badge.
+  if (songCount === 0) {
+    return { tone: 'error', label: labels.empty, detail: null, notice: { type: 'error', text: labels.empty } };
+  }
+
   return { tone: 'success', label: labels.idle, detail, notice: void 0 };
 }
 

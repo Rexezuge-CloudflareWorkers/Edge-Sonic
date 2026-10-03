@@ -189,6 +189,27 @@ than wrong, because a client seeks by it.
   re-index. `enrichFacts` takes an `EnrichFacts` (id, path, size, mtimeMs) rather than a
   `SongRow`, so the scan does not fabricate one; a fabricated row is a copy of the schema
   that rots silently when a column is added.
+- **`is_scanned` has two writers and one key, and a matching mtime cannot say which.**
+  `reconcileFolder` used to write `isScanned: !changed`, reading a child's stored mtime as
+  proof the child had been reconciled. But `nodes.mtime_ms` is written by the scan *and* by
+  `TreeService`'s read-through browse, from the same `Depth: 1` PROPFIND — and the scan
+  writes it having descended, while the browse writes it having read nothing below. So a
+  browse-materialized library closed every one of its own folders on the first scan chunk
+  and never indexed a track: 80 albums, none opened, `songs` empty, `scan_state` `idle`.
+  `is_scanned` is now an **input** to `needsDescent` and not only its output, and
+  "does this row need rewriting" is separated from "does this folder need descending".
+  `start`'s incrementality short-circuit got the matching floor, because a completed scan
+  that indexed nothing is not evidence the library is current — `scanned_count` counts
+  folders *visited*, so that walk leaves it at `1`. See the parent index.
+- **A listing that placed nothing is not a listing that found nothing.** `toLibraryPath`
+  refusals are silent `continue`s, so a listing whose hrefs all fail containment empties
+  `childPaths` and `songPaths` and the prune deletes the library as a mass deletion before
+  reporting `idle`. RFC 4918 §8.3 makes that reachable on a healthy origin — a server may
+  anchor `DAV:href` as `/owner/volume/…` or `/dir/file.txt` and both are correct.
+  `reconcileFolder` throws before writing a row, counted **excluding the folder's own
+  entry**, because an empty folder's `Depth: 1` listing is exactly one entry and failing
+  those turned healthy scans into `stalled`.
+
 - **Enrichment is not what makes a library browsable, and treating it as though it were
   is why it shipped broken.** The aggregates filter on the `_ci` columns in SQL, so a
   track this module has not read is *absent* from `getArtists`, `getAlbumList2` and

@@ -97,6 +97,30 @@ Three things in `librarySummary.ts` are decisions rather than code:
 because `failed` and `stalled` are one stored status separated by a counter: reporting the row's
 status verbatim renders a terminal scan as one that is still being retried.
 
+## `probe` is the only surface that still holds the raw hrefs, and it used to discard them
+
+`LibraryService.probe` did `await client.propfind('', { depth: 0 }); return reachable();` — it
+threw away the listing it had just received. So a library whose configured root path did not
+match the `DAV:href` prefix its origin emitted probed **perfectly clean**: the credential
+worked, the origin answered `207`, and not one entry could ever be indexed. That is the same
+shape as the scan's prune reading an unmappable listing as a mass deletion — a success verdict
+over an absence of evidence.
+
+`reachable(entries, placeable)` now takes the listing and answers `207` with a message naming
+the root path when the origin returned entries and none could be placed. Two things it
+deliberately does **not** do:
+
+- **It is narrow, and the comment in `probeOutcome.ts` says so.** A `Depth: 0` listing holds
+  exactly one entry — the root — so this asks only "could the root be placed?". It will not
+  catch a browse-path or enumeration defect further down, and it does not claim to.
+- **An empty listing is a success.** An empty folder is a legitimate library with zero tracks,
+  so the guard is `entries > 0 && placeable === 0`. Failing every probe that returns a listing
+  would be the same over-correction in the other direction, and it would break every probe.
+
+The status stays `207` on the failure, because the origin *did* answer: this is a
+configuration fault, and reporting it as unreachable would send an operator off to debug their
+own server — the exact failure `classifyBeforeRequest` exists to prevent.
+
 ## The user rate limits come after auth
 
 `registerUserRateLimits(app)` is registered **after** `app.use('/user/*', userAuthentication())`,

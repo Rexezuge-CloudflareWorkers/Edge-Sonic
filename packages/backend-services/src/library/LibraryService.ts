@@ -19,7 +19,7 @@ import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backe
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
-import { WebDavClient, WebDavError } from '@edge-sonic/webdav';
+import { WebDavClient, WebDavError, toLibraryPath } from '@edge-sonic/webdav';
 import { classifyBeforeRequest, credentialUnreadable, fromStatus, reachable, unreachable } from './probeOutcome';
 import type { ProbeOutcome } from './probeOutcome';
 
@@ -335,8 +335,14 @@ class LibraryService {
     }
 
     try {
-      await client.propfind('', { depth: 0, timeoutMs: this.deps.timeoutMs });
-      return reachable();
+      // The listing is read rather than discarded: a `207` whose entries none map onto the
+      // configured root path is a reachable-but-unindexable library, and this is the only
+      // point where the raw `DAV:href` values are still in hand. `toLibraryPath` is the same
+      // containment check the scan applies, so the probe and the scan cannot disagree about
+      // what "under this library" means.
+      const listed = await client.propfind('', { depth: 0, timeoutMs: this.deps.timeoutMs });
+      const placeable = listed.filter((resource) => toLibraryPath(resource.path, row.root_path) !== null).length;
+      return reachable(listed.length, placeable);
     } catch (error) {
       return error instanceof WebDavError ? fromStatus(error.status) : unreachable();
     }

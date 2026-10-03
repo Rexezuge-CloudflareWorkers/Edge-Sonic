@@ -180,6 +180,37 @@ describe('describeScanState', () => {
     expect(presented.detail).toBe('2 tracks indexed');
   });
 
+  it('refuses to call a finished scan that indexed nothing "up to date"', () => {
+    // The gap this file existed to close had a second half. `never` covered a library with
+    // no `scan_state` row; nothing covered a library whose scan *finished* and indexed
+    // nothing, which fell through to `idle` — a success-toned "Up to date." beside "0
+    // tracks indexed". Both halves on screen, contradicting, and the badge won.
+    //
+    // It shipped: 80 album folders on the origin, every one left unopened by a scan that
+    // could not tell a browse-written row from its own, `songs` empty, `scan_state`
+    // `idle`. So this is not a cosmetic tone — it is the only thing on the page that was
+    // untrue.
+    const presented = describeScanState(state({ status: 'idle' }), 0);
+    expect(presented.label).toBe(SCAN_LABELS.empty);
+    expect(presented.tone).not.toBe('success');
+    expect(presented.tone).toBe('error');
+    // `detail: null`, not "0 tracks indexed": rendering the count under a label denying
+    // there is any gives the number the badge is contradicting. Same reasoning as `never`.
+    expect(presented.detail).toBeNull();
+    // And it is a notice, because nothing else changes it — the same argument as `stalled`.
+    expect(presented.notice).toEqual({ type: 'error', text: SCAN_LABELS.empty });
+  });
+
+  it.each(['scanning', 'failed', 'stalled'] as const)('still shows zero tracks honestly while a scan is %s', (status) => {
+    // The paired direction, and it matters: zero tracks is the *expected* state of a
+    // library for the whole length of a first scan. A guard written as `songCount === 0`
+    // rather than as `idle && songCount === 0` would paint every first scan as a failure
+    // and train an operator to ignore the line that does mean something is wrong.
+    const presented = describeScanState(state({ status }), 0);
+    expect(presented.label).not.toBe(SCAN_LABELS.empty);
+    expect(presented.detail).toBe('0 tracks indexed');
+  });
+
   it('takes its labels as arguments, so the decision is testable without i18next', () => {
     // Same shape as `describeProbe`'s injectable labels: this module decides *which* text,
     // not where it comes from. A test that had to initialise i18next to assert a string would

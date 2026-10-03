@@ -980,4 +980,249 @@ describe('ScanService', () => {
     // becomes unreachable rather than being served.
     expect(result.indexVersion).toBeGreaterThan(1);
   });
+
+  /**
+   * `is_scanned` is written by two callers — the scan and `TreeService`'s read-through
+   * browse — from the same `Depth: 1` listing, so a stored `mtime_ms` cannot say which of
+   * them wrote it. These four cases are the invariant that follows from that, and each is
+   * paired: the second of each pair fails if the first is "fixed" by simply always
+   * descending, which is what a fix that only adds a condition tends to do.
+   */
+  describe('a folder materialized by a browse rather than by a scan', () => {
+    /**
+     * One folder per chunk.
+     *
+     * This is the shape the shipped failure needed, and without it the guard is
+     * untestable. `step` reads the frontier **once** and walks every folder in it, so with
+     * the default 40 a root chunk that wrongly closes its children still visits them in the
+     * same chunk — the bug is invisible and the library indexes fine. It only shows at a
+     * chunk boundary, where the next chunk finds the frontier already empty.
+     *
+     * One folder per chunk is also what a large library gets in practice: a root with 80
+     * albums cannot be reconciled to the origin's `Depth: 1` limit in one chunk anyway.
+     */
+    let oneAtATime: ScanService;
+
+    beforeEach(() => {
+      oneAtATime = new ScanService({
+        ...index.deps,
+        clientFor: async (_library, onRequest) =>
+          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
+        timeoutMs: 1000,
+        ...UNBOUNDED_CHUNK,
+        chunkFolders: 1,
+        // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
+        enrichMaxPerFolder: 0,
+      });
+    });
+
+    /**
+     * Seed `nodes` the way `TreeService.getMusicDirectory` does: a live listing
+     * materialized on a client's first visit, `is_scanned` left at `0`, mtimes that match
+     * what the origin currently reports.
+     *
+     * This is the shipped state — album folders present, every one of them closed, and the
+     * scan reporting the library finished.
+     */
+    function seedAsBrowsed(): void {
+      for (const entry of sampleTree()[ROOT]!) {
+        if (entry.path === ROOT) continue;
+        void index.deps.nodes.upsertMany([
+          {
+            libraryId: LIBRARY_ID,
+            path: entry.path.slice(ROOT.length + 1),
+            parentPath: '',
+            name: entry.path.slice(ROOT.length + 1),
+            mtimeMs: entry.mtime ?? null,
+            etag: null,
+            depth: 1,
+            // What `NodeDAO.upsertMany` binds for an omitted `isScanned`: `undefined`
+            // is falsy, so the browse path writes 0.
+            isScanned: undefined,
+          },
+        ]);
+      }
+    }
+
+    it('still descends into it, because a matching mtime does not mean it was read', async () => {
+      seedAsBrowsed();
+      // Present, with the origin's own mtimes and not yet reconciled — so `changed` is
+      // false for every one of them, which is exactly what used to close them for good.
+      expect(index.nodes.size).toBe(1);
+      expect(index.nodes.get(`${LIBRARY_ID}\nBlur`)?.is_scanned).toBe(0);
+
+      await oneAtATime.start(row);
+      for (let poll = 0; poll < 50; poll += 1) {
+        if ((await oneAtATime.step(row)).status !== 'scanning') break;
+      }
+
+      expect(index.songs.size).toBe(6);
+      expect(index.state().status).toBe('idle');
+    });
+
+    it('still closes a folder the scan itself reconciled, so the optimization survives', async () => {
+      // The paired case. If the fix were "always descend", incrementality would be gone: an
+      // unchanged rescan would cost one PROPFIND per folder instead of one, against a
+      // 5,000-rows/day allowance. This asserts the cheap path is still cheap, so the guard
+      // above cannot be satisfied by disabling it.
+      await oneAtATime.start(row);
+      for (let poll = 0; poll < 50; poll += 1) {
+        if ((await oneAtATime.step(row)).status !== 'scanning') break;
+      }
+      expect(index.songs.size).toBe(6);
+
+      dav.reset();
+      index.writes.nodes = 0;
+      await oneAtATime.start(row);
+      const polled = await oneAtATime.step(row);
+      expect(polled.status).toBe('idle');
+      expect(polled.webdavRequests).toBe(0);
+      expect(index.writes.nodes).toBe(0);
+    });
+  });
+
+  describe('a listing that placed nothing', () => {
+    /**
+     * A root path none of the tree's paths sit under. `sampleTree` is rooted at
+     * `/dav/music`, so a library configured at `/elsewhere` receives hrefs that all fail
+     * containment — the shape a server anchoring `DAV:href` differently produces.
+     */
+    function mismatchedLibrary(): LibraryRow {
+      return library({ root_path: '/elsewhere' });
+    }
+
+    it('prunes nothing and says why, rather than reading it as a mass deletion', async () => {
+      // Seed a fully indexed library first, so "nothing was pruned" is a claim about a
+      // populated index rather than about an empty one.
+      await runToCompletion();
+      expect(index.songs.size).toBe(6);
+
+      // Put the root back on the frontier explicitly. `start` legitimately short-circuits
+      // here — this library *does* have tracks and an unchanged root, so its cheap path is
+      // correct — and the case under test is the chunk, not `start`. Its own floor is
+      // asserted in the next `describe`.
+      await index.deps.nodes.upsertMany([
+        { libraryId: LIBRARY_ID, path: '', parentPath: '', name: '', mtimeMs: 1_000_000, etag: null, depth: 0, isScanned: false },
+      ]);
+      // And the state has to say a scan is running: `decideStep` answers from stored
+      // status before it reads the frontier, so an `idle` library is never walked however
+      // full its frontier is. Its own floor is asserted in the next `describe`.
+      await index.deps.scanState.markScanning(LIBRARY_ID, 0);
+      dav.reset();
+
+      const mismatched = mismatchedLibrary();
+      const result = await service.step(mismatched);
+      // The whole point: a listing we could not place is not evidence of a deletion.
+      expect(result.status).toBe('failed');
+      expect(result.lastError).toMatch(/root path/i);
+      expect(index.songs.size).toBe(6);
+      expect(index.nodes.size).toBeGreaterThanOrEqual(5);
+    });
+
+    it('leaves the folder on the frontier, and bounds its retries', async () => {
+      // A library nobody can fix must stop retrying rather than loop for ever, which is
+      // what `consecutive_failures` bounds — but it must not be silently finished either.
+      // The counter and the frontier are the two halves: the counter is what stops the
+      // loop, and a folder still on the frontier is what lets a fixed root path be picked
+      // up by the next `startScan` without an operator editing any rows.
+      const mismatched = mismatchedLibrary();
+      await service.start(mismatched);
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await service.step(mismatched);
+      }
+      expect(index.state().status).toBe('failed');
+      expect(index.state().consecutive_failures).toBeGreaterThanOrEqual(MAX_CONSECUTIVE_FAILURES);
+
+      const frontier = await index.deps.nodes.listFrontier(LIBRARY_ID, 10);
+      expect(frontier.map((node) => node.path)).toContain('');
+    });
+
+    it('is not triggered by an empty folder, whose listing contains only itself', async () => {
+      // The over-correction, and it was a real one: the guard first read
+      // `resources.length > 0 && childPaths.length === 0`, which is **true for every empty
+      // leaf directory** — a `Depth: 1` listing of a folder with nothing in it is exactly
+      // one entry, the folder itself. `test/scan-do.test.ts` is what caught it, through a
+      // fixture whose `Bon Iver` folder holds no tracks, and it surfaced as a scan that
+      // reported `stalled` instead of `idle`.
+      //
+      // So the count excludes the self-entry, and this asserts that directly: an empty leaf
+      // is walked to completion, not failed.
+      const root = sampleTree()[ROOT]!;
+      const emptyLeaf = root[1]!.path;
+      const emptyTree: Record<string, DavEntry[]> = {
+        [ROOT]: root,
+        // A folder whose listing is itself and nothing else — no tracks, no subfolders.
+        [emptyLeaf]: [{ path: emptyLeaf, collection: true, mtime: 2000 }],
+      };
+      const emptyDav = fakeDav(emptyTree);
+      const emptyService = new ScanService({
+        ...index.deps,
+        clientFor: async (_library, onRequest) =>
+          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, emptyDav.fetch, onRequest),
+        timeoutMs: 1000,
+        ...UNBOUNDED_CHUNK,
+        enrichMaxPerFolder: 0,
+      });
+
+      await emptyService.start(row);
+      let last = await emptyService.step(row);
+      for (let poll = 0; poll < 20 && last.status === 'scanning'; poll += 1) {
+        last = await emptyService.step(row);
+      }
+      // Not `failed` and not `stalled`: an empty folder is a folder that reconciled fine.
+      expect(last.status).toBe('idle');
+      expect(last.lastError).toBeNull();
+    });
+  });
+
+  describe('a completed scan that indexed nothing', () => {
+    /**
+     * The shipped state, built directly rather than produced by a scan — because a scan
+     * now indexes this tree, which is the point of the fix. It is the operator's
+     * database: one root row, `scan_state` `idle`, a matching root mtime, no tracks.
+     */
+    async function seedFinishedButEmpty(mtime = 1_000_000): Promise<void> {
+      await index.deps.nodes.upsertMany([
+        { libraryId: LIBRARY_ID, path: '', parentPath: '', name: '', mtimeMs: mtime, etag: null, depth: 0, isScanned: true },
+      ]);
+      await index.deps.scanState.markScanning(LIBRARY_ID, 0);
+      await index.deps.scanState.saveProgress(LIBRARY_ID, 1, null);
+      await index.deps.scanState.complete(LIBRARY_ID, 1);
+    }
+
+    it('is re-walked by the next startScan rather than short-circuited', async () => {
+      // `start`'s cheap path compares the root's mtime and reports `idle`. That is only
+      // sound if the previous scan actually read something, and `scanned_count` counts
+      // folders *visited* — a walk that visited the root and closed every child unread
+      // leaves it at 1. Without the track-count floor this library could never be
+      // re-walked: the origin's root mtime would have to change, or the library be
+      // deleted, which cascades the whole index away.
+      await seedFinishedButEmpty();
+      expect(index.state().status).toBe('idle');
+      expect(index.state().scanned_count).toBeGreaterThan(0);
+      expect(index.songs.size).toBe(0);
+
+      dav.reset();
+      const restarted = await service.start(row);
+      expect(restarted.status).toBe('scanning');
+      for (let poll = 0; poll < 50; poll += 1) {
+        if ((await service.step(row)).status !== 'scanning') break;
+      }
+      expect(index.songs.size).toBe(6);
+      // And it really was a re-walk, not a short-circuit that happened to look like one.
+      expect(dav.propfinds.length).toBeGreaterThan(0);
+    });
+
+    it('still short-circuits a library that does have tracks', async () => {
+      // The paired case again, on the same guard: with tracks indexed the cheap path is
+      // the whole reason a rescan costs one subrequest, and a floor that disabled it
+      // would be a regression dressed as a fix.
+      await runToCompletion();
+      dav.reset();
+      const result = await service.start(row);
+      expect(result.status).toBe('idle');
+      expect(result.webdavRequests).toBe(1);
+      expect(dav.propfinds).toHaveLength(1);
+    });
+  });
 });
