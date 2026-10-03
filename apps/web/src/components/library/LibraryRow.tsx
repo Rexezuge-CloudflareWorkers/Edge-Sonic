@@ -4,9 +4,10 @@ import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { LibraryForm } from './LibraryForm';
-import { libraryScanStatus, probeLibrary, startLibraryScan, stepLibraryScan } from '../../services/libraryService';
+import { probeLibrary, startLibraryScan, stepLibraryScan } from '../../services/libraryService';
 import type { LibraryDraft } from '../../lib/libraryDraft';
 import { describeProbe, describeScan, describeStopReason } from '../../lib/probe';
+import { describeScanState } from '../../lib/scanStatus';
 import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../../types';
 
 /**
@@ -50,11 +51,23 @@ interface LibraryRowProps {
 function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, onRun, onDelete }: LibraryRowProps) {
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
-  const [scan, setScan] = useState<{ status: string; lastError: string | null; stoppedBy: ChunkStopReason } | null>(null);
+  /**
+   * Which bound ended the last chunk **this row ran**, or `null`.
+   *
+   * Why local and not from `library.scan`: `stoppedBy` is a property of a chunk, and the
+   * server does not persist it — `GET /user/libraries` reads `scan_state`, which has no such
+   * column, so the only place it exists is the response to `POST …/scan/step`. Holding it here
+   * is what lets the diagnosis outlive the 6-second notice the chunk also raises.
+   *
+   * The cost is that it does not survive a reload, which was the deliberate trade: persisting
+   * it means a new column, a migration, a lock entry and a write on every chunk, for a
+   * sentence an operator reads once while the page is open.
+   */
+  const [stoppedBy, setStoppedBy] = useState<ChunkStopReason>(null);
   // Guards the two async handlers below, which are **event handlers, not effects**.
   //
   // An effect owns its own cleanup because the effect knows when the component goes away;
-  // an event handler has to be told. `rescan` makes three sequential round trips against a
+  // an event handler has to be told. `rescan` makes two sequential round trips against a
   // deliberately slow origin — a chunk is bounded by `SCAN_CHUNK_DEADLINE_MS` — so
   // navigating to `/users` mid-chunk calls `setState` on a row that is gone. The view-level
   // effects already do this; these two had no guard, and `apps/web/AGENTS.md` claimed a lint
@@ -102,8 +115,10 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
    * it. So an operator with no Subsonic client polling used to click this and watch a
    * scan that never moved.
    *
-   * The status is then re-read rather than taken from the chunk, so what the row shows
-   * is the persisted state a `/rest` poll would see.
+   * Nothing is read back afterwards. `onRun` reloads the library list when the action
+   * returns, and that list now carries the scan state — so the third round trip re-read a
+   * field the refresh was about to re-read anyway, and the only thing it contributed was
+   * overwriting `stoppedBy` with `null` and discarding the diagnosis with it.
    */
   const rescan = async () => {
     await onRun(
@@ -111,19 +126,13 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
       async () => {
         const started = await startLibraryScan(library.id);
         if (!alive.current) return undefined;
-        setScan({ status: started.status, lastError: started.lastError, stoppedBy: started.stoppedBy });
+        // Kept from `start` as well as from the chunk, and not overwritten by a later
+        // `null`: a library whose *root probe* fails is decided by `start` and never
+        // reaches `step`, so this is where its diagnosis lives.
+        setStoppedBy((previous) => started.stoppedBy ?? previous);
         const chunk = await stepLibraryScan(library.id);
         if (!alive.current) return undefined;
-        setScan({ status: chunk.status, lastError: chunk.lastError, stoppedBy: chunk.stoppedBy });
-        const current = await libraryScanStatus(library.id);
-        if (!alive.current) return undefined;
-        // The status read omits `stoppedBy` — it is a property of a chunk, not of the
-        // persisted state, and `libraryTypes` says so. Carrying the chunk's value forward
-        // is therefore the only way it survives: writing `null` here discarded it, and
-        // because this is the **last** write the settled render showed no diagnosis at all,
-        // for the one scan problem `apps/web/AGENTS.md` says exists here "because the second
-        // has an action and the first does not".
-        setScan({ status: current.status, lastError: current.lastError, stoppedBy: chunk.stoppedBy });
+        setStoppedBy((previous) => chunk.stoppedBy ?? previous);
         return undefined;
       },
       t('libraries.scanStarted', 'Scan started.'),
@@ -131,11 +140,22 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   };
 
   const presented = probe === null ? null : describeProbe(probe);
-  const scanFailure = describeScan(scan?.lastError);
+  // From the list, not from this row's own state: the poll is what keeps it current, and a
+  // status held only here would be right until the operator happened to click something.
+  const scanState = library.scan;
+  const scanPresented = describeScanState(scanState, library.songCount, {
+    never: t('libraries.scanNever', 'Not scanned yet.'),
+    idle: t('libraries.scanIdle', 'Up to date.'),
+    scanning: t('libraries.scanScanning', 'Scanning.'),
+    failed: t('libraries.scanFailed', 'Retrying after an error.'),
+    stalled: t('libraries.scanStalled', 'Stopped retrying. Fix the cause, then rescan.'),
+    tracksIndexed: t('libraries.scanTracks', '{{count}} tracks indexed'),
+  });
+  const scanFailure = describeScan(scanState?.lastError);
   // Which bound cut the last chunk short, when one did. Rendered under the row for the
   // same reason as `lastError`: `useNotice` clears after 6 s, and a scan that pauses
   // every poll is not something an operator reads once and remembers.
-  const scanPaused = describeStopReason(scan?.stoppedBy, {
+  const scanPaused = describeStopReason(stoppedBy, {
     requests: t(
       'libraries.scanPausedRequests',
       'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.',
@@ -149,6 +169,15 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
         <span className="text-sm font-medium text-[var(--color-text-primary)]">{library.displayName ?? library.slug}</span>
         <code className="rounded bg-[var(--color-surface-base)] px-1.5 py-0.5 text-xs text-[var(--color-text-muted)]">{library.slug}</code>
         {presented !== null && <Badge variant={presented.tone}>{presented.label}</Badge>}
+        {/*
+          The scan badge is unconditional, where the probe badge is not — and the asymmetry
+          is the point. A probe is an event with no state until one is run, so nothing to show
+          is honest. A scan is a *state* that exists whether or not anyone is looking: a
+          library nobody has scanned says so here, which is the one row on this page the
+          operator has to act on. It rendered nothing at all before, because the state lived in
+          this component and was only ever set by the Rescan button.
+        */}
+        <Badge variant={scanPresented.tone}>{scanPresented.label}</Badge>
         {library.isEnabled ? null : <Badge variant="warning">{t('libraries.disabled', 'disabled')}</Badge>}
       </div>
       {/*
@@ -173,19 +202,27 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
       {presented !== null && presented.tone === 'error' && (
         <p className="mt-2 break-words text-xs text-[var(--color-error-text)]">{presented.label}</p>
       )}
-      {scan !== null && (
-        <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-          {t('libraries.scan', 'Scan')}: {scan.status}
-          {scanFailure !== null && <span className="ml-2 break-words text-[var(--color-error-text)]">{scanFailure}</span>}
-          {/*
-            Muted rather than an error tone: a chunk that hit a bound did its job and
-            left the rest of the frontier for the next poll. It is information about
-            throughput, not a fault, and colouring it as one would train an operator to
-            ignore the line that does mean something went wrong.
-          */}
-          {scanPaused !== null && <span className="ml-2 break-words">{scanPaused}</span>}
-        </p>
-      )}
+      {/*
+        The count, and the two diagnoses. Rendered from the list's scan state so the poll is
+        what updates them, which is the whole reason this line exists on a page load.
+
+        `songCount` is tracks, not folders: it is the figure `getScanStatus` publishes as
+        `count`, and it is the only progress number that means the same thing to this surface
+        and to a Subsonic client watching the same library. `scanned` (folders visited) is
+        deliberately not shown as a fraction — `total_count` is written as `0` and never
+        updated, so a "12 of 0" bar is the arithmetic the server actually holds.
+      */}
+      <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+        {scanPresented.detail}
+        {scanFailure !== null && <span className="ml-2 break-words text-[var(--color-error-text)]">{scanFailure}</span>}
+        {/*
+          Muted rather than an error tone: a chunk that hit a bound did its job and
+          left the rest of the frontier for the next poll. It is information about
+          throughput, not a fault, and colouring it as one would train an operator to
+          ignore the line that does mean something went wrong.
+        */}
+        {scanPaused !== null && <span className="ml-2 break-words">{scanPaused}</span>}
+      </p>
       {editing && <LibraryForm library={library} busy={busy} onSubmit={(draft) => onEditSubmit(library.id, draft)} onCancel={onEditDone} />}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button size="sm" loading={busy || probing} onClick={() => void test()}>

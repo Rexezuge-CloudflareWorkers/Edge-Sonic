@@ -73,7 +73,7 @@ import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
 import { backfill, settle } from './scanPrelude';
 import { ScanBudget, stopReason } from './scanBudget';
-import { describeFailure, MAX_CONSECUTIVE_FAILURES, unrecordedFailure } from './scanRetry';
+import { describeFailure, MAX_CONSECUTIVE_FAILURES, storedStatus, unrecordedFailure } from './scanRetry';
 import type { ChunkResult, ScanDeps } from './scanTypes';
 
 
@@ -302,8 +302,10 @@ class ScanService {
     return {
       // A read-only status reports `stalled` from the stored counter, so an operator
       // opening the page sees the same terminal state a poll would have reported —
-      // rather than a `failed` that reads as "retrying" when it is not.
-      status: state.status === 'scanning' ? 'scanning' : state.status === 'failed' ? (state.consecutive_failures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed') : 'idle',
+      // rather than a `failed` that reads as "retrying" when it is not. The mapping
+      // itself is `storedStatus`, shared with the operator's library list so the two
+      // surfaces cannot disagree about whether a scan is over.
+      status: storedStatus(state),
       scanned: state.scanned_count,
       total: state.total_count,
       indexVersion: state.index_version,

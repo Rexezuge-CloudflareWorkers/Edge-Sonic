@@ -1,6 +1,23 @@
 export const NOTICE_TIMEOUT_MS = 6000;
 
 /**
+ * How often the operator page re-reads the library list while something is scanning.
+ *
+ * Sized against a budget that is easy to forget exists: `/user/*` is rate-limited to **60
+ * requests per minute** keyed on the Access identity (`RATE_LIMIT_DEFS` in `apps/api`). One
+ * poll per tick of the libraries endpoint is 12 requests a minute at this interval, so an
+ * operator watching a scan keeps a large majority of the bucket free for the actions they
+ * will actually want — probe, rescan, edit.
+ *
+ * It is a poll of `GET /user/libraries`, which is **passive**: it reads `scan_state` and
+ * `songs` and advances nothing. So the interval is a *display* cadence and not a claim about
+ * how fast a scan progresses — with no `SCAN` Durable Object binding configured, the scan is
+ * advanced by `/rest/getScanStatus` and by the operator's own rescan, and polling this page
+ * faster would change nothing but the request count.
+ */
+export const SCAN_POLL_INTERVAL_MS = 5000;
+
+/**
  * The sign-in target for the landing page and the `Unauthorized` gate.
  *
  * It exists for one reason: this path is inside the Cloudflare Access application,

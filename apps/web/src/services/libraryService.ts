@@ -40,6 +40,20 @@ export const probeLibrary = (id: string): Promise<ProbeResult> => apiPost(`/libr
 
 export const startLibraryScan = (id: string): Promise<ScanStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/scan`);
 
+/**
+ * Read one library's scan state.
+ *
+ * `GET /user/libraries/:id/scan` is a passive read and is still the right call for a
+ * one-off question — a support request about a single library, a script. It is **not** what
+ * the library page uses, because that page shows every library and polls them, and N reads
+ * a tick against a 60-request-per-minute bucket is the wrong shape when one list call already
+ * carries every library's state.
+ *
+ * Kept as a named export rather than inlined at its (presently zero) call site because the
+ * route is part of the operator API and is asserted in `test/user-api.test.ts`; deleting the
+ * wrapper because nothing in this repo happens to call it today would make the *route* look
+ * unused to the next reader, and it is not.
+ */
 export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiGet(`/libraries/${encodeURIComponent(id)}/scan`);
 
 /**

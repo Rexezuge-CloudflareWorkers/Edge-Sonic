@@ -31,8 +31,18 @@
  * prevent.
  */
 import { BaseDAO } from './BaseDAO';
+import { chunkArray } from './chunking';
+import { bindChunkSize } from './sqlLimits';
 import type { ScanStateRow } from './rows';
 import { nowSeconds } from './identity';
+
+/**
+ * Library ids per statement: one variable each, and nothing else.
+ *
+ * Derived from the measured ceiling rather than chosen, so a raised `MAX_LIBRARIES` cannot
+ * silently push this over D1's 100-parameter limit. See `sqlLimits.ts`.
+ */
+const LIBRARIES_PER_STATEMENT = bindChunkSize(1);
 
 class ScanStateDAO extends BaseDAO {
   public async find(libraryId: string): Promise<ScanStateRow | null> {
@@ -40,6 +50,37 @@ class ScanStateDAO extends BaseDAO {
       async () => await this.database.prepare('SELECT * FROM scan_state WHERE library_id = ?').bind(libraryId).first<ScanStateRow>(),
       'scanState.find',
     );
+  }
+
+  /**
+   * Every stored scan state for `libraryIds`, keyed by library id.
+   *
+   * A **read**, and deliberately not `ensure` for the ids it does not find. `ensure` writes
+   * an `idle` row on first sight, so a caller that used it here would turn a `GET` into a
+   * write on every poll for every library that has never been scanned — against the
+   * 5,000-rows/day allowance, and on a request path that is supposed to be observable
+   * rather than mutating.
+   *
+   * The absence is therefore load-bearing: a library with no row has never been scanned,
+   * which is a **different state** from `idle` (scanned, nothing to do) and the one that
+   * needs an operator action. `ScanService.status` calls `ensure` because it reports on
+   * one library and has to produce a row to report on; this is that call's opposite.
+   */
+  public async listByLibraries(libraryIds: readonly string[]): Promise<Map<string, ScanStateRow>> {
+    const states = new Map<string, ScanStateRow>();
+    for (const chunk of chunkArray(libraryIds, LIBRARIES_PER_STATEMENT)) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const result = await this.withRetry(
+        async () =>
+          await this.database
+            .prepare(`SELECT * FROM scan_state WHERE library_id IN (${placeholders})`)
+            .bind(...chunk)
+            .all<ScanStateRow>(),
+        'scanState.listByLibraries',
+      );
+      for (const row of result.results ?? []) states.set(row.library_id, row);
+    }
+    return states;
   }
 
   /**
@@ -57,7 +98,9 @@ class ScanStateDAO extends BaseDAO {
     await this.withRetry(
       async () =>
         await this.database
-          .prepare('INSERT OR IGNORE INTO scan_state (library_id, status, scanned_count, total_count, index_version, updated_at) VALUES (?, ?, 0, 0, 1, ?)')
+          .prepare(
+            'INSERT OR IGNORE INTO scan_state (library_id, status, scanned_count, total_count, index_version, updated_at) VALUES (?, ?, 0, 0, 1, ?)',
+          )
           .bind(libraryId, 'idle', nowSeconds())
           .run(),
       'scanState.ensure',
@@ -79,7 +122,9 @@ class ScanStateDAO extends BaseDAO {
     await this.withRetry(
       async () =>
         await this.database
-          .prepare("UPDATE scan_state SET status = 'scanning', total_count = ?, scanned_count = 0, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, started_at = ?, updated_at = ? WHERE library_id = ?")
+          .prepare(
+            "UPDATE scan_state SET status = 'scanning', total_count = ?, scanned_count = 0, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, started_at = ?, updated_at = ? WHERE library_id = ?",
+          )
           .bind(totalCount, nowSeconds(), nowSeconds(), libraryId)
           .run(),
       'scanState.markScanning',
@@ -97,7 +142,9 @@ class ScanStateDAO extends BaseDAO {
     await this.withRetry(
       async () =>
         await this.database
-          .prepare("UPDATE scan_state SET status = 'failed', last_error = ?, consecutive_failures = consecutive_failures + 1, updated_at = ? WHERE library_id = ?")
+          .prepare(
+            "UPDATE scan_state SET status = 'failed', last_error = ?, consecutive_failures = consecutive_failures + 1, updated_at = ? WHERE library_id = ?",
+          )
           // Bounded before it is written, because the text originates upstream, and
           // again in the service, which is what the operator is actually shown.
           .bind(error.slice(0, 500), nowSeconds(), libraryId)
@@ -120,7 +167,9 @@ class ScanStateDAO extends BaseDAO {
     await this.withRetry(
       async () =>
         await this.database
-          .prepare("UPDATE scan_state SET status = 'scanning', scanned_count = ?, cursor_path = ?, consecutive_failures = 0, updated_at = ? WHERE library_id = ?")
+          .prepare(
+            "UPDATE scan_state SET status = 'scanning', scanned_count = ?, cursor_path = ?, consecutive_failures = 0, updated_at = ? WHERE library_id = ?",
+          )
           .bind(scannedCount, cursorPath, nowSeconds(), libraryId)
           .run(),
       'scanState.saveProgress',
@@ -139,7 +188,9 @@ class ScanStateDAO extends BaseDAO {
     await this.withRetry(
       async () =>
         await this.database
-          .prepare("UPDATE scan_state SET status = 'idle', scanned_count = ?, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, updated_at = ?, index_version = index_version + 1 WHERE library_id = ?")
+          .prepare(
+            "UPDATE scan_state SET status = 'idle', scanned_count = ?, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, updated_at = ?, index_version = index_version + 1 WHERE library_id = ?",
+          )
           .bind(scannedCount, nowSeconds(), libraryId)
           .run(),
       'scanState.complete',
