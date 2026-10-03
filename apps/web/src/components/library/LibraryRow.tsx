@@ -146,6 +146,7 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   const scanPresented = describeScanState(scanState, library.songCount, {
     never: t('libraries.scanNever', 'Not scanned yet.'),
     idle: t('libraries.scanIdle', 'Up to date.'),
+    empty: t('libraries.scanEmpty', 'Scan finished with nothing indexed. Check the library root path, then rescan.'),
     scanning: t('libraries.scanScanning', 'Scanning.'),
     failed: t('libraries.scanFailed', 'Retrying after an error.'),
     stalled: t('libraries.scanStalled', 'Stopped retrying. Fix the cause, then rescan.'),

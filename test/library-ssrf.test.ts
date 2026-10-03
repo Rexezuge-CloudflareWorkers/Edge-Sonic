@@ -10,7 +10,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
-import { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug } from '@edge-sonic/backend-services/library';
+import { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug, reachable } from '@edge-sonic/backend-services/library';
 import { encryptData, decryptData, isUsableKey, timingSafeEqualStrings, generateAesGcmKey } from '@edge-sonic/backend-data';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { WebDavClient, WebDavError } from '@edge-sonic/webdav';
@@ -268,7 +268,6 @@ describe('LibraryService', () => {
   async function probeRow(overrides: Partial<LibraryRow> = {}): Promise<LibraryRow> {
     const encrypted = await encryptData('hunter2', KEY);
     return {
-      ...overrides,
       id: 'L1',
       slug: 'home',
       slug_ci: 'home',
@@ -282,6 +281,12 @@ describe('LibraryService', () => {
       is_enabled: 1,
       created_at: 0,
       updated_at: 0,
+      // **Last**, and it used to be first — so every field below silently overwrote the
+      // caller's override and `probeRow({ base_url: … })` probed the *default* origin. The
+      // cases built on it passed anyway, because each asserts on the outcome the default
+      // happens to produce: a double that compensates for a bug hides it, and a helper
+      // that ignores its own argument is the same shape one level down.
+      ...overrides,
     };
   }
 
@@ -369,6 +374,69 @@ describe('LibraryService', () => {
     const result = await service.probe(await probeRow());
     vi.unstubAllGlobals();
     expect(result.status).toBeNull();
+  });
+
+  describe('a root the origin answers for but whose paths cannot be placed', () => {
+    /**
+     * A `Depth: 0` listing whose single entry carries `href`.
+     *
+     * Keyed on the *request* path the configured root path builds, and pointing the
+     * `DAV:href` wherever the argument says — because the shape being modelled is an
+     * origin that answers `207` for the URL it was asked about and then names its
+     * resources by some other anchor. RFC 4918 §8.3 permits a server to do that, and a
+     * bucket-per-volume origin with a per-bucket `href_prefix_mode` does exactly it:
+     * `base` emits `/owner/volume/…` and `root` emits `/dir/file.txt`, and the two are
+     * not interchangeable.
+     */
+    function originAnsweringWith(href: string) {
+      return buildService({ dav: fakeDav({ '/somewhere/else': [{ path: href, collection: true }] }) });
+    }
+
+    it('is a failure naming the root path, not a success', async () => {
+      // `probe` used to discard the listing it had just received, so this library probed
+      // perfectly clean: the credential worked, the origin answered `207`, and not one
+      // entry could ever be indexed. "Reachable." over a library that indexes nothing is
+      // the same class of claim as "Up to date." over zero tracks — a success badge with
+      // nothing behind it.
+      const { service, dav } = originAnsweringWith('/dav/music/Blur');
+      vi.stubGlobal('fetch', dav.fetch);
+      const result = await service.probe(await probeRow({ root_path: '/somewhere/else' }));
+      vi.unstubAllGlobals();
+
+      expect(result.ok).toBe(false);
+      // The origin answered, so the status is `207`. This is a configuration fault, and
+      // reporting it as unreachable would send the operator off to debug their own server
+      // again — which is the whole reason `classifyBeforeRequest` exists.
+      expect(result.status).toBe(207);
+      expect(result.error).toMatch(/root path/i);
+    });
+
+    it('is still a success when the href is the path that was asked for', async () => {
+      // The paired case, without which the guard above could be satisfied by failing every
+      // probe that returns a listing — which is every probe.
+      const { service, dav } = originAnsweringWith('/somewhere/else');
+      vi.stubGlobal('fetch', dav.fetch);
+      const result = await service.probe(await probeRow({ root_path: '/somewhere/else' }));
+      vi.unstubAllGlobals();
+
+      expect(result.ok).toBe(true);
+      expect(result.error).toBeNull();
+    });
+
+    it('is still a success when the origin lists nothing, which is an empty library', () => {
+      // The third case, and the reason the guard is `entries > 0 && placeable === 0` rather
+      // than `placeable === 0`: an empty folder is a legitimate library with zero tracks,
+      // and failing its probe would be the same over-correction in the other direction.
+      //
+      // Asserted on the constructor rather than through `probe`, because `fakeDav` cannot
+      // model this — it resolves `listing[0]!` to build the `Depth: 0` self-entry, so an
+      // empty listing is unreachable through the double. Asserting it end-to-end would
+      // mean teaching the double a case the origin can produce, which is the right fix and
+      // a larger one than this change; the constructor is where the decision lives.
+      expect(reachable(0, 0).ok).toBe(true);
+      expect(reachable(1, 1).ok).toBe(true);
+      expect(reachable(4, 0).ok).toBe(false);
+    });
   });
 
   /**

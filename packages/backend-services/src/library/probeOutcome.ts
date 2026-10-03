@@ -42,8 +42,35 @@ interface ProbeOutcome {
 The origin answered. `207` is the only success a `PROPFIND` can return, and the
 client refuses anything else, so the status is a constant rather than a lie about
 a value that was never observed.
+
+### Why this takes the listing instead of discarding it
+
+It used to take nothing: `probe` received the `Depth: 0` listing and threw it
+away, so a library whose root path did not match the `DAV:href` prefix the origin
+emitted probed **perfectly clean** — the credential worked, the origin answered,
+and not one entry could be indexed. `describeProbe` renders `result.error`
+verbatim, so the diagnosis existed as a constructor here and nothing ever called
+it.
+
+That check is narrow on purpose and does not pretend to be broader: a `Depth: 0`
+listing holds exactly one entry, the root itself, so this asks only "could the root
+be placed?" It will not catch a browse-path or enumeration defect further down —
+it is the cheapest question that catches the most common misconfiguration, asked
+at the one point where the raw hrefs are still in hand.
 */
-function reachable(): ProbeOutcome {
+function reachable(entries: number, placeable: number): ProbeOutcome {
+  // A root that answered with entries and placed none of them is a misconfigured root
+  // path, and it is the one reachable-but-useless outcome there is. RFC 4918 §8.3 lets a
+  // server anchor `DAV:href` differently — some emit `/owner/volume/…`, some `/dir/file.txt`
+  // — and the two are not interchangeable.
+  if (entries > 0 && placeable === 0) {
+    return {
+      ok: false,
+      status: 207,
+      error:
+        'The WebDAV server answered, but none of the paths it listed could be matched to the configured library root path, so nothing can be indexed. Check that the root path is the prefix the server puts in its DAV:href values.',
+    };
+  }
   return { ok: true, status: 207, error: null };
 }
 

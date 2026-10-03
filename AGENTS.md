@@ -708,6 +708,61 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   album name, where `getSong` omitted `album` for a root-level track while `getAlbum`
   published `"Unknown Album"` for the same row.
 
+- **A column with two writers needs both writers in its key.** `nodes.mtime_ms` is written
+  by the scan *and* by `TreeService`'s read-through browse, from the same `Depth: 1`
+  PROPFIND, so a stored mtime cannot say which of them wrote it — and the two mean opposite
+  things. The scan writes it having *descended into that folder*; the browse writes it
+  having read nothing at all below it. `reconcileFolder` read `!changed` as "already
+  reconciled", so it closed every folder a browse had materialized. It shipped: a library
+  of 80 albums where **none was ever opened**, `songs` empty, `scan_state` `idle`, and the
+  page reporting "Up to date. 0 tracks indexed." Three things then made it permanent, and
+  each is its own rule:
+  - **`is_scanned` is an input to the descent decision, not only its output.** It is the
+    only one of the two that says "someone actually descended", so `needsDescent` consults
+    it: `known?.is_scanned !== 1 || mtimeMoved || etagMoved`. The browse path writes `0`
+    (`isScanned` is optional and `undefined` binds to `0`), so `0` and "absent" both descend.
+    This is the `reader_version` invariant one level up — the bytes *and* the thing that
+    read them, or the second is unreachable.
+  - **"Does this row need rewriting" and "does this folder need descending" are different
+    questions**, and one `changed` flag was answering both. Pairing matters: the same cases
+    assert that a folder the *scan* reconciled with an unchanged mtime is still closed, so
+    the guard cannot be satisfied by disabling incrementality — which would cost one
+    PROPFIND per folder per rescan against a 5,000-rows/day allowance.
+  - **A completed scan that indexed nothing is not evidence the library is current.**
+    `start`'s cheap path compared the root mtime and reported `idle`, which is only sound if
+    the previous scan read something — and `scanned_count` counts folders *visited*, so a
+    walk that visited the root and closed every child unread leaves it at `1`. With no floor,
+    that library could never be re-walked: the origin's root mtime had to change, or the
+    library be deleted, which cascades the index away. `start` now also requires
+    `songs.countByLibrary > 0`, one indexed read, on `startScan` only.
+  - **The chunk boundary is what makes it visible, so the test needs one.** `step` reads the
+    frontier *once* and walks all of it, so at the default 40 a root chunk that wrongly
+    closes its children still visits them in the same chunk and the library indexes fine.
+    The case needs `chunkFolders: 1`, which is also what a root with 80 albums gets in
+    practice.
+
+- **A listing that placed nothing is not a listing that found nothing.** Every `toLibraryPath`
+  refusal is a silent `continue`, so a listing whose hrefs none sit under the configured root
+  path empties `childPaths` and `songPaths` — and the prune then concludes every existing
+  child **vanished** and deletes the library recursively, on both planes, before reporting
+  `idle`. "We could not place these paths" and "the operator deleted their music" were one
+  observation. `reconcileFolder` now throws before a single row is written, so the folder
+  stays on the frontier and `step`'s catch records the reason against the retry budget.
+  **RFC 4918 §8.3 makes this reachable on a healthy origin**: a server may anchor `DAV:href`
+  differently (`/owner/volume/…` vs `/dir/file.txt`), and both are correct. Two rules, and
+  the second is how the first collapsed:
+  - **The count excludes the folder's own entry.** A `Depth: 1` listing of an empty folder
+    is exactly one entry — itself — so `resources.length > 0 && childPaths.length === 0` is
+    true of every empty leaf directory, and the guard failed scans that were fine. Caught by
+    `test/scan-do.test.ts` through a fixture whose album folder holds no tracks, surfacing as
+    `stalled` where `idle` was expected.
+  - **`probe` is the surface that can catch it, and it was discarding the evidence.** It
+    threw away the `207` it had just received, so a reachable-but-unindexable library probed
+    **perfectly clean**. It now reports `207` with a message naming the root path, and it is
+    narrow on purpose — a `Depth: 0` listing holds one entry, so it asks only "could the root
+    be placed?" An empty listing stays a success, because an empty folder is a legitimate
+    library with zero tracks.
+
 ## Test doubles must model the platform
 
 A double that shares a wrong assumption with the code it tests makes both look right. Two
