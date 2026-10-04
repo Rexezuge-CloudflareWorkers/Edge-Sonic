@@ -24,6 +24,7 @@ import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
+import { albumIdentity } from './albumIdentity';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
 import { ENDPOINTS } from './endpoints';
 import { openSubsonicExtensionsPayload } from './endpoints/system';
@@ -234,6 +235,11 @@ async function buildContext(
       const base = requested ?? fallback ?? defaultPage;
       return Math.min(Math.max(1, Math.trunc(base)), maxPage);
     },
+    // Read from the request's config rather than closed over at module scope, so a
+    // deployment's `ALBUM_GROUP_BY` is the one in force. A module constant would be
+    // resolved before `env` exists, which is the `LOG_LEVEL` defect: a setting that passes
+    // validation and changes nothing.
+    albumsFor: (library) => albumIdentity(config.getAlbumGroupBy(), library.id),
   };
 }
 

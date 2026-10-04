@@ -21,6 +21,24 @@ Cap on how many media folders one user may be granted.
 export const DEFAULT_MAX_LIBRARIES = '10';
 
 /**
+ * What decides which tracks are one album: `folder`, `album` or `album_artist`.
+ *
+ * `album` rather than `folder`, and the reason is a measured one rather than a preference.
+ * A library whose folders are laid out per release answers identically either way, so the
+ * default is invisible there — which is exactly why making it a *decision* rather than an
+ * accident matters. Measured against a live library of 113 tracks: 80 album folders carrying
+ * 71 distinct `ALBUM` values, because nine releases were split across folders and one of them
+ * across six. `folder` published `MementoMori (メメントモリ)` six times and split
+ * `Ex-Otogibanashi` in half.
+ *
+ * `folder` remains available for the libraries that want it — a DJ set of 400 folders, each
+ * one album with an inconsistent `ALBUM` tag, is a real layout and grouping on the tag merges
+ * them. The full argument, including what each value costs, is in `subsonic/albumKey.ts`;
+ * this is only the default.
+ */
+export const DEFAULT_ALBUM_GROUP_BY = 'album';
+
+/**
 Per-WebDAV-request timeout.
 */
 export const DEFAULT_WEBDAV_TIMEOUT_MS = '10000';

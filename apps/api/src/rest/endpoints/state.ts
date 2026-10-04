@@ -37,7 +37,7 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
       // Renamed to `bookmark`: the element name is the JSON key a client reads, so a
       // `song` element inside a `bookmarks` wrapper produces `bookmarks.song` and leaves
       // `bookmarks.bookmark` as the empty seed.
-      ...songElement(songToModel(song, songLibrary, annotations)),
+      ...songElement(songToModel(song, songLibrary, context.albumsFor(songLibrary), annotations)),
       name: 'bookmark',
       children: [
         el('position', {}, [row.position_ms]),
@@ -145,7 +145,7 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
         ...(saved.changedAt === null ? [] : [el('changed', {}, [toIso(saved.changedAt)!])]),
         // Renamed: see the note on `getBookmarks`. The element name is the key, so a
         // `song` element here would put the queue under `playQueue.song`.
-        ...renderable.map((song) => ({ ...songElement(songToModel(song, libraryOf(libraries, song.library_id), annotations)), name: 'entry' })),
+        ...renderable.map((song) => ({ ...songElement(songToModel(song, libraryOf(libraries, song.library_id), context.albumsFor(libraryOf(libraries, song.library_id)), annotations)), name: 'entry' })),
       ],
     ),
   );

@@ -4,19 +4,28 @@
  *
  * All aggregated from the `songs` index with an indexed `GROUP BY` rather than by
  * walking folders. `getAlbumList` (file-structure variant) and `getAlbumList2` (tag
- * variant) share one implementation, because a WebDAV library has no separate
- * "albums by file structure" — the albums *are* directories. They stay separate
- * endpoints because clients send both.
+ * variant) share one implementation, and they do so **deliberately** — the protocol
+ * describes them as two views, but a server with two album identities answers
+ * `getAlbumList2` and `getAlbum` with one album and `getAlbumList` with another, and a
+ * client's album id is whichever it saw last. Navidrome answers both from its single
+ * album table. The folder view is still reachable, through `getIndexes` and
+ * `getMusicDirectory`, which is the protocol's actual folder browse.
+ *
+ * What *is* configurable is what an album is: see `ALBUM_GROUP_BY` and
+ * `subsonic/albumKey.ts`. Both variants follow it, so a client that sends either gets the
+ * same albums with the same ids.
  */
-import { albumChildElement, albumElement, decodeId, el, elList, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, decodeId, el, elList, ErrorCode, IdKind, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
+import type { AnnotationLookup } from '../mappers';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
-import { annotationsFor, groupAlbums } from './structured';
+import { annotationsFor } from './structured';
+import { groupAlbumsOf } from './albumRecord';
 
 /**
 How each album-list type maps onto a `songs` query.
@@ -95,20 +104,14 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     throw new SubsonicError(ErrorCode.Generic, `type '${type}' not implemented`);
   }
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const identity = context.albumsFor(library);
   const size = context.pageSize(context.params.optionalInt('size'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
 
   if (type === 'starred') {
     const starredIds = await context.annotations.listStarred(context.user.id, 'album');
-    const rows: SongRow[] = [];
-    for (const id of starredIds) {
-      const decoded = safeDecodeId(id, IdKind.Album);
-      if (decoded && decoded.libraryId === library.id) {
-        rows.push(...(await context.songs.listByAlbumDir(library.id, decoded.path)));
-      }
-    }
     const annotations = await annotationsFor(context, starredIds.length > 0);
-    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbums(rows, library, annotations), wrapperName)));
+    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, library, starredIds, annotations), wrapperName)));
   }
 
   const needsRange = type === 'byYear' || type === 'byGenre';
@@ -120,6 +123,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   const genre = type === 'byGenre' ? context.params.get('genre') : undefined;
 
   const rows = await context.songIndex.listAlbums(library.id, {
+    grouping: identity.grouping,
     genreCi: genre ? genre.toLowerCase() : null,
     ...(needsRange && { fromYear, toYear }),
     limit: size,
@@ -127,7 +131,46 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random,
   });
 
-  return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbums(rows, library, NO_ANNOTATIONS), wrapperName)));
+  return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbumsOf(rows, library, identity, NO_ANNOTATIONS), wrapperName)));
+}
+
+/**
+ * The albums a user has starred, deduplicated by the album they resolve to.
+ *
+ * ### Why the ids are resolved and then dropped
+ *
+ * A star is stored under the id the album had when the user starred it, and two stored ids can
+ * now name one album: `Ex-Otogibanashi` was starred as two folders, and under a tag grouping
+ * both folders are one album. Rendering both rows publishes **the same album twice** in a list
+ * whose whole job is to be a set — and the client sees two tiles that open the same record.
+ *
+ * So the stored ids are resolved to keys, the keys are deduplicated, and the rows are fetched
+ * once per key. The alternative, trusting that a star's id is still its album's id, is the same
+ * assumption that made a folder rename orphan every star.
+ *
+ * @param annotations Carried through so `albumModel` can find the star it is rendering — the
+ *   id it publishes is the *current* one, and the stored one is not among them.
+ */
+async function starredAlbums(
+  context: RestContext,
+  library: LibraryRow,
+  starredIds: readonly string[],
+  annotations: AnnotationLookup,
+): Promise<Album[]> {
+  if (starredIds.length === 0) return [];
+  const identity = context.albumsFor(library);
+  const keys: string[] = [];
+  for (const id of starredIds) {
+    const key = await resolveAlbumId(id, identity.grouping, async (dirPath) => await context.songs.listByAlbumDir(library.id, dirPath));
+    // A star whose album has gone resolves to nothing and is skipped rather than failing the
+    // list: one stale row must not hide every other star, which is the same rule
+    // `safeDecodeId` applies to an id this server can no longer decode.
+    if (key === null || keys.includes(key)) continue;
+    keys.push(key);
+  }
+  if (keys.length === 0) return [];
+  const rows = await context.songIndex.listForAlbumKeys(library.id, keys, identity.grouping);
+  return groupAlbumsOf(rows, library, identity, annotations);
 }
 
 async function getAlbumList(context: RestContext): Promise<EnvelopeResponse> {
@@ -144,7 +187,8 @@ Wrap rows as song elements with one set of annotation lookups for the page.
 async function songNodes(context: RestContext, library: LibraryRow, rows: readonly SongRow[]): Promise<ElementNode[]> {
   const ids = rows.map((row) => row.id);
   const annotations = await annotationsFor(context, ids.length > 0);
-  return rows.map((row) => songElement(songToModel(row, library, annotations)));
+  const identity = context.albumsFor(library);
+  return rows.map((row) => songElement(songToModel(row, library, identity, annotations)));
 }
 
 async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
@@ -208,19 +252,15 @@ async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'
   const songIdsHere = songIds.filter((id) => safeDecodeId(id, IdKind.Song)?.libraryId === library.id);
   const songs = await context.songs.listIdsIn(library.id, songIdsHere);
 
-  const albumRows: SongRow[] = [];
-  for (const id of albumIds) {
-    const decoded = safeDecodeId(id, IdKind.Album);
-    if (decoded && decoded.libraryId === library.id) {
-      albumRows.push(...(await context.songs.listByAlbumDir(library.id, decoded.path)));
-    }
-  }
-
   const annotations = await annotationsFor(context, songIds.length + albumIds.length > 0);
+  // Through `starredAlbums`, not a per-id directory read: an album's identity is now a tag for
+  // most libraries, so a starred *folder* id has to resolve through the group or the starred
+  // list publishes half of an album the rest of the server publishes whole.
+  const albums = await starredAlbums(context, library, albumIds, annotations);
   // `starred` and `starred2` declare both an `album` and a `song` key, so the wrapper is
   // a record either way. An album in that wrapper is a `Child`, matching `starred`'s own
   // schema — see `renderAlbums` for why the element type follows the wrapper.
-  const albumNodes = groupAlbums(albumRows, library, annotations).map((album) => albumChildElement(album, album.artistId));
+  const albumNodes = albums.map((album) => albumChildElement(album, album.artistId));
   return respond(context, elList(wrapperName, ['album', 'song'], {}, [...albumNodes, ...(await songNodes(context, library, songs))]));
 }
 
@@ -241,6 +281,7 @@ async function getStarred2(context: RestContext): Promise<EnvelopeResponse> {
  */
 async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, undefined);
+  const identity = context.albumsFor(library);
   const entries = await context.annotations.listNowPlaying();
   const nodes: ElementNode[] = [];
   for (const entry of entries) {
@@ -248,7 +289,7 @@ async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
     const song = await context.songs.findById(entry.song_id);
     if (!song) continue;
     nodes.push({
-      ...songElement(songToModel(song, library)),
+      ...songElement(songToModel(song, library, identity)),
       // The wrapper declares `entry` as its list key, and the element name is the JSON
       // key a client reads. Leaving this as `song` puts the payload under
       // `nowPlaying.song` and leaves `nowPlaying.entry` as its empty seed, so a client

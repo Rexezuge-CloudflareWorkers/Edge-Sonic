@@ -14,6 +14,7 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 | `dao/rows.ts`    | every row type and the aggregate row shapes                                   |
 | `dao/SongDAO.ts` | one song row: its facts, its derived metadata, its lifecycle, its single-row reads |
 | `dao/songIndex.ts`| the aggregate reads: a page of albums, a page of artists, the genres         |
+| `dao/albumKeySql.ts`| the album key as SQL: the `GROUP BY` per grouping, and the batch size |
 | `dao/NodeDAO.ts` | the folder tree, the scan frontier, the subtree prune                         |
 | `dao/playlists.ts` | a named, ordered list of songs owned by one user                            |
 | `dao/UserStateDAO.ts` | per-user state: playlists, stars, ratings, bookmarks, play queue, now playing, throttle |
@@ -93,6 +94,24 @@ a silent data loss rather than a filter.
   statement. This is the `fakeDav` receiver mistake one layer down: a double is evidence
   only to the extent it models the platform's constraints, and modelling *an* SQLite was
   not the same as modelling *D1's* SQLite.
+- **What a group *is* is `ALBUM_GROUP_BY`, and the two halves of it are one function.**
+  `albumKeySql.ts` writes the `GROUP BY` and `subsonic/albumKey.ts` derives the key in TypeScript;
+  `projection.keyOf` rebuilds the key string from the grouped row so the page's membership and the
+  caller's membership cannot disagree. Three things here are invisible in a result and are asserted
+  some other way:
+  - **`GROUP BY album_artist_ci`, not `COALESCE(album_artist_ci, '')`.** A missing album artist is
+    a *value*, so NULL is its own group. The coercion returns the same rows — `'' IS ''` — and
+    silently drops `idx_songs_album`, which is a page of albums becoming a scan of the library's
+    rows. `EXPLAIN QUERY PLAN` is the only instrument that tells the two apart.
+  - **The batch size is derived from the grouping**, because the halves are not the author's to
+    count: one variable per group under `folder` and `album`, two under `album_artist`. 49, not 50.
+  - **The page's tiebreak is the key columns, not `dir_path`.** A directory can hold two album keys
+    under a tag grouping, so `dir_path` was never a *total* order, and a page boundary between two
+    albums that tie on every term could return one twice or skip it.
+- **Every caller that starts from a set of keys goes through `listForAlbumKeys`, not a local
+  grouping.** `getAlbum`, the starred paths, `getArtist` and `search3` each begin with a subset of
+  an album's rows, and grouping that subset publishes an album holding one track of a compilation —
+  a `songCount`, a `duration` and an `artist` that disagree with every other surface.
 - **Aggregate queries page over groups, then fetch every row of the groups on the page.**
   A SQL `GROUP BY` returns one *representative row* per group, so counting from it
   reports 1 for a real discography. This shipped: every album in the product reported

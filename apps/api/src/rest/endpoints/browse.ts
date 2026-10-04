@@ -69,7 +69,7 @@ async function getIndexes(context: RestContext): Promise<EnvelopeResponse> {
     return respond(context, elList('indexes', ['shortcut', 'index'], { lastModified: newest, ignoredArticles: IGNORED_ARTICLES }, []));
   }
   const rows = await context.songIndex.listArtists(library.id, 5000, 0);
-  return respond(context, buildIndexes(roots, library, artistIndexGroups(library, groupArtistRows(rows)), newest));
+  return respond(context, buildIndexes(roots, library, artistIndexGroups(library, groupArtistRows(rows, context.albumsFor(library))), newest));
 }
 
 /**
@@ -106,7 +106,7 @@ async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse
     if (song) {
       // The indexed row wins: it carries duration, genre, and track number, which
       // the node row does not have.
-      return childElement(songToChild(song, library, selfId));
+      return childElement(songToChild(song, library, selfId, context.albumsFor(library)));
     }
     const isDirectory = !isPlayable(node.name);
     return childElement({

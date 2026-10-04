@@ -33,17 +33,33 @@ import {
 } from '@edge-sonic/backend-data/dao';
 import { sqliteQueryable, queryPlan } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
+import { albumIdOf } from '@edge-sonic/subsonic';
+// The comparator under test is the one the endpoints publish with, imported rather than
+// restated: a copy here would pass against itself, and the assertion it exists for is that
+// the row fetch's SQL order and this order agree.
+import { compareAlbumTracks } from '../apps/api/src/rest/albumIdentity';
 import { migrationDrift, migrationFiles, migrationSql, readLock, sha256 } from './helpers/migrations';
 
 /**
  * The order `getAlbumList2?type=alphabeticalByName` asks for.
  *
- * An **aggregate**, because `listAlbums` groups by `dir_path` — one group is one album —
- * so the ordering must be a function of the group. A bare `album_ci` would order an album
- * by whichever of its tracks `GROUP BY` happened to keep, which is arbitrary: the same
- * album could sort two ways on two calls.
+ * An **aggregate**, because `listAlbums` groups — one group is one album — so the ordering
+ * must be a function of the group. A bare `album_ci` would order an album by whichever of its
+ * tracks `GROUP BY` happened to keep, which is arbitrary: the same album could sort two ways on
+ * two calls.
  */
 const MIN_ALBUM_CI = ['MIN(album_ci) ASC'];
+
+/**
+ * The grouping the DAO tests run under, which is the deployment default.
+ *
+ * Stated rather than left to the type: `listAlbums` takes it as a required option precisely so
+ * that "which album is this" cannot be answered differently in the suite than in production.
+ * These fixtures hold one album per directory, so every grouping agrees on their membership —
+ * which is why the tests that *do* discriminate between them are new ones, with a fixture where
+ * a release spans directories.
+ */
+const ALBUM_GROUPING = 'album' as const;
 
 /**
 Base64 of a 32-byte key, generated once so a file's rows stay readable.
@@ -643,7 +659,7 @@ describe('path-derived grouping', () => {
     expect(row?.album_artist_ci).toBe(`bonobo${DERIVED_MARKER.toLowerCase()}`);
 
     // And the aggregate that filters on those columns now answers.
-    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
+    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
     expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
     const artists = await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0);
     expect(artists.map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
@@ -797,7 +813,7 @@ describe('path-derived grouping', () => {
       await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
 
       // Before: absent from the aggregate, not shown with a blank name.
-      expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: MIN_ALBUM_CI })).toEqual([]);
+      expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI })).toEqual([]);
 
       await drain(libraryId);
 
@@ -807,7 +823,7 @@ describe('path-derived grouping', () => {
       expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
 
       // The aggregate answers. This is the assertion the whole change exists for.
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
       expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
       expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
     });
@@ -1026,7 +1042,7 @@ describe('path-derived grouping', () => {
       const ALBUMS = 500;
       for (let index = 0; index < ALBUMS; index += 1) await seedAlbum(libraryId, index);
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: ALBUMS, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: ALBUMS, offset: 0, orderBy: MIN_ALBUM_CI });
 
       // Every album, complete. A silent truncation would satisfy a "does not throw"
       // assertion and is the failure mode a chunked fetch actually has.
@@ -1051,7 +1067,7 @@ describe('path-derived grouping', () => {
         album: 'Album 0049',
       });
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { limit: 60, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 60, offset: 0, orderBy: MIN_ALBUM_CI });
 
       expect(albums).toHaveLength(61);
       expect(new Set(albums.map((song) => song.id)).size).toBe(61);
@@ -1073,7 +1089,7 @@ describe('path-derived grouping', () => {
       for (let index = 0; index < 120; index += 1) await seedAlbum(libraryId, index);
 
       const index = new SongIndexDAO(handle.db);
-      const chunked = await index.listAlbums(libraryId, { limit: 120, offset: 0, orderBy: ['RANDOM()'] });
+      const chunked = await index.listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 120, offset: 0, orderBy: ['RANDOM()'] });
 
       // The oracle: every row in the library, in **one** statement binding a single
       // variable, so the comparison statement cannot itself be over the ceiling. Two pages
@@ -1111,11 +1127,11 @@ describe('path-derived grouping', () => {
       for (let index = 0; index < 120; index += 1) await seedAlbum(libraryId, index);
 
       const index = new SongIndexDAO(handle.db);
-      const whole = await index.listAlbums(libraryId, { limit: 120, offset: 0, orderBy: MIN_ALBUM_CI });
+      const whole = await index.listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 120, offset: 0, orderBy: MIN_ALBUM_CI });
 
       const paged: string[] = [];
       for (let offset = 0; offset < 120; offset += 40) {
-        const page = await index.listAlbums(libraryId, { limit: 40, offset, orderBy: MIN_ALBUM_CI });
+        const page = await index.listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 40, offset, orderBy: MIN_ALBUM_CI });
         expect(page).toHaveLength(40);
         paged.push(...page.map((song) => song.id));
       }
@@ -1370,5 +1386,264 @@ describe('DAO round-trips', () => {
     expect(await nodes.deleteSubtree(libraryId, 'Blur')).toBe(2);
     expect(await nodes.find(libraryId, 'Blur')).toBeNull();
     expect(await nodes.find(libraryId, 'Blurberry')).not.toBeNull();
+  });
+});
+
+/**
+ * What an album is, per grouping — and the two things a one-album-per-directory fixture cannot see.
+ *
+ * ### Why this suite exists at all
+ *
+ * Every album test above passes under all three groupings, because its fixture holds one album
+ * in one directory. That is the shape of the defect this is about: a grouping decision is
+ * invisible on a library that agrees with itself, and the disagreement only appears on one where
+ * a release spans folders. Measured against a live library: 113 tracks in 80 album folders
+ * carrying 71 distinct `ALBUM` values, because nine releases were split across directories and
+ * one of them across six.
+ *
+ * So every fixture below puts **one album in two or three directories**, and one of them puts
+ * **two albums in one directory** — the other direction, and the one that a directory-keyed id
+ * cannot represent at all, since two groups would claim the same representative directory and
+ * publish one id for two albums.
+ */
+describe('album identity by grouping', () => {
+  /**
+   * One release, three folders, one track each, **no album artist tag anywhere**.
+   *
+   * The layout a per-artist rip produces: the folder is named after the track's performer, so
+   * the same release is one directory per artist and `ALBUM` is the only thing they share. It is
+   * the fixture the original report was measured on.
+   */
+  async function seedSplitRelease(userId: string, libraryId: string, album = 'Ex-Otogibanashi'): Promise<void> {
+    const songs = new SongDAO(handle.db);
+    const tracks = [
+      { dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi', name: '01 - Ex-Otogibanashi.opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 1 },
+      { dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi', name: '02 - Sekaijū wa Mine [Remix].opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 2 },
+      { dir: 'ryo (supercell) & Kagura - Ex-Otogibanashi', name: '03 - Melt (Kagura ver.) [Remix].opus', artist: 'ryo (supercell) & Kagura', track: 3 },
+    ];
+    await songs.upsertFileFacts(tracks.map((t) => ({ id: songId(libraryId, `${t.dir}/${t.name}`), libraryId, path: `${t.dir}/${t.name}`, dirPath: t.dir, name: t.name, size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' })));
+    for (const t of tracks) {
+      await songs.applyMetadata(songId(libraryId, `${t.dir}/${t.name}`), {
+        title: t.name.replace(/^\d+ - /, '').replace('.opus', ''),
+        artist: t.artist,
+        album,
+        track: t.track,
+        disc: 1,
+        duration: 200,
+        readerVersion: 1,
+      });
+    }
+  }
+
+  const pages = async (libraryId: string, grouping: 'folder' | 'album' | 'album_artist', limit = 10) =>
+    await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping, limit, offset: 0, orderBy: MIN_ALBUM_CI });
+
+  it('groups a release split across folders by its album tag, and not by its folders', async () => {
+    const userId = await seedUser('SplitAlbum');
+    const libraryId = await seedLibrary(userId, 'LSPLIT');
+    await seedSplitRelease(userId, libraryId);
+
+    // The whole point, and it is three rows becoming one album rather than three.
+    const byAlbum = await pages(libraryId, 'album');
+    expect(byAlbum).toHaveLength(3);
+    expect(new Set(byAlbum.map((song) => song.album_ci))).toEqual(new Set(['ex-otogibanashi']));
+    expect([...new Set(byAlbum.map((song) => song.dir_path))]).toHaveLength(2);
+
+    // And `folder` still answers its own question, one directory at a time.
+    const byFolder = await pages(libraryId, 'folder');
+    expect(new Set(byFolder.map((song) => song.dir_path))).toHaveLength(2);
+  });
+
+  it('treats a missing album artist as one value, so an untagged library still merges', async () => {
+    const userId = await seedUser('SplitNoAlbumArtist');
+    const libraryId = await seedLibrary(userId, 'LNOAA');
+    // `albumArtist: null` written **explicitly**, which is not what an absent tag does —
+    // `EnrichmentService` omits the field rather than clearing it, so the path-derived value
+    // survives. Writing NULL here models the other case, and it is a real one: a library
+    // indexed before `upsertFileFacts` derived `album_artist` keeps NULL for ever, because
+    // the derivation backfill selects on `derived_version` and that column was never bumped
+    // when the album-artist half was added. 113 rows on a live library, all NULL.
+    const songs = new SongDAO(handle.db);
+    const halves: Array<[string, number]> = [
+      ['A - Silent Siren Selection', 2],
+      ['B - Silent Siren Selection', 8],
+    ];
+    for (const [dir, track] of halves) {
+      const path = `${dir}/0${track}.opus`;
+      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: `0${track}.opus`, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
+      await songs.applyMetadata(songId(libraryId, path), { title: 'Track', artist: dir[0], album: 'Silent Siren Selection', albumArtist: null, disc: 1, track, duration: 1, readerVersion: 1 });
+    }
+
+    // `album_artist` groups on `(album_artist_ci, album_ci)` and both rows' album artist is
+    // NULL. If NULL were a wildcard — matching any album artist — these would scatter; if it
+    // were dropped from the key, they would join every tagged album sharing the name. One
+    // group is the third option and the only correct one.
+    const byArtist = await pages(libraryId, 'album_artist');
+    expect(byArtist).toHaveLength(2);
+    expect(byArtist.every((song) => song.album_artist === null)).toBe(true);
+    expect(new Set(byArtist.map((song) => song.album_ci))).toEqual(new Set(['silent siren selection']));
+  });
+
+  it('leaves a split release split under `album_artist` when the album artist came from the folder', async () => {
+    const userId = await seedUser('SplitDerivedAlbumArtist');
+    const libraryId = await seedLibrary(userId, 'LDA');
+    await seedSplitRelease(userId, libraryId);
+
+    // The honest limit of the mode, and it is a fact about the data rather than about the
+    // grouping: `upsertFileFacts` derives `album_artist` from the folder, and in this layout
+    // the folder is named after the performer — so each half of the release gets its own
+    // derived album artist and `album_artist` grouping reproduces the split. This is why the
+    // default is `album`, and why `album_artist` is documented as the answer for a *properly
+    // tagged* library rather than a general one.
+    const rows = await pages(libraryId, 'album_artist');
+    expect(new Set(rows.map((song) => song.album_artist))).toHaveLength(2);
+    // The marker is on the *derived album artist*, not on the album: `applyMetadata` wrote the real
+    // album tag over the derived one, and the derived album artist survived because an absent tag
+    // omits the field rather than clearing it.
+    expect(rows.every((song) => song.album_artist?.endsWith(DERIVED_MARKER))).toBe(true);
+  });
+
+  it('separates two albums that share a name but not an album artist', async () => {
+    const userId = await seedUser('SameNameTwoArtists');
+    const libraryId = await seedLibrary(userId, 'LSAME');
+    const songs = new SongDAO(handle.db);
+    for (const [dir, artist] of [
+      ['A - Greatest Hits', 'Artist A'],
+      ['B - Greatest Hits', 'Artist B'],
+    ]) {
+      const path = `${dir}/01 Track.opus`;
+      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: '01 Track.opus', size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
+      await songs.applyMetadata(songId(libraryId, path), { title: 'Track', artist, album: 'Greatest Hits', albumArtist: artist, track: 1, duration: 1, readerVersion: 1 });
+    }
+
+    // The mirror of the case above, and the reason `album_artist` exists as a mode: two
+    // self-titled records by different artists are two albums, and grouping on the name alone
+    // merges them into one holding both artists' tracks.
+    const byArtist = await pages(libraryId, 'album_artist');
+    expect(byArtist).toHaveLength(2);
+    expect(new Set(byArtist.map((song) => song.album_artist))).toEqual(new Set(['Artist A', 'Artist B']));
+
+    // And `album` mode genuinely cannot tell them apart: one album, two rows, both artists'
+    // tracks on it. That is the mode's cost rather than a bug in it, and it is why the two
+    // modes exist.
+    expect(await pages(libraryId, 'album')).toHaveLength(2);
+  });
+
+  it('keeps the SQL page and the row grouping in agreement when one directory holds two albums', async () => {
+    // **The fixture the whole suite was missing.** One directory, two album artists, one album
+    // name each: the shape a properly tagged compilation folder has. It is where the two
+    // groupings can disagree, because a directory-keyed id would have two groups claiming the
+    // same representative directory and publishing one id for two albums.
+    const userId = await seedUser('TwoAlbumsOneDir');
+    const libraryId = await seedLibrary(userId, 'LTWO');
+    const songs = new SongDAO(handle.db);
+    const dir = 'Various - Split Release';
+    for (const [file, albumArtist] of [
+      ['01 - One.opus', 'Artist A'],
+      ['02 - Two.opus', 'Artist B'],
+    ]) {
+      const path = `${dir}/${file}`;
+      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: file, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
+      await songs.applyMetadata(songId(libraryId, path), { title: file, artist: albumArtist, album: 'Split Release', albumArtist, track: Number(file[0]), duration: 1, readerVersion: 1 });
+    }
+
+    // Two albums, so two distinct keys, so two distinct ids. Asserted on the ids rather than
+    // the row count because two albums and two rows look identical until something resolves one.
+    const rows = await pages(libraryId, 'album_artist');
+    expect(rows).toHaveLength(2);
+    const ids = rows.map((row) => albumIdOf(row, libraryId, 'album_artist'));
+    expect(new Set(ids).size).toBe(2);
+
+    // And `folder` collapses them, which is the honest answer for that mode.
+    expect(await pages(libraryId, 'folder')).toHaveLength(2);
+    expect(new Set((await pages(libraryId, 'folder')).map((row) => row.dir_path)).size).toBe(1);
+  });
+
+  it('uses the album index for the row fetch, so a tag-grouped page is not a scan', async () => {
+    // **The assertion a row-count test cannot make.** `COALESCE(album_artist_ci, '')` matches
+    // exactly the rows `(album_artist_ci IS ? AND album_ci = ?)` matches — the NULL group
+    // included, because `'' IS ''`. So a coercion is invisible in every result and visible only
+    // here, as a scan of the library's rows on the endpoint a player draws its album list from.
+    const userId = await seedUser('AlbumIndexPlan');
+    const libraryId = await seedLibrary(userId, 'LPLAN');
+    await seedSplitRelease(userId, libraryId);
+
+    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND ((album_artist_ci IS ? AND album_ci = ?))', [libraryId, null, 'ex-otogibanashi']);
+    // All three columns constrained, not just the leading one: a plan that used the index for
+    // `library_id` alone would still say `idx_songs_album` and still scan the library.
+    expect(plan).toContain('idx_songs_album');
+    expect(plan).toContain('album_artist_ci=?');
+    expect(plan).not.toContain('SCAN');
+
+    // The negation, so the assertion above cannot pass on a plan that merely mentions an
+    // index. The coercion returns **the same rows** — including the NULL group, because
+    // `'' IS ''` — and the plan is the only place the difference exists: it falls back to
+    // `idx_songs_album_title_ci`, which constrains the album name but not the album artist,
+    // so every row sharing that name in the library is examined and then discarded.
+    const coerced = queryPlan(handle, "SELECT * FROM songs WHERE library_id = ? AND ((COALESCE(album_artist_ci, '') = ? AND album_ci = ?))", [libraryId, '', 'ex-otogibanashi']);
+    expect(coerced).not.toContain('album_artist_ci=?');
+    expect(coerced).not.toBe(plan);
+  });
+
+  it('pages a release split across folders without repeating or dropping it', async () => {
+    const userId = await seedUser('SplitPaging');
+    const libraryId = await seedLibrary(userId, 'LSPLITPAGE');
+    // Ten releases of two tracks each, every release in **two** directories, so a page
+    // boundary of one album lands between two of its own directories.
+    const songs = new SongDAO(handle.db);
+    for (let album = 0; album < 10; album += 1) {
+      for (const half of [1, 2]) {
+        const dir = `Artist ${half} - Album ${String(album).padStart(2, '0')}`;
+        const path = `${dir}/0${half} Track.opus`;
+        await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: `0${half} Track.opus`, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
+        await songs.applyMetadata(songId(libraryId, path), { title: 'Track', artist: `Artist ${half}`, album: `Album ${String(album).padStart(2, '0')}`, track: half, disc: 1, duration: 1, readerVersion: 1 });
+      }
+    }
+
+    const index = new SongIndexDAO(handle.db);
+    const whole = await index.listAlbums(libraryId, { grouping: 'album', limit: 100, offset: 0, orderBy: MIN_ALBUM_CI });
+
+    // **The concatenation**, not any one page's order: a re-sort leaves every individual page
+    // looking plausible, which is the failure the old comparator caused.
+    const paged: string[] = [];
+    for (let offset = 0; offset < 10; offset += 3) {
+      const page = await index.listAlbums(libraryId, { grouping: 'album', limit: 3, offset, orderBy: MIN_ALBUM_CI });
+      for (const row of page) paged.push(row.album_ci ?? '');
+    }
+    expect(paged).toEqual(whole.map((row) => row.album_ci ?? ''));
+    expect(new Set(paged).size).toBe(10);
+    // Every release kept both of its tracks, so no page boundary split one.
+    expect(paged.filter((album) => album === 'album 00')).toHaveLength(2);
+  });
+
+  it('orders an album the same way in SQL and in the comparator a client reads', async () => {
+    // `name_ci` versus `name` is the difference the two orderings can have, and it needs names
+    // differing **only by case** to show: `apple` sorts before `Banana` lowercased and after it
+    // as written. The row fetch orders by `name_ci` and the caller re-sorts by `compareAlbumTracks`,
+    // so a disagreement here is an album whose published track order depends on which statement
+    // happened to produce it.
+    const userId = await seedUser('AlbumTrackOrder');
+    const libraryId = await seedLibrary(userId, 'LORDER');
+    const songs = new SongDAO(handle.db);
+    const dir = 'Two Discs';
+    const rows = [
+      { file: 'a-low.opus', title: 'apple', disc: 1, track: 2 },
+      { file: 'b-upper.opus', title: 'Banana', disc: 1, track: 2 },
+      { file: 'c-disc2.opus', title: 'zebra', disc: 2, track: 1 },
+    ];
+    for (const row of rows) {
+      const path = `${dir}/${row.file}`;
+      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: row.file, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
+      await songs.applyMetadata(songId(libraryId, path), { title: row.title, artist: 'A', album: 'Two Discs', albumArtist: 'A', disc: row.disc, track: row.track, duration: 1, readerVersion: 1 });
+    }
+
+    const fetched = await pages(libraryId, 'album');
+    const sqlOrder = fetched.map((row) => row.title);
+    const comparatorOrder = [...fetched].sort(compareAlbumTracks).map((row) => row.title);
+
+    expect(sqlOrder).toEqual(comparatorOrder);
+    // And the order itself, so a change to both in the same direction fails: disc first, so a
+    // two-disc album does not interleave, and `name` not `name_ci` on the tie.
+    expect(comparatorOrder).toEqual(['apple', 'Banana', 'zebra']);
   });
 });

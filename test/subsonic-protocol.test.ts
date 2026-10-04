@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 import {
   albumElement,
   albumWithSongs,
+  albumIdOf,
+  decodeAlbumKey,
   decodeId,
   decodeLegacyPassword,
   el,
@@ -665,5 +667,126 @@ describe('Subsonic ids', () => {
         expect((error as SubsonicError).code).toBe(ErrorCode.NotFound);
       }
     });
+  });
+});
+
+/**
+ * The album id's round trip, and the payload rules `decodeId` imposes on it.
+ *
+ * ### Why this is a protocol test and not a mapper test
+ *
+ * Because the constraint is not ours. `encodeAlbumKey` writes into the `path` half of an encoded
+ * id, and `decodeId` runs `normalizeRelativePath` over that string — refusing `.`, `..`, empty
+ * segments, control characters and `%XX`. So an album name written into the payload literally is an
+ * id this server itself cannot read back, and the failure is silent in the worst way: `getAlbum`
+ * answers `code=70`, `getCoverArt` serves the placeholder, and nothing says the id was minted
+ * here.
+ *
+ * Every name below is one that appears in a real library or a real title. `'`/`&'`/`,` are on most
+ * of this product's own live folders — Japanese album and artist names carry them routinely — and
+ * `.` and `..` are on every artist with an album called `Sgt. Pepper's` or a self-titled record.
+ */
+describe('the album id', () => {
+  const LIBRARY = 'lib-1';
+  const row = (over: Partial<{ dir_path: string; album: string | null; album_ci: string | null; album_artist: string | null; album_artist_ci: string | null }> = {}) => ({
+    dir_path: 'Some/Album',
+    album: 'Album',
+    album_ci: 'album',
+    album_artist: null,
+    album_artist_ci: null,
+    ...over,
+  });
+
+  /**
+   * Encode under a grouping, then decode, and hand back the key.
+   *
+   * Through the public surface only — `albumIdOf` and `decodeAlbumKey` — so a test cannot pass by
+   * reading an intermediate representation this module happens to share.
+   */
+  async function roundTrip(albumRow: ReturnType<typeof row>, grouping: 'folder' | 'album' | 'album_artist'): Promise<string | null> {
+    const id = albumIdOf(albumRow, LIBRARY, grouping);
+    if (id === undefined) return null;
+    const decoded = decodeId(id);
+    expect(decoded.kind).toBe(IdKind.AlbumKey);
+    return decodeAlbumKey(decoded.path);
+  }
+
+  it('round-trips names that a literal payload could not carry', async () => {
+    // Each of these is refused by `normalizeRelativePath` in at least one position, so each is a
+    // case where writing the name plainly produces an id the server cannot decode.
+    const names = [
+      'Ex-Otogibanashi',
+      'Sgt. Pepper\'s Lonely Hearts Club Band',
+      '..',
+      'a/b',
+      '100%',
+      String.raw`a\b`,
+      '超かぐや姫！',
+      'TVアニメ『無職転生Ⅱ ～異世界行ったら本気だす～』 エンディングテーマコレクション',
+      '「負けヒロインが多すぎる！」マケイン応援！カバーソングコレクション',
+      '   leading and trailing   ',
+    ];
+
+    for (const name of names) {
+      // An album name is keyed on its `_ci` twin, which is what the column holds.
+      const albumRow = row({ album: name, album_ci: name.toLowerCase() });
+      expect(await roundTrip(albumRow, 'album'), `album name ${JSON.stringify(name)} did not survive the round trip`).toBe(`album:${name.toLowerCase()}`);
+    }
+  });
+
+  it('keeps a colon in an album name, which is also the key separator', async () => {
+    // The separator between the key's parts and the separator inside a name are the same character,
+    // so the split has to be positional. `aa:` with no artist is the *absent* artist artist, and
+    // `aa:artist:album` is a present one — a parser that split on the first `:` would read
+    // `Ex-Otogibanashi: deluxe` as an artist called `Ex-Otogibanashi`.
+    const deluxe = row({ album: 'Ex-Otogibanashi: deluxe', album_ci: 'ex-otogibanashi: deluxe' });
+    expect(await roundTrip(deluxe, 'album')).toBe('album:ex-otogibanashi: deluxe');
+
+    const withArtist = row({ album: 'Album', album_ci: 'album', album_artist: 'A: B', album_artist_ci: 'a: b' });
+    expect(await roundTrip(withArtist, 'album_artist')).toBe('aa:a: b:album');
+  });
+
+  it('tells the three album_artist shapes apart, and an absent artist from an empty one', async () => {
+    // Three distinct payloads, and the difference between them is a tag's absence — which is a
+    // value in its own right. Collapsing "no album artist" and "an empty album artist" would merge
+    // every untagged row into every album that happens to share its name.
+    const absent = row({ album_artist: null, album_artist_ci: null });
+    expect(await roundTrip(absent, 'album_artist')).toBe('aa:album');
+
+    const empty = row({ album_artist: '', album_artist_ci: '' });
+    // Treated as absent by the key, so it is the same group — asserted so a change that started
+    // distinguishing them is a deliberate diff rather than a silent one.
+    expect(await roundTrip(empty, 'album_artist')).toBe('aa:album');
+
+    const present = row({ album_artist: 'Artist', album_artist_ci: 'artist' });
+    expect(await roundTrip(present, 'album_artist')).toBe('aa:artist:album');
+  });
+
+  it('publishes no id for a row with no album tag, under a tag grouping', async () => {
+    // Such a row is filtered out of every album list, so minting it an id would let a client drill
+    // into an album nothing else can reach. Under `folder` it always has one, because the directory
+    // is the album.
+    // An **empty** tag as well as an absent one: the aggregates filter on `album_ci <> ''`, so a
+    // group under the empty name would be a blank row at the top of every album list — the defect
+    // `NodeDAO.listRoots` had with the library root.
+    for (const untagged of [row({ album: null, album_ci: null }), row({ album: '', album_ci: '' })]) {
+      expect(albumIdOf(untagged, LIBRARY, 'album')).toBeUndefined();
+      expect(albumIdOf(untagged, LIBRARY, 'album_artist')).toBeUndefined();
+    }
+    const untagged = row({ album: null, album_ci: null });
+
+    // `folder` mints the **original** id kind with the raw directory, byte for byte what this
+    // server minted before the identity became configurable — which is what makes that setting a
+    // real no-op for an existing deployment rather than a migration.
+    const id = albumIdOf(untagged, LIBRARY, 'folder');
+    expect(id).toBe(encodeId(IdKind.Album, LIBRARY, 'Some/Album'));
+  });
+
+  it('refuses a payload that is not one of the three shapes', () => {
+    // The gate for untrusted input, and `null` is what becomes `code=70` at the call site rather
+    // than a masked `500` from a query built out of a parsed fragment.
+    for (const payload of ['', 'x', 'a/', '/b', 'a/b/c', 'aa/artist', 'aa/a/b/c', 'zz/album', 'a/b/c']) {
+      expect(decodeAlbumKey(payload), `payload ${JSON.stringify(payload)} should not decode`).toBeNull();
+    }
   });
 });

@@ -20,7 +20,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@edge-sonic/shared": "workspace:*"
+    "@edge-sonic/shared": "workspace:*",
+    "@edge-sonic/subsonic": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "26.6.2",

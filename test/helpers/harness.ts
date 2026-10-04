@@ -75,7 +75,7 @@ export function base64(bytes: Uint8Array): string {
 /**
 Mint an id the way the product does: `kind:base64url(libraryId \n path)`.
 */
-export function subsonicId(kind: 's' | 'al' | 'ar' | 'dir' | 'vid' | 'mf' | 'dira', path: string, libraryId = LIBRARY_ID): string {
+export function subsonicId(kind: 's' | 'al' | 'alk' | 'ar' | 'dir' | 'vid' | 'mf' | 'dira', path: string, libraryId = LIBRARY_ID): string {
   return `${kind}:${base64(new TextEncoder().encode(`${libraryId}\n${path}`))}`;
 }
 

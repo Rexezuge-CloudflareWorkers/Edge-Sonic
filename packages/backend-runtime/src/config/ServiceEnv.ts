@@ -39,6 +39,12 @@ interface ServiceEnv {
   SCAN_ENRICH_MAX_PER_FOLDER?: string;
   MAX_PAGE_SIZE?: string;
   DEFAULT_PAGE_SIZE?: string;
+  /**
+   * Which tracks are one album: `folder`, `album` or `album_artist`. Decided per deployment
+   * rather than per request, because it is a property of how somebody's library is laid out
+   * and no answer is right for both layouts. `@edge-sonic/subsonic` owns the vocabulary.
+   */
+  ALBUM_GROUP_BY?: string;
   STREAM_RATE_LIMIT?: string;
   STREAM_TIMEOUT_MS?: string;
   AUTH_FAILURE_LIMIT?: string;

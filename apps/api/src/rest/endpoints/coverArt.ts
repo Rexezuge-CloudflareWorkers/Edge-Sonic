@@ -44,12 +44,13 @@
  * extracted bytes are cached in KV under a 30-day TTL, which holds it to roughly one
  * origin read per album per client per month.
  */
-import { decodeId, encodeId, IdKind } from '@edge-sonic/subsonic';
+import { decodeAlbumKey, decodeId, encodeId, IdKind } from '@edge-sonic/subsonic';
 import type { IdKindValue } from '@edge-sonic/subsonic';
-import type { LibraryRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { embeddedAlbumArt, TreeService } from '@edge-sonic/backend-services/index';
 import type { ResolvedArt } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
+import { compareAlbumTracks } from '../albumIdentity';
 import type { PassthroughResponse } from './media';
 import { passthrough } from './media';
 
@@ -109,20 +110,29 @@ const ALBUM_ART_TRACK_LIMIT = 3;
 
 async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
   const id = context.params.require('id');
-  // The prefix is not checked here: `getCoverArt` legitimately accepts a song, an
-  // album, an artist, or a directory id, and all four resolve to a folder.
+  // The prefix is not checked here: `getCoverArt` legitimately accepts a song, an album, an
+  // artist, or a directory id, and all of them resolve to a folder.
   const decoded = decodeId(id);
-  TreeService.assertPath(decoded.path);
+  // **The path guard is on the path-shaped kinds only.** An album-key payload is base64url
+  // segments and is never used as a path, so asserting it against `assertPath` would be a check
+  // against the wrong thing — and skipping it for the folder kinds would leave a traversal
+  // reachable through the directory branch.
+  if (decoded.kind !== IdKind.AlbumKey) TreeService.assertPath(decoded.path);
   const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   context.libraries.assertReachable(library);
 
-  const folder = await resolveCoverFolder(library, decoded.kind, decoded.path, context);
+  // Resolved once and used by both branches, so the sidecar probe and the embedded probe
+  // cannot be looking at different albums. See `AlbumTarget`.
+  const target =
+    decoded.kind === IdKind.Artist ? { dirPath: null, songs: [] } : await albumTargetFor(library, decoded.kind, decoded.path, context);
+
+  const folder = await resolveCoverFolder(library, decoded.kind, decoded.path, target.dirPath, context);
   if (folder !== null) {
     return await forwardCoverFile(library, folder, context);
   }
 
   // No sidecar. Before falling back to the placeholder, try the album's own tags.
-  const embedded = await embeddedArtFor(library, decoded.kind, decoded.path, context);
+  const embedded = await embeddedArtFor(target, library, context);
   if (embedded !== null) {
     return {
       // `slice()`, not the view itself: the bytes are usually a window onto a much larger
@@ -178,27 +188,91 @@ async function forwardCoverFile(library: LibraryRow, folder: string, context: Re
 }
 
 /**
+ * What an id resolves to for artwork purposes: the folder to probe, and the album's rows.
+ *
+ * One resolution for both halves rather than one for the sidecar and one for the embedded
+ * picture, and the reason is a merged album. Under a tag grouping an album spans directories, so
+ * resolving the folder and then re-reading *that folder's* rows would probe one disc of a
+ * two-disc release and answer "no artwork" for an album whose second disc carries the picture.
+ * The two answers have to come from the same set of rows or the endpoint contradicts itself
+ * depending on which branch ran.
+ */
+interface AlbumTarget {
+  readonly dirPath: string | null;
+  readonly songs: readonly SongRow[];
+}
+
+/**
+ * The album an id names, its rows and the folder its artwork is found in.
+ *
+ * `IdKind.AlbumKey` is the current form and resolves through the grouping key; `IdKind.Album` is
+ * the folder form this server minted before an album's identity became configurable, and both
+ * arrive in clients. A song id resolves through its own row, and an artist id through its
+ * directory — see `resolveCoverFolder` for the artist case, which is not this function's problem.
+ */
+async function albumTargetFor(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<AlbumTarget> {
+  if (kind === IdKind.Song) {
+    const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
+    return { dirPath: song?.dir_path ?? null, songs: song === null ? [] : [song] };
+  }
+  if (kind === IdKind.AlbumKey) {
+    const key = decodeAlbumKey(path);
+    if (key === null) return { dirPath: null, songs: [] };
+    const songs = await context.songIndex.listForAlbumKeys(library.id, [key], context.albumsFor(library).grouping);
+    return { dirPath: representativeDir(songs), songs };
+  }
+  if (kind === IdKind.Album) {
+    const songs = await context.songs.listByAlbumDir(library.id, path);
+    // A folder id names a directory, so that directory is the folder probed even when the
+    // album now spans others — a pre-existing star points at this album, and the sidecar
+    // beside the tracks it was starred from is the one the user saw.
+    return { dirPath: path, songs };
+  }
+  if (kind === IdKind.Directory) {
+    const songs = await context.songs.listByDirectory(library.id, path);
+    return { dirPath: path, songs };
+  }
+  return { dirPath: null, songs: [] };
+}
+
+/**
+ * The folder a group's artwork is looked for in: the first track's, in protocol order.
+ *
+ * A tag-grouped album spans directories and there is no answer right for all of them — a
+ * release with `cover.jpg` beside disc 1 and embedded art on disc 2 has art in two places. One
+ * folder is chosen, deterministically, and the alternative, probing each until one has art,
+ * spends a `PROPFIND` or a ranged read per directory on a request a client makes **per grid
+ * cell** — the arithmetic `ARTIST_COVER_PROBE_LIMIT` exists to bound one layer up.
+ *
+ * `compareAlbumTracks` is `getAlbum`'s own ordering, so the folder chosen is the folder of the
+ * track a client calls track 1. An unstable choice would write the KV entry under a key that
+ * stops matching: the cache never hits and two clients can be shown different covers for one
+ * album.
+ */
+function representativeDir(songs: readonly SongRow[]): string | null {
+  const first = [...songs].sort(compareAlbumTracks)[0];
+  return first?.dir_path ?? null;
+}
+
+/**
  * Artwork from the album's own tracks, for any accepted id kind.
  *
- * Resolves the id to an album directory the way `resolveCoverFolder` does, then hands
- * that directory's tracks to the extractor. `null` is an ordinary answer, not a failure:
- * no song rows, no picture on any probed track, or an origin that could not be read.
+ * `null` is an ordinary answer, not a failure: no song rows, no picture on any probed track, or
+ * an origin that could not be read.
  */
-async function embeddedArtFor(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<ResolvedArt | null> {
-  const dirPath = await albumDirFor(library, kind, path, context);
-  if (dirPath === null) return null;
-
-  const songs = await context.songs.listByAlbumDir(library.id, dirPath);
-  if (songs.length === 0) return null;
+async function embeddedArtFor(target: AlbumTarget, library: LibraryRow, context: RestContext): Promise<ResolvedArt | null> {
+  if (target.dirPath === null || target.songs.length === 0) return null;
 
   // **Deterministic order, and it is load-bearing.** The cache key is built from the
   // tracks this probes and the first one carrying a picture is the one that answers, so an
-  // unstable order means the same album resolves to different bytes on different requests,
-  // the cache never hits, and two clients can be shown different covers for one album.
-  // Track number then name, matching `getAlbum`'s own ordering — so the picture comes from
-  // the file a client would call track 1.
-  const candidates = [...songs]
-    .sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name))
+  // unstable order means the same album resolves to different bytes on different requests, the
+  // cache never hits, and two clients can be shown different covers for one album.
+  // `compareAlbumTracks` — disc, then track, then name — is `getAlbum`'s own ordering, so the
+  // picture comes from the file a client would call track 1. It used to be track and name with
+  // no disc, which matched a `getAlbum` that also had no disc: both wrong together, and both
+  // picked disc 2's first track out of a two-disc album.
+  const candidates = [...target.songs]
+    .sort(compareAlbumTracks)
     .slice(0, ALBUM_ART_TRACK_LIMIT)
     .map((song) => ({ id: song.id, path: song.path, size: song.size, mtimeMs: song.mtime_ms }));
 
@@ -207,46 +281,36 @@ async function embeddedArtFor(library: LibraryRow, kind: IdKindValue, path: stri
   // exercises.
   const stub = context.scanStubFor(library.id);
   if (stub) {
-    return await stub.coverArt(library.id, dirPath, candidates, context.streamTimeoutMs);
+    return await stub.coverArt(library.id, target.dirPath, candidates, context.streamTimeoutMs);
   }
-  return await embeddedAlbumArt(library, dirPath, candidates, { clientFor: (row) => context.libraries.clientFor(row), cache: context.cache }, context.streamTimeoutMs);
-}
-
-/**
- * The album directory an id refers to, for artwork purposes.
- *
- * Deliberately simpler than `resolveCoverFolder`: the artist case is not re-probed across
- * several album directories here, because that loop already spent up to three
- * `PROPFIND`s and this runs *after* it. A cover request is one a client makes per grid
- * cell, so the subrequest count is the number that has to stay small.
- */
-async function albumDirFor(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<string | null> {
-  if (kind === IdKind.Album || kind === IdKind.Directory) return path;
-  if (kind === IdKind.Song) {
-    const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
-    return song?.dir_path ?? null;
-  }
-  if (kind === IdKind.Artist) {
-    // An artist id carries a name, not a path. The artist *directory* is the cheap guess
-    // and it is right for the overwhelmingly common `Artist/Album` layout; when it holds
-    // no tracks the answer is "no artwork", which the placeholder renders.
-    const slash = path.indexOf('/');
-    return slash === -1 ? path : path.slice(0, slash);
-  }
-  return null;
+  return await embeddedAlbumArt(library, target.dirPath, candidates, { clientFor: (row) => context.libraries.clientFor(row), cache: context.cache }, context.streamTimeoutMs);
 }
 
 /**
  * The folder to look for a sidecar cover in, for any accepted id kind.
+ *
+ * `albumDir` is the folder {@link albumTargetFor} already resolved, passed in rather than
+ * recomputed: this runs *after* the target is resolved, and a second resolution would spend the
+ * same statement twice on a request a client makes per grid cell.
  */
-async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<string | null> {
+async function resolveCoverFolder(
+  library: LibraryRow,
+  kind: IdKindValue,
+  path: string,
+  albumDir: string | null,
+  context: RestContext,
+): Promise<string | null> {
   if (kind === IdKind.Song) {
     const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
     return song ? await findCoverIn(library, song.dir_path, context) : null;
   }
-  if (kind === IdKind.Album) return await findCoverIn(library, path, context);
-  if (kind === IdKind.Directory) return await findCoverIn(library, path, context);
-  if (kind === IdKind.Artist) {
+  // Every kind whose id resolves to a folder: an album key, a legacy album directory, and a
+  // directory id. One branch rather than three, because the folder is the same answer for all
+  // three and a folder id and an album id disagreeing here would be a bug with no symptom
+  // until a cover failed to load.
+  if (albumDir !== null) return await findCoverIn(library, albumDir, context);
+  if (kind !== IdKind.Artist) return null;
+  {
     // An artist id carries the artist *name*, not a path, so the folder has to be found.
     // Albums are searched first, because that is where the cover lives, and the artist
     // directory is the fallback for a library that keeps one.
@@ -272,7 +336,6 @@ async function resolveCoverFolder(library: LibraryRow, kind: IdKindValue, path: 
     const slash = path.indexOf('/');
     return await findCoverIn(library, slash === -1 ? path : path.slice(0, slash), context);
   }
-  return null;
 }
 
 async function findCoverIn(library: LibraryRow, dirPath: string, context: RestContext): Promise<string | null> {

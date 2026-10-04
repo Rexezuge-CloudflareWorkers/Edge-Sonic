@@ -509,3 +509,142 @@ describe('getCoverArt with embedded artwork', () => {
     expect(harness.dav.requestCount()).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Artwork for an album that spans directories.
+ *
+ * ### Why this needed its own fixture
+ *
+ * An album id names a **grouping key** and no longer a folder, so this endpoint has to turn a key
+ * back into somewhere to look — and every other cover test in this repository seeds one album in
+ * one directory, where that question has no answer to get wrong. Under a tag grouping it does: the
+ * album's tracks sit in several folders, and a release may have a `cover.jpg` beside disc 1 and the
+ * picture embedded on disc 2.
+ *
+ * The two halves that can disagree are therefore:
+ *
+ * - **which folder** the sidecar and the embedded probe look in, and
+ * - **which tracks** the embedded probe considers at all — re-reading only the chosen folder's rows
+ *   would probe one disc of a two-disc release and answer "no artwork" for an album whose other
+ *   disc carries the picture.
+ */
+describe('getCoverArt for an album spanning directories', () => {
+  const DIR_A = 'Artist A - Shared Release';
+  const DIR_B = 'Artist B - Shared Release';
+  const TRACK_A = `${DIR_A}/01 - First.opus`;
+  const TRACK_B = `${DIR_B}/02 - Second.opus`;
+  const now = 1_700_000_000;
+
+  /**
+   * One release, two directories, one track each, and the harness album left in place.
+   *
+   * The origin holds a **sidecar in A only**, so a folder choice of B answers with the placeholder
+   * and a folder choice of A answers with the image — which is the only way an assertion can tell
+   * which folder was chosen rather than merely that an image came back.
+   */
+  function splitOrigin(): Record<string, DavEntry[]> {
+    const track = flacWithCover(COVER);
+    return {
+      [`${ROOT}/${DIR_A}`]: [
+        { path: `${ROOT}/${DIR_A}`, collection: true, mtime: now, etag: '"a1"' },
+        { path: `${ROOT}/${TRACK_A}`, size: track.length, contentType: 'audio/ogg', mtime: now, etag: '"a2"', body: track },
+        { path: `${ROOT}/${DIR_A}/cover.jpg`, size: COVER.byteLength, contentType: 'image/jpeg', mtime: now, etag: '"a3"', body: COVER },
+      ],
+      [`${ROOT}/${DIR_B}`]: [
+        { path: `${ROOT}/${DIR_B}`, collection: true, mtime: now, etag: '"b1"' },
+        { path: `${ROOT}/${TRACK_B}`, size: track.length, contentType: 'audio/ogg', mtime: now, etag: '"b2"', body: track },
+      ],
+    };
+  }
+
+  /**
+  The album id the server mints for the merged release.
+  */
+  async function mergedAlbumId(): Promise<string> {
+    const response = await harness.fetch(harness.restUrl('getAlbumList2', { type: 'alphabeticalByName', size: '20' }));
+    const parsed = (await response.json()) as { 'subsonic-response': { albumList2: { album: Array<{ id: string; name: string }> } } };
+    const album = parsed['subsonic-response'].albumList2.album.find((entry) => entry.name === 'Shared Release');
+    expect(album, 'the merged release is absent from getAlbumList2').toBeDefined();
+    return album?.id ?? '';
+  }
+
+  beforeEach(async () => {
+    harness.close();
+    harness = await createHarness(splitOrigin());
+    globalThis.fetch = harness.dav.fetch;
+
+    const rows = [
+      { path: TRACK_A, dir: DIR_A, name: '01 - First.opus', track: 1 },
+      { path: TRACK_B, dir: DIR_B, name: '02 - Second.opus', track: 2 },
+    ];
+    for (const row of rows) {
+      await harness.db.db
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, title, title_ci,
+             artist, artist_ci, album, album_ci, album_artist, album_artist_ci, track, disc, duration, bitrate,
+             reader_version, derived_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 4096, ?, 'opus', ?, ?, ?, ?, 'Shared Release', 'shared release', NULL, NULL, ?, 1, 100, 900, 1, 1, ?, ?)`,
+        )
+        .bind(
+          subsonicId('s', row.path),
+          LIBRARY_ID,
+          row.path,
+          row.dir,
+          row.name,
+          row.name.toLowerCase(),
+          now,
+          row.track === 1 ? 'First' : 'Second',
+          row.track === 1 ? 'first' : 'second',
+          row.track === 1 ? 'Artist A' : 'Artist B',
+          row.track === 1 ? 'artist a' : 'artist b',
+          row.track,
+          now,
+          now,
+        )
+        .run();
+    }
+    await new NodeDAO(harness.db.db).upsertMany([
+      { libraryId: LIBRARY_ID, path: DIR_A, parentPath: '', name: DIR_A, mtimeMs: now, etag: '"a1"', depth: 1, isScanned: true },
+      { libraryId: LIBRARY_ID, path: DIR_B, parentPath: '', name: DIR_B, mtimeMs: now, etag: '"b1"', depth: 1, isScanned: true },
+    ]);
+  });
+
+  it('reports the whole album, so the id and the track count agree', async () => {
+    const albumId = await mergedAlbumId();
+    const response = await coverFor(albumId);
+
+    // `getCoverArt` never answers JSON — see the module header — so anything else here is the
+    // masked-envelope failure: a client hands it to an image decoder and fails with no diagnostic.
+    expect(response.headers.get('content-type')).toMatch(/^image\//);
+    // The real JPEG, not the 70-byte placeholder. A placeholder is a *valid* image, so a length
+    // assertion is the only thing that distinguishes "artwork" from "a transparent pixel".
+    expect((await response.arrayBuffer()).byteLength).toBe(COVER.byteLength);
+  });
+
+  it('looks in the folder of the track a client calls track 1, and says so on every request', async () => {
+    const albumId = await mergedAlbumId();
+    const first = await coverFor(albumId);
+    const second = await coverFor(albumId);
+
+    // Only DIR_A has a sidecar, so an image proves the sidecar branch ran in A. **Stability** is
+    // the other half: the cache key is built from the folder, so a folder that moved between
+    // requests writes an entry under a key that stops matching — the cache never hits and two
+    // clients can be shown different covers for one album.
+    expect(first.headers.get('content-type')).toBe('image/jpeg');
+    expect(second.headers.get('content-type')).toBe('image/jpeg');
+    expect(await second.arrayBuffer()).toEqual(await first.arrayBuffer());
+  });
+
+  it('probes tracks from every directory, not only the folder it settled on', async () => {
+    // The other half of the merged-album problem, and the one a single-folder fixture cannot see:
+    // resolving the folder and then re-reading *that folder's* rows probes one disc of a release
+    // and answers "no artwork" for an album whose other disc carries the picture. Here B's track
+    // also has the picture embedded, so the assertion is that removing A's sidecar still yields an
+    // image — which can only come from B's file.
+    await harness.db.db.prepare('DELETE FROM nodes WHERE path = ?').bind(`${DIR_A}/cover.jpg`).run();
+
+    const response = await coverFor(await mergedAlbumId());
+    expect(response.headers.get('content-type')).toMatch(/^image\//);
+    expect((await response.arrayBuffer()).byteLength).toBe(COVER.byteLength);
+  });
+});

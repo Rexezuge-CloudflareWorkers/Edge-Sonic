@@ -5,9 +5,11 @@
  *
  * - `song` ids come from `encodeId`, which is reversible, so `stream` can resolve
  *   an id to a path without a lookup.
- * - `album` ids are derived from `dir_path`, **never from the album name**. A
- *   starred album resolves to its songs by directory, so a name-derived id orphans
- *   every star the first time somebody renames a folder.
+ * - `album` ids are the album's **grouping key**, never its name and no longer its directory —
+ *   `ALBUM_GROUP_BY` decides what an album is, `subsonic/albumKey.ts` owns that question and
+ *   `./albumIdentity.ts` carries it per request. A name would be the part that changes; a
+ *   directory is only the album for some libraries. The directory-shaped id is still
+ *   *accepted*, so a starred album from before the change still resolves.
  * - `artist` ids are derived from the artist grouping's directory when the artist
  *   is a single directory, and from the lowercase artist name otherwise (a
  *   compilation splits one artist across many directories and has no single
@@ -16,6 +18,7 @@
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { artistElement, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
 import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
+import type { AlbumIdentity } from './albumIdentity';
 
 /**
 Epoch seconds → the ISO-8601 form the protocol uses for `created` and `changed`.
@@ -67,6 +70,13 @@ function titleFromPath(song: SongRow): string {
  * Lives beside `songToModel` rather than in an endpoint module because both consume it,
  * and an endpoint importing its way up to a shared derivation is how a second copy of the
  * path convention starts.
+ *
+ * `DERIVED_MARKER` is **not** stripped, and that is a decision rather than an oversight. A row
+ * the scan has not range-read carries `X (derived)`; a row it has carries `X`. They are
+ * deliberately different albums — see `subsonic/albumKey.ts` — because the marker is the only
+ * record that a name is a guess, and merging the two would publish a guess as a release name. The
+ * cost is that a partially-enriched library lists one release twice, once under each spelling,
+ * which is a lesser price than an album named after a filename convention and nothing saying so.
  */
 function albumNameOf(song: SongRow): string {
   if (song.album) return song.album;
@@ -85,13 +95,6 @@ function artistNameOf(song: SongRow): string {
   const slash = song.dir_path.lastIndexOf('/');
   const dir = slash <= 0 ? song.dir_path : song.dir_path.slice(0, slash);
   return dir.length > 0 ? dir : 'Unknown Artist';
-}
-
-/**
- * The key an album groups under. `dir_path` when known, else the album name.
- */
-function albumKeyOf(song: SongRow): string {
-  return song.dir_path.length > 0 ? song.dir_path : `name:${albumNameOf(song)}`;
 }
 
 /**
@@ -129,20 +132,26 @@ interface ArtistGroup {
  * A real tag wins over a path-derived name, so the first row carrying a tag names
  * the group: a library half-enriched groups under the true name rather than under
  * a guess.
+ *
+ * `identity` rather than a grouping, because `albums` is a **set of album keys** and the key is
+ * the grouping's answer — an artist's `albumCount` is "how many distinct albums is this artist on",
+ * and under a tag grouping a compilation counts for every artist who contributed a track to it.
+ * That is the honest answer for a library with no `ALBUMARTIST`: the artist page shows the album
+ * in full, with the other artists' tracks on it, because a partial album is the one answer a
+ * client cannot render.
  */
-function groupArtistRows(rows: readonly SongRow[]): ArtistGroup[] {
+function groupArtistRows(rows: readonly SongRow[], identity: AlbumIdentity): ArtistGroup[] {
   const byName = new Map<string, { name: string; albums: Set<string>; songs: number }>();
   for (const row of rows) {
     const name = row.artist ?? artistNameOf(row);
     const key = name.toLowerCase();
+    const albumKey = identity.keyOf(row);
     const existing = byName.get(key);
     if (existing) {
-      existing.albums.add(albumKeyOf(row));
+      existing.albums.add(albumKey);
       existing.songs += 1;
-    } else if (row.artist === null) {
-      byName.set(key, { name, albums: new Set([albumKeyOf(row)]), songs: 1 });
     } else {
-      byName.set(key, { name: row.artist, albums: new Set([albumKeyOf(row)]), songs: 1 });
+      byName.set(key, { name: row.artist ?? name, albums: new Set([albumKey]), songs: 1 });
     }
   }
   return [...byName].sort(([a], [b]) => a.localeCompare(b)).map(([, group]) => group);
@@ -213,9 +222,8 @@ interface AnnotationLookup {
  */
 const NO_ANNOTATIONS: AnnotationLookup = { stars: new Map(), ratings: new Map(), playCounts: new Map() };
 
-function songToModel(song: SongRow, library: LibraryRow, annotations?: AnnotationLookup): Song {
-  const albumDir = song.dir_path;
-  const albumId = albumDir.length > 0 ? encodeId(IdKind.Album, library.id, albumDir) : undefined;
+function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity, annotations?: AnnotationLookup): Song {
+  const albumId = identity.idOf(song);
   // `artist` falls back for the same reason `album` does, four lines below — a row the
   // scan never tag-read and whose path yields no name still has to produce a record a
   // client can decode.
@@ -265,7 +273,7 @@ function songToModel(song: SongRow, library: LibraryRow, annotations?: Annotatio
     contentType: song.content_type ?? guessContentType(song.suffix),
     suffix: song.suffix || suffixOfPath(song.path),
     created: toIso(song.created_at),
-    ...((albumDir.length > 0) && { coverArt: albumId }),
+    ...(albumId !== undefined && { coverArt: albumId }),
     ...(annotations?.stars.has(song.id) && { starred: toIso(song.mtime_ms) }),
     ...(annotations?.ratings.has(song.id) && { userRating: annotations.ratings.get(song.id) }),
     // Always a number, defaulting to 0. Omitting it leaves a client doing
@@ -305,8 +313,8 @@ function guessContentType(suffix: string): string {
   return CONTENT_TYPES[suffix.toLowerCase()] ?? 'audio/mpeg';
 }
 
-function songToChild(song: SongRow, library: LibraryRow, parentId: string, annotations?: AnnotationLookup): Child {
-  const albumDir = song.dir_path;
+function songToChild(song: SongRow, library: LibraryRow, parentId: string, identity: AlbumIdentity, annotations?: AnnotationLookup): Child {
+  const albumId = identity.idOf(song);
   return {
     id: song.id,
     parent: parentId,
@@ -320,7 +328,7 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
     discNumber: song.disc ?? undefined,
     year: song.year ?? undefined,
     genre: song.genre ?? undefined,
-    coverArt: albumDir.length > 0 ? encodeId(IdKind.Album, library.id, albumDir) : undefined,
+    coverArt: albumId,
     size: song.size,
     contentType: song.content_type ?? guessContentType(song.suffix),
     suffix: song.suffix || suffixOfPath(song.path),
@@ -337,7 +345,8 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, annot
   };
 }
 
-export { toIso, guessContentType, songToModel, songToChild, albumNameOf, artistNameOf, albumKeyOf, groupArtistRows, artistIndexGroups };
+export { toIso, guessContentType, songToModel, songToChild, albumNameOf, artistNameOf, groupArtistRows, artistIndexGroups };
 export { IGNORED_ARTICLES } from '@edge-sonic/subsonic';
+export type { AlbumIdentity } from './albumIdentity';
 export type { AnnotationLookup, ArtistGroup };
 export { NO_ANNOTATIONS };
