@@ -247,7 +247,22 @@ async function embeddedAlbumArt(
     // for ever.
     if (cached.byteLength === 0) return null;
     const mimeType = sniffImageType(cached);
-    return mimeType === null ? null : { mimeType, data: cached };
+    if (mimeType === null) {
+      // Logged, because this is the one branch on the cache path that means something
+      // other than what it says, and it said it silently.
+      //
+      // No writer here can produce it: `resolveImageBytes` refuses a non-image before it
+      // is stored, so every entry under this key was a picture on the way in. An entry
+      // that is *not* a picture on the way out therefore means the **bytes changed in
+      // transit** — which is exactly what a reader that asked KV for `text` got, since
+      // UTF-8 replaces every invalid sequence and a JPEG is mostly invalid sequences. It
+      // shipped: 42 covers on the first sweep of an 80-album library, 0 on the second,
+      // with no line anywhere naming a cause. `test/kv-outage.test.ts` pins the reader;
+      // this line is what would have named it.
+      logger.warn(`Cached artwork for ${dirPath} is not a recognised image (${cached.byteLength} bytes); serving the placeholder.`);
+      return null;
+    }
+    return { mimeType, data: cached };
   }
 
   const client = await deps.clientFor(library);

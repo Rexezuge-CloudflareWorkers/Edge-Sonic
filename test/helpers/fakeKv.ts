@@ -1,10 +1,32 @@
 /**
  * KV doubles.
  *
- * A KV namespace is *exactly* modelable, which is what makes it worth a double: a
- * Map, a TTL field, and a switch to make every call throw. That last mode is the
+ * A KV namespace is *almost* exactly modelable, which is what makes it worth a double:
+ * a Map, a TTL field, and a switch to make every call throw. That last mode is the
  * whole point of `test/kv-outage.test.ts` — the server must answer identically when
  * the cache is absent, throwing, or absent-and-throwing.
+ *
+ * ### "Almost", and the gap it left was the artwork cache
+ *
+ * This double returned whatever `put` was handed, so every round-trip in the suite was
+ * byte-exact. The real binding does not: **`get()` defaults to `type: 'text'`**, and
+ * UTF-8 is not a byte-preserving codec, so a stored JPEG read back as text comes back
+ * lossy-decoded — every invalid sequence replaced by U+FFFD, three bytes each. The
+ * whole embedded-artwork feature was destroyed by that and nothing failed: the cover
+ * was extracted correctly and served correctly on the request that extracted it, and
+ * then reported as "no artwork" on every request after, because
+ * `sniffImageType(ef bf bd …)` is `null`. 42 covers on the first sweep of an 80-album
+ * library, 0 on the second.
+ *
+ * So the double models the platform's **defaults**, not only its shapes:
+ *
+ * - `put` accepts a `string` or an `ArrayBuffer`, and stores what it was given.
+ * - `get` returns the stored `ArrayBuffer` **only** when asked for `'arrayBuffer'`.
+ *   With no type, or `'text'`, it returns `new TextDecoder().decode(bytes)` — the same
+ *   lossy decode the platform performs, so a caller that forgets the type sees
+ *   precisely what production sees.
+ * - `requestedTypes` records what each `get` asked for, so a test can assert the
+ *   decision rather than infer it from the bytes.
  *
  * Anything SQL-shaped is deliberately **not** modelled here. `test/integration` runs
  * against real D1, because a hand-written SQL double is a second implementation of
@@ -61,7 +83,12 @@ export interface FakeKv {
   Operation counts, so a test can assert a cache *write* did or did not happen.
   */
   readonly calls: { get: number; put: number; delete: number; list: number };
-  entries(): Map<string, string>;
+  /**
+   * The `type` each `get` asked for, in order, so a test can assert a reader stated
+   * its decision rather than inheriting the platform's default.
+   */
+  readonly requestedTypes: Array<'text' | 'arrayBuffer' | undefined>;
+  entries(): Map<string, string | ArrayBuffer>;
   /**
   Accepted writes, which is the budget a KV-outage test is really checking.
   */
@@ -82,9 +109,29 @@ function deadKv(): KvNamespaceLike {
   return { get: refuse, put: refuse, delete: refuse, list: refuse };
 }
 
+/**
+ * The bytes a stored value carries, whatever type it was written as.
+ */
+function storedBytes(value: string | ArrayBuffer): Uint8Array {
+  return typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value);
+}
+
+/**
+ * What the platform returns for a `get` that did not ask for bytes.
+ *
+ * A lossy UTF-8 decode, exactly as workerd performs it: a sequence that is not valid
+ * UTF-8 becomes U+FFFD rather than an error, so binary data comes back *changed* and
+ * nothing throws. This is the behaviour a byte-exact double cannot reproduce, and a
+ * caller must therefore be able to run straight into it.
+ */
+function asText(value: string | ArrayBuffer): string {
+  return new TextDecoder().decode(storedBytes(value));
+}
+
 function fakeKv(initial: Record<string, string> = {}, options: FakeKvOptions = {}): FakeKv {
-  const store = new Map<string, string>(Object.entries(initial));
+  const store = new Map<string, string | ArrayBuffer>(Object.entries(initial));
   const calls = { get: 0, put: 0, delete: 0, list: 0 };
+  const requestedTypes: Array<'text' | 'arrayBuffer' | undefined> = [];
   const held: Array<() => void> = [];
   let acceptedWrites = 0;
 
@@ -93,11 +140,19 @@ function fakeKv(initial: Record<string, string> = {}, options: FakeKvOptions = {
   };
 
   const ns: KvNamespaceLike = {
-    async get(key: string): Promise<string | null> {
+    async get(key: string, type?: 'text' | 'arrayBuffer'): Promise<string | ArrayBuffer | null> {
       calls.get += 1;
-      return options.failAll || options.failReads ? (await refuse()) : store.get(key) ?? null;
+      requestedTypes.push(type);
+      if (options.failAll || options.failReads) return await refuse();
+      const value = store.get(key);
+      if (value === undefined) return null;
+      // `'arrayBuffer'` is the only path that returns bytes. Anything else — including
+      // the platform's default, which is `'text'` — goes through the lossy decode, so a
+      // `getBytes` that forgets the type reads a corrupted value here exactly as it does
+      // in production.
+      return type === 'arrayBuffer' ? storedBytes(value).slice().buffer : asText(value);
     },
-    async put(key: string, value: string): Promise<void> {
+    async put(key: string, value: string | ArrayBuffer): Promise<void> {
       calls.put += 1;
       if (options.failAll) return await refuse();
       // Held when `deferPuts` is set, so a caller that does not await its write is
@@ -121,6 +176,7 @@ function fakeKv(initial: Record<string, string> = {}, options: FakeKvOptions = {
   return {
     ns,
     calls,
+    requestedTypes,
     entries: () => new Map(store),
     writes: () => acceptedWrites,
     // Resolving the gates and then yielding once is enough: the waiting `put` bodies

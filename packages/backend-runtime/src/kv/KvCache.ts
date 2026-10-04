@@ -54,7 +54,15 @@ interface KvNamespaceLike {
   // binding has always accepted and returned both; the narrow signature was this
   // file's assumption, not the platform's, and it is the same class of mistake as a
   // test double modelling *an* implementation of the platform.
-  get(key: string): Promise<string | ArrayBuffer | null>;
+  //
+  // ### And the `type` parameter is load-bearing, not decoration
+  //
+  // The platform's own overloads are `get(key, options?): Promise<string | null>`
+  // and `get(key, "arrayBuffer"): Promise<ArrayBuffer | null>` — **and `text` is the
+  // default**. A signature that omits the parameter therefore does not merely widen
+  // the return type; it *forbids the only call that can return bytes*, so the
+  // omission compiled, passed every test, and shipped. See `getBytes`.
+  get(key: string, type?: 'text' | 'arrayBuffer'): Promise<string | ArrayBuffer | null>;
   put(key: string, value: string | ArrayBuffer, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<unknown>;
   list(options: { prefix: string; limit?: number; cursor?: string }): Promise<KvListPage>;
@@ -174,7 +182,10 @@ class KvCache {
     return await this.guard(
       'get',
       async () => {
-        const raw = await this.namespace!.get(buildKvKey(domain, parts));
+        // `'text'` stated rather than relied upon, and it is the opposite decision from
+        // `getBytes` for the same reason: a reader that does not say what it wants is
+        // given the platform's default, and the two defaults are not the same.
+        const raw = await this.namespace!.get(buildKvKey(domain, parts), 'text');
         if (raw === null || raw === undefined) return null;
         // Only reachable if bytes were stored under a text key. Decoding is the right
         // answer rather than throwing: the caller reads this as a cache, and a corrupt
@@ -192,12 +203,52 @@ class KvCache {
    * not free: artwork is routinely 500 KB, and encoding it to text to cache it would
    * cost a third more memory on the way in and on the way out, for every cover, on
    * every request that missed the client's own cache.
+   *
+   * ### `type: 'arrayBuffer'` is the whole method
+   *
+   * `get()`'s default type is **`text`**, so `ns.get(key)` returns the value as a
+   * string — and the platform's own overloads say so, which is why the parameter is
+   * named here rather than inferred. Getting this wrong is invisible in every layer
+   * above it: the bytes arrive, they are the wrong bytes, and nothing throws.
+   *
+   * It shipped, and it took the entire artwork feature with it. UTF-8 is not a
+   * byte-preserving codec, so a JPEG read as text is lossy-decoded (every invalid
+   * sequence becomes U+FFFD) and `TextEncoder` re-encodes those replacements as
+   * three bytes each:
+   *
+   * ```text
+   *   put:  ff d8 ff db 00 84 00 08          (8 bytes,  intact)
+   *   get:  ef bf bd ef bf bd ef bf bd ...   (18 bytes, sniff fails)
+   * ```
+   *
+   * The consequence is a cover that is extracted correctly, served correctly on the
+   * request that extracted it, and then reported as **no artwork** on every request
+   * after — because `embeddedAlbumArt` re-identifies the cached bytes from their own
+   * magic, `ff d8 ff db` is not `ef bf bd`, and the answer is `PLACEHOLDER_PNG` for
+   * the entry's full 30-day TTL under a key only the file's own mtime can
+   * invalidate. Against a live library of 80 Opus albums: 42 covers on the first
+   * sweep, **0 of 80** on the second.
+   *
+   * Two things hid it, and each is its own rule:
+   *
+   * - **A byte-exact double is still not the platform.** `fakeKv` returned whatever
+   *   `put` was given, so every round-trip in the suite was lossless while the real
+   *   binding was lossy — the same defect as a D1 double that lowercases both sides
+   *   of a predicate, one encoding down. The platform's **defaults** are part of its
+   *   contract; a default nobody wrote down is the part that ships.
+   * - **The narrowed type is what made it unreachable.** `get(key: string)` with no
+   *   `type` cannot express the `arrayBuffer` overload, so the correct call was a
+   *   compile error and the wrong one was the only one available.
+   *
+   * The `typeof raw === 'string'` branch below is kept for a caller or a double that
+   * hands back text, and it is not what a real binding does — assert the requested
+   * type rather than trusting the returned one.
    */
   public async getBytes(domain: KvDomainName, parts: readonly string[]): Promise<Uint8Array | null> {
     return await this.guard(
       'get',
       async () => {
-        const raw = await this.namespace!.get(buildKvKey(domain, parts));
+        const raw = await this.namespace!.get(buildKvKey(domain, parts), 'arrayBuffer');
         if (raw === null || raw === undefined) return null;
         return typeof raw === 'string' ? new TextEncoder().encode(raw) : new Uint8Array(raw);
       },

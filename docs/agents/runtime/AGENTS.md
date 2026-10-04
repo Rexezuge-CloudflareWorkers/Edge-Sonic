@@ -239,6 +239,19 @@ keys of the form `domain:v1:<parts...>`.
   so one cannot be added and quietly left unversioned.
 - **`KvCache` fails soft.** A missing binding and a throwing binding are the same code
   path, and the responses are byte-identical to a warm cache; D1 is what answers.
+- **Every read states its `type`, because `get()`'s default is `text`.** That default is
+  the platform's, it is documented, and it is a *lossy* codec for binary: a stored JPEG
+  read back as text has every invalid UTF-8 sequence replaced by U+FFFD and comes back
+  three bytes per replacement. `getBytes` therefore asks for `'arrayBuffer'` and
+  `getText` for `'text'`, and `KvNamespaceLike.get` carries the parameter so the
+  `arrayBuffer` overload can be expressed at all. This is not a tidiness rule: it took
+  the entire embedded-artwork feature with it on a live 100%-Opus library — 42 covers on
+  the first sweep of 80 albums, **0 of 80** on the second, every one a `200` with a
+  decodable placeholder — and the suite stayed green because `fakeKv` returned stored
+  values verbatim. A byte-exact double cannot see a lossy platform, which is the same
+  class of defect as the D1 double that lowercased both sides of a predicate. Asserted in
+  `test/kv-outage.test.ts`; full account:
+  `docs/issues/kv-default-text-read-corrupts-artwork.md`.
 - **The circuit breaker is module-level**, so one outage opens it for the isolate rather
   than giving each request scope its own three failures to get through. It opens after
   three consecutive failures, cools down for 5 s, and half-opens with a probe.
