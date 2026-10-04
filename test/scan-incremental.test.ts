@@ -26,6 +26,8 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { DERIVE_MAX_ROWS_PER_CHUNK, MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-services/index';
+import { WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
+import { SubrequestCounter } from '@edge-sonic/shared';
 import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
@@ -58,16 +60,39 @@ function createIndex() {
 
   const nodeKey = (path: string): string => `${LIBRARY_ID}\n${path}`;
 
+  // The invocation's counter, handed to the service so the store below and the walk are
+  // counted by one thing. At the platform ceiling rather than unlimited: a suite whose double
+  // cannot exhaust a budget cannot see a scan that exceeds one.
+  const subrequests = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
+
+  /**
+   * One D1 statement, charged to the counter the scan budgets against.
+   *
+   * `statements` rather than always one, because a DAO's write batch costs one subrequest per
+   * statement. Counting every call as one is how a double under-reports: this suite's
+   * predecessor counted nothing at all, which is why the scan's budget could be `40` while a
+   * chunk spent ~200 and every test here stayed green.
+   *
+   * The batch is issued **whole** regardless of what is left — this suite is about which rows
+   * change, its fixtures are two folders wide, and truncation is modelled where the budget is
+   * measured (`test/scan-budget.test.ts`). One suite per question.
+   */
+  const db = <T>(fn: () => T, statements = 1): T => {
+    subrequests.charge(statements, 'd1');
+    return fn();
+  };
+
   return {
     nodes,
     songs,
     state: () => state,
     writes,
     deps: {
+      subrequests,
       nodes: {
-        find: async (_libraryId: string, path: string) => nodes.get(nodeKey(path)) ?? null,
+        find: async (_libraryId: string, path: string) => db(() => nodes.get(nodeKey(path)) ?? null),
         listChildren: async (_libraryId: string, parentPath: string) =>
-          [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci)),
+          db(() => [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci))),
         // `path !== ''` excludes the library root's own row, which is
         // `path === parentPath === ''` and so matches `parent_path === ''` exactly as a
         // top-level folder does. This double had that filter while `NodeDAO.listRoots`
@@ -76,12 +101,13 @@ function createIndex() {
         // compensates for a bug hides it. `test/schema.int.test.ts` now asserts the
         // predicate against a real SQLite, where a wrong query and a double cannot
         // disagree.
-        listRoots: async () => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== ''),
+        listRoots: async () => db(() => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== '')),
         // The scan frontier: unscanned folders, shallowest first. This ordering is
         // what makes a partial scan produce a browsable top of the tree.
         listFrontier: async (_libraryId: string, limit: number) =>
-          [...nodes.values()].filter((node) => node.is_scanned === 0).sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path)).slice(0, limit),
-        upsertMany: async (inputs: readonly NodeInput[]) => {
+          db(() => [...nodes.values()].filter((node) => node.is_scanned === 0).sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path)).slice(0, limit)),
+        upsertMany: async (inputs: readonly NodeInput[]) =>
+          db(() => {
           let changed = 0;
           for (const raw of inputs) {
             const input = raw as {
@@ -122,8 +148,8 @@ function createIndex() {
             changed += 1;
           }
           writes.nodes += changed;
-          return changed;
-        },
+          return { changes: changed, written: inputs.length, truncated: false };
+        }, inputs.length),
         patch: async (_libraryId: string, path: string, patch: Record<string, unknown>) => {
           const node = nodes.get(nodeKey(path));
           if (!node) return;
@@ -148,10 +174,11 @@ function createIndex() {
           writes.nodes += doomed.length;
           return doomed.length;
         },
-        countByLibrary: async () => nodes.size,
+        countByLibrary: async () => db(() => nodes.size),
       },
       songs: {
-        upsertFileFacts: async (inputs: readonly SongUpsertInput[]) => {
+        upsertFileFacts: async (inputs: readonly SongUpsertInput[]) =>
+          db(() => {
           let changed = 0;
           for (const raw of inputs) {
             const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
@@ -207,14 +234,16 @@ function createIndex() {
             changed += 1;
           }
           writes.songs += changed;
-          return changed;
-        },
+          return { changes: changed, written: inputs.length, truncated: false };
+        }, inputs.length),
         deleteInDirectoryNotIn: async (_libraryId: string, dirPath: string, keep: readonly string[]) => {
           const keepSet = new Set(keep);
-          const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath && !keepSet.has(song.path));
+          const doomed = db(() => [...songs.values()].filter((song) => song.dir_path === dirPath && !keepSet.has(song.path)));
+          // The deletes are a batch of their own, so they are a second statement group.
           for (const song of doomed) songs.delete(song.id);
           writes.songs += doomed.length;
-          return doomed.length;
+          subrequests.charge(doomed.length, 'd1');
+          return { changes: doomed.length, written: doomed.length, truncated: false };
         },
         // Recursive, like the real one: a vanished folder takes its songs with it,
         // and their `dir_path` is deeper than the folder itself.
@@ -224,7 +253,7 @@ function createIndex() {
           writes.songs += doomed.length;
           return doomed.length;
         },
-        countByLibrary: async () => songs.size,
+        countByLibrary: async () => db(() => songs.size),
       },
       scanState: {
         find: async () => state,
@@ -536,7 +565,7 @@ describe('ScanService', () => {
     index.writes.songs = 0;
 
     const started = await service.start(row);
-    expect(started.webdavRequests).toBe(1);
+    expect(started.subrequests.fetch).toBe(1);
     expect(started.status).toBe('idle');
     expect(index.writes.nodes).toBe(0);
     expect(index.writes.songs).toBe(0);
@@ -544,7 +573,7 @@ describe('ScanService', () => {
     // And a poll after that is a no-op too.
     const polled = await service.step(row);
     expect(polled.status).toBe('idle');
-    expect(polled.webdavRequests).toBe(0);
+    expect(polled.subrequests.fetch).toBe(0);
     expect(index.writes.nodes).toBe(0);
     expect(index.writes.songs).toBe(0);
 
@@ -873,7 +902,7 @@ describe('ScanService', () => {
       expect(result.rowsWritten).toBe(2);
       // And it spent no subrequests: `dir_path` is already on the row, so this is a
       // function of data D1 holds.
-      expect(result.webdavRequests).toBe(0);
+      expect(result.subrequests.fetch).toBe(0);
       expect(dav.propfinds).toHaveLength(0);
     });
 
@@ -955,7 +984,7 @@ describe('ScanService', () => {
     dav.reset();
     const result = await service.step(row);
     expect(result.status).toBe('idle');
-    expect(result.webdavRequests).toBe(0);
+    expect(result.subrequests.fetch).toBe(0);
     expect(result.rowsWritten).toBe(0);
     expect(dav.propfinds).toHaveLength(0);
   });
@@ -1076,7 +1105,7 @@ describe('ScanService', () => {
       await oneAtATime.start(row);
       const polled = await oneAtATime.step(row);
       expect(polled.status).toBe('idle');
-      expect(polled.webdavRequests).toBe(0);
+      expect(polled.subrequests.fetch).toBe(0);
       expect(index.writes.nodes).toBe(0);
     });
   });
@@ -1221,7 +1250,7 @@ describe('ScanService', () => {
       dav.reset();
       const result = await service.start(row);
       expect(result.status).toBe('idle');
-      expect(result.webdavRequests).toBe(1);
+      expect(result.subrequests.fetch).toBe(1);
       expect(dav.propfinds).toHaveLength(1);
     });
   });

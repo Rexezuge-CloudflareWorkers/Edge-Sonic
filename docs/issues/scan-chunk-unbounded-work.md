@@ -153,14 +153,19 @@ amplification of it, not a separate defect.
 Every acceptance criterion is met, and one correction to the issue's own numbers turned
 out to matter more than the fix.
 
-**The 1,000-subrequest premise was stale.** Cloudflare retired that ceiling on 2026-02-11.
-The current limits are **50 external** subrequests per invocation on Workers **Free** and
-10,000 on Paid, raiseable to 10M via `limits.subrequests`; internal D1/KV subrequests are
-1,000 on Free. This codebase sizes every other quota against the free tier, so `Free` is
-the column that governs the default — and `SCAN_CHUNK_FOLDERS = 40` was already 80% of
-the entire external budget before a single enrichment read. A chunk of 1,640 was therefore
-not "past 1,000": on a Free-plan account it was **33× past 50**. `DEFAULT_SCAN_CHUNK_MAX_REQUESTS`
-is now 40, leaving ten for redirect chains, which the platform also counts.
+**The 1,000-subrequest premise was stale, and the correction was itself half wrong.** Cloudflare
+retired that ceiling on 2026-02-11. Workers **Free** allows **50 subrequests per invocation** and
+Paid 10,000, raiseable to 10M via `limits.subrequests`. A chunk of 1,640 was therefore not
+"past 1,000": on a Free-plan account it was **33× past 50**.
+
+This resolution originally read D1 and KV as having a *separate* 1,000-subrequest allowance on
+Free, on the strength of a second row on Cloudflare's Workers limits page, and set
+`DEFAULT_SCAN_CHUNK_MAX_REQUESTS` to 40 on that basis. **That was wrong**, and the correction
+introduced the defect the next issue records: D1's own limits page counts *queries per Worker
+invocation* against the same 50, so the budget has to be a total rather than a WebDAV count. The
+ceiling is now 50, the chunk budget is `50 − 8`, and every other scan bound is derived from it —
+see `docs/issues/free-plan-subrequest-ceiling.md`. The measurement work below was still the right
+work and is kept: it is what made the budget *measurable*, which is what the second fix needed.
 
 1. **Bounded by subrequests, not folders** — `ScanBudget` carries `maxRequests` and the
    loop checks `canAfford()` before each folder. The count is **measured**:

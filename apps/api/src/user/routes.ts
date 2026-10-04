@@ -4,7 +4,22 @@ import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backe
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { listLibrarySummaries } from './librarySummary';
+import type { Context } from 'hono';
+import type { SubrequestCounter } from '@edge-sonic/shared';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
+
+/**
+ * The invocation's subrequest counter, for the routes that call into the scan Durable Object.
+ *
+ * A small named helper rather than three `scope.get(...)` calls, because `BaseRoute.getScope`
+ * falls back to minting a fresh scope when the middleware did not install one — and a
+ * *fresh* scope is a fresh counter, so a fallback would hand these three routes a budget of its
+ * own that nothing else in the invocation is spending. Reading it once, through the same
+ * accessor the rest of the file uses, keeps the counter shared.
+ */
+function meterOf(c: Context): SubrequestCounter {
+  return BaseRoute.getScope(c).get(Tokens.SubrequestMeter);
+}
 
 /**
  * Read a path parameter that the route pattern guarantees exists.
@@ -104,7 +119,7 @@ async function startScan(c: UserContext): Promise<Response> {
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   if (hasScanBinding(c.env)) {
-    return c.json(await getScanStub(c.env, library.id).startScan(library.id));
+    return c.json(await getScanStub(c.env, library.id, meterOf(c)).startScan(library.id));
   }
   return c.json(await scope.get(Tokens.ScanService).start(library));
 }
@@ -113,7 +128,7 @@ async function scanStatus(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   if (hasScanBinding(c.env)) {
-    return c.json(await getScanStub(c.env, id).getStatus(id));
+    return c.json(await getScanStub(c.env, id, meterOf(c)).getStatus(id));
   }
   return c.json(await scope.get(Tokens.ScanService).status(id));
 }
@@ -142,7 +157,7 @@ async function stepScan(c: UserContext): Promise<Response> {
   const library = (await service.listAll()).find((candidate) => candidate.id === id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   if (hasScanBinding(c.env)) {
-    return c.json(await getScanStub(c.env, library.id).stepOnce(library.id));
+    return c.json(await getScanStub(c.env, library.id, meterOf(c)).stepOnce(library.id));
   }
   return c.json(await scope.get(Tokens.ScanService).step(library));
 }

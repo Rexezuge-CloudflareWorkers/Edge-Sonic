@@ -207,6 +207,13 @@ class SongIndexDAO extends BaseDAO {
    * @param keys Album directories in the caller's chosen order.
    */
   private async songsForAlbumDirs(libraryId: string, keys: readonly AlbumKeyRow[], context: string): Promise<SongRow[]> {
+    // Refuse rather than stop early. The key page above already fixed *which* albums this
+    // request is about, so returning a subset would be a page that silently omits albums the
+    // caller asked for and the client will render as "that is all there is". The size is
+    // bounded upstream by `MAX_PAGE_SIZE_CEILING`, so this is the backstop for a caller that
+    // bypassed it — and it is checked before the first statement, so a refusal costs nothing.
+    this.requireSubrequests(Math.ceil(keys.length / ALBUM_GROUPS_PER_STATEMENT), context);
+
     const rows: SongRow[] = [];
     for (const chunk of chunkArray(keys, ALBUM_GROUPS_PER_STATEMENT)) {
       const clause = chunk.map(() => '(dir_path IS ?)').join(' OR ');
@@ -242,7 +249,16 @@ class SongIndexDAO extends BaseDAO {
     return ordered;
   }
 
-  public async listArtists(libraryId: string, limit: number, offset: number): Promise<SongRow[]> {
+  public async listArtists(libraryId: string, requestedLimit: number, offset: number): Promise<SongRow[]> {
+    // Clamped, and this is the one read whose size the caller *does* choose, so it is the one
+    // place a page can be made to fit rather than refused. The callers ask for 500
+    // (`getArtists`), 5,000 (`getArtist`) and 500 (`getCoverArt`'s artist probe); against a
+    // ceiling of 50 subrequests, 5,000 artists is 51 statements before a single row is read,
+    // so the honest clamp is "as many artists as the remaining budget can fetch rows for".
+    //
+    // It clamps the **artist count**, not the statement count, so the answer is still one page
+    // of whole artists rather than a page of half-fetched ones.
+    const limit = this.clampToSubrequestBudget(requestedLimit, ARTISTS_PER_STATEMENT);
     const page = await this.withRetry(
       async () =>
         await this.database

@@ -2,6 +2,7 @@ export { ServiceError } from './IServiceError';
 export { BadRequestError } from './BadRequestError';
 export { ConflictError } from './ConflictError';
 export { PayloadTooLargeError } from './PayloadTooLargeError';
+export { SubrequestBudgetExhaustedError } from './SubrequestBudgetExhaustedError';
 export { RateLimitedError } from './RateLimitedError';
 export { DatabaseError } from './DatabaseError';
 export { ForbiddenError } from './ForbiddenError';

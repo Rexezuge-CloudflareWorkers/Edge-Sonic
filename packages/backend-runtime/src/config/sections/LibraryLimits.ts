@@ -16,6 +16,7 @@ import {
   DEFAULT_TAG_READ_TAIL_BYTES,
   DEFAULT_WEBDAV_TIMEOUT_MS,
 } from '../ConfigurationDefaults';
+import { SCAN_CHUNK_FOLDER_LIMIT, SCAN_CHUNK_SUBSREQUEST_BUDGET, SCAN_ENRICH_MAX_PER_FOLDER } from '../subrequests';
 
 /**
  * Library, scan, and request limits.
@@ -65,6 +66,13 @@ class ScanLimits {
    * `ConfigurationDefaults`, which is where the two bounds are kept distinct.
    */
   public getScanChunkFolders(): number {
+    return Math.min(EnvParser.positiveInt(this.env, 'SCAN_CHUNK_FOLDERS', DEFAULT_SCAN_CHUNK_FOLDERS), SCAN_CHUNK_FOLDER_LIMIT);
+  }
+
+  /**
+   * The configured folder count **before** the clamp, so `validate()` can say what it reduced.
+   */
+  public getRequestedScanChunkFolders(): number {
     return EnvParser.positiveInt(this.env, 'SCAN_CHUNK_FOLDERS', DEFAULT_SCAN_CHUNK_FOLDERS);
   }
 
@@ -77,6 +85,13 @@ class ScanLimits {
    * trips it on an account that never raised `limits.subrequests`.
    */
   public getScanChunkMaxRequests(): number {
+    return Math.min(EnvParser.positiveInt(this.env, 'SCAN_CHUNK_MAX_REQUESTS', DEFAULT_SCAN_CHUNK_MAX_REQUESTS), SCAN_CHUNK_SUBSREQUEST_BUDGET);
+  }
+
+  /**
+  The configured chunk ceiling before the clamp, for `validate()` to report.
+  */
+  public getRequestedScanChunkMaxRequests(): number {
     return EnvParser.positiveInt(this.env, 'SCAN_CHUNK_MAX_REQUESTS', DEFAULT_SCAN_CHUNK_MAX_REQUESTS);
   }
 
@@ -134,6 +149,13 @@ class ScanLimits {
    * path that was already carrying the whole feature.
    */
   public getScanEnrichMaxPerFolder(): number {
+    return Math.min(EnvParser.positiveInt(this.env, 'SCAN_ENRICH_MAX_PER_FOLDER', DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER), SCAN_ENRICH_MAX_PER_FOLDER);
+  }
+
+  /**
+  The configured per-folder enrich cap before the clamp, for `validate()` to report.
+  */
+  public getRequestedScanEnrichMaxPerFolder(): number {
     return EnvParser.positiveInt(this.env, 'SCAN_ENRICH_MAX_PER_FOLDER', DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER);
   }
 }

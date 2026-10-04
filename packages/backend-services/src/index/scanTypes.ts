@@ -11,7 +11,8 @@
  * handful of queries its case needs, and a change to a DAO that the scan does not depend
  * on is not a change here.
  */
-import type { DerivableRow, DerivationWrite, LibraryRow, NodeRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
+import type { DerivableRow, DerivationWrite, LibraryRow, NodeRow, ScanStateRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
+import type { SubrequestCounter, SubrequestSpend } from '@edge-sonic/shared';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { ChunkStopReason } from './scanBudget';
 
@@ -57,14 +58,26 @@ interface ScanNodeStore {
   listChildren(libraryId: string, parentPath: string): Promise<NodeRow[]>;
   listRoots(libraryId: string): Promise<NodeRow[]>;
   listFrontier(libraryId: string, limit: number): Promise<NodeRow[]>;
-  upsertMany(inputs: readonly ScanNodeInput[]): Promise<number>;
+  /**
+   * `WriteBatchResult` and not a count, because a cold album of 500 tracks is ~500 statements
+   * against a ceiling of 50 and is *expected* to come back truncated on a Free plan. The scan
+   * has to see that, because the one write it must not do for a half-written folder is the
+   * folder's own row carrying `is_scanned: true`.
+   */
+  upsertMany(inputs: readonly ScanNodeInput[]): Promise<WriteBatchResult>;
   deleteSubtree(libraryId: string, path: string): Promise<number>;
   countByLibrary(libraryId: string): Promise<number>;
 }
 
 interface ScanSongStore {
-  upsertFileFacts(inputs: readonly ScanSongInput[]): Promise<number>;
-  deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<number>;
+  upsertFileFacts(inputs: readonly ScanSongInput[]): Promise<WriteBatchResult>;
+  /**
+   * `WriteBatchResult` for the same reason `upsertFileFacts` is: a folder that lost 200 tracks
+   * is a 200-statement delete against a ceiling of 50, and the scan does not act on the
+   * truncation — it is idempotent and the next chunk finishes it — but it must not be *told*
+   * it deleted rows it did not.
+   */
+  deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<WriteBatchResult>;
   deleteSubtree(libraryId: string, dirPath: string): Promise<number>;
   countByLibrary(libraryId: string): Promise<number>;
 }
@@ -112,10 +125,18 @@ interface ScanDeps {
    */
   derivation?: ScanDerivationStore;
   /**
-   * The `onRequest` callback is forwarded to the client, so every subrequest this
-   * scan issues is charged to the chunk's budget — including the ones issued by
-   * `enrichSong` below, which run inside the same loop and were previously
-   * uncounted.
+   * The invocation's subrequest counter.
+   *
+   * Every D1 statement and KV operation the scan causes is charged here, from inside the DAO
+   * and the cache, because those are constructed once per request scope and hold a reference to
+   * this counter. It is also what `ScanBudget` wraps, so the budget the chunk decides against
+   * and the counter the DAOs write to cannot be two different numbers.
+   */
+  subrequests: SubrequestCounter;
+  /**
+   * The `onRequest` callback is forwarded to the client, so every WebDAV subrequest this scan
+   * issues is charged to the same counter — including the ones issued by `enrichSong` below,
+   * which run inside the same loop.
    */
   clientFor: (row: LibraryRow, onRequest?: () => void) => Promise<WebDavClient>;
   timeoutMs: number;
@@ -128,12 +149,11 @@ interface ScanDeps {
   */
   chunkFolders: number;
   /**
-   * Subrequests one chunk may issue.
+   * Subrequests one chunk may issue, of **every** kind.
    *
-   * Sized against the platform's *external* subrequest ceiling. That is 50 on the
-   * Free plan and 10,000 on Paid — the 1,000 this was originally sized against was
-   * retired on 2026-02-11 — so a default assuming 1,000 produced a chunk that
-   * *fails* rather than one that is slow.
+   * The platform ceiling is 50 per invocation on the Free plan and D1 counts its own queries
+   * against it, so a budget that counted only `fetch` was not a budget. Derived in
+   * `subrequests.ts`; see `ConfigurationDefaults` for what it was instead.
    */
   chunkMaxRequests: number;
   /**
@@ -161,12 +181,10 @@ interface ScanDeps {
   /**
   Tracks enriched per folder, per chunk.
 
-  A bound on the *shape* of a folder, separate from the chunk's own budget: without
-  it, one album of 500 changed tracks takes the whole budget on its first folder and
-  the walk never advances. An Ogg track costs a prefix read and a tail read, so the
-  chunk budget admits one on the cost of two. Whatever does not fit keeps
-  `enriched_at = null` and is enriched on first play instead — a track with no
-  duration until someone opens it, rather than a chunk that fails.
+  A bound on the *shape* of a folder, separate from the chunk's own budget: without it, one
+  album of 500 changed tracks takes every poll for itself and the folders behind it are never
+  walked. Whatever does not fit keeps `enriched_at = null` and is enriched on first play
+  instead — a track with no duration until someone opens it, rather than a chunk that dies.
   */
   enrichMaxPerFolder: number;
 }
@@ -230,16 +248,20 @@ interface ChunkResult {
   */
   readonly foldersVisited: number;
   /**
-  Subrequests this chunk issued, counted by `WebDavClient` itself.
+  Subrequests this chunk issued, per kind.
 
-  Measured rather than accumulated by the walk, which is what makes it a budget:
-  the scan's loop used to `+= 1` per `PROPFIND` and charge nothing for the range
-  reads its own enrichment made, so it under-reported by up to 40x while the
-  field's comment described it as instrumented "so the budget is testable". A
-  test asserts this equals what the WebDAV double received, so the two cannot
-  drift apart again.
+  Measured at every charge point rather than accumulated by the walk — `WebDavClient` for
+  `fetch`, `BaseDAO.withRetry` and `BaseDAO.runWriteBatch` for `d1`, `KvCache.guard` for `kv` —
+  and all of them writing to the one counter the chunk reads.
+
+  It was `webdavRequests: number`, and the rename is the fix rather than cosmetics. A field
+  called `webdavRequests` on a chunk that spends most of its budget on D1 is a field whose name
+  contradicts its value, and the test that guarded it asserted the value equalled the WebDAV
+  double's count — so it was **green** while the chunk spent five times the ceiling on
+  statements nobody counted. `test/scan-budget.test.ts` now asserts the total against all three
+  doubles.
   */
-  readonly webdavRequests: number;
+  readonly subrequests: SubrequestSpend;
   readonly rowsWritten: number;
   /**
   Which bound ended this chunk, or `null` for one that did no work.

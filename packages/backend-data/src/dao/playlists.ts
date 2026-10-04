@@ -275,7 +275,12 @@ class PlaylistDAO extends BaseDAO {
          WHERE id = ?`,
       )
       .bind(playlistId, playlistId, timestamp, playlistId);
-    const all = [...statements, totals];    await this.runWriteBatch(all, 'playlists.refreshTotals');
+    const all = [...statements, totals];
+    // The `totals` recompute is the statement that makes `song_count` and `duration` agree
+    // with the entries, so a batch that stopped before it would publish a playlist whose
+    // header describes a different set of songs than it holds. All-or-nothing, for the same
+    // reason as the queue: a wrong count is worse than a refusal.
+    await this.runWriteBatch(all, 'playlists.refreshTotals', { requireComplete: true });
   }
 }
 

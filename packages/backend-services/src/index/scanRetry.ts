@@ -37,6 +37,7 @@
  * survives the isolate, and is cleared by `startScan`, which is the operator's escape
  * hatch and needs no surface of its own.
  */
+import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
 import { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES } from './scanTypes';
 import type { ChunkResult, ScanStatus } from './scanTypes';
 import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
@@ -68,7 +69,7 @@ function decideStep(state: ScanStateRow): StepDecision {
 /**
  * A poll that will do no work, reported from stored state.
  *
- * `foldersVisited`, `webdavRequests` and `rowsWritten` are all zero because they are
+ * `foldersVisited`, `subrequests` and `rowsWritten` are all zero because they are
  * **measured**, not defaulted: this call issued no request and wrote no row, and a
  * non-zero number here would be a claim the service cannot support — except for
  * `rowsWritten`, which the caller may have written to, by the derivation backfill, before
@@ -86,7 +87,7 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', 
     // NULL, and a scan nobody is asking about is not the place to explain itself.
     lastError: status === 'idle' ? null : state.last_error,
     foldersVisited: 0,
-    webdavRequests: 0,
+    subrequests: NO_SUBREQUESTS_SPENT,
     rowsWritten,
     stoppedBy: null,
   };
@@ -197,7 +198,7 @@ function unrecordedFailure(lastError: string): ChunkResult {
     indexVersion: 0,
     lastError,
     foldersVisited: 0,
-    webdavRequests: 0,
+    subrequests: NO_SUBREQUESTS_SPENT,
     rowsWritten: 0,
     stoppedBy: null,
   };

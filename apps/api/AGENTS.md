@@ -252,6 +252,18 @@ A bounded chunk returns inside its deadline, so "still scanning" is an answer an
 symptom — and a client that does back off should keep polling rather than lengthen its
 interval, because **polling is the scan**.
 
+**The ceiling is a total, and on Free it is 50.** Workers Free allows 50 subrequests per
+invocation and a D1 statement is one of them — D1 states its own limit as *queries per Worker
+invocation — 1000 (Workers Paid) / 50 (Free)* — so a chunk that budgeted only `fetch` spent
+~240 against a budget of 40 and was terminated by the runtime inside its first album, on every
+chunk, with `ScanWorker.alarm` re-arming and each dead invocation banking a few tracks. That is
+why a scan could report success while no chunk ever completed, and why `stoppedBy: 'requests'`
+was **unreachable** — this operator surface has a string for it that could never render, and a
+self-inflicted ceiling was recorded against the retry budget as though it were a credential
+failure. The string it renders now says the limit is the plan's and the scan continues, rather
+than telling an operator to raise a knob Free cannot raise. See
+`docs/issues/free-plan-subrequest-ceiling.md`.
+
 Neither bound is visible in the `scanStatus` element, which carries only `scanning` and
 `count`. Which bound ended a chunk is on `ChunkResult.stoppedBy`, read through
 `POST /user/libraries/:id/scan/step` — a `POST` for the same reason `probe` is, since it

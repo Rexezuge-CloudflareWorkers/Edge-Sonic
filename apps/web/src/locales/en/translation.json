@@ -61,7 +61,7 @@
     "scanStalled": "Stopped retrying. Fix the cause, then rescan.",
     "scanTracks": "{{count}} tracks indexed",
     "stale": "Showing the last known state — the most recent update could not be read.",
-    "scanPausedRequests": "Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.",
+    "scanPausedRequests": "Paused at the per-chunk request limit. This is the plan limit, not a fault — the scan continues on the next tick.",
     "scanPausedDeadline": "Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.",
     "probed": "Probe finished.",
     "probedOk": "The origin answered.",

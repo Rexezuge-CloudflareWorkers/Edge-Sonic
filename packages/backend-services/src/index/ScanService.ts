@@ -68,11 +68,13 @@
  * that spends the operator's WebDAV requests to reach the same conclusion every time.
  */
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
-import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
 import { backfill, settle } from './scanPrelude';
+import { start } from './scanStart';
 import { ScanBudget, stopReason } from './scanBudget';
+import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
 import { describeFailure, MAX_CONSECUTIVE_FAILURES, storedStatus, unrecordedFailure } from './scanRetry';
 import type { ChunkResult, ScanDeps } from './scanTypes';
 
@@ -84,121 +86,27 @@ class ScanService {
   /**
    * The budget one chunk runs under.
    *
-   * A fresh object per call, because a budget is scoped to one invocation and
-   * this service is a per-request singleton — sharing one across chunks would
-   * make the second poll inherit the first poll's spending, and a scan would stop
-   * after a single chunk however large the ceiling.
+   * A fresh wrapper per call, because a budget is scoped to one chunk and this service is a
+   * per-request singleton — sharing one across chunks would make the second poll inherit the
+   * first poll's spending, and a scan would stop after a single chunk however large the
+   * ceiling. The **counter** is not fresh: it is the request scope's, because that is the
+   * object every D1 statement and KV operation is charging, and a budget reading a different
+   * counter from the one the DAOs write to would be a budget reading fiction.
    */
   private budget(): ScanBudget {
-    return new ScanBudget({ maxRequests: this.deps.chunkMaxRequests, deadlineMs: this.deps.chunkDeadlineMs });
+    return new ScanBudget({
+      meter: this.deps.subrequests,
+      maxRequests: this.deps.chunkMaxRequests,
+      deadlineMs: this.deps.chunkDeadlineMs,
+    });
   }
 
   /**
-   * `startScan`: probe the root and decide whether there is anything to do.
-   *
-   * Deliberately does no further walking. Making `startScan` the expensive request
-   * means a client that calls it and then times out has learned nothing about
-   * progress.
+   * `startScan`: probe the root, seed the frontier, and decide whether there is anything to
+   * walk. The decision and the cheap path are `scanStart.ts`; this is the seam.
    */
   public async start(library: LibraryRow): Promise<ChunkResult> {
-    const state = await this.deps.scanState.ensure(library.id);
-    const budget = this.budget();
-
-    let root: DavResource | undefined;
-    try {
-      const listed = await (await this.deps.clientFor(library, () => budget.charge())).propfind('', { depth: 0, timeoutMs: this.deps.timeoutMs });
-      root = listed.find((resource) => toLibraryPath(resource.path, library.root_path) === '') ?? listed[0];
-    } catch (error) {
-      const status = (error as { status?: number }).status;
-      if (status === 404 || status === 410) {
-        // The library root is gone. Clear the index rather than leaving rows that
-        // point at paths which no longer exist.
-        await this.deps.nodes.deleteSubtree(library.id, '');
-        const indexVersion = await this.deps.scanState.complete(library.id, 0);
-        return {
-          status: 'idle',
-          scanned: 0,
-          total: 0,
-          indexVersion,
-          lastError: null,
-          foldersVisited: 0,
-          webdavRequests: budget.spent,
-          rowsWritten: 0,
-          stoppedBy: null,
-        };
-      }
-      return await this.failChunk(library, state, error, budget);
-    }
-
-    const rootMtime = root?.lastModifiedMs ?? null;
-    const stored = await this.deps.nodes.find(library.id, '');
-
-    // A completed scan whose root mtime still matches means nothing below it
-    // moved. This comparison against the *stored* value is the entire reason a
-    // rescan is free.
-    //
-    // ### The floor, and why "completed" is not enough on its own
-    //
-    // The stored mtime is written by two callers — the scan and `TreeService`'s
-    // read-through browse — so a match says *something* listed this root, not that
-    // anything below it was ever read. Worse, a scan that indexed nothing is
-    // indistinguishable here from a scan that finished: `scanned_count` counts
-    // folders *visited*, and a walk that visited the root and closed every child
-    // unread has `scanned_count = 1`.
-    //
-    // That combination is what made a broken library permanent rather than merely
-    // wrong. Once `complete()` recorded `idle` with a matching root mtime, this
-    // branch fired on every later `startScan` and the library could never be
-    // re-walked — the only escapes were the origin's root mtime moving or the
-    // library being deleted, which cascades the whole index away.
-    //
-    // So the short-circuit also requires that the library has tracks. One indexed
-    // read on `startScan` only — not on any chunk — and it is what makes the cheap
-    // path *safe to be wrong about*: an empty result re-walks rather than reporting
-    // a library it has no evidence is current.
-    const indexedTracks = state.status === 'idle' && state.scanned_count > 0 ? await this.deps.songs.countByLibrary(library.id) : 0;
-
-    if (state.status === 'idle' && state.scanned_count > 0 && indexedTracks > 0 && rootMtime !== null && stored?.mtime_ms === rootMtime) {
-      return {
-        status: 'idle',
-        scanned: state.scanned_count,
-        total: state.scanned_count,
-        indexVersion: state.index_version,
-        lastError: null,
-        foldersVisited: 0,
-        webdavRequests: budget.spent,
-        rowsWritten: 0,
-        stoppedBy: null,
-      };
-    }
-
-    // Seed the frontier with the root. Every other folder joins it as its parent is
-    // reconciled, which is what bounds a chunk's subrequest count.
-    await this.deps.nodes.upsertMany([
-      {
-        libraryId: library.id,
-        path: '',
-        parentPath: '',
-        name: '',
-        mtimeMs: rootMtime,
-        etag: root?.etag ?? null,
-        depth: 0,
-        isScanned: false,
-      },
-    ]);
-
-    await this.deps.scanState.markScanning(library.id, 0);
-    return {
-      status: 'scanning',
-      scanned: 0,
-      total: 0,
-      indexVersion: state.index_version,
-      lastError: null,
-      foldersVisited: 0,
-      webdavRequests: budget.spent,
-      rowsWritten: 0,
-      stoppedBy: null,
-    };
+    return await start(this.deps, library, this.budget(), async (row, state, error, budget) => await this.failChunk(row, state, error, budget));
   }
 
   /**
@@ -249,11 +157,18 @@ class ScanService {
       scanned = state.scanned_count;
 
       for (const folder of frontier) {
-        // One `PROPFIND` is the cost of the next unit of work, and it is checked
-        // *before* it is issued. A folder skipped here stays `is_scanned = 0` and
-        // is the first thing the next poll picks up, so leaving early loses
-        // nothing and double-writes nothing.
-        if (!budget.canAfford()) break;
+        // The cost of the next unit of work, checked *before* it is issued, and it is a
+        // folder's whole base cost rather than the one `PROPFIND` it used to check for.
+        //
+        // `SUBSREQUESTS_PER_FOLDER_BASE` is the part a folder costs whatever it contains: one
+        // `PROPFIND`, two `listChildren`, the `upsertMany` for its own row, its songs' upsert
+        // and the prune. Checking only the `PROPFIND` is what let a chunk start a folder it
+        // could not finish — and "could not finish" on the Free plan is not a slow folder, it
+        // is a terminated invocation.
+        //
+        // A folder skipped here stays `is_scanned = 0` and is the first thing the next poll
+        // picks up, so leaving early loses nothing and double-writes nothing.
+        if (!budget.canAfford(SUBSREQUESTS_PER_FOLDER_BASE)) break;
 
         foldersVisited += 1;
         const listed = await this.listFolder(library, folder.path, budget);
@@ -262,7 +177,7 @@ class ScanService {
           // design, scoped to a folder the scan already visited, so its cost is
           // proportional to the deletion rather than to library size.
           rowsWritten += await this.deps.nodes.deleteSubtree(library.id, folder.path);
-          rowsWritten += await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, []);
+          rowsWritten += (await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, [])).changes;
           scanned += 1;
           continue;
         }
@@ -278,7 +193,7 @@ class ScanService {
         indexVersion: state.index_version,
         lastError: null,
         foldersVisited,
-        webdavRequests: budget.spent,
+        subrequests: budget.spend(),
         rowsWritten,
         // `frontier` when the loop ran out of folders to visit, and the bound that
         // cut it short otherwise — which is the fact an operator watching a scan
@@ -335,7 +250,7 @@ class ScanService {
       // and an `idle` scan is the state an operator is not asking about.
       lastError: state.status === 'failed' ? state.last_error : null,
       foldersVisited: 0,
-      webdavRequests: 0,
+      subrequests: NO_SUBREQUESTS_SPENT,
       rowsWritten: 0,
       // Which bound ended the *last* chunk is not persisted, so a read-only status
       // cannot report one. `null` is honest: this call did no work, so nothing
@@ -370,7 +285,7 @@ class ScanService {
       // The budget's own count rather than a `?? 1` fallback: it measures every
       // request the failed chunk issued, including the ones that threw, which is
       // the number an operator needs to tell a credential failure from a ceiling.
-      webdavRequests: budget.spent,
+      subrequests: budget.spend(),
       rowsWritten: partial?.rowsWritten ?? 0,
       stoppedBy: null,
     };

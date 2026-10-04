@@ -106,22 +106,50 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
 - Otherwise only folders whose mtime moved are descended. The `is_scanned` flag is written
   by the node upsert, so the frontier is the database's, not memory's.
 - **A chunk is bounded three ways, and the three are not redundant** — they guard
-  different resources. `chunkMaxRequests` (default 40) is the platform's *external*
-  subrequest ceiling, which is **50 on the Free plan** and 10,000 on Paid; the 1,000
-  these were originally sized against was retired on 2026-02-11. `chunkDeadlineMs`
-  (default 20 s) is what makes a poll *return* on a slow origin. `chunkFolders`
-  (default 40) bounds D1 work against the 5,000-rows/day allowance. The loop checks
-  `budget.canAfford()` before each folder and before each enriched track, and **leaves
-  early** rather than running itself out — a cold scan of 1,000 folders / 5,000 tracks
-  is roughly 6,100 row writes against a 5,000/day allowance, survivable because the
-  scan is chunked and resumable and because every later scan writes zero rows.
-- **The subrequest count is measured, not asserted.** `WebDavClient` charges a caller
-  supplied `onRequest` inside its private `request()` — the single path `propfind`,
-  `get`, `readPrefix` and `readTail` share — and `ScanService` threads one meter
-  through `clientFor` *and* through `enrichSong`, so a range read the scan causes is
-  charged to the same ceiling as the `PROPFIND` that found the file. It used to be
-  `+= 1` in the walk's loop, which counted nothing the enrichment did and
-  under-reported by up to 40x.
+  different resources. `chunkMaxRequests` (default 42) is the platform's subrequest ceiling
+  **less an invocation reserve**: Workers Free allows **50 subrequests per invocation**, and
+  a subrequest is a `fetch`, a **D1 statement**, a KV operation, a DO RPC or a Secrets Store
+  read — D1 states its own limit as *queries per Worker invocation — 50 (Free)*.
+  `chunkDeadlineMs` (default 20 s) is what makes a poll *return* on a slow origin.
+  `chunkFolders` (default 7) bounds D1 work against the 5,000-rows/day allowance, and is
+  **derived** from the ceiling rather than typed beside it: 40 folders is ~240 subrequests.
+  The loop checks `budget.canAfford()` before each folder — at a folder's whole base cost of
+  6, not at its one `PROPFIND`, because a chunk that starts a folder it cannot finish does
+  not get a slow folder, it gets a terminated invocation — and before each enriched track at
+  five, and **leaves early** rather than running itself out. A cold scan of 1,000 folders /
+  5,000 tracks is roughly 6,100 row writes against a 5,000/day allowance, survivable because
+  the scan is chunked and resumable and because every later scan writes zero rows.
+- **Every subrequest is measured, not asserted.** `WebDavClient` charges a caller supplied
+  `onRequest` inside its private `request()` — the single path `propfind`, `get`,
+  `readPrefix` and `readTail` share — and the composition root makes the **scope's**
+  `SubrequestCounter` the default `onRequest`, so a cover-art probe and a scan's `PROPFIND`
+  are counted by the same object. D1 charges that same counter inside `BaseDAO`, KV inside
+  `KvCache`. It used to be `+= 1` in the walk's loop, which counted nothing the enrichment
+  did and under-reported by up to 40x; then it counted WebDAV and nothing else, which
+  under-reported by ~5x and killed every chunk on a Free account. `ScanBudget` **wraps**
+  the scope's counter rather than owning one, because a budget reading a second, private
+  number while the DAOs write to the first is the same defect one layer up.
+  `ChunkResult.subrequests` replaced `webdavRequests`, and the rename is the fix rather
+  than cosmetics: a field called `webdavRequests` on a chunk that spends most of its budget
+  on D1 is a field whose name contradicts its value, and the test that guarded it asserted
+  the value equalled the WebDAV double's count — green while the chunk spent five times the
+  ceiling.
+- **`stoppedBy: 'requests'` is a normal, resumable return, and it was unreachable.**
+  `stopReason` asks the **deadline first**: `remaining > 0` does not mean the chunk could
+  have done anything, because it may have had five subrequests left and needed six for the
+  next folder. Asking `remaining <= 0` reported `deadline` for that case, so an operator was
+  told a slow origin had ended the chunk when a number had. And while the meter was blind
+  to D1 the state could not occur at all — the operator surface had a string for it and could
+  never render it, so a self-inflicted ceiling spent `MAX_CONSECUTIVE_FAILURES` as though it
+  were a credential failure.
+- **A folder larger than the invocation is resumable, not truncated-and-forgotten.**
+  `runWriteBatch` splits a write batch by what is left of the budget and reports
+  `truncated`; `reconcileFolder` writes the children first and the folder's own row — the
+  one carrying `is_scanned: true` — last and only if nothing was truncated, and skips
+  enrichment and the prune there, because the prune derives its delete set from the rows D1
+  holds and would delete exactly the children the upsert could not write. A 500-track album
+  is ~1,000 statements against a ceiling of 50, so this is the expected case on Free rather
+  than an edge case.
 - **The operator surface can advance a scan.** `POST /user/libraries/:id/scan/step`
   runs one chunk. `/rest/getScanStatus` was the only caller of `step`, so an operator
   clicking "Rescan" started a scan that only progressed while some *Subsonic client*
@@ -254,8 +282,14 @@ enrichment takes the remainder — so a wide-changed album can end its own chunk
 the trade made deliberately, because a chunk that ends early is resumable and a chunk that
 exceeds the platform's ceiling is not.
 
+The chunk admits a track on the cost of **five** subrequests — the two external range reads
+plus a `songMeta` KV read, an `applyMetadata` and a `songMeta` KV write — derived in
+`subrequests.ts` rather than written beside the loop. It was `2`, which counted the external
+reads alone, and admitting twenty tracks per folder on that reservation is ~100 subrequests of
+work onto a budget of 50.
+
 Per-folder enrichment is capped by `SCAN_ENRICH_MAX_PER_FOLDER` because a cold scan of
-5,000 tracks is 5,000 subrequests against a 1,000 limit. What does not fit keeps
+5,000 tracks is 5,000 subrequests against a 50 limit. What does not fit keeps
 `enriched_at = null` and is enriched on first play — a degraded answer rather than a chunk
 that fails. Failures are swallowed for the same reason: the scan's rows are already
 written, and one unavailable origin must not discard them.

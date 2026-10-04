@@ -47,7 +47,15 @@ import {
   DEFAULT_SCAN_CHUNK_DEADLINE_MS,
   DEFAULT_SCAN_CHUNK_FOLDERS,
   DEFAULT_SCAN_CHUNK_MAX_REQUESTS,
+  DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER,
+  SCAN_CHUNK_FOLDER_LIMIT,
+  SCAN_CHUNK_SUBSREQUEST_BUDGET,
+  SCAN_ENRICH_MAX_PER_FOLDER,
+  SUBSREQUESTS_PER_ENRICHED_TRACK,
+  SUBSREQUESTS_PER_FOLDER_BASE,
+  WORKER_SUBSREQUEST_CEILING,
 } from '@edge-sonic/backend-runtime/config';
+import { SubrequestCounter } from '@edge-sonic/shared';
 import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
@@ -57,6 +65,37 @@ const LIBRARY_ID = 'L1';
 const ROOT = '/dav/music';
 const ALBUMS = ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8', 'A9', 'A10', 'A11', 'A12'];
 const TRACKS_PER_ALBUM = 3;
+
+/**
+ * What one of this fixture's album folders costs, in subrequests.
+ *
+ * Spelled out rather than imported, because `SUBSREQUESTS_PER_FOLDER_BASE` is deliberately only
+ * the *base* — the part a folder costs whatever it holds — and a test that used it as the whole
+ * cost would be asserting against a constant chosen to be an underestimate. This is the real
+ * figure, and a ceiling built from it is a ceiling that means something:
+ *
+ * | Step                                   | Subrequests |
+ * | -------------------------------------- | ----------- |
+ * | the `PROPFIND`                         | 1           |
+ * | `listChildren` to diff against         | 1           |
+ * | `upsertMany` — one per child           | 3           |
+ * | `upsertFileFacts` — one per track      | 3           |
+ * | `upsertMany` — the folder's own row    | 1           |
+ * | `listChildren` for the prune           | 1           |
+ * | `deleteInDirectoryNotIn` — its read    | 1           |
+ */
+const FIXTURE_FOLDER_COST = 1 + 1 + TRACKS_PER_ALBUM + TRACKS_PER_ALBUM + 1 + 1 + 1;
+
+/**
+ * The same folder, up to the point enrichment starts — which is two fewer, because the prune's
+ * read and its (empty) delete run *after* the tracks.
+ *
+ * A ceiling that decides how many tracks get enriched has to be computed against this figure
+ * rather than the folder's total: adding the prune's two statements to the estimate makes the
+ * ceiling look smaller than it is, admits a third track, and produces a test that passes for
+ * the wrong reason while documenting a bound nobody has.
+ */
+const FIXTURE_FOLDER_COST_BEFORE_ENRICHMENT = FIXTURE_FOLDER_COST - 2;
 
 /**
  * An index that records writes and holds the frontier, in memory.
@@ -82,6 +121,23 @@ interface IndexOptions {
    * measured, and the half that is missing is the half D1 actually causes in production.
    */
   d1LatencyMs?: number;
+  /**
+   * The counter the double charges, standing in for the one the DAOs hold in production.
+   *
+   * ### Why this is the most important line in the file
+   *
+   * Because it is what makes this double model **D1** rather than a database in general. It
+   * used to model a database whose statements were free, because nothing said otherwise — the
+   * scan's budget metered `fetch`, and this store sat beside it charging nothing. So the
+   * suite could see the WebDAV half of a chunk precisely and the half that actually killed the
+   * invocation not at all, and reported the product as comfortably inside a ceiling of 50
+   * while a chunk spent ~240.
+   *
+   * One subrequest per statement, matching `BaseDAO.withRetry` and `BaseDAO.runWriteBatch` —
+   * pessimistic about `batch()`, because the platform does not say which reading is right and
+   * over-counting a budget only makes a scan slower.
+   */
+  meter?: SubrequestCounter;
 }
 
 function createIndex(options: IndexOptions = {}) {
@@ -107,18 +163,51 @@ function createIndex(options: IndexOptions = {}) {
   // test can assert the deadline fired *without* spending a subrequest — the two bounds
   // guard different resources and a test that cannot tell them apart proves neither.
   let d1Calls = 0;
+  let d1Statements = 0;
   // Settable rather than fixed, so a test can leave the **setup** fast and make only the
   // chunk under test slow. A fixed latency applies to `readyFullFrontier`'s own drain and
   // re-seed as well, which changes the fixture rather than the case.
   let latencyMs = options.d1LatencyMs ?? 0;
-  const charge = async <T>(value: () => T): Promise<T> => {
+  //
+  // The **platform** ceiling, not an unlimited one — which is the whole point of this double
+  // modelling D1 rather than a database. An unmetered store let every write batch be issued
+  // whole, so the cases below measured a chunk that could never happen: one that never ran out
+  // of anything. With the real ceiling, a batch that does not fit truncates exactly as
+  // `BaseDAO.runWriteBatch` truncates, and a folder too large for one chunk stays on the
+  // frontier — which is the behaviour the shipped defaults depend on.
+  const meter = options.meter ?? new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
+
+  /**
+   * One D1 statement: charged, counted and optionally slow.
+   *
+   * `statements` rather than always 1, because a DAO's write batch costs one subrequest per
+   * statement — `runWriteBatch` charges the group's length — and a folder of three tracks
+   * upserts four rows. Counting every store call as one is how a double under-reports by the
+   * same factor the product over-spent by.
+   */
+  const charge = async <T>(value: () => T, statements = 1): Promise<T> => {
     d1Calls += 1;
+    d1Statements += statements;
+    meter.charge(statements, 'd1');
     if (latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, latencyMs));
     return value();
   };
 
+  /**
+   * How many of `statements` fit what is left, and how many were written.
+   *
+   * `runWriteBatch`'s own rule, so the truncation this models is the truncation production
+   * does rather than an invention of the test.
+   */
+  const writeBatch = (statements: number): { written: number; truncated: boolean } => {
+    const fits = Number.isFinite(meter.ceiling) ? Math.max(0, Math.min(statements, Math.floor(meter.remaining))) : statements;
+    return { written: fits, truncated: fits < statements };
+  };
+
   return {
     d1Calls: () => d1Calls,
+    d1Statements: () => d1Statements,
+    meter,
     setD1Latency: (ms: number) => {
       latencyMs = ms;
     },
@@ -146,10 +235,11 @@ function createIndex(options: IndexOptions = {}) {
               .sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path))
               .slice(0, limit),
           ),
-        upsertMany: async (inputs: readonly { libraryId: string; path: string; parentPath: string; name: string; mtimeMs: number | null; etag: string | null; depth: number; isScanned?: boolean }[]) =>
-          await charge(() => {
+        upsertMany: async (inputs: readonly { libraryId: string; path: string; parentPath: string; name: string; mtimeMs: number | null; etag: string | null; depth: number; isScanned?: boolean }[]) => {
+          const { written } = writeBatch(inputs.length);
+          const result = await charge(() => {
           let changed = 0;
-          for (const input of inputs) {
+          for (const input of inputs.slice(0, written)) {
             const key = nodeKey(input.path);
             const existing = nodes.get(key);
             if (existing !== undefined && existing.mtime_ms === input.mtimeMs && existing.etag === input.etag && existing.is_scanned === (input.isScanned ? 1 : 0)) continue;
@@ -169,7 +259,9 @@ function createIndex(options: IndexOptions = {}) {
             changed += 1;
           }
           return changed;
-        }),
+        }, inputs.length);
+          return { changes: result, written, truncated: written < inputs.length };
+        },
         deleteSubtree: async (_libraryId: string, path: string) => {
           const doomed = [...nodes.values()].filter((node) => node.path === path || node.path.startsWith(`${path}/`));
           for (const node of doomed) nodes.delete(nodeKey(node.path));
@@ -187,9 +279,10 @@ function createIndex(options: IndexOptions = {}) {
         // cost was therefore running against a world in which no row is ever derived: a
         // double disagreeing with production about the very column under repair, which is
         // the failure mode the rule about doubles names.
-        upsertFileFacts: async (inputs: readonly { id: string; path: string; size: number; mtimeMs: number }[]) =>
-          await charge(() => {
-          for (const input of inputs) {
+        upsertFileFacts: async (inputs: readonly { id: string; path: string; size: number; mtimeMs: number }[]) => {
+          const { written } = writeBatch(inputs.length);
+          const result = await charge(() => {
+          for (const input of inputs.slice(0, written)) {
             const dirPath = input.path.split('/').slice(0, -1).join('/');
             const derived = deriveFromPath(dirPath);
             songs.set(input.id, {
@@ -232,7 +325,9 @@ function createIndex(options: IndexOptions = {}) {
             } as SongRow);
           }
           return inputs.length;
-        }),
+        }, inputs.length);
+          return { changes: result, written, truncated: written < inputs.length };
+        },
         // The prune path, made **visible**. It returned 0 unconditionally, so the largest
         // row-write cost in a cold scan — a folder of deleted files — was free in every
         // budget measurement here. Now it costs rows and removes them, so a chunk that
@@ -243,9 +338,13 @@ function createIndex(options: IndexOptions = {}) {
         // that prunes is measurable the way a chunk that indexes is.
         deleteInDirectoryNotIn: async (_libraryId: string, dirPath: string, keepPaths: readonly string[]) => {
           const keep = new Set(keepPaths);
-          const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath && !keep.has(song.path));
-          for (const song of doomed) songs.delete(song.id);
-          return doomed.length;
+          const doomed = await charge(() => [...songs.values()].filter((song) => song.dir_path === dirPath && !keep.has(song.path)), 1);
+          // The deletes are a batch of their own, so they are charged as one — which is the
+          // case that makes the scan's prune a budget item at all.
+          const { written } = writeBatch(doomed.length);
+          for (const song of doomed.slice(0, written)) songs.delete(song.id);
+          if (doomed.length > 0) meter.charge(doomed.length, 'd1');
+          return { changes: written, written, truncated: written < doomed.length };
         },
         deleteSubtree: async (_libraryId: string, dirPath: string) => {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath);
@@ -369,8 +468,11 @@ interface Harness {
  * with one name and two contracts means the next reader who greps `createHarness` gets
  * whichever they expected.
  */
-function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number, d1LatencyMs?: number): Harness {
-  const index = createIndex(d1LatencyMs === undefined ? {} : { d1LatencyMs });
+function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number, d1LatencyMs?: number, meterCeiling?: number): Harness {
+  const index = createIndex({
+    ...(d1LatencyMs !== undefined && { d1LatencyMs }),
+    ...(meterCeiling !== undefined && { meter: new SubrequestCounter(meterCeiling) }),
+  });
   const dav = fakeDav(tree, latencyMs === undefined ? {} : { latencyMs });
   const row = library();
 
@@ -382,6 +484,11 @@ function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number,
     makeService: (overrides = {}) =>
       new ScanService({
         ...index.deps,
+        // The counter the store double above charges. Without it the scan would budget against
+        // a counter of its own and the D1 half of every chunk would be invisible to the
+        // assertions below — which is the defect this file exists to catch, reproduced by the
+        // fix.
+        subrequests: index.meter,
         // The real client, so the charge happens inside `WebDavClient.request()` —
         // the same place production charges it. A `clientFor` that ignored `onRequest`
         // would make every count assertion below pass vacuously.
@@ -409,9 +516,17 @@ function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number,
         ...(overrides.enrich !== false && {
           enrichSong: async (libraryRow, facts, onRequest) => {
             const client = new WebDavClient(libraryRow.base_url, libraryRow.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest);
+            // The three charges `EnrichmentService` makes that are not WebDAV: a `songMeta` KV
+            // read on the way in, an `applyMetadata` and a `songMeta` KV write on the way out.
+            // Modelled explicitly rather than by standing up the real service, because what
+            // these cases measure is the cost of a track — and that cost is 5, which is the
+            // number the chunk's per-track reservation was wrong about by 3.
+            index.meter.charge(1, 'kv');
             try {
               await client.readPrefix(facts.path, 4096, 1000);
               await client.readTail(facts.path, 4096, facts.size, 1000);
+              index.meter.charge(1, 'd1');
+              index.meter.charge(1, 'kv');
             } catch {
               // The scan swallows a failed enrichment and leaves the track for
               // `getSong`; these cases are about cost, not decoding.
@@ -478,24 +593,30 @@ describe('a scan chunk is bounded work', () => {
     await harness.readyFullFrontier();
     const result = await harness.makeService().step(harness.row);
 
-    expect(result.webdavRequests).toBe(harness.issued());
+    expect(result.subrequests.fetch).toBe(harness.issued());
     // And not the walk-only number, which is what it used to report.
-    expect(result.webdavRequests).toBeGreaterThan(result.foldersVisited);
+    expect(result.subrequests.fetch).toBeGreaterThan(result.foldersVisited);
   });
 
   it('leaves the frontier when the request ceiling is reached, and names the bound', async () => {
-    // One `PROPFIND` per folder, so a ceiling of 3 admits exactly three folders and
-    // then stops. Asserted on the count rather than on the ceiling being honoured in
-    // general: a chunk that visited everything would be the bug.
+    // Two folders' worth of ceiling, so two folders are indexed and the rest are left. The
+    // budget is now a folder's whole cost rather than its `PROPFIND`, so "three requests" no
+    // longer means "three folders" — and that is the change that keeps a chunk from starting
+    // work it cannot finish, which on this platform is not slow work.
     await harness.readyFullFrontier();
-    const result = await harness.makeService({ maxRequests: 3, enrich: false }).step(harness.row);
+    const result = await harness.makeService({ maxRequests: FIXTURE_FOLDER_COST * 2, enrich: false }).step(harness.row);
 
     expect(result.status).toBe('scanning');
-    expect(result.foldersVisited).toBe(3);
-    expect(result.webdavRequests).toBeLessThanOrEqual(3);
+    expect(result.foldersVisited).toBe(2);
+    // The chunk budget says when to *stop starting* work; the platform ceiling says how much
+    // may be spent. A chunk can overshoot its own budget by the tail of the folder it was
+    // already inside — that is what `SUBSREQUEST_INVOCATION_RESERVE` pays for — and by no more
+    // than one folder, because the walk checks before each folder rather than after.
+    expect(result.subrequests.total).toBeLessThanOrEqual(FIXTURE_FOLDER_COST * 2 + FIXTURE_FOLDER_COST);
+    expect(result.subrequests.total).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
     expect(result.stoppedBy).toBe('requests');
     // Folders left on the frontier for the next poll, rather than lost.
-    expect(harness.index.frontier()).toHaveLength(ALBUMS.length - 3);
+    expect(harness.index.frontier()).toHaveLength(ALBUMS.length - 2);
   });
 
   it('leaves the frontier when the deadline is reached, and names that bound instead', async () => {
@@ -553,7 +674,7 @@ describe('a scan chunk is bounded work', () => {
     // Both fail these two numbers.
     expect(result.foldersVisited).toBeGreaterThan(0);
     expect(result.foldersVisited).toBeLessThan(ALBUMS.length);
-    expect(slowStore.issued()).toBe(result.webdavRequests);
+    expect(slowStore.issued()).toBe(result.subrequests.fetch);
     expect(slowStore.issued()).toBeLessThanOrEqual(result.foldersVisited);
 
     // And the folders it did not reach are all still on the frontier, which is what makes
@@ -565,8 +686,14 @@ describe('a scan chunk is bounded work', () => {
     // The guard without this: a `canAfford` that always returned `false` would make
     // both bound tests pass, and every scan would silently do nothing. This is the
     // "a guard needs a test that proves it has teeth" rule from the testing guide.
-    await harness.readyFullFrontier();
-    const result = await harness.makeService({ maxRequests: 10_000, deadlineMs: 60_000, enrich: false }).step(harness.row);
+    //
+    // Its own harness, with the ceiling raised, because *generous* now means generous in both
+    // dimensions. Twelve albums of three tracks cost ~130 subrequests to index, which no
+    // single Free-plan invocation can pay for — so on the real ceiling this case would be
+    // measuring the ceiling rather than the guard, and the guard would go untested.
+    const generous = createScanHarness(albumTree(ALBUMS.length), undefined, undefined, WORKER_SUBSREQUEST_CEILING * 10);
+    await generous.readyFullFrontier();
+    const result = await generous.makeService({ maxRequests: 10_000, deadlineMs: 60_000, enrich: false }).step(generous.row);
 
     expect(result.foldersVisited).toBe(ALBUMS.length);
     expect(result.stoppedBy).toBe('frontier');
@@ -575,8 +702,26 @@ describe('a scan chunk is bounded work', () => {
   it('reports `frontier` — not a limit — for a chunk that simply ran out of folders', async () => {
     // The ordinary case must not be dressed up as a problem, or an operator reads a
     // line about limits on every healthy poll.
+    const generous = createScanHarness(albumTree(ALBUMS.length), undefined, undefined, WORKER_SUBSREQUEST_CEILING * 10);
+    await generous.readyFullFrontier();
+    expect((await generous.makeService({ enrich: false }).step(generous.row)).stoppedBy).toBe('frontier');
+  });
+
+  it('leaves the frontier partly drained on the real ceiling, and says so rather than failing', async () => {
+    // The Free-plan shape, asserted as the *expected* behaviour rather than as a compromise:
+    // twelve albums cost more than one invocation's ceiling, so a chunk reconciles the ones
+    // that fit, reports `requests`, and leaves the rest for the alarm to come back for. The
+    // assertion that matters is the last one — the chunk returned. Before the ceiling was
+    // measured, it did not: the platform terminated the invocation.
     await harness.readyFullFrontier();
-    expect((await harness.makeService({ enrich: false }).step(harness.row)).stoppedBy).toBe('frontier');
+    const result = await harness.makeService({ maxRequests: 10_000, enrich: false }).step(harness.row);
+
+    expect(result.status).toBe('scanning');
+    expect(result.stoppedBy).toBe('requests');
+    expect(result.foldersVisited).toBeGreaterThan(0);
+    expect(result.foldersVisited).toBeLessThan(ALBUMS.length);
+    expect(result.subrequests.total).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
+    expect(harness.index.frontier().length).toBeGreaterThan(0);
   });
 
   it('resumes on the next poll with no folder lost and none walked twice', async () => {
@@ -585,8 +730,12 @@ describe('a scan chunk is bounded work', () => {
     // was actually asked for, because `scanned_count` is a running total and says
     // nothing about which folders were visited.
     await harness.readyFullFrontier();
-    const service = harness.makeService({ maxRequests: 3, enrich: false });
-    expect((await service.step(harness.row)).foldersVisited).toBe(3);
+    // Three folders' worth, not three requests'. A ceiling that cannot pay for a whole folder
+    // admits none, which is the correct answer and a different one from "admits three folders".
+    const service = harness.makeService({ maxRequests: FIXTURE_FOLDER_COST * 3, enrich: false });
+    const first = await service.step(harness.row);
+    expect(first.foldersVisited).toBe(3);
+    expect(first.stoppedBy).toBe('requests');
 
     for (let poll = 0; poll < 20; poll += 1) {
       if ((await service.step(harness.row)).status !== 'scanning') break;
@@ -601,19 +750,53 @@ describe('a scan chunk is bounded work', () => {
     expect(harness.index.frontier()).toEqual([]);
   });
 
+  it('admits no folder at all when the ceiling cannot pay for one', async () => {
+    // The case that was impossible to express before, and the one a Free-plan account lives
+    // in. A chunk that checks only the cost of the next `PROPFIND` starts a folder it cannot
+    // finish; on this platform that is not a slow folder, it is a terminated invocation. So
+    // the check is the folder's whole base cost, and below it the chunk does nothing and says
+    // so — a normal, resumable return rather than a failure.
+    await harness.readyFullFrontier();
+    const result = await harness.makeService({ maxRequests: SUBSREQUESTS_PER_FOLDER_BASE - 1, enrich: false }).step(harness.row);
+
+    expect(result.status).toBe('scanning');
+    expect(result.foldersVisited).toBe(0);
+    expect(result.stoppedBy).toBe('requests');
+    expect(harness.dav.requestCount()).toBe(0);
+    // And the frontier is untouched, so the next poll with a workable ceiling does the work.
+    expect(harness.index.frontier()).toHaveLength(ALBUMS.length);
+  });
+
   it('enriches the tracks it can afford, and leaves the rest for `getSong`', async () => {
     // Enrichment takes the remainder of the budget rather than a reserved slice, so
     // a wide-changed album can end its own chunk. The tracks it skipped keep
     // `enriched_at = null` — a degraded answer, not a failed chunk.
+    //
+    // The ceiling is two tracks plus a folder: an album of three tracks costs `6` to index and
+    // `SUBSREQUESTS_PER_ENRICHED_TRACK` (5) a track to enrich, so 20 pays for the folder and
+    // two of its three tracks and stops before the third. That the *third* is the one left
+    // behind is the assertion that matters — a budget which spent its remainder on nothing, or
+    // on all three, would both pass a count-only check.
     await harness.readyFullFrontier();
-    const result = await harness.makeService({ maxRequests: 12 }).step(harness.row);
+    // The folder up to enrichment (9), then two tracks at 5 each, then **one short of a third**:
+    // 9 + 10 + 4 = 23, so the third track would need 24. Spelled out rather than tuned, because
+    // a ceiling chosen to make an assertion pass is the thing this file exists to distrust — and
+    // `SUBSREQUESTS_PER_FOLDER_BASE` cannot be used here, since it is only the part of a
+    // folder's cost that does not depend on how many tracks it holds.
+    const ceiling = FIXTURE_FOLDER_COST_BEFORE_ENRICHMENT + SUBSREQUESTS_PER_ENRICHED_TRACK * 2 + (SUBSREQUESTS_PER_ENRICHED_TRACK - 1);
+    const result = await harness.makeService({ maxRequests: ceiling }).step(harness.row);
 
     expect(result.status).toBe('scanning');
     expect(result.stoppedBy).toBe('requests');
     // Something was enriched *and* something was not, which is the trade being made
     // visible rather than asserted in a comment.
-    expect(result.webdavRequests).toBeGreaterThan(result.foldersVisited);
-    expect(result.webdavRequests).toBeLessThanOrEqual(12);
+    expect(result.subrequests.fetch).toBeGreaterThan(result.foldersVisited);
+    expect(result.subrequests.total).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
+    // Two tracks' worth of range reads past the folder's own `PROPFIND`, and not three. This
+    // is the assertion about `SUBSREQUESTS_PER_ENRICHED_TRACK`: with the old reservation of 2
+    // the chunk admitted all three tracks and crossed the ceiling, and a count-only check
+    // would have called that a pass.
+    expect(result.subrequests.fetch).toBe(result.foldersVisited + 4);
   });
 
   it('spends nothing on enrichment when the scan has none to do', async () => {
@@ -625,7 +808,7 @@ describe('a scan chunk is bounded work', () => {
     const result = await service.start(harness.row);
 
     expect(result.status).toBe('idle');
-    expect(result.webdavRequests).toBe(1);
+    expect(result.subrequests.fetch).toBe(1);
     expect(result.stoppedBy).toBeNull();
   });
 });
@@ -656,7 +839,7 @@ describe('a slow origin', () => {
     expect(first.foldersVisited).toBeGreaterThan(0);
     expect(first.foldersVisited).toBeLessThan(4);
     // The count is still the truth about the origin, deadline or not.
-    expect(first.webdavRequests).toBe(harness.issued());
+    expect(first.subrequests.fetch).toBe(harness.issued());
 
     // And the work the deadline cut short is picked up rather than abandoned.
     expect(harness.index.frontier().length).toBeGreaterThan(0);
@@ -666,17 +849,32 @@ describe('a slow origin', () => {
 
 describe('the shipped defaults', () => {
   it('bounds a chunk below the platform ceiling on a Free-plan account', () => {
-    // 50 external subrequests per invocation on the Free plan; 10,000 on Paid, and the
-    // 1,000 figure these defaults were originally sized against was retired on
-    // 2026-02-11. A default above 50 is a chunk that fails rather than one that is
-    // slow, so the number is asserted rather than left to a comment.
-    expect(DEFAULT_SCAN_CHUNK_MAX_REQUESTS).toBe('40');
-    expect(Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS)).toBeLessThan(50);
+    // Workers Free allows **50 subrequests per invocation**, and D1 counts its own queries
+    // against it. The chunk default is the ceiling less the invocation's own overhead, and it
+    // is *derived* rather than typed — so the assertion is the relationship, not the numeral.
+    // `40` was the previous default and it was not merely conservative: a chunk spent 40
+    // *counted* requests and roughly 200 subrequests, because everything except `fetch` went
+    // unmeasured.
+    expect(WORKER_SUBSREQUEST_CEILING).toBe(50);
+    expect(Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS)).toBe(SCAN_CHUNK_SUBSREQUEST_BUDGET);
+    expect(Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS)).toBeLessThan(WORKER_SUBSREQUEST_CEILING);
   });
 
-  it('keeps a rescan chunk inside that ceiling with enrichment on', async () => {
-    // The acceptance criterion: measured against an origin that counts, at the shipped
-    // defaults, and below the platform ceiling.
+  it('derives the folder count and the enrich cap from that same ceiling', () => {
+    // Three bounds, one number. A folder count typed beside the ceiling is the defect itself:
+    // 40 folders is 40 counted requests and ~160 statements, and the two bounds were treated
+    // as independent when they are the same budget spent twice.
+    expect(Number(DEFAULT_SCAN_CHUNK_FOLDERS)).toBe(SCAN_CHUNK_FOLDER_LIMIT);
+    expect(Number(DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER)).toBe(SCAN_ENRICH_MAX_PER_FOLDER);
+    expect(Number(DEFAULT_SCAN_CHUNK_FOLDERS) * SUBSREQUESTS_PER_FOLDER_BASE).toBeLessThanOrEqual(Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS));
+  });
+
+  it('keeps a rescan chunk inside the platform ceiling with enrichment on', async () => {
+    // The acceptance criterion: measured against an origin that counts **and** a store that
+    // counts, at the shipped defaults, and under the ceiling that actually kills an
+    // invocation. The two are not the same number — the chunk budget leaves room for the
+    // invocation's own statements, which is what `SUBSREQUEST_INVOCATION_RESERVE` is — so the
+    // assertion is against the platform.
     const harness = createScanHarness(albumTree(ALBUMS.length));
     await harness.readyFullFrontier();
     const result = await harness
@@ -687,12 +885,15 @@ describe('the shipped defaults', () => {
       })
       .step(harness.row);
 
-    expect(result.webdavRequests).toBe(harness.issued());
-    expect(result.webdavRequests).toBeLessThanOrEqual(Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS));
+    expect(result.subrequests.fetch).toBe(harness.issued());
+    expect(result.subrequests.total).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
     expect(result.status).toBe('scanning');
+    // And the chunk reports *which* resource it spent, because "paused" with one number is
+    // what made this undiagnosable from the operator surface.
+    expect(result.subrequests.d1).toBeGreaterThan(0);
   });
 
-  it('keeps a cold chunk inside that ceiling too, where nothing is indexed yet', async () => {
+  it('keeps a cold chunk inside the platform ceiling too, where nothing is indexed yet', async () => {
     // The case above drains first, so its frontier is a rescan's. A cold scan walks
     // one level per chunk and the bound has to hold for it as well — otherwise the
     // number only protects the case that was easier to reach.
@@ -709,8 +910,42 @@ describe('the shipped defaults', () => {
     harness.dav.reset();
     const result = await service.step(harness.row);
 
-    expect(result.webdavRequests).toBe(harness.issued());
-    expect(result.webdavRequests).toBeLessThanOrEqual(Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS));
+    expect(result.subrequests.fetch).toBe(harness.issued());
+    expect(result.subrequests.total).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
+  });
+
+  it('finishes the whole library, in more chunks, rather than dying partway through one', async () => {
+    // The bug as an operator saw it: a 110-track library that indexed about twenty tracks,
+    // died, retried, indexed twenty more, and eventually reported success — never because a
+    // chunk completed but because each terminated invocation left progress behind.
+    //
+    // So this asserts the property the ceiling is supposed to have bought: every chunk
+    // returns, and the scan still finishes. A budget that only made chunks *smaller* without
+    // making them *complete* would pass every count assertion above and fail here.
+    const harness = createScanHarness(albumTree(ALBUMS.length));
+    const service = harness.makeService({
+      folders: Number(DEFAULT_SCAN_CHUNK_FOLDERS),
+      maxRequests: Number(DEFAULT_SCAN_CHUNK_MAX_REQUESTS),
+      deadlineMs: Number(DEFAULT_SCAN_CHUNK_DEADLINE_MS),
+    });
+    await service.start(harness.row);
+
+    let chunks = 0;
+    let result = await service.step(harness.row);
+    while (result.status === 'scanning' && chunks < 200) {
+      // Every chunk must fit the ceiling, or the loop below is measuring the platform's
+      // tolerance rather than this product's accounting.
+      expect(result.subrequests.total).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
+      chunks += 1;
+      result = await service.step(harness.row);
+    }
+
+    expect(result.status).toBe('idle');
+    expect(harness.index.songs.size).toBe(ALBUMS.length * TRACKS_PER_ALBUM);
+    expect(harness.index.frontier()).toEqual([]);
+    // More than one chunk is the point: the ceiling is now *below* what one chunk of twelve
+    // albums costs, which is the whole change.
+    expect(chunks).toBeGreaterThan(0);
   });
 
   it('reports a deadline a client can wait out', () => {

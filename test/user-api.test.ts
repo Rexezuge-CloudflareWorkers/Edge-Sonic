@@ -492,10 +492,14 @@ describe('libraries', () => {
     // It really advanced: the frontier moved, and the request reached the origin.
     expect(chunk.body.foldersVisited).toBeGreaterThan(0);
     expect(harness.dav.propfinds.length).toBeGreaterThan(0);
-    // The two costs a chunk spends, and the bound that ended it. `null` would mean
-    // "nothing stopped it", which for a `scanning` result is never the case.
+    // What the chunk spent, per kind, and the bound that ended it. `null` would mean
+    // "nothing stopped it", which for a `scanning` result is never the case. The breakdown is
+    // asserted rather than the total alone because a total cannot say whether the operator
+    // should raise a budget or shrink a page.
     expect(chunk.body).toHaveProperty('stoppedBy');
-    expect(chunk.body.webdavRequests).toBeGreaterThan(0);
+    expect(chunk.body.subrequests).toMatchObject({ total: expect.any(Number) });
+    expect((chunk.body.subrequests as { total: number }).total).toBeGreaterThan(0);
+    expect((chunk.body.subrequests as { d1: number }).d1).toBeGreaterThan(0);
     expect(chunk.body.stoppedBy).toBe('frontier');
   });
 

@@ -195,7 +195,11 @@ class AnnotationDAO extends BaseDAO {
         )
         .bind(input.userId, input.currentSongId, input.positionMs, input.changed, timestamp),
     );
-    await this.runWriteBatch(statements, 'annotations.savePlayQueue');
+    // All-or-nothing, and this is the case the option exists for. A play queue saved halfway
+    // is a *shorter queue* — a wrong answer rather than an unfinished one, and
+    // indistinguishable from a queue the client deliberately shortened. A `413` naming the
+    // limit is recoverable; a silently truncated queue is not.
+    await this.runWriteBatch(statements, 'annotations.savePlayQueue', { requireComplete: true });
   }
 
   /**

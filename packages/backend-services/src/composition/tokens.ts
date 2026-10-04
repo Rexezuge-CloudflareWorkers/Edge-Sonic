@@ -10,6 +10,7 @@ import type {
   SongIndexDAO,
   UserDAO,
 } from '@edge-sonic/backend-data/dao';
+import type { SubrequestCounter } from '@edge-sonic/shared';
 import type { Token } from '@edge-sonic/backend-runtime/di';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
@@ -27,6 +28,14 @@ import type { EnrichmentService } from '../index/EnrichmentService';
  * without an explicit generic at the ~40 call sites that use it.
  */
 const Tokens = {
+  /**
+   * The invocation's subrequest counter, and the one object every charge point writes to.
+   *
+   * A token rather than a constructor argument threaded through each service because the
+   * charge points are constructed here and read from three layers down; passing it by hand
+   * would be a chance to forget one, and a forgotten charge is invisible.
+   */
+  SubrequestMeter: Symbol('SubrequestMeter') as Token<SubrequestCounter>,
   KvCache: Symbol('KvCache') as Token<KvCache>,
   AppConfig: Symbol('AppConfig') as Token<AppConfiguration>,
 

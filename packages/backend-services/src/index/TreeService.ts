@@ -19,7 +19,7 @@
  * `persistChildren`, which is the only place a node row is written.
  */
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
-import type { LibraryRow, NodeRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, NodeRow, SongRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
 import { encodeId, IdKind } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
@@ -38,7 +38,7 @@ interface NodeStore {
       etag: string | null;
       depth: number;
     }[],
-  ): Promise<number>;
+  ): Promise<WriteBatchResult>;
   countByLibrary(libraryId: string): Promise<number>;
 }
 
@@ -56,7 +56,7 @@ interface SongStore {
       contentType: string | null;
       suffix: string;
     }[],
-  ): Promise<number>;
+  ): Promise<WriteBatchResult>;
 }
 
 interface TreeDeps {
@@ -147,6 +147,33 @@ function syntheticRootNode(libraryId: string, self: DavResource | undefined): No
     created_at: 0,
     updated_at: 0,
   };
+}
+
+/**
+ * The listing a `PROPFIND` returned, as `NodeRow`s, without writing any of them.
+ *
+ * Only the fields a folder listing publishes, and only for the answer this module gives when
+ * its writes did not fit. A row read here is never persisted, so it never becomes the answer
+ * to a *later* read — the folder's own row is deliberately absent, so the next browse re-lists
+ * rather than trusting this.
+ */
+function materialized(libraryId: string, resources: readonly DavResource[], parentPath: string): NodeRow[] {
+  return resources
+    .map((resource) => ({ resource, path: toLibraryPath(resource.path, '') }))
+    .filter((entry): entry is { resource: DavResource; path: string } => entry.path !== null && entry.path !== parentPath)
+    .map(({ resource, path }) => ({
+      library_id: libraryId,
+      path,
+      parent_path: parentPath,
+      name: basename(path),
+      name_ci: basename(path).toLowerCase(),
+      mtime_ms: resource.lastModifiedMs,
+      etag: resource.etag,
+      depth: depthOf(path),
+      is_scanned: 0,
+      created_at: 0,
+      updated_at: 0,
+    }));
 }
 
 class TreeService {
@@ -284,8 +311,22 @@ class TreeService {
       }
     }
 
-    if (nodeInputs.length > 0) await this.deps.nodes.upsertMany(nodeInputs);
-    if (songInputs.length > 0) await this.deps.songs.upsertFileFacts(songInputs);
+    // ### A browse that cannot finish persisting still answers, from what it just read
+    //
+    // Both writes are truncating, because a folder of 500 tracks is ~1,000 statements against a
+    // ceiling of 50 and is *expected* to come back short on a Free plan. The scan can resume
+    // from that; a browse cannot, and must not try to: this path already holds the complete
+    // listing in memory, because it is what `PROPFIND` returned a moment ago.
+    //
+    // So when the writes do not fit, nothing is persisted and the caller is answered from the
+    // listing — correct, one subrequest, and self-healing, because the folder's own row is
+    // never written, so the next browse does the same cheap read rather than serving a
+    // half-materialized tree from D1. Persisting *part* of a folder would be the one answer
+    // that is worse than either alternative: a listing that is missing children, served as
+    // though they were deleted.
+    const nodes = nodeInputs.length > 0 ? await this.deps.nodes.upsertMany(nodeInputs) : { changes: 0, truncated: false };
+    const songs = songInputs.length > 0 ? await this.deps.songs.upsertFileFacts(songInputs) : { changes: 0, truncated: false };
+    if (nodes.truncated || songs.truncated) return { children: materialized(library.id, resources, parentPath), node: syntheticRootNode(library.id, self) };
 
     // Materialize the folder's own row, so the next read finds it in D1 and skips
     // the PROPFIND entirely. Skipped for the library root, which has no path.

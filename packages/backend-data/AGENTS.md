@@ -196,11 +196,40 @@ a silent data loss rather than a filter.
   the row it wrote is exactly the row whose absence means *never scanned*. The same rule as
   `songs.countByLibraries`, which omits a library with no tracks rather than defaulting it to
   `0` — a defaulted zero erases the difference between "nothing indexed" and "never looked at".
+- **A D1 statement is a subrequest, so `withRetry` charges one.** Workers Free allows **50
+  subrequests per invocation** and D1 counts its own queries against the same 50 — *Queries
+  per Worker invocation — 1000 (Workers Paid) / 50 (Free)*. Every DAO holds the request
+  scope's `SubrequestMeter`, and `withRetry` charges it, because that is the one path every
+  statement takes: a charge per call site is a hundred chances to forget one, and a forgotten
+  charge has **no symptom at all** until the platform terminates the invocation — the
+  statement works, the rows are right, the suite is green. `runWriteBatch` charges
+  **per statement**, not per `batch()` call, because the platform does not say which reading
+  is right and an over-count costs throughput while an under-count costs availability.
+- **A write batch splits to fit, and reports that it did.** `runWriteBatch` returns
+  `WriteBatchResult`, not a count, because a 500-track album is ~1,000 statements against a
+  ceiling of 50 — truncation is the *expected* case on Free, not an edge case. The caller
+  acts on it: the scan writes a folder's children first and its own `is_scanned` row last,
+  **only if nothing was truncated**, so a half-written folder stays on the frontier. Writes
+  with no partial form — a play queue, a playlist's `song_count`, the derivation backfill —
+  pass `requireComplete` and refuse with a `413` instead, because half a queue is a *shorter
+  queue*, which is a wrong answer rather than an unfinished one.
+- **A DAO that constructs another DAO must pass the meter down.** `SongDAO` built its
+  `SongIdLookupDAO` with `new SongIdLookupDAO(this.database)`, dropping it — the whole defect
+  above, present in the code written to fix it. `BaseDAO` exposes the meter to subclasses so
+  the only way to build a DAO from a DAO is from one that already has one.
+- **A read whose size the caller chose is clamped; one it did not is refused.**
+  `listArtists`' callers ask for 500, 5,000 and 500, so the limit is clamped to what the
+  remaining budget can fetch rows for. `songsForAlbumDirs` and `listIdsIn` refuse with a
+  `413`, because the key list *is* the answer and resolving a subset of it is a page that
+  silently omits albums or a queue that silently shortened.
 - **A configured limit is not a bound the queries can honour.** `MAX_PAGE_SIZE` is 500, and
   until the batching above existed a 500-album page was a request the server was obliged to
   accept and could not answer. Same class as `SCAN_CHUNK_MAX_REQUESTS` being 1,000 on an
   account whose ceiling was 50: both numbers are read as permissions rather than as
-  obligations on the code below them.
+  obligations on the code below them. The ceiling is now **derived** from the statement
+  budget in `subrequests.ts` rather than typed here — the old `2200` bounded the page's
+  *group* count while the statement count is driven by its *track* count, so 2,200 albums
+  cost ~100 statements.
 - **A prune takes the whole subtree, with a trailing `/`.** A folder that disappears takes
   its `dir_path`s deeper than itself with it, so a one-level delete leaves songs indexed
   that keep appearing in every album list. The `LIKE` is escaped so a folder named `100%`

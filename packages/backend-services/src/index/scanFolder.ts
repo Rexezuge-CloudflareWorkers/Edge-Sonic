@@ -35,10 +35,8 @@ import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
  * folder, so it has to be right rather than merely cheap.
  */
 async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: NodeRow, resources: readonly DavResource[], budget: ScanBudget): Promise<number> {
-  // The folder's own entry, straight from this listing. Its mtime is the *fresh*
-  // one and is what gets written back — writing the frontier row's stored value
-  // instead would leave the index permanently one version behind, so the next
-  // `startScan` would see a mismatch and re-walk the whole library every time.
+  // The folder's own entry in this listing, kept for the `is_scanned` write further down —
+  // where the comment on why it must be the *fresh* mtime lives, beside the write.
   const self = resources.find((resource) => toLibraryPath(resource.path, library.root_path) === folder.path);
 
   // One query for the folder's existing children; every comparison below is then
@@ -149,23 +147,53 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
   }
 
   let writes = 0;
-  // The folder itself leaves the frontier, carrying the mtime this listing
-  // reported. That value is what the next `startScan`'s root probe compares
-  // against, so it has to be the fresh one.
-  writes += await deps.nodes.upsertMany([
-    {
-      libraryId: library.id,
-      path: folder.path,
-      parentPath: folder.parent_path,
-      name: folder.name,
-      mtimeMs: self?.lastModifiedMs ?? folder.mtime_ms,
-      etag: self?.etag ?? folder.etag,
-      depth: folder.depth,
-      isScanned: true,
-    },
-    ...nodeInputs,
-  ]);
-  if (songInputs.length > 0) writes += await deps.songs.upsertFileFacts(songInputs);
+  // The children go first, and the folder's own row — the one carrying `is_scanned: true`,
+  // the flag that takes this folder off the frontier — goes **last, and only if every child
+  // landed**.
+  //
+  // That ordering is the fix for the folder that is larger than the invocation's subrequest
+  // budget. A 500-track album is ~1,000 statements against a ceiling of 50, so `upsertMany`
+  // writes what fits and reports `truncated`; retiring the folder at that point would leave a
+  // folder whose tracks were never indexed with nothing on the frontier to revisit it.
+  // Leaving `is_scanned` alone keeps it there, and because both upserts are keyed on `path`
+  // and skip rows whose mtime has not moved, the next chunk re-lists the folder, recognises the
+  // rows it already wrote, and writes only the ones that are missing.
+  const childNodes = await deps.nodes.upsertMany(nodeInputs);
+  writes += childNodes.changes;
+  const songRows = songInputs.length > 0 ? await deps.songs.upsertFileFacts(songInputs) : { changes: 0, truncated: false };
+  writes += songRows.changes;
+
+  const truncated = childNodes.truncated || songRows.truncated;
+  if (truncated) {
+    // Enrichment and the prune both read from what was *written*, and both are wrong on a
+    // partial write. Enriching spends five subrequests per track to produce metadata for rows
+    // that are not there; the prune derives its `vanished` set from the rows D1 holds, so it
+    // would delete exactly the children this listing reported and the upsert could not write —
+    // the partial-write case deleting the complement of itself.
+    //
+    // So the folder returns here, unfinished, on the frontier. Nothing is lost: the next chunk
+    // re-reads the same `Depth: 1` listing and finishes it.
+    return writes;
+  }
+
+  writes += (
+    await deps.nodes.upsertMany([
+      {
+        libraryId: library.id,
+        path: folder.path,
+        parentPath: folder.parent_path,
+        name: folder.name,
+        // The folder's own entry, straight from this listing. Its mtime is the *fresh* one and
+        // is what gets written back — writing the frontier row's stored value instead would
+        // leave the index permanently one version behind, so the next `startScan` would see a
+        // mismatch and re-walk the whole library every time.
+        mtimeMs: self?.lastModifiedMs ?? folder.mtime_ms,
+        etag: self?.etag ?? folder.etag,
+        depth: folder.depth,
+        isScanned: true,
+      },
+    ])
+  ).changes;
 
   // Fill in what a range read knows and a `PROPFIND` does not: duration, bitrate, and
   // the text tags that `getArtists`, `getAlbumList2`, `getGenres` and `search3` all
@@ -189,7 +217,7 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
     .map((node) => node.path)
     .filter((path) => path !== folder.path && !keptPaths.has(path));
 
-  writes += await deps.songs.deleteInDirectoryNotIn(library.id, folder.path, songPaths);
+  writes += (await deps.songs.deleteInDirectoryNotIn(library.id, folder.path, songPaths)).changes;
   for (const path of vanished) {
     // A vanished *folder* takes its subtree with it, on both planes. A one-level
     // delete would leave the folder's own songs behind, and their `dir_path` is

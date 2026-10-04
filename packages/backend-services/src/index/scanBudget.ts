@@ -1,56 +1,66 @@
 /**
- * What one scan chunk is allowed to spend.
+ * What one scan chunk may spend, and what it spent.
  *
- * ### Why a chunk needs a budget at all
+ * ### Why this counts more than WebDAV
  *
- * A chunk used to be "however many folders `SCAN_CHUNK_FOLDERS` names", walked
- * sequentially with nothing checked. On an origin answering a ranged `GET` in
- * 2.2 s, 40 folders is 88 seconds of wall clock and the client gives up long
- * before that — so the work still completed server-side, invisibly, and a client
- * that backed off stopped advancing the scan by construction. Adding enrichment
- * made it worse: per-track range reads moved *inside* the same sequential loop,
- * taking a chunk from 40 subrequests to 1,640.
+ * It used to count one thing: requests issued by `WebDavClient`. That was a real measurement —
+ * `charge()` is wired to the client's private `request()`, the one path `propfind`, `get`,
+ * `readPrefix` and `readTail` share — and it was the wrong measurement, because a subrequest is
+ * not only a `fetch`. D1 states its own limit as *queries per Worker invocation — 50 (Free)*,
+ * and a KV operation is a subrequest too.
  *
- * Two independent bounds, because they defend against two different failures:
+ * So a chunk of 40 folders charged this budget 40 and spent the platform about 240: 40
+ * `PROPFIND`s, ~160 D1 statements for the frontier diff, the node and song upserts and the
+ * prune, and ~40 KV reads and writes for the enrichment each folder did. It crossed the
+ * ceiling mid-chunk, and the platform terminated the invocation — an error no `catch` in the
+ * scan can see, so `ScanWorker.alarm` logged it, re-armed, and the next chunk died the same
+ * way. A 110-track library "finished" only because each dead invocation left a little progress
+ * behind, about twenty tracks at a time. See `docs/issues/free-plan-subrequest-ceiling.md`.
  *
- * - **A request ceiling.** The platform counts subrequests per invocation, and a
- *   chunk that exceeds it does not complete slowly, it **fails**. Free plan is 50
- *   external subrequests (Paid is 10,000; the 1,000 figure this was originally
- *   sized against was retired on 2026-02-11), so a chunk bounded at 40 leaves
- *   headroom for redirect chains, which the platform also counts.
- * - **A wall-clock deadline.** A fast origin and a slow one differ by two orders
- *   of magnitude per request, and neither a folder count nor a request count is
- *   right for both. The deadline is what makes a poll *return* on a 2 s origin.
+ * ### Why the counter is borrowed rather than owned
  *
- * ### Why the count is measured rather than asserted
+ * The meter belongs to the **request scope**, because that is the lifetime of an invocation
+ * and because the DAOs and the KV cache hold a reference to it — they are constructed once per
+ * scope and every statement they issue has to land in the same counter the chunk is reading. A
+ * budget that constructed its own counter would be counting a second, private number while the
+ * real one went unobserved, which is the defect all over again.
  *
- * `charge()` is called by `WebDavClient.request()` — the single choke point every
- * WebDAV call funnels through — so this is a measurement of what was issued and
- * not a claim about what was attempted. A caller-incremented counter under-reports
- * by construction, which is exactly the defect that made the old
- * `webdavRequests` field useless as a budget.
- *
- * ### Why the loop leaves rather than finishes
- *
- * Exceeding a bound mid-chunk is not a failure. The frontier lives in D1 as
- * `is_scanned = 0` rows, so a folder this chunk did not open is still there for
- * the next poll. What does not fit keeps `enriched_at = null` and is enriched on
- * first play — a track with no duration until someone opens it, rather than a
- * chunk that fails.
+ * So `ScanBudget` *wraps* the scope's counter: it resets it at the start of a chunk, adds the
+ * wall-clock deadline the counter knows nothing about, and adds the per-unit reservations that
+ * have to be made before the work rather than after it.
  */
+import { NO_SUBREQUESTS_SPENT, subrequestSpend } from '@edge-sonic/shared';
+import type { SubrequestCounter, SubrequestKind, SubrequestSpend } from '@edge-sonic/shared';
+
 interface ScanBudgetOptions {
   /**
-   * Subrequests this chunk may issue.
+   * The invocation's counter.
    *
-   * Sized against the platform's **external** subrequest ceiling, not against the
-   * 1,000 figure that predates 2026-02-11: Free plan allows 50 per invocation.
+   * Reset on construction, so two chunks in one invocation — which is what the `POST
+   * /user/libraries/:id/scan/step` route does when it seeds and then steps — do not share a
+   * count, while still charging the *same* counter the DAOs and the KV cache write to.
+   *
+   * It is reset here rather than at construction of the scope because the counter's lifetime
+   * is the invocation and the *chunk's* count starts at the beginning of a chunk. Two
+   * different windows over one counter, which is only safe because nothing else reads it
+   * between the reset and the end of the chunk.
+   */
+  meter: SubrequestCounter;
+  /**
+   * Subrequests this chunk may issue — the **inner** limit.
+   *
+   * Distinct from the counter's ceiling, which is the platform's and is not the chunk's to
+   * spend: the chunk gets `ceiling − invocation reserve` so the rest of the invocation —
+   * authentication, the library grant, `scan_state` — has room. Both are enforced, and
+   * `canAfford` requires both, so a chunk cannot spend the reserve even if every one of its
+   * own bounds is satisfied.
    */
   maxRequests: number;
   /**
    * Milliseconds this chunk may take.
    *
-   * A deadline is checked between units of work, so a chunk overruns by at most
-   * one in-flight request — bounded by the per-request timeout, not by this.
+   * A deadline is checked between units of work, so a chunk overruns by at most one in-flight
+   * request — bounded by the per-request timeout, not by this.
    */
   deadlineMs: number;
   /**
@@ -60,68 +70,90 @@ interface ScanBudgetOptions {
 }
 
 class ScanBudget {
-  private spentRequests = 0;
   private readonly startedAt: number;
   private readonly now: () => number;
 
   constructor(private readonly options: ScanBudgetOptions) {
     this.now = options.now ?? Date.now;
     this.startedAt = this.now();
+    this.options.meter.reset();
   }
 
   /**
-   * Subrequests issued so far.
-   *
-   * The value reported as `ChunkResult.webdavRequests`, and the one a test
-   * asserts against what its WebDAV double actually received.
-   */
+  Subrequests issued so far, of every kind.
+  */
   public get spent(): number {
-    return this.spentRequests;
+    return this.options.meter.spent;
   }
 
   /**
-   * How many more subrequests fit under the ceiling.
+   * How many more subrequests fit, under **both** ceilings, floored at zero.
+   *
+   * The minimum rather than the chunk's own arithmetic alone: the platform's ceiling is the
+   * one that kills the invocation, so a chunk that believes it has room when it does not is
+   * the failure this file exists to prevent, and the reverse — believing it has none when it
+   * does — only costs a poll.
    */
   public get remaining(): number {
-    return Math.max(0, this.options.maxRequests - this.spentRequests);
+    return Math.min(this.options.meter.remaining, Math.max(0, this.options.maxRequests - this.options.meter.spent));
   }
 
   /**
-   * Milliseconds left before the deadline, floored at zero.
-   */
+  The ceiling this chunk runs under.
+  */
+  public get ceiling(): number {
+    return this.options.maxRequests;
+  }
+
+  /**
+  Milliseconds left before the deadline, floored at zero.
+  */
   public get remainingMs(): number {
     return Math.max(0, this.options.deadlineMs - (this.now() - this.startedAt));
   }
 
   /**
-   * Whether the chunk must stop taking on work.
-   *
-   * Checked **before** a unit of work starts rather than after it finishes, so
-   * the answer is a decision and not a report.
-   */
+  Whether the chunk must stop taking on work.
+  */
   public get exhausted(): boolean {
-    return this.spentRequests >= this.options.maxRequests || this.remainingMs <= 0;
+    return this.options.meter.spent >= this.options.maxRequests || this.options.meter.exhausted || this.remainingMs <= 0;
   }
 
   /**
    * Whether `count` more subrequests would still fit.
    *
-   * `n` is the *worst case* for the unit about to run: an enriched Ogg track
-   * costs a prefix read and a tail read, and admitting it on the cost of one is
-   * how a budget gets spent past its ceiling.
+   * `n` is the *worst case* for the unit about to run, and that is the whole discipline: the
+   * charge happens after the work is issued, because a charge point cannot know in advance how
+   * many statements a folder's upsert turns into, so the decision has to be made with a
+   * reservation. Admitting a unit on the cost of the requests it *might* make is how a budget
+   * gets spent past its ceiling.
    */
   public canAfford(count = 1): boolean {
-    return !this.exhausted && this.spentRequests + count <= this.options.maxRequests && this.remainingMs > 0;
+    if (this.remainingMs <= 0) return false;
+    return this.options.meter.canAfford(count) && this.options.meter.spent + count <= this.options.maxRequests;
   }
 
   /**
    * Record `count` subrequests issued.
    *
-   * Wired to `WebDavClient`'s `onRequest`, so this is called by the client rather
-   * than by the loop that decided to call the client.
+   * Wired to `WebDavClient`'s `onRequest`, so this is called by the client rather than by the
+   * loop that decided to call the client. D1 and KV do not come through here — they charge the
+   * same counter from inside the DAO and the cache — which is why the budget and the counter
+   * are one object rather than two that have to be kept in step.
    */
-  public charge(count = 1): void {
-    this.spentRequests += count;
+  public charge(count = 1, kind: SubrequestKind = 'fetch'): void {
+    this.options.meter.charge(count, kind);
+  }
+
+  /**
+   * What this chunk spent, per kind.
+   *
+   * Reported rather than kept private because an operator whose scan keeps pausing at the
+   * ceiling needs to know *which* resource ran out, and `stoppedBy: 'requests'` alone cannot
+   * tell them.
+   */
+  public spend(): SubrequestSpend {
+    return this.options.meter.spent === 0 ? NO_SUBREQUESTS_SPENT : subrequestSpend(this.options.meter.breakdown(), this.options.meter.spent);
   }
 }
 
@@ -139,13 +171,24 @@ type ChunkStopReason = 'frontier' | 'requests' | 'deadline' | null;
  * Name the bound that ended a chunk, or `frontier` when none did.
  *
  * Both exhausted states are reported rather than collapsed into one value: a
- * chunk stopped at 40 requests and a chunk stopped at 20 s have different
- * remedies, and "it stopped" is not a diagnosis.
+ * chunk stopped at the subrequest ceiling and a chunk stopped at 20 s have
+ * different remedies, and "it stopped" is not a diagnosis.
+ *
+ * `requests` is now a state a Free-plan deployment reaches **by design** rather than by
+ * misconfiguration — it is what a 42-subrequest chunk looks like on a 110-track library — so it
+ * is a normal return with the alarm re-armed behind it, not a failure that spends the retry
+ * budget. Before the ceiling was measured, the same condition killed the invocation instead,
+ * which is why a scan that could never finish looked like a scan that kept failing.
  */
 function stopReason(budget: ScanBudget, exhaustedWork: boolean): ChunkStopReason {
   if (!exhaustedWork) return 'frontier';
-  if (budget.remaining <= 0) return 'requests';
-  return 'deadline';
+  // Time first, then the ceiling — not the other way round. `remaining > 0` does not mean the
+  // chunk could have done anything: it may have had five subrequests left and needed six for
+  // the next folder, which is the **request** ceiling stopping it and not a clock. Asking
+  // `remaining <= 0` made exactly that case report `deadline`, so an operator was told a slow
+  // origin had ended the chunk when a number had.
+  if (budget.remainingMs <= 0) return 'deadline';
+  return 'requests';
 }
 
 export { ScanBudget, stopReason };

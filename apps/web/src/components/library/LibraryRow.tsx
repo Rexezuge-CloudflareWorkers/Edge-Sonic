@@ -157,9 +157,14 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   // same reason as `lastError`: `useNotice` clears after 6 s, and a scan that pauses
   // every poll is not something an operator reads once and remembers.
   const scanPaused = describeStopReason(stoppedBy, {
+    // The inline default and the bundle are validated against each other by
+    // `scripts/validate_locales.mjs`, so both say the same thing: on Workers Free the ceiling
+    // is the platform's and cannot be raised from here, the server clamps the value, and a chunk
+    // that spends more is terminated rather than slowed. "Raise this knob" was advice that made
+    // the scan die.
     requests: t(
       'libraries.scanPausedRequests',
-      'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.',
+      'Paused at the per-chunk request limit. This is the plan limit, not a fault — the scan continues on the next tick.',
     ),
     deadline: t('libraries.scanPausedDeadline', 'Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.'),
   });

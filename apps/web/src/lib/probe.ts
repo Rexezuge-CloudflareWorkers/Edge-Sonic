@@ -122,7 +122,12 @@ function describeStopReason(stoppedBy: ChunkStopReason | undefined, labels?: Sto
 }
 
 const STOP_REASON_LABELS: StopReasonLabels = {
-  requests: 'Paused at the per-chunk request limit. Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll.',
+  // Not "raise SCAN_CHUNK_MAX_REQUESTS". On Workers Free the platform allows 50 subrequests
+  // per invocation and cannot be raised from here, the server clamps the value to what fits,
+  // and a chunk that spends more is *terminated* rather than slowed — so the old advice walked
+  // an operator straight into a scan that died. The limit is reached by design on a Free plan
+  // and the alarm re-arms behind it; the honest thing to say is that it is still going.
+  requests: 'Paused at the per-chunk request limit. This is the plan limit, not a fault — the scan continues on the next tick.',
   deadline: 'Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.',
 };
 

@@ -16,6 +16,7 @@
  * rows. The arithmetic is in `migrations/0001` so nobody is surprised by it.
  */
 import { BaseDAO } from './BaseDAO';
+import type { WriteBatchResult } from './BaseDAO';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
 import type { CountRow, SongRow } from './rows';
@@ -106,8 +107,15 @@ class SongDAO extends BaseDAO {
     return await this.listByDirectory(libraryId, dirPath);
   }
 
-  public async upsertFileFacts(inputs: readonly SongUpsertInput[]): Promise<number> {
-    if (inputs.length === 0) return 0;
+  /**
+   * Write song rows, as many as the subrequest budget allows.
+   *
+   * `WriteBatchResult` rather than a count: a cold album of 500 tracks is ~500 statements
+   * against a ceiling of 50, so truncation is the *expected* case on Free, and the caller has
+   * to see it or it will mark a half-written folder reconciled.
+   */
+  public async upsertFileFacts(inputs: readonly SongUpsertInput[]): Promise<WriteBatchResult> {
+    if (inputs.length === 0) return { changes: 0, written: 0, truncated: false };
     const timestamp = nowSeconds();
     // Derived once per input rather than per bound parameter, and only when the caller
     // did not supply it — so a caller that already knows the answer (the indexer does)
@@ -189,7 +197,7 @@ class SongDAO extends BaseDAO {
    * a guard whose stated budget was ten times the real one.
    */
   public async listIdsIn(libraryId: string, ids: readonly string[]): Promise<SongRow[]> {
-    return await new SongIdLookupDAO(this.database).listIdsIn(libraryId, ids);
+    return await new SongIdLookupDAO(this.database, this.subrequests).listIdsIn(libraryId, ids);
   }
 
   /**
@@ -197,7 +205,7 @@ class SongDAO extends BaseDAO {
    * this is a separate method rather than a nullable `libraryId`.
    */
   public async listIdsAcrossLibraries(ids: readonly string[]): Promise<SongRow[]> {
-    return await new SongIdLookupDAO(this.database).listIdsAcrossLibraries(ids);
+    return await new SongIdLookupDAO(this.database, this.subrequests).listIdsAcrossLibraries(ids);
   }
 
   public async countByLibrary(libraryId: string): Promise<number> {
@@ -335,7 +343,7 @@ class SongDAO extends BaseDAO {
    * would spend the daily D1 delete allowance on a library that mostly still
    * exists; a prune proportional to what changed is nearly free.
    */
-  public async deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<number> {
+  public async deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<WriteBatchResult> {
     const all = await this.withRetry(
       async () =>
         await this.database
@@ -346,10 +354,14 @@ class SongDAO extends BaseDAO {
     );
     const keep = new Set(keepPaths);
     const doomed = (all.results ?? []).map((row) => row.path).filter((path) => !keep.has(path));
-    if (doomed.length === 0) return 0;
+    if (doomed.length === 0) return { changes: 0, written: 0, truncated: false };
     const statements = doomed.map((path) => this.database.prepare('DELETE FROM songs WHERE library_id = ? AND path = ?').bind(libraryId, path));
-    await this.runWriteBatch(statements, 'songs.deleteInDirectoryNotIn');
-    return doomed.length;
+    // Handed to the batch rather than counted here: a folder that lost 200 tracks is another
+    // statement group that can exceed the ceiling on its own. A prune that stops halfway is
+    // idempotent, so the rows it did not reach are simply still there for the next chunk — and
+    // nothing downstream reads `truncated` for a delete, because a prune reporting "incomplete"
+    // would read as a fault and it is not one.
+    return await this.runWriteBatch(statements, 'songs.deleteInDirectoryNotIn');
   }
 
   /**

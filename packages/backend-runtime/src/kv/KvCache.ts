@@ -25,6 +25,8 @@
  * library's `index_version`, so a superseded entry becomes unreachable on its
  * own and ages out by TTL. See `scan_state.index_version`.
  */
+import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@edge-sonic/shared';
 import { createLogger } from '../logger';
 import { KV_DOMAINS, buildKvKey, clampTtl, utf8ByteLength } from './KvDomains';
 import type { KvDomainName } from './KvDomains';
@@ -112,7 +114,19 @@ function recordFailure(): void {
 }
 
 class KvCache {
-  constructor(private readonly namespace?: KvNamespaceLike | null) {}
+  /**
+   * @param namespace The binding, or `null` for a deployment without one.
+   * @param meter The invocation's subrequest counter. A KV `get`/`put`/`delete` is a subrequest
+   *   like any other — D1's limits page counts *queries* per invocation and the Workers page
+   *   counts subrequests to KV — so a cache that is invisible to the ceiling makes every
+   *   number that budgets work wrong. It used to be exactly that: `KvCache` charged nothing,
+   *   `ScanBudget` counted only `fetch`, and a cold scan chunk spent 20 KV reads per folder on
+   *   a budget that had no idea. See `docs/issues/free-plan-subrequest-ceiling.md`.
+   */
+  constructor(
+    private readonly namespace?: KvNamespaceLike | null,
+    private readonly meter: SubrequestMeter = UNMETERED_SUBREQUESTS,
+  ) {}
 
   /**
    * Whether the binding is present.
@@ -131,10 +145,20 @@ class KvCache {
    * Never throws and never returns a rejection: every failure path is a `null`
    * or `false`, which callers read as "miss" or "not stored".
    */
-  private async guard<T>(operation: string, run: () => Promise<T>, fallback: T): Promise<T> {
+  private async guard<T>(operation: string, run: () => Promise<T>, fallback: T, options?: { charge?: boolean }): Promise<T> {
     const ns = this.namespace;
     if (!ns) return fallback;
     if (isCircuitOpen(Date.now())) return fallback;
+    // Charged here, not at the call site: this is the point at which a request is *about to
+    // be issued*, and it is reached only when there is a namespace and the breaker is closed.
+    // A miss caused by no binding, or by a namespace that is down, spends no subrequest —
+    // which is the whole point of failing soft, and charging before this line would have
+    // counted a request that was never made.
+    //
+    // `charge: false` is for the one caller that issues a *loop* of operations inside one
+    // `guard` (`purgePrefix`), where charging once here would report a 10,000-key purge as a
+    // single subrequest. It charges per call instead.
+    if (options?.charge !== false) this.meter.charge(1, 'kv');
     try {
       const result = await run();
       recordSuccess();
@@ -282,16 +306,22 @@ class KvCache {
       // cursor advances would skip keys. Each pass removes a full page, so the
       // loop terminates; the page cap bounds worst-case cost.
       for (let page = 0; page < PURGE_MAX_PAGES; page += 1) {
+        this.meter.charge(1, 'kv');
         const listed = await ns.list({ prefix, limit: PURGE_LIST_LIMIT });
         if (listed.keys.length === 0) return deleted;
         for (const key of listed.keys) {
+          // Per delete rather than per `guard`: `purgePrefix` wraps a whole loop in one
+          // `guard`, so charging there would report a 10,000-key purge as one subrequest. It
+          // has no production caller, which is exactly why it is the one place a loop needed
+          // saying out loud.
+          this.meter.charge(1, 'kv');
           await ns.delete(key.name);
           deleted += 1;
         }
         if (listed.keys.length < PURGE_LIST_LIMIT) return deleted;
       }
       return deleted;
-    }, 0);
+    }, 0, { charge: false });
     return result;
   }
 }

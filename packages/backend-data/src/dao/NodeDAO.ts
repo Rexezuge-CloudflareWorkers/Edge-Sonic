@@ -14,6 +14,7 @@
  * a response-code assertion cannot see a quota being spent.
  */
 import { BaseDAO } from './BaseDAO';
+import type { WriteBatchResult } from './BaseDAO';
 import type { NodeRow } from './rows';
 import { nowSeconds } from './identity';
 
@@ -123,8 +124,16 @@ class NodeDAO extends BaseDAO {
     return result.results ?? [];
   }
 
-  public async upsertMany(inputs: readonly NodeInput[]): Promise<number> {
-    if (inputs.length === 0) return 0;
+  /**
+   * Write node rows, as many as the subrequest budget allows.
+   *
+   * `truncated` is load-bearing and is why this does not return a plain count: the scan
+   * writes a folder's children and *then* the folder's own row with `is_scanned: true`, and
+   * that second write must not happen for a folder whose children are only partly there.
+   * See `BaseDAO`'s `WriteBatchResult`.
+   */
+  public async upsertMany(inputs: readonly NodeInput[]): Promise<WriteBatchResult> {
+    if (inputs.length === 0) return { changes: 0, written: 0, truncated: false };
     const timestamp = nowSeconds();
     const statements = inputs.map((input) =>
       this.database

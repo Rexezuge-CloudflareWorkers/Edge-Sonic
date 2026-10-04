@@ -323,15 +323,59 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the guard has teeth. The same rule the previous invariant records, one level up: the
   budget lived in a comment and in the choice of default numbers, and **a comment is
   not a measurement**.
-- **Size a subrequest budget against the plan that will run it.** Cloudflare retired
-  the 1,000-subrequest ceiling on 2026-02-11: Workers **Free** allows **50 external**
-  subrequests per invocation and **Paid** 10,000 (raiseable to 10M). This codebase
-  sizes every other quota against the free tier, and `SCAN_CHUNK_FOLDERS = 40` was
-  already 80% of the whole external budget before a single enrichment read. A default
-  of 1,000 is not a slow chunk, it is a **failed** chunk on a Free-plan account, and
-  the number sat in a comment that read like a measurement. `DEFAULT_SCAN_CHUNK_MAX_REQUESTS`
-  is 40, and `test/scan-budget.test.ts` asserts both the constant and that a real
-  chunk stays under it with enrichment on.
+- **A subrequest is not only `fetch`, and budgeting the easy one to measure kills the
+  invocation.** Workers Free allows **50 subrequests per invocation**, and D1 counts
+  its own queries against the same 50 — *"Queries per Worker invocation — 1000 (Workers
+  Paid) / 50 (Free)"* — as do KV, Durable Object RPCs and Secrets Store reads. Cloudflare's
+  own two limits pages disagree on the internal-service question (the Workers page carries a
+  *subrequests to internal services: 1,000 on Free* row), and this repository believed the
+  wrong one for long enough to ship a broken scan: `ScanBudget` metered
+  `WebDavClient.request()` and nothing else, so a chunk of 40 folders charged its budget
+  **40** and spent the platform **~240**. It crossed the ceiling inside its first album,
+  `ScanWorker.alarm` caught an error nothing in the scan can see, re-armed a second later,
+  and each dead invocation banked ~20 tracks — which is why a 110-track library *finished*
+  while no chunk ever completed. Four rules, and each is how the previous one collapsed:
+  - **One counter, owned by the request scope, charged at the choke point.** `fetch` was
+    easy to instrument because `WebDavClient` has a private `request()`; D1 and KV were not
+    counted because nothing forced them to be, and a forgotten charge has **no symptom at
+    all** until the platform kills the invocation — the statement works, the rows are
+    right, the suite is green. `BaseDAO.withRetry` is the one path every D1 statement
+    takes, so charging there is one line rather than a hundred chances to forget one.
+  - **Charge pessimistically where the platform is ambiguous.** A D1 `batch()` of N
+    statements is 1 or N subrequests and the docs do not say; charging N costs throughput
+    if N is wrong and costs availability if 1 is.
+  - **The per-unit reservation is the unit's whole cost.** `MAX_REQUESTS_PER_TRACK = 2`
+    counted a prefix read and a tail read — the two *external* requests — while the same
+    track also costs a `songMeta` KV read, an `applyMetadata` and a `songMeta` KV write.
+    Admitting 20 tracks per folder on the cost of two each is ~100 subrequests of work onto
+    a budget of 50. Likewise a folder: the walk checked one `PROPFIND`, and a chunk that
+    starts a folder it cannot finish does not get a slow folder, it gets a terminated
+    invocation.
+  - **Every bound is derived from the one platform number, and clamped to it.**
+    `subrequests.ts` holds `WORKER_SUBSREQUEST_CEILING = 50` and computes the chunk budget
+    (`50 − 8` for the invocation's own statements), the folder count (`floor(42/6)`), the
+    enrich cap (`floor(42/5)`) and `MAX_PAGE_SIZE_CEILING`. The three scan vars are
+    **clamped**, because the operator surface was telling people to raise one of them: on
+    Free the ceiling cannot be raised, and following that advice converts a chunk that
+    pauses into a chunk the runtime terminates.
+  A budget that ran out is a **pause**, not a failure — `stoppedBy: 'requests'` was
+  structurally unreachable while the meter could not see D1, so a self-inflicted ceiling
+  spent the retry budget on every attempt and the operator surface had a string for a state
+  it could never render. Asserted in `test/subrequest-budget.test.ts` (per charge point,
+  with negatives) and `test/scan-budget.test.ts` (a whole chunk, against a store double
+  that charges). Full account: `docs/issues/free-plan-subrequest-ceiling.md`.
+- **A write that is larger than the invocation must be resumable, or it must be refused.**
+  A 500-track album is ~1,000 statements against a ceiling of 50, so truncation is the
+  *expected* case on Free rather than an edge case. `runWriteBatch` splits by what is left
+  and reports `truncated`; `reconcileFolder` writes the children **first** and the folder's
+  own row — the one carrying `is_scanned: true` — **last and only if nothing was
+  truncated**, so a half-written folder stays on the frontier and the next chunk finishes it.
+  The prune is skipped there, because it derives its delete set from the rows D1 holds and
+  would otherwise delete exactly the children the upsert could not write. A browse cannot
+  resume, so `TreeService` persists nothing and answers from the listing it already holds. And
+  a write that has no partial form — a play queue, a playlist's `song_count`, the derivation
+  backfill — refuses with a `413` instead, because half a queue is a *shorter queue*, which
+  is a wrong answer rather than an unfinished one.
 - **A `no-store` predicate must name a path the router serves.** `isSensitiveJsonPath`
   once checked a prefix this worker did not register, so the branch was unreachable and the
   operator surface shipped with no `Cache-Control`. A predicate copied from another router's

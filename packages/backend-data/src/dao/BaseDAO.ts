@@ -1,15 +1,81 @@
+import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@edge-sonic/shared';
 import type { D1Queryable, D1Result } from '../utils/D1Types';
 import { executeD1WithRetry } from '../utils/D1Utils';
 
 /**
+ * What a write batch actually managed to write.
+ *
+ * ### Why a batch can come back short
+ *
+ * `runWriteBatch` issues statements in groups sized by what is left of the invocation's
+ * **subrequest** budget, not by what D1 will accept. A folder of 500 tracks is one
+ * `upsertFileFacts` call and ~500 statements, and Workers Free allows **50 subrequests per
+ * invocation** — so the batch cannot be issued whole, and issuing it whole does not make it
+ * slow, it **terminates the invocation** with `Too many subrequests by single Worker
+ * invocation`, an error no `catch` here can see.
+ *
+ * So it is issued in as many groups as fit and the rest is reported as unwritten. That is only
+ * safe because every caller of a truncating batch treats "not written" as "not done":
+ *
+ * - the scan leaves the folder's `is_scanned` flag alone, so the folder stays on the frontier
+ *   and the next chunk re-lists it and writes the rows that are still missing. `upsertFileFacts`
+ *   is an idempotent upsert keyed on `path`, and the pre-write comparison skips rows whose
+ *   mtime has not moved, so the retry costs one `PROPFIND` and one `listChildren` and no
+ *   duplicate writes;
+ * - the read-through browse (`TreeService`) does not persist at all when its writes do not
+ *   fit, because it already holds the listing in memory and the folder is not marked
+ *   materialized.
+ *
+ * `truncated` is therefore not a diagnostic — it is a promise the caller is relying on, which
+ * is why it is on the return value rather than logged.
+ */
+interface WriteBatchResult {
+  /**
+  Rows the statements changed, summed over the groups that were issued.
+  */
+  readonly changes: number;
+  /**
+  How many statements were issued. Less than were passed in when `truncated`.
+  */
+  readonly written: number;
+  /**
+  Whether statements were left unwritten because the budget ran out.
+  */
+  readonly truncated: boolean;
+}
+
+/**
  * Base for every D1 DAO.
  *
- * It owns exactly one concern: retrying transient D1 faults. Everything else
- * (SQL text, binding order, result shaping) belongs to the concrete DAO, which is
- * the only place that knows its table's shape.
+ * It owns two concerns: retrying transient D1 faults, and **charging the subrequest meter**.
+ * Everything else (SQL text, binding order, result shaping) belongs to the concrete DAO, which
+ * is the only place that knows its table's shape.
+ *
+ * ### Why charging lives here
+ *
+ * Because this is the only place every D1 statement passes through. There are roughly a
+ * hundred call sites; a charge at each of them is a hundred chances to forget one, and a
+ * forgotten charge is invisible — the statement still works, the query still returns the right
+ * rows, and the invocation still dies at the ceiling with nothing in the logs to say why.
+ *
+ * So `withRetry` charges, because a DAO's every read and every single write goes through it,
+ * and `runWriteBatch` charges, because a `batch()` does not.
+ *
+ * ### Why a DAO without a meter is a defect and not a default
+ *
+ * The meter defaults to one that enforces nothing, which is right for a test double and wrong
+ * for production. Production wiring is asserted — `test/subrequest-budget.test.ts` checks that
+ * both composition roots construct their DAOs with a real counter — because an unmetered DAO
+ * in production is precisely the failure this class of bug is made of: a path that spends
+ * nothing because nothing was watching it.
  */
 abstract class BaseDAO {
-  constructor(protected readonly database: D1Queryable) {}
+  constructor(
+    protected readonly database: D1Queryable,
+    private readonly meter: SubrequestMeter = UNMETERED_SUBREQUESTS,
+  ) {}
 
   /**
    * Run a statement — or a read — with bounded retries on transient faults.
@@ -21,35 +87,172 @@ abstract class BaseDAO {
    * operator.
    *
    * Generic so reads get the same retry as writes; see `executeD1WithRetry`.
+   *
+   * Charges **one** subrequest, once, for the logical statement. A retry that re-issues the
+   * operation is charged again only if the platform counted it, which this cannot know; the
+   * pessimistic choice would be to charge per attempt, and that would make a transient blip
+   * look like three statements' worth of budget on a ceiling of fifty. One per statement is
+   * the reading D1's own limits page states.
    */
   protected withRetry<T>(operation: () => Promise<T>, context: string): Promise<T> {
+    this.meter.charge(1, 'd1');
     return executeD1WithRetry(operation, context);
   }
 
   /**
-   * Run a write batch, falling back to sequential statements when the binding
-   * does not support `batch`.
+   * How many more subrequests this DAO could issue, or `Infinity` when unmetered.
    *
-   * The fallback is not hypothetical: the D1 doubles used in the unit suite are
-   * plain objects, and a code path that only works against real D1 is a code path
-   * with no test coverage at all.
+   * Exposed for the paging loops that page over *groups* rather than rows: they must stop
+   * before the invocation is killed, and the only number that can tell them is the one the
+   * ceiling is enforced through.
+   */
+  protected get subrequestsRemaining(): number {
+    return this.meter.remaining;
+  }
+
+  /**
+   * The invocation's counter, for a DAO that constructs another one.
+   *
+   * `SongDAO` delegates its id lookups to `SongIdLookupDAO`, and it built one with
+   * `new SongIdLookupDAO(this.database)` — dropping the meter. That is the whole defect this
+   * layer was changed for, present in the code written to fix it: the delegated DAO worked,
+   * returned the right rows, and spent nothing the budget could see, and nothing in the suite
+   * failed because a total is the easiest thing in the world to assert.
+   *
+   * So a composition's meter is reachable from a subclass, and the only way to build a DAO is
+   * from a DAO that already has one.
+   */
+  protected get subrequests(): SubrequestMeter {
+    return this.meter;
+  }
+
+  /**
+   * Assert that `statements` more statements fit, or refuse.
+   *
+   * For a **read** whose size the caller did not choose. A write can be truncated and resumed;
+   * a read cannot — half a page of albums is a wrong page, not an unfinished one — so the only
+   * honest options are to clamp the size upstream (which is what the derived
+   * `MAX_PAGE_SIZE_CEILING` does) or to refuse here with an error the mapper can turn into a
+   * `413`. Being killed by the platform is the third option and it is the worst one: no
+   * envelope, no status, and a message about subrequests in a client's error log.
+   *
+   * `statements` rather than rows, because rows and statements are different numbers and the
+   * ceiling is denominated in the second. Callers derive it from `bindChunkSize`, which is
+   * where every other batching decision in this layer is made.
+   */
+  protected requireSubrequests(statements: number, context: string): void {
+    if (!Number.isFinite(this.meter.ceiling) || (statements <= this.meter.remaining)) return;
+    throw new SubrequestBudgetExhaustedError(
+      `Reading ${context} needs about ${statements} queries and ${this.meter.remaining} remain in this invocation.`,
+    );
+  }
+
+  /**
+   * Run a write batch, splitting it to fit the subrequest budget.
+   *
+   * Falls back to sequential statements when the binding does not support `batch`. The
+   * fallback is not hypothetical: the D1 doubles used in the unit suite are plain objects,
+   * and a code path that only works against real D1 is a code path with no test coverage at
+   * all.
+   *
+   * ### The group size is the budget, not a constant
+   *
+   * A statement cannot be half-issued — `batch()` is a transaction — so the question is not
+   * "how do I split this" but "how many of these fit in what is left of the ceiling". The
+   * loop therefore asks `canAfford` before each group rather than dividing by a number chosen
+   * here, which is what makes it correct on an account that raised its ceiling and on one that
+   * did not.
+   *
+   * Zero statements fit once the budget is gone, so a batch with nothing left returns
+   * `truncated` without issuing anything rather than crossing the ceiling to make one
+   * statement's worth of progress.
+   *
+   * @param options.requireComplete Refuse rather than truncate. See `SubrequestBudgetExhaustedError`.
    */
   protected async runWriteBatch(
     statements: ReturnType<D1Queryable['prepare']>[],
     context: string,
-  ): Promise<number> {
-    if (statements.length === 0) return 0;
-    if (this.database.batch) {
-      const results: D1Result[] = await this.withRetry(async () => await this.database.batch!(statements), context);
-      return (results ?? []).reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
+    options?: { requireComplete?: boolean },
+  ): Promise<WriteBatchResult> {
+    if (statements.length === 0) return { changes: 0, written: 0, truncated: false };
+
+    // Checked once, before anything is issued, so the refusal costs no writes. A caller that
+    // needs all-or-nothing gets an error instead of a partial write; a caller that can resume
+    // gets `truncated` and finishes on the next chunk.
+    if (options?.requireComplete === true && !this.canFitAll(statements.length)) {
+      throw new SubrequestBudgetExhaustedError(
+        `Writing ${statements.length} rows for ${context} needs ${statements.length} subrequests and ${this.meter.remaining} remain in this invocation.`,
+      );
     }
+
     let changes = 0;
-    for (const statement of statements) {
-      const result: D1Result = await this.withRetry(async () => await statement.run(), context);
-      changes += result.meta?.changes ?? 0;
+    let written = 0;
+
+    for (let offset = 0; offset < statements.length; ) {
+      const fits = this.fitCount(statements.length - offset);
+      if (fits === 0) break;
+
+      const group = statements.slice(offset, offset + fits);
+      // Charged before the group is issued, and for its pessimistic cost, so the ceiling is
+      // never crossed by the accounting being later than the request.
+      this.meter.charge(fits, 'd1');
+      written += group.length;
+
+      if (this.database.batch) {
+        const results: D1Result[] = await executeD1WithRetry(async () => await this.database.batch!(group), context);
+        changes += (results ?? []).reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
+      } else {
+        for (const statement of group) {
+          const result: D1Result = await executeD1WithRetry(async () => await statement.run(), context);
+          changes += result.meta?.changes ?? 0;
+        }
+      }
+      offset += fits;
     }
-    return changes;
+
+    return { changes, written, truncated: written < statements.length };
+  }
+
+  /**
+   * How many of `available` statements still fit in the subrequest budget.
+   *
+   * `available` rather than a derived batch size, so the caller never has to know the
+   * ceiling: this is the one place the relationship between "statements left" and "budget
+   * left" is written down.
+   */
+  private fitCount(available: number): number {
+    if (!Number.isFinite(this.meter.ceiling)) return available;
+    return Math.max(0, Math.min(available, Math.floor(this.meter.remaining)));
+  }
+
+  /**
+   * The most items of `perStatement` each that the remaining budget can still fetch.
+   *
+   * For a read whose size the caller chooses and whose answer is a whole number of items —
+   * a page of artists, a page of albums. Clamping is right there and refusing is not: the
+   * caller asked for "as many as you can serve", so a smaller page is the answer rather than
+   * an error, and it is the same degradation `MAX_PAGE_SIZE_CEILING` performs one layer up.
+   *
+   * Never returns less than one group: a page of nothing is not an answer, and the caller
+   * would render it as an empty library.
+   */
+  protected clampToSubrequestBudget(requested: number, perStatement: number): number {
+    if (!Number.isFinite(this.meter.ceiling)) return requested;
+    const affordable = Math.max(1, Math.floor(this.meter.remaining)) * Math.max(1, perStatement);
+    return Math.max(1, Math.min(Math.max(0, requested), affordable));
+  }
+
+  /**
+   * Whether `count` statements fit whole.
+   *
+   * Separate from `fitCount` because the two answer different questions: "how many may I
+   * issue" and "may I issue all of these". An unmetered DAO fits everything, which is what
+   * keeps every existing test double working.
+   */
+  private canFitAll(count: number): boolean {
+    return !Number.isFinite(this.meter.ceiling) || count <= this.meter.remaining;
   }
 }
 
 export { BaseDAO };
+export type { WriteBatchResult };

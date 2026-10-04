@@ -28,6 +28,7 @@
  */
 
 
+import type { SubrequestMeter } from '@edge-sonic/shared';
 import { isUsableKey } from '@edge-sonic/backend-data/crypto';
 
 interface SecretsStoreSecret {
@@ -63,7 +64,20 @@ A memoized key provider. Throws on use when unconfigured.
 */
 type KeyProvider = () => Promise<string>;
 
-function resolveKey(binding: SecretsStoreSecret | undefined, rawVar: string | undefined, bindingName: string, varName: string): KeyProvider {
+/**
+ * @param meter The invocation's counter, charged once per `binding.get()`. A Secrets Store read
+ *   is a request to a Cloudflare service and therefore a subrequest like any other; it is
+ *   memoized, so it is at most one per scope per key, but it is counted because "at most two"
+ *   is a fact this file should not have to be trusted about — a third key and a third charge
+ *   would appear with no test noticing.
+ */
+function resolveKey(
+  binding: SecretsStoreSecret | undefined,
+  rawVar: string | undefined,
+  bindingName: string,
+  varName: string,
+  meter?: SubrequestMeter,
+): KeyProvider {
   let pending: Promise<string> | undefined;
   return () => {
     if (pending) return pending;
@@ -72,6 +86,7 @@ function resolveKey(binding: SecretsStoreSecret | undefined, rawVar: string | un
         // Deliberately no fallback to `rawVar` on failure: a binding that throws is
         // a broken production configuration, and silently using a var instead
         // would produce credentials encrypted under a key nobody is tracking.
+        meter?.charge(1, 'secret');
         const value = await binding.get();
         if (!isUsableKey(value)) {
           throw new Error(`${bindingName} is present but is not a 32-byte base64 key.`);
