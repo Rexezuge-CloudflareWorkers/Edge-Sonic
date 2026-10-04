@@ -1,5 +1,8 @@
 import { EnvParser } from '../EnvParser';
+import { isAlbumGrouping } from '@edge-sonic/subsonic';
+import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
 import {
+  DEFAULT_ALBUM_GROUP_BY,
   DEFAULT_AUTH_FAILURE_LIMIT,
   DEFAULT_AUTH_FAILURE_WINDOW_SECONDS,
   DEFAULT_MAX_LIBRARIES,
@@ -187,6 +190,32 @@ class RequestLimits {
 
   public getDefaultPageSize(): number {
     return EnvParser.positiveInt(this.env, 'DEFAULT_PAGE_SIZE', DEFAULT_PAGE_SIZE);
+  }
+
+  /**
+   * Which tracks are one album.
+   *
+   * Read through `isAlbumGrouping` rather than cast, so an unrecognised value cannot become a
+   * grouping by assertion. An unset variable takes the default; a *wrong* one does not, and
+   * falls through to the default only because `validate()` has already refused it by name —
+   * see the note there. The alternative, letting the cast through, groups a library by
+   * something the operator did not ask for and reports nothing.
+   */
+  public getAlbumGroupBy(): AlbumGroupingValue {
+    const raw = EnvParser.string(this.env, 'ALBUM_GROUP_BY', '').trim();
+    if (raw === '') {
+      const fallback = DEFAULT_ALBUM_GROUP_BY;
+      return isAlbumGrouping(fallback) ? fallback : 'album';
+    }
+    return isAlbumGrouping(raw) ? raw : 'album';
+  }
+
+  /**
+   * The configured value before validation, so `validate()` can name what it refused rather
+   * than reporting a setting the operator never wrote.
+   */
+  public getRequestedAlbumGroupBy(): string {
+    return EnvParser.string(this.env, 'ALBUM_GROUP_BY', '').trim();
   }
 
   public getStreamRateLimit(): number {

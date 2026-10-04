@@ -16,10 +16,13 @@
  *    ID forever.
  *
  * Property 3 has a consequence that is easy to get wrong and is load-bearing:
- * an **album** ID must be derived from a directory *path*, never from an album
- * *name*. `getStarred2` and the `starred` album list resolve an album to its
- * songs through `songs.dir_path`; mint album IDs from names and a single rename
- * orphans every star, silently.
+ * an **album** ID must resolve back to its songs, so the payload has to be
+ * whatever the resolution actually reads. While an album *was* a directory that
+ * meant `dir_path` and never an album name — rename the folder and a name-derived
+ * id orphans every star, silently. An album's identity is configurable now
+ * (`albumKey.ts`), so the payload is the grouping key and the kind prefix says
+ * so. The rule underneath is unchanged and is the one to keep: **the payload is
+ * the resolution's own input**, so the two cannot be changed apart.
  *
  * ### Ids are forgeable
  *
@@ -59,8 +62,23 @@ const IdKind = {
   Artist: 'ar',
   /**
   An album.
+
+  A **directory** path. Still accepted, and still resolvable, because clients hold album ids
+  for a long time — in a star, in a rating, in a saved playlist — and an id this server can no
+  longer decode is an album that silently disappeared from someone's library. Nothing mints it
+  any more; {@link IdKind.AlbumKey} is what the publishers emit. See `albumKey.ts`.
   */
   Album: 'al',
+  /**
+  An album named by its **grouping key** rather than by a directory.
+
+  The kind exists because the key is not a path, and because two keys must be told apart on the
+  wire. An album's identity is `ALBUM_GROUP_BY`'s answer to "which tracks are this album", which
+  is a tag for most libraries and only a directory for some — so the id has to carry the key,
+  and the prefix is what says the payload is a key rather than a folder, with no heuristic
+  guessing between two shapes that are both ordinary relative paths.
+  */
+  AlbumKey: 'alk',
   /**
   A song.
   */

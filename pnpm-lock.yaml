@@ -288,6 +288,9 @@ importers:
       '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
+      '@edge-sonic/subsonic':
+        specifier: workspace:*
+        version: link:../subsonic
     devDependencies:
       '@types/node':
         specifier: 26.6.3

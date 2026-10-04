@@ -5,45 +5,26 @@
  *
  * `SongDAO` owns one row - its facts, its derived metadata, its lifecycle. These read
  * across rows: a page of albums, one artist's albums, the library's genres. They are the
- * only queries in the system that have to aggregate, and the only ones shaped by the
- * protocol's paging rather than by the schema's keys. Keeping them here puts the
+ * only queries in the system that have to aggregate, and the only ones shaped by
+ * the protocol's paging rather than by the schema's keys. Keeping them here puts the
  * page-then-fetch pattern in one file, where it can be read once, instead of duplicated
  * across a class that has nothing else in common with it.
+ *
+ * ### What an album is, and where that question is answered
+ *
+ * Not here. `ALBUM_GROUP_BY` decides it, `subsonic/albumKey.ts` owns the decision, this file's
+ * neighbour `albumKeySql.ts` writes it as SQL, and `apps/api`'s `albumIdentity` carries it per
+ * request. What this file does is make the SQL grouping and the TypeScript grouping **the same
+ * function of the same columns**, which is the property every bug below was a violation of.
  */
 import { BaseDAO } from './BaseDAO';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
+import { albumKeySpec, specFromKey } from '@edge-sonic/subsonic';
+import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
+import { albumGroupsPerStatement, albumKeyProjection } from './albumKeySql';
+import type { AlbumKeyRowOut } from './albumKeySql';
 import type { SongRow } from './rows';
-
-/**
- * One row of `listAlbums`: the album's identity key.
- *
- * The **directory**, not the tag pair, because that is what an album *is* here: a starred
- * album resolves back to its songs through `dir_path`, and the album id is derived from
- * it, so it is the identity that has to stay stable across a folder rename.
- *
- * No sort key is carried alongside. The rows arrive in the order the query chose, and that
- * order is the whole answer — `songsForAlbumDirs` re-emits the buckets in this list's
- * order, so the list *is* the ordering, and a separate key would be a second thing that
- * could disagree with it.
- */
-interface AlbumKeyRow {
-  readonly key: string;
-}
-
-/**
- * Album groups per statement: one variable each, plus the `library_id`.
- *
- * Derived, never chosen — see `sqlLimits.ts`.
- *
- * It used to be two variables per group, because the group was an `(album_artist, album)`
- * pair and each half had to be bound. Grouping on `dir_path` makes it one, and that is
- * not only cheaper: the SQL grouping and the caller's grouping were two different answers
- * to "which rows are this album", so a page of five SQL groups held anywhere between one
- * and five albums, and one album's tracks could straddle a page boundary and be reported
- * twice.
- */
-const ALBUM_GROUPS_PER_STATEMENT = bindChunkSize(1);
 
 /**
  * Artists per statement: one variable each, plus the `library_id`.
@@ -73,7 +54,7 @@ const ARTISTS_PER_STATEMENT = bindChunkSize(1);
  * It used to, and it was the reason `getAlbumList2?type=alphabeticalByName` was not
  * alphabetical: this tuple leads with `album_artist_ci`, so re-sorting by it substitutes
  * *alphabetical by artist* for whatever the caller asked for. The album fetch rebuilds the
- * caller's order from its key list instead — see `songsForAlbumDirs`.
+ * caller's order from its key list instead — see `songsForAlbumKeys`.
  */
 function compareSongRows(a: SongRow, b: SongRow): number {
   const columns: readonly (keyof SongRow)[] = ['album_artist_ci', 'album_ci', 'disc', 'track', 'name_ci'];
@@ -105,34 +86,37 @@ class SongIndexDAO extends BaseDAO {
    *
    * ### One grouping, or two answers to the same question
    *
-   * This used to `GROUP BY album_artist_ci, album_ci` while the caller regrouped by
-   * `dir_path`. Two different definitions of "which tracks are this album", and every
-   * symptom followed from the disagreement rather than from either being wrong alone:
+   * This grouped in SQL on `(album_artist_ci, album_ci)` while the caller regrouped by `dir_path`.
+   * Two different definitions of "which tracks are this album", and every symptom followed from the
+   * disagreement rather than from either being wrong alone:
    *
-   * - **The page held the wrong number of albums.** `LIMIT 5` bounded five SQL groups;
-   *   the caller's grouping then merged them, so a page could carry four albums, or one.
+   * - **The page held the wrong number of albums.** `LIMIT 5` bounded five SQL groups; the
+   *   caller's grouping then merged them, so a page could carry four albums, or one.
    * - **An album appeared on two pages.** A directory whose tracks carry two different
-   *   `album_artist` values is one album to the caller and two groups to the query, so
-   *   paging by group split it — and a page could carry the same album twice.
-   * - **`alphabeticalByName` was not alphabetical.** The query ordered by `album_ci`, the
-   *   row fetch re-sorted by `album_artist_ci` first, and the caller's grouping re-sorted
-   *   by directory path. Three orderings, none of them the one that was asked for.
+   *   `album_artist` values is one album to the caller and two groups to the query, so paging by
+   *   group split it — and a page could carry the same album twice.
+   * - **`alphabeticalByName` was not alphabetical.** The query ordered by `album_ci`, the row fetch
+   *   re-sorted by `album_artist_ci` first, and the caller's grouping re-sorted by directory path.
+   *   Three orderings, none of them the one that was asked for.
    *
-   * The group is now `dir_path`, which is the key `getAlbum`, the star table and the
-   * album id all already use. The tags choose the *order* — as aggregates over the group,
-   * so one album sorts by one value rather than by whichever of its tracks happened to
-   * lead — but not the *membership*.
+   * It was unified on `dir_path`, which made the two agree and left the *choice* unmade: a library
+   * whose folders split a release got one album per folder, which is a correct answer to a question
+   * nobody asked. The grouping is now the configured one, and the SQL group and the TypeScript
+   * group are both derived from the same key function — so agreeing is structural rather than a
+   * coincidence to be re-tested per grouping.
    *
-   * @param orderBy Aggregate expressions over the group, most significant first. A list
-   *   rather than one clause because `alphabeticalByArtist` is a two-term order and
-   *   SQLite cannot alias a multi-term `ORDER BY` as one expression. `dir_path` is
-   *   appended as a final tiebreak: without it, two albums that tie on every term can
-   *   come back in either order, and a page boundary between them would make paging
-   *   return the same album twice or skip it entirely.
+   * The tags choose the *order* — as aggregates over the group, so one album sorts by one value
+   * rather than by whichever of its tracks happened to lead — but not the *membership*.
+   *
+   * @param orderBy Aggregate expressions over the group, most significant first. A list rather than
+   *   one clause because `alphabeticalByArtist` is a two-term order and SQLite cannot alias a
+   *   multi-term `ORDER BY` as one expression. `albumKeySql` appends the key columns as a final
+   *   tiebreak, because a page boundary needs a total order.
    */
   public async listAlbums(
     libraryId: string,
     options: {
+      grouping: AlbumGroupingValue;
       albumArtistCi?: string | null;
       genreCi?: string | null;
       fromYear?: number;
@@ -162,70 +146,95 @@ class SongIndexDAO extends BaseDAO {
     }
     values.push(options.limit, options.offset);
 
-    const ordering = [...options.orderBy, 'dir_path ASC'].join(', ');
+    const projection = albumKeyProjection(options.grouping);
+    const ordering = [...options.orderBy, ...projection.orderTiebreak].join(', ');
     const page = await this.withRetry(
       async () =>
         await this.database
           .prepare(
-            `SELECT dir_path AS key
-               FROM songs WHERE ${where.join(' AND ')}
-              GROUP BY dir_path
+            `SELECT ${projection.select} FROM songs WHERE ${where.join(' AND ')}
+              GROUP BY ${projection.groupBy}
               ORDER BY ${ordering}
               LIMIT ? OFFSET ?`,
           )
           .bind(...values)
-          .all<AlbumKeyRow>(),
+          .all<AlbumKeyRowOut>(),
       'songs.listAlbums.page',
     );
 
-    const keys = page.results ?? [];
+    const keys = (page.results ?? []).map((row) => projection.keyOf(row));
     if (keys.length === 0) return [];
-    return await this.songsForAlbumDirs(libraryId, keys, 'songs.listAlbums.rows');
+    return await this.songsForAlbumKeys(libraryId, keys, options.grouping, 'songs.listAlbums.rows');
   }
 
   /**
-   * Every song belonging to a set of album directories, **in the order those directories
-   * were given**.
+   * Every song belonging to a set of album keys, **in the order those keys were given**.
    *
+   * Public because three callers start from a set of keys rather than from a page: `getAlbum` and
+   * the starred paths from an id, `getArtist` and `search3` from the keys of rows they already hold.
+   * All four need **whole** groups, which is why this returns rows rather than albums — the counts
+   * and the album-level fields come from the same rows.
+   */
+  public async listForAlbumKeys(libraryId: string, keys: readonly string[], grouping: AlbumGroupingValue): Promise<SongRow[]> {
+    if (keys.length === 0) return [];
+    return await this.songsForAlbumKeys(libraryId, keys, grouping, 'songs.listForAlbumKeys');
+  }
+
+  /**
    * ### Why the order is rebuilt here rather than left to the statement
    *
-   * Because a chunked fetch cannot inherit it. Each statement is internally sorted, but
-   * the chunks are concatenated, so the result is a function of the *key list's* order and
-   * not of the database's. It used to be re-sorted by `(album_artist_ci, album_ci, disc,
-   * track, name_ci)` — which is right for making an album's tracks contiguous and ordered,
-   * and wrong for the list itself, because it discards the ordering the caller asked for
-   * and substitutes one that happens to be alphabetical *by artist*.
+   * Because a chunked fetch cannot inherit it. Each statement is internally sorted, but the chunks
+   * are concatenated, so the result is a function of the *key list's* order and not of the
+   * database's. It used to be re-sorted by `(album_artist_ci, album_ci, disc, track, name_ci)` —
+   * right for making an album's tracks contiguous and ordered, and wrong for the list itself, because
+   * it discards the ordering the caller asked for and substitutes one that happens to be
+   * alphabetical *by artist*.
    *
-   * So the order is rebuilt from the key list: each chunk is grouped, and the groups are
-   * emitted in the order the keys arrived. That makes the result a function of `keys`
-   * alone, which is what lets the chunk count stay an implementation detail — and it is
-   * the same trick `listIdsIn` uses for an ordered id list, for the same reason.
+   * So the order is rebuilt from the key list: each chunk is grouped, and the groups are emitted in
+   * the order the keys arrived. That makes the result a function of `keys` alone, which is what lets
+   * the chunk count stay an implementation detail — and it is the same trick `listIdsIn` uses for an
+   * ordered id list, for the same reason.
    *
-   * Within a group the tracks keep the protocol's order: disc, then track, then name, so
-   * an untagged track (both nullable) lands where it always did.
+   * Within a group the tracks keep the protocol's order: disc, then track, then name. This
+   * `ORDER BY` only has to make each album's rows contiguous and roughly ordered before the caller
+   * re-sorts them with `compareAlbumTracks`, which is the order a client reads; the two are asserted
+   * to agree on a fixture whose names differ only by case, which is what `name_ci` versus `name`
+   * separates.
    *
-   * @param keys Album directories in the caller's chosen order.
+   * @param keys Album keys in the caller's chosen order.
    */
-  private async songsForAlbumDirs(libraryId: string, keys: readonly AlbumKeyRow[], context: string): Promise<SongRow[]> {
-    // Refuse rather than stop early. The key page above already fixed *which* albums this
-    // request is about, so returning a subset would be a page that silently omits albums the
-    // caller asked for and the client will render as "that is all there is". The size is
-    // bounded upstream by `MAX_PAGE_SIZE_CEILING`, so this is the backstop for a caller that
-    // bypassed it — and it is checked before the first statement, so a refusal costs nothing.
-    this.requireSubrequests(Math.ceil(keys.length / ALBUM_GROUPS_PER_STATEMENT), context);
+  private async songsForAlbumKeys(
+    libraryId: string,
+    keys: readonly string[],
+    grouping: AlbumGroupingValue,
+    context: string,
+  ): Promise<SongRow[]> {
+    // Refuse rather than stop early. The key page above already fixed *which* albums this request
+    // is about, so returning a subset would be a page that silently omits albums the caller asked for
+    // and the client will render as "that is all there is". The size is bounded upstream by
+    // `MAX_PAGE_SIZE_CEILING`, so this is the backstop for a caller that bypassed it — and it is
+    // checked before the first statement, so a refusal costs nothing.
+    const perStatement = albumGroupsPerStatement(grouping);
+    this.requireSubrequests(Math.ceil(keys.length / perStatement), context);
 
     const rows: SongRow[] = [];
-    for (const chunk of chunkArray(keys, ALBUM_GROUPS_PER_STATEMENT)) {
-      const clause = chunk.map(() => '(dir_path IS ?)').join(' OR ');
+    for (const chunk of chunkArray(keys, perStatement)) {
+      // One predicate per key, and the predicate comes **from the key** — never reconstructed from a
+      // column list at the call site. Under `album_artist` it has to be a NULL-safe pair, and the two
+      // ways to write it are not equivalent: `album_artist_ci = ?` cannot match the NULL group at
+      // all, while `COALESCE(album_artist_ci, '') = ?` matches the right rows and silently stops
+      // using `idx_songs_album`. Identical results, one page instead of a scan, nothing to see.
+      const specs = chunk.map((key) => specFromKey(key));
+      const clause = specs.map((spec) => `(${spec.predicate})`).join(' OR ');
       const values: unknown[] = [libraryId];
-      for (const key of chunk) values.push(key.key);
+      for (const spec of specs) values.push(...spec.values);
 
       const result = await this.withRetry(
         async () =>
           await this.database
             .prepare(
               `SELECT * FROM songs WHERE library_id = ? AND (${clause})
-                ORDER BY dir_path ASC, disc ASC, track ASC, name_ci ASC`,
+                ORDER BY disc ASC, track ASC, name_ci ASC`,
             )
             .bind(...values)
             .all<SongRow>(),
@@ -234,16 +243,17 @@ class SongIndexDAO extends BaseDAO {
       rows.push(...(result.results ?? []));
     }
 
-    // Bucket by directory, then emit the buckets in the key list's order.
+    // Bucket by key, then emit the buckets in the key list's order.
     const byKey = new Map<string, SongRow[]>();
     for (const row of rows) {
-      const bucket = byKey.get(row.dir_path);
+      const key = albumKeySpec(row, grouping).string;
+      const bucket = byKey.get(key);
       if (bucket) bucket.push(row);
-      else byKey.set(row.dir_path, [row]);
+      else byKey.set(key, [row]);
     }
     const ordered: SongRow[] = [];
     for (const key of keys) {
-      const bucket = byKey.get(key.key);
+      const bucket = byKey.get(key);
       if (bucket) ordered.push(...bucket);
     }
     return ordered;
@@ -275,7 +285,7 @@ class SongIndexDAO extends BaseDAO {
     const keys = (page.results ?? []).map((row) => row.artist_key);
     if (keys.length === 0) return [];
 
-    // Batched for the same reason as `songsForAlbumDirs`, and this one was worse: the
+    // Batched for the same reason as `songsForAlbumKeys`, and this one was worse: the
     // callers ask for 500 artists (`getArtists`), 5,000 (`getArtist`) and 500
     // (`getCoverArt`'s artist probe), so every one of them was a guaranteed masked 500 on
     // any library with 100 or more artists — the endpoint a player draws its front page
@@ -299,30 +309,19 @@ class SongIndexDAO extends BaseDAO {
   }
 
   /**
-   * The songs of one page of albums.
+   * `getGenres` — the library's genres, with song and album counts.
    *
-   * Two statements, and the reason matters. The obvious implementation is
-   * `GROUP BY album_artist_ci, album_ci` in SQL, and it is wrong in a way that is invisible
-   * in the row count: the group collapses each album to one **representative row**, so the
-   * caller sees one track per album and every album in the product reports
-   * `songCount: 1` and a duration equal to its first track. Clients draw an album's
-   * length and track count from exactly those two fields, so the whole library looks wrong
-   * and nothing errors.
+   * Two statements and the reason matters. The obvious implementation is `GROUP BY genre_ci` in SQL,
+   * and it is wrong in a way that is invisible in the row count: the group collapses each genre to
+   * one **representative row**, so the caller sees one track per genre and every genre reports
+   * `songCount: 1` and an album count of 1. Clients draw a genre's length and track count from
+   * exactly those two fields, so the whole library looks wrong and nothing errors.
    *
-   * So the SQL only decides *which* albums are on this page and in what order, and the
-   * fetch returns **every** song of those albums. The aggregation then happens once, in
-   * `groupAlbums`, from the same rows the counts are derived from - which is the only way
-   * the two cannot disagree.
-   *
-   * Paging is over albums, not songs, because that is what the protocol means by `size`:
-   * a page of ten albums is ten albums, not however many tracks ten albums hold.
-   *
-   * The second query deliberately does **not** re-apply the year or genre filter. Those
-   * filters choose which albums appear; an album selected because one of its tracks is
-   * from 2007 is still the whole album, and a partial track count for it would be the
-   * same bug in a narrower window.
+   * So the counts are aggregates here, in the same statement as the names, and cannot drift from
+   * the rows they summarize. The distinct-album count is over the album key — which under a tag
+   * grouping is a pair of columns, so it is `DISTINCT` over their concatenation rather than over
+   * `album_ci` alone: counting by name alone would report one album for two self-titled records.
    */
-
   public async listGenres(libraryId: string): Promise<GenreCountRow[]> {
     const result = await this.withRetry(
       async () =>
@@ -341,15 +340,6 @@ class SongIndexDAO extends BaseDAO {
     );
     return result.results ?? [];
   }
-
-  /**
-   * The songs of one page of artists.
-   *
-   * Two statements for the same reason as `listAlbums`: a SQL `GROUP BY artist_ci`
-   * returns one row per artist, so `getArtist`'s `albumCount` and every album's
-   * `songCount` would each be 1 for a real discography. The page is chosen in SQL; the
-   * rows are complete.
-   */
 }
 
 export { SongIndexDAO };

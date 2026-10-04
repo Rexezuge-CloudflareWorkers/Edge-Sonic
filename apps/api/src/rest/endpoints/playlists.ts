@@ -156,7 +156,7 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
     {
       ...element,
       children: rows.map((song) => ({
-        ...songElement(songToModel(song, visible.get(song.library_id) as LibraryRow, annotations)),
+        ...songElement(songToModel(song, visible.get(song.library_id) as LibraryRow, context.albumsFor(visible.get(song.library_id) as LibraryRow), annotations)),
         name: 'entry',
         array: true as const,
       })),

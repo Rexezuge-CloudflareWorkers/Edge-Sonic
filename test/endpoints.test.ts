@@ -18,7 +18,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { OPEN_SUBSONIC_EXTENSIONS } from '../apps/api/src/rest/endpoints/system';
-import { createHarness, ALBUM_DIR, ORIGIN, SALT, USERNAME, subsonicId } from './helpers/harness';
+import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
+import { createHarness, ALBUM_DIR, LIBRARY_ID, ORIGIN, SALT, USERNAME, subsonicId } from './helpers/harness';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
 let harness: Harness;
@@ -573,8 +574,13 @@ describe('scrobbling', () => {
 
 describe('starred items', () => {
   it('stars and unstars a song, an album and an artist', async () => {
-    const album = subsonicId('al', ALBUM_DIR);
     const artist = subsonicId('ar', 'Bon Iver');
+    // The album id is taken from `getAlbumList2` rather than built here, because that is what
+    // a client does and because the id is a grouping key: building it from a directory
+    // asserts a spelling the server no longer mints. Starring a directory-shaped id is a
+    // separate case — an existing user's star — asserted in the split-release block below.
+    const listed = payload<{ album: Array<{ id: string }> }>((await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body, 'albumList2').album;
+    const album = listed[0]?.id ?? '';
     for (const params of [{ id: SKINNY_LOVE }, { albumId: album }, { artistId: artist }] as Record<string, string>[]) {
       await harness.rest('star', params);
     }
@@ -966,8 +972,338 @@ describe('getArtists and getArtist', () => {
     const detail = await harness.rest('getArtist', { id: ARTIST });
     const artist = payload<{ name: string; albumCount: number; album: Array<{ id: string }> }>(detail.body, 'artist');
     expect(artist.name).toBe('Bon Iver');
-    // The album ids are the same reversible ids used everywhere else, so a client that
-    // kept one from a previous session still resolves it.
-    expect(artist.album.map((album) => album.id)).toEqual([ALBUM]);
+
+    // The album id is the one `getAlbumList2` publishes, not a literal: the property under
+    // test is that every surface mints one id for one album, and pinning a spelling here
+    // would fail on the id scheme rather than on the property. Asserted **against the other
+    // surface** for that reason — a hard-coded id passes even if `getArtist` and the lists
+    // disagree, which is the defect this line was written for.
+    const listed = payload<{ album: Array<{ id: string }> }>((await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body, 'albumList2').album;
+    expect(artist.album.map((album) => album.id)).toEqual(listed.map((album) => album.id));
+
+    // And a directory-shaped id still resolves to it, which is the whole reason the old
+    // spelling is still accepted rather than dropped: a client holding one from a previous
+    // session opens the album it names.
+    const legacy = await harness.rest('getAlbum', { id: ALBUM });
+    expect(payload<{ id: string }>(legacy.body, 'album').id).toBe(artist.album[0]?.id);
+  });
+});
+
+/**
+ * A release split across directories, and what the server does about it.
+ *
+ * ### The shape of the fixture, and why the harness's own album cannot stand in for it
+ *
+ * `createHarness` seeds one album in one directory with a consistent `album_artist`, so every
+ * grouping answers identically on it — which is exactly why the original defect was invisible
+ * here. The rows below put **one release in two directories** with **no `ALBUMARTIST` tag**,
+ * which is what a per-artist rip produces: the folder is named after the performer, so the
+ * release is one directory per artist and `ALBUM` is the only thing they share.
+ *
+ * `album_artist` is written as NULL explicitly rather than left to the path derivation, because
+ * `EnrichmentService` omits an absent tag rather than clearing it and the derived value
+ * survives. It models a library indexed before that derivation existed — and it is what the
+ * deployed instance this was measured against looks like: 113 rows, every `album_artist` NULL.
+ */
+const SPLIT_DIR_A = 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi';
+const SPLIT_DIR_B = 'ryo (supercell) & Kagura - Ex-Otogibanashi';
+
+async function seedSplitRelease(album = 'Ex-Otogibanashi'): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = [
+    { dir: SPLIT_DIR_A, file: '01 - Ex-Otogibanashi.opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 1, disc: 1, duration: 180 },
+    { dir: SPLIT_DIR_A, file: '02 - Sekaijū wa Mine [Remix].opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 2, disc: 1, duration: 263 },
+    { dir: SPLIT_DIR_B, file: '03 - Melt [Remix].opus', artist: 'ryo (supercell) & Kagura', track: 3, disc: 1, duration: 271 },
+  ];
+  for (const row of rows) {
+    const path = `${row.dir}/${row.file}`;
+    await harness.db.db
+      .prepare(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, title, title_ci,
+           artist, artist_ci, album, album_ci, album_artist, album_artist_ci, track, disc, duration, bitrate,
+           reader_version, derived_version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1000, 1000, 'opus', ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, 900, 1, 1, ?, ?)`,
+      )
+      .bind(
+        subsonicId('s', path),
+        LIBRARY_ID,
+        path,
+        row.dir,
+        row.file,
+        row.file.toLowerCase(),
+        row.file.replace(/^\d+ - /, '').replace('.opus', ''),
+        row.file.toLowerCase(),
+        row.artist,
+        row.artist.toLowerCase(),
+        album,
+        album.toLowerCase(),
+        row.track,
+        row.disc,
+        row.duration,
+        now,
+        now,
+      )
+      .run();
+  }
+}
+
+/**
+ * One album in two directories, resolved through the real worker.
+ */
+describe('a release split across directories', () => {
+  beforeEach(async () => {
+    await seedSplitRelease();
+  });
+
+  const listAlbums = async (): Promise<Array<Record<string, unknown>>> => {
+    const { body } = await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '20' });
+    return payload<{ album: Array<Record<string, unknown>> }>(body, 'albumList2').album;
+  };
+
+  /**
+   * The merged release, or a thrown expectation rather than `undefined`.
+   *
+   * `undefined` would flow into every assertion below as "the album has no id", and a test
+   * that reports "expected undefined to be 3" does not say which of the four things it wanted.
+   */
+  const splitAlbum = async (): Promise<Record<string, unknown>> => {
+    const albums = await listAlbums();
+    const album = albums.find((entry) => entry.name === 'Ex-Otogibanashi');
+    expect(album, 'the split release is absent from getAlbumList2 entirely').toBeDefined();
+    return album as Record<string, unknown>;
+  };
+
+  it('publishes one album with every track, not one per directory', async () => {
+    const albums = (await listAlbums()).filter((album) => album.name === 'Ex-Otogibanashi');
+
+    // The report. Two directories, two albums, one release — and a client drawing an album
+    // grid shows the same record twice with different track counts, which is a bug with no
+    // error and no way for the client to reconcile.
+    expect(albums).toHaveLength(1);
+    expect(albums[0]?.songCount).toBe(3);
+    // The durations summed across **both** directories. A partial album reports a shorter one.
+    expect(albums[0]?.duration).toBe(714);
+  });
+
+  it('gives the album a key-derived id rather than a directory', async () => {
+    const album = await splitAlbum();
+
+    // A new kind, because the payload is a grouping key and not a path, and two id shapes
+    // that are both ordinary relative paths need the prefix to say which reading applies.
+    expect(String(album.id).startsWith('alk:')).toBe(true);
+    // A directory id for the same album, which is what every client is holding today.
+    expect(subsonicId('al', SPLIT_DIR_A).startsWith('al:')).toBe(true);
+  });
+
+  it('resolves the album id to every track, and to the same record the list published', async () => {
+    const listed = await splitAlbum();
+    const { body } = await harness.rest('getAlbum', { id: String(listed.id) });
+    const album = payload<{ id: string; song: Array<Record<string, unknown>> }>(body, 'album');
+
+    expect(album.song).toHaveLength(3);
+    // **Key sets, not spot checks.** `getAlbum` and the lists built the same album from two
+    // literals and had already diverged on `created`, which a client declaring it
+    // non-nullable fails on for *every* album.
+    const fromAlbum = Object.keys(album).filter((key) => key !== 'song').sort();
+    const fromList = Object.keys(listed).sort();
+    expect(fromAlbum).toEqual(fromList);
+    expect(album.id).toBe(listed.id);
+  });
+
+  it('still resolves an album id minted as a directory, and resolves it to the whole release', async () => {
+    // A client is holding thousands of these: every starred album and every album rating on
+    // every deployment that predates the change. Resolving one to **its own directory** rather
+    // than to the group would answer `code=200` with half an album while every list published
+    // all three tracks — two answers to "what album is this id" for one id.
+    const { body } = await harness.rest('getAlbum', { id: subsonicId('al', SPLIT_DIR_B) });
+    const album = payload<{ song: Array<Record<string, unknown>>; songCount: number; id: string }>(body, 'album');
+
+    expect(album.song).toHaveLength(3);
+    expect(album.songCount).toBe(3);
+    // And it publishes the **current** id, so a client that starred the directory and then
+    // opens the album navigates with the id every other surface is using.
+    expect(album.id).toBe((await splitAlbum()).id);
+  });
+
+  it('decorates a star written under the directory id', async () => {
+    // The half of the change that has no symptom while it is wrong. A star is stored under the
+    // id the album had when the user starred it; the album is published under a new one; so a
+    // lookup on the new id finds nothing and the star is reported by nothing at all — the
+    // `starred: undefined` finding one layer up, where a field was dropped by both serializers
+    // because the lookup held nothing.
+    await harness.rest('star', { albumId: subsonicId('al', SPLIT_DIR_A) });
+
+    // On the two surfaces that carry annotations. **`getAlbumList2` is not one of them** — it
+    // renders with `NO_ANNOTATIONS` to keep seven per-user D1 reads off an album list, so a
+    // star is absent there by design and asserting it would be asserting a change nobody
+    // asked for. A client reads an album's star from `getAlbum` and from the starred list.
+    const current = (await splitAlbum()).id;
+    const detail = payload<{ id: string; starred?: string }>((await harness.rest('getAlbum', { id: String(current) })).body, 'album');
+    expect(detail.starred).toBeDefined();
+
+    const starred = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getStarred2')).body, 'starred2').album;
+    expect(starred).toHaveLength(1);
+    expect(starred[0]?.id).toBe(current);
+    expect(starred[0]?.starred).toBeDefined();
+  });
+
+  it('publishes one album for two directory stars, because the starred list is a set', async () => {
+    // Both directories were starred before the release was one album, so two stored ids name
+    // one record. Rendering both publishes the same album twice in a list whose whole job is
+    // to be a set.
+    await harness.rest('star', { albumId: subsonicId('al', SPLIT_DIR_A) });
+    await harness.rest('star', { albumId: subsonicId('al', SPLIT_DIR_B) });
+
+    const { body } = await harness.rest('getStarred2');
+    const starred = payload<{ album: Array<Record<string, unknown>> }>(body, 'starred2').album;
+    expect(starred).toHaveLength(1);
+    expect(starred[0]?.songCount).toBe(3);
+  });
+
+  it('publishes the same ids from the file-structure variant as from the tag variant', async () => {
+    // The protocol declares `getAlbumList` "by file structure" and `getAlbumList2` "by tag".
+    // This server answers both from one grouping on purpose: two album identities would mean a
+    // client's album id is whichever it saw last, and `getAlbum` would have to accept both for
+    // ever. Navidrome answers both from its single album table.
+    const tag = (await listAlbums()).filter((album) => album.name === 'Ex-Otogibanashi');
+    const { body } = await harness.rest('getAlbumList', { type: 'alphabeticalByName', size: '20' });
+    const structural = payload<{ album: Array<Record<string, unknown>> }>(body, 'albumList').album.filter((album) => album.title === 'Ex-Otogibanashi');
+
+    expect(structural.map((album) => album.id)).toEqual(tag.map((album) => album.id));
+    expect(structural).toHaveLength(1);
+  });
+
+  it('reports the whole album on the artist page, not the artist’s share of it', async () => {
+    // `getArtist` filters to the artist's own tracks and then groups them. Grouping that alone
+    // publishes an album holding one track — and the same album id then reports `songCount: 1`
+    // here and `songCount: 3` everywhere else.
+    const { body } = await harness.rest('getArtist', { id: subsonicId('ar', 'ryo (supercell) & Kagura') });
+    const artist = payload<{ album: Array<Record<string, unknown>> }>(body, 'artist').album;
+
+    const release = artist.filter((album) => album.name === 'Ex-Otogibanashi');
+    expect(release).toHaveLength(1);
+    expect(release[0]?.songCount).toBe(3);
+    expect(release[0]?.id).toBe((await splitAlbum()).id);
+  });
+
+  it('names a multi-artist album Various Artists, and publishes no artistId for it', async () => {
+    const album = await splitAlbum();
+
+    // `artist` is **required** by the schema, so it cannot be omitted. `artistId` is not, and
+    // publishing one would be a link that answers `code=70` — a client tapping the album's
+    // artist and being told the album does not exist. A synthesized name resolves to no artist,
+    // so the id is left off rather than pointed at one.
+    expect(album.artist).toBe('Various Artists');
+    expect(album.artistId).toBeUndefined();
+  });
+
+  it('keeps an artistId on an album that has one artist, so the two do not become one rule', async () => {
+    // The harness album: one album artist, one directory, one artist. If the `Various Artists`
+    // branch were taken whenever `album_artist` were absent, this album — whose tags all agree —
+    // would lose its link too, and the rule would be "no album artist means no artist".
+    const forEmma = (await listAlbums()).find((album) => album.name === 'For Emma, Forever Ago');
+    expect(forEmma?.artist).toBe('Bon Iver');
+    expect(forEmma?.artistId).toBe(subsonicId('ar', 'Bon Iver'));
+
+    // And a client can drill it, which is what makes publishing the id worth anything.
+    const { body } = await harness.rest('getArtist', { id: String(forEmma?.artistId) });
+    expect(payload<{ name: string }>(body, 'artist').name).toBe('Bon Iver');
+  });
+
+  it('orders a two-disc album by disc, so a client does not draw disc 1 twice', async () => {
+    // **This is a pre-existing defect, not one the grouping introduced**, and the harness's
+    // single-disc album cannot see it. `getAlbum` sorted by track and name while the lists
+    // sorted by disc, track and name, so a two-disc album came back interleaved:
+    //
+    //   disc=1 trk=2  Stella☆
+    //   disc=2 trk=3  Koi Yuki     <- disc 2 between two disc 1 tracks
+    //   disc=2 trk=6  KAKUMEI
+    //   disc=1 trk=8  I x U
+    //   disc=2 trk=14 Cherry Bomb
+    //
+    // Every field is right and the order is wrong, which is why it presented as nothing at all.
+    const now = Math.floor(Date.now() / 1000);
+    const dir = 'Silent Siren Selection';
+    for (const [file, disc, track] of [
+      ['a.opus', 1, 2],
+      ['b.opus', 2, 3],
+      ['c.opus', 1, 8],
+    ] as Array<[string, number, number]>) {
+      const path = `${dir}/${file}`;
+      await harness.db.db
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, title, title_ci,
+             artist, artist_ci, album, album_ci, album_artist, album_artist_ci, track, disc, duration, bitrate,
+             reader_version, derived_version, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1000, 1000, 'opus', ?, ?, 'Silent Siren', 'silent siren', 'Silent Siren Selection',
+             'silent siren selection', 'Silent Siren', 'silent siren', ?, ?, 200, 900, 1, 1, ?, ?)`,
+        )
+        .bind(subsonicId('s', path), LIBRARY_ID, path, dir, file, file, file, file, track, disc, now, now)
+        .run();
+    }
+
+    const { body } = await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '20' });
+    const albums = payload<{ album: Array<Record<string, unknown>> }>(body, 'albumList2').album;
+    const album = albums.find((entry) => entry.name === 'Silent Siren Selection');
+    expect(album, 'the two-disc album is absent from getAlbumList2').toBeDefined();
+    const detail = payload<{ song: Array<{ title: string; discNumber?: number; track?: number }> }>((await harness.rest('getAlbum', { id: String(album?.id) })).body, 'album');
+
+    // Disc 1's two tracks, then disc 2's one. Asserted as the whole sequence rather than as
+    // "it is sorted", because a comparator with `disc` removed and one that never had it both
+    // produce a list that is sorted by *something*.
+    expect(detail.song.map((song) => [song.discNumber, song.track])).toEqual([
+      [1, 2],
+      [1, 8],
+      [2, 3],
+    ]);
+  });
+});
+
+/**
+ * The knob itself: read by the request path, and refused at boot when it names nothing.
+ */
+describe('ALBUM_GROUP_BY', () => {
+  it('changes the answer, so it is read rather than merely parsed', async () => {
+    // A variable can be declared, parsed, validated, templated and read by nothing, and every
+    // one of those states looks identical from the outside. `STREAM_RATE_LIMIT` was inert: the
+    // limiter used a literal, so `600` lived in three places and an operator setting `50` got a
+    // clean validation pass and an unchanged server. So each value is asserted to answer
+    // differently, on the one fixture where the values disagree.
+    await harness.close();
+    harness = await createHarness();
+    await seedSplitRelease();
+
+    const albumCount = async (env: Record<string, unknown>): Promise<number> => {
+      await harness.close();
+      harness = await createHarness();
+      await seedSplitRelease();
+      const response = await harness.fetch(harness.restUrl('getAlbumList2', { type: 'alphabeticalByName', size: '20' }), env);
+      const parsed = (await response.json()) as SubsonicBody;
+      return payload<{ album: Array<{ name: string }> }>(parsed, 'albumList2').album.filter((album) => album.name === 'Ex-Otogibanashi').length;
+    };
+
+    // `folder` answers its own question: two directories, two albums. `album` merges them.
+    expect(await albumCount({ ALBUM_GROUP_BY: 'folder' })).toBe(2);
+    expect(await albumCount({ ALBUM_GROUP_BY: 'album' })).toBe(1);
+    // And unset takes the default, which is `album` — stated so a change to the default is a
+    // deliberate diff here rather than a silent behaviour change on every deployment.
+    expect(await albumCount({})).toBe(1);
+  });
+
+  it('refuses an unrecognised value by name, rather than grouping by something else', async () => {
+    // Not a degraded answer but a **different** partition: `folder`, `album` and `album_artist`
+    // put a library's tracks into different albums, and the default is not an approximation of
+    // what was asked for. Every other variable here either falls back to something close or
+    // clamps a bound; this one cannot, so a typo has to be named. And it has no error response
+    // for a client to see, which makes the boot-time report the only place it can surface.
+    const warnings = AppConfiguration.fromEnv({ ALBUM_GROUP_BY: 'album artist' }).validate();
+    const reported = warnings.filter((warning) => warning.includes('ALBUM_GROUP_BY'));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain('folder');
+    expect(reported[0]).toContain('album_artist');
+
+    // A valid value reports nothing, and so does an unset one.
+    expect(AppConfiguration.fromEnv({ ALBUM_GROUP_BY: 'album' }).validate().filter((warning) => warning.includes('ALBUM_GROUP_BY'))).toHaveLength(0);
+    expect(AppConfiguration.fromEnv({}).validate().filter((warning) => warning.includes('ALBUM_GROUP_BY'))).toHaveLength(0);
   });
 });

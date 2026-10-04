@@ -25,8 +25,10 @@ import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
 import { resolveLibrary } from './libraries';
-import { annotationsFor, groupAlbums } from './structured';
-import { albumKeyOf, artistNameOf } from '../mappers';
+import { annotationsFor } from './structured';
+import { groupAlbumsOf } from './albumRecord';
+import { artistNameOf } from '../mappers';
+import type { AlbumIdentity } from '../albumIdentity';
 
 
 interface SearchSpec {
@@ -68,7 +70,7 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
   const { songs } = await runSearch(context, library);
   const count = context.pageSize(context.params.optionalInt('count'), 20);
   const annotations = await annotationsFor(context, songs.length > 0);
-  const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, annotations)));
+  const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, context.albumsFor(library), annotations)));
   return respond(context, elList('searchResult', 'song', {}, nodes));
 }
 
@@ -81,12 +83,21 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
  */
 async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | 'searchResult3'): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const identity = context.albumsFor(library);
   const { songs } = await runSearch(context, library);
   const annotations = await annotationsFor(context, songs.length > 0);
 
-  const artists = groupArtists(songs, library, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
+  const artists = groupArtists(songs, library, identity, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
   const albumOffset = context.params.int('albumOffset', 0, { min: 0 });
-  const albums = groupAlbums(songs, library, NO_ANNOTATIONS).slice(
+  // **Completed, then grouped.** `songs` is the matched subset, so grouping it alone publishes
+  // an album holding the tracks the term happened to hit — and the same album id then reports a
+  // different `songCount`, `duration` and `artist` here than everywhere else. The protocol's own
+  // shape agrees: `searchResult3` carries albums as `AlbumID3` records with no songs attached,
+  // so the album's numbers are supposed to be the album's. One statement per 49 keys, against a
+  // default page of 20 albums.
+  const albumKeys = [...new Set(songs.map((song) => identity.keyOf(song)))];
+  const complete = await context.songIndex.listForAlbumKeys(library.id, albumKeys, identity.grouping);
+  const albums = groupAlbumsOf(complete, library, identity, NO_ANNOTATIONS).slice(
     albumOffset,
     albumOffset + context.pageSize(context.params.optionalInt('albumCount'), 20),
   );
@@ -110,25 +121,31 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
       [
         ...artists,
         ...albumNodes,
-        ...songs.map((song) => songElement(songToModel(song, library, annotations))),
+        ...songs.map((song) => songElement(songToModel(song, library, identity, annotations))),
       ],
     ),
   );
 }
 
 /**
-Distinct artists across the result set, as `artist` elements.
-*/
-function groupArtists(rows: readonly SongRow[], library: LibraryRow, limit: number, offset: number): ElementNode[] {
+ * Distinct artists across the result set, as `artist` elements.
+ *
+ * `albumCount` counts distinct album **keys**, so a compilation counts once for every artist
+ * who contributed a track to it — see `groupArtistRows`, which answers the same question for
+ * `getArtists` and has to agree with this or the two browses disagree about an artist's
+ * discography.
+ */
+function groupArtists(rows: readonly SongRow[], library: LibraryRow, identity: AlbumIdentity, limit: number, offset: number): ElementNode[] {
   const counts = new Map<string, { name: string; albums: Set<string> }>();
   for (const row of rows) {
     const name = row.artist ?? row.album_artist ?? artistNameOf(row);
     const key = name.toLowerCase();
+    const albumKey = identity.keyOf(row);
     const existing = counts.get(key);
     if (existing) {
-      existing.albums.add(albumKeyOf(row));
+      existing.albums.add(albumKey);
     } else {
-      counts.set(key, { name, albums: new Set([albumKeyOf(row)]) });
+      counts.set(key, { name, albums: new Set([albumKey]) });
     }
   }
   return [...counts.values()]

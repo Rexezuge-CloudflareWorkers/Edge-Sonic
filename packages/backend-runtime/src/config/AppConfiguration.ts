@@ -1,4 +1,7 @@
 import { EnvParser } from './EnvParser';
+import { isAlbumGrouping } from '@edge-sonic/subsonic';
+import { ALBUM_GROUPINGS } from '@edge-sonic/subsonic';
+import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
 import { isLogLevel } from '../logger';
 import type { LogLevel } from '../logger';
 import {
@@ -126,6 +129,14 @@ class AppConfiguration {
 
   public getDefaultPageSize(): number {
     return this.requests.getDefaultPageSize();
+  }
+
+  /**
+   * Which tracks are one album. See `subsonic/albumKey.ts` for what each value means and
+   * what it costs — this only decides which one is in force.
+   */
+  public getAlbumGroupBy(): AlbumGroupingValue {
+    return this.requests.getAlbumGroupBy();
   }
 
   public getStreamRateLimit(): number {
@@ -267,7 +278,27 @@ class AppConfiguration {
       warnings.push(`Invalid configuration: LOG_LEVEL must be one of debug, info, warn, error (got ${JSON.stringify(logLevel)})`);
     }
 
-    // A bypass present but inert is the dangerous direction: one edit to
+    // `ALBUM_GROUP_BY` decides what an album **is**, so an unrecognised value is not a
+    // degraded answer — it is a different answer than the operator asked for, delivered
+    // without saying so. Every other variable in this method either falls back to a default
+    // that is close to what was meant, or clamps a bound. Neither is true here: `folder`,
+    // `album` and `album_artist` partition a library into different albums, and the default is
+    // a *different* partition rather than a safe approximation of the configured one.
+    //
+    // So it is named. Silently grouping by `album` when an operator wrote `ALBUM_GROUP_BY=album
+    // artist` is the "an unrecognised `type` is a different failure and stays a different one"
+    // rule applied to a setting rather than a parameter — and it is the more dangerous half,
+    // because a mistyped setting has no error response for a client to see.
+    const albumGroupBy = this.requests.getRequestedAlbumGroupBy();
+    if (albumGroupBy.length > 0 && !isAlbumGrouping(albumGroupBy)) {
+      warnings.push(
+        `Invalid configuration: ALBUM_GROUP_BY must be one of ${ALBUM_GROUPINGS.join(', ')} (got ${JSON.stringify(albumGroupBy)}). ` +
+          `It decides which tracks are one album, so a value that is not recognised is a different grouping rather than a degraded one; ` +
+          `the default is in force until it is corrected.`,
+      );
+    }
+
+    // The bypass present but inert is the dangerous direction: one edit to
     // ENVIRONMENT away from authenticating everyone as a fixed identity. An
     // *active* bypass is the intended local setup and is not reported.
     if (!this.isBypassAllowed() && (this.getDevAuthEmail() !== null || this.isDemoMode())) {

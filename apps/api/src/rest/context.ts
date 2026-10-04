@@ -6,7 +6,8 @@
  * authentication. Those three are the parts of the protocol that are easy to get
  * subtly wrong and that a handler has no business repeating.
  */
-import type { UserRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, UserRow } from '@edge-sonic/backend-data/dao';
+import type { AlbumIdentity } from './albumIdentity';
 
 import type { SubsonicParams } from '@edge-sonic/subsonic';
 import type { ResponseFormat } from '@edge-sonic/subsonic';
@@ -74,6 +75,16 @@ interface RestContext {
   Page size already clamped to `MAX_PAGE_SIZE`.
   */
   readonly pageSize: (requested: number | undefined, fallback?: number) => number;
+  /**
+  The album identity for a library — its grouping, its key, and its id.
+
+  **Resolved from the request's configuration and never from a module constant**, because a
+  module-level value is resolved before `env` exists: that is how `LOG_LEVEL` was inert in
+  every deployed Worker while passing validation. Built per call rather than stored on the
+  context because the id embeds the library, and one context serves every library a caller may
+  see.
+  */
+  readonly albumsFor: (library: LibraryRow) => AlbumIdentity;
 }
 
 export type { RestContext };

@@ -7,22 +7,20 @@
  *
  * ### The grouping, and where it can be wrong
  *
- * Artists and albums are derived from the path convention *and* from tags, and
- * neither is authoritative. A library with no tags groups by folder name; a tagged
- * library groups by tag. Both are supported, which means the grouping is a
- * **view** over `songs` rather than a stored entity — and that is the reason album
- * ids are derived from `dir_path` and never from the album name: the name is
- * precisely the part that is allowed to change.
+ * Artists and albums are derived from the path convention *and* from tags, and neither is
+ * authoritative — which is why the grouping is a setting (`ALBUM_GROUP_BY`) rather than an
+ * assumption, and why the album record and its id live in `./albumRecord` instead of here: they are
+ * the two ends of one decision, and both are read by four callers each.
  */
-import { albumElement, albumWithSongs, decodeId, elList, encodeId, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
-import type { Album } from '@edge-sonic/subsonic';
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import { albumElement, albumWithSongs, decodeId, elList, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
+import { artistIndexGroups, artistNameOf, groupArtistRows, IGNORED_ARTICLES, songToModel } from '../mappers';
 import type { AnnotationLookup } from '../mappers';
-import { albumKeyOf, albumNameOf, artistIndexGroups, artistNameOf, groupArtistRows, IGNORED_ARTICLES, songToModel, toIso } from '../mappers';
+import { compareAlbumTracks } from '../albumIdentity';
+import { albumModel, groupAlbumsOf, libraryForAlbumId, resolveAlbumKey } from './albumRecord';
 import { resolveLibrary } from './libraries';
 
 /**
@@ -64,12 +62,13 @@ async function annotationsFor(context: RestContext, renderingAnything: boolean):
  */
 async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const identity = context.albumsFor(library);
   const limit = context.pageSize(context.params.optionalInt('size'), 500);
   const offset = context.params.int('offset', 0, { min: 0 });
 
   const rows = await context.songIndex.listArtists(library.id, limit + offset, 0);
 
-  const groups = groupArtistRows(rows).slice(offset, offset + limit);
+  const groups = groupArtistRows(rows, identity).slice(offset, offset + limit);
   const annotations = await annotationsFor(context, groups.length > 0);
   const indexes = artistIndexGroups(library, groups, annotations.stars);
 
@@ -113,123 +112,66 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const decoded = decodeId(id, IdKind.Artist);
   const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
   const artistName = decoded.path;
+  const identity = context.albumsFor(library);
 
   const all = await context.songIndex.listArtists(library.id, 5000, 0);
   const mine = all.filter((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === artistName.toLowerCase());
   if (mine.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Artist not found.');
 
+  // **The album is completed, not just grouped.**
+  //
+  // `mine` is every track by this artist, so grouping it alone publishes an album holding only
+  // that artist's share of a release — and the same album id then reports a different
+  // `songCount` here than in `getAlbumList2`, `search3` and `getAlbum`. Two numbers for one
+  // album is the shape of defect this file already records for `getAlbum`'s omitted `created`:
+  // every response is internally valid and no client can reconcile them.
+  //
+  // So the keys are collected and the whole groups fetched. One extra statement per 49 keys,
+  // against an endpoint that already spends 51 statements reading artists.
+  const keys = [...new Set(mine.map((row) => identity.keyOf(row)))];
+  const complete = await context.songIndex.listForAlbumKeys(library.id, keys, identity.grouping);
   const annotations = await annotationsFor(context, true);
-  const albums = groupAlbums(mine, library, annotations);
+  const albums = groupAlbumsOf(complete, library, identity, annotations);
   return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length }, albums.map((album) => albumElement(album))));
 }
 
-/**
- * The album record, from its songs.
- *
- * **One function, because it is one album.** `getAlbum` and every album *list*
- * (`getArtist`, `getAlbumList2`, `search2`/`search3`) publish the same `id`, the same
- * name and the same `created`, read from the same first track. They were two literals,
- * and they had already diverged: `getAlbum`'s copy omitted `created` while the lists
- * emitted it.
- *
- * That is not cosmetic. A client whose `Album` model is
- * `@SerialName("created") val createdAt: Instant` — non-nullable, no default — throws
- * `MissingFieldException` on **every** `getAlbum`, for every album, because the key is
- * absent. The protocol types `created` as optional, so the omission was legal and the
- * breakage was invisible from here: a correct-looking response that one strict client
- * cannot read at all.
- *
- * @param songs The album's tracks, already ordered — the first one supplies the
- *   album-level fields, and it is also what `getAlbum` publishes as `track 1`.
- */
-function albumModel(songs: readonly SongRow[], library: LibraryRow, annotations: AnnotationLookup, id: string): Album {
-  const first = songs[0];
-  return {
-    id,
-    name: albumNameOf(first),
-    artist: first.artist ?? first.album_artist ?? undefined,
-    artistId: encodeId(IdKind.Artist, library.id, first.artist ?? first.album_artist ?? artistNameOf(first)),
-    songCount: songs.length,
-    duration: songs.reduce((total, song) => total + song.duration, 0),
-    year: first.year ?? undefined,
-    genre: first.genre ?? undefined,
-    coverArt: id,
-    created: toIso(first.created_at),
-    ...(annotations.stars.has(id) && { starred: toIso(first.mtime_ms) }),
-    ...(annotations.ratings.has(id) && { userRating: annotations.ratings.get(id) }),
-  };
-}
 
-/**
- * Group songs into album **models**, in the order the albums first appear in `rows`.
- *
- * **The key is `dir_path`, not the album name.** A starred album resolves back to its
- * songs through this key, so a name-derived key would orphan every star the first time
- * somebody fixed a typo in a folder name.
- *
- * ### No sort here, and that is load-bearing
- *
- * This used to end in `.sort(([a], [b]) => a.localeCompare(b))` over the group keys, which
- * re-sorted the list by **directory path** after the database had ordered it by whatever
- * the caller asked for. `getAlbumList2?type=alphabeticalByName` therefore returned
- * albums ordered by their folder — and since the folders here are named
- * `Artist - Album`, that is an order no client could have predicted and none requested.
- *
- * The order now belongs to whoever chose it: `listAlbums` sorts in SQL and this preserves
- * what it hands over, and a caller with no opinion (`getArtist`, `search`) gets first
- * appearance, which is the order its own query produced. Ordering is a decision about the
- * *list*, and a grouping has no opinion about it.
- *
- * ### Models, not elements
- *
- * It returns `Album` values rather than protocol nodes because the two album list
- * endpoints publish **different element types** — `getAlbumList` answers with `Child`,
- * `getAlbumList2` with `AlbumID3` — and only the builder knows which is which. A grouping
- * that returned elements would have to choose, and the choice would be wrong for one of
- * them: it chose `AlbumID3` for both, which put `title` and `isDir` on every album in
- * `getAlbumList2` where the schema declares neither.
- *
- * So the split is made by the caller, which knows its own wrapper, and the grouping stays
- * the one place that decides what an album *is*.
- */
-function groupAlbums(rows: readonly SongRow[], library: LibraryRow, annotations: AnnotationLookup): Album[] {
-  const groups = new Map<string, SongRow[]>();
-  for (const row of rows) {
-    const key = albumKeyOf(row);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.push(row);
-    } else {
-      groups.set(key, [row]);
-    }
-  }
-
-  return [...groups].map(([key, songs]) => {
-    songs.sort((a, b) => (a.disc ?? 9999) - (b.disc ?? 9999) || (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
-    return albumModel(songs, library, annotations, encodeId(IdKind.Album, library.id, key));
-  });
-}
 
 /**
 `getAlbum` — an album's songs.
 */
 async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   const id = requireMediaId(context, 'Album');
-  const decoded = decodeId(id, IdKind.Album);
-  const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
-  TreeService.assertPath(decoded.path);
+  const library = await libraryForAlbumId(context, id);
+  const identity = context.albumsFor(library);
 
-  const songs = await context.songs.listByAlbumDir(library.id, decoded.path);
+  // Both id kinds, because both are in the wild. `alk:` is what this server mints; `al:` is
+  // what it minted before an album's identity became configurable, and it is still sitting in
+  // every starred album and every rating on every deployment. Resolving it through the
+  // directory and then the *group* is what keeps such a star pointing at the merged album
+  // rather than at the half of it that happened to be its directory — which would be two
+  // answers to "what album is this id" for one id, one of them reachable only from a list.
+  const key = await resolveAlbumKey(context, id, library);
+  if (key === null) throw new SubsonicError(ErrorCode.NotFound, 'Album not found.');
+
+  const songs = await context.songIndex.listForAlbumKeys(library.id, [key], identity.grouping);
   if (songs.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Album not found.');
 
   const annotations = await annotationsFor(context, songs.length > 0);
-  const ordered = [...songs].sort((a, b) => (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name));
+  const ordered = [...songs].sort(compareAlbumTracks);
 
   // `albumWithSongs`, not `albumElement` with children attached: the songs are a repeated
   // child of a record element, and an undeclared one collapses to a bare object for a
   // single-track album. See the builder for the failure that shipped.
-  return respond(context, albumWithSongs(albumModel(ordered, library, annotations, id), ordered.map((song) => songToModel(song, library, annotations))));
+  return respond(
+    context,
+    albumWithSongs(
+      albumModel(ordered, library, identity, annotations),
+      ordered.map((song) => songToModel(song, library, identity, annotations)),
+    ),
+  );
 }
+
 
 /**
  * `getSong` — one track, enriched on demand.
@@ -264,7 +206,7 @@ async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   }
 
   const annotations = await annotationsFor(context, true);
-  return respond(context, songElement(songToModel(song, library, annotations)));
+  return respond(context, songElement(songToModel(song, library, context.albumsFor(library), annotations)));
 }
 
 /**
@@ -278,11 +220,10 @@ export {
   getArtist,
   getAlbum,
   getSong,
-  groupAlbums,
-  albumModel,
   annotationsFor,
 };
 
-// `albumNameOf`/`artistNameOf`/`albumKeyOf` live in `../mappers`, beside the `songToModel`
-// that reads the same two, and are re-exported here so `lists.ts` and `search.ts` keep
-// importing the grouping helpers from one place rather than reaching into a mapper.
+// `groupAlbumsOf` and `albumModel` live in `./albumRecord` and are re-exported under the names
+// `lists.ts` and `search.ts` already import, because reaching into a second module for one call
+// would make the grouping look like it belongs to whichever endpoint imported it first — which is
+// how two of them came to disagree about it.

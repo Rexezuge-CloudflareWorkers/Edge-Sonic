@@ -223,11 +223,33 @@ second **spelling** rather than a second way past it, and only a canonical posit
 
 ## Ids
 
-`kind:base64url(libraryId \n path)`, kinds `s:`/`al:`/`ar:`/`dir:`/`vid:`/`mf:`/`dira:`.
-Album and artist ids derive from the **directory**, never the name, so a starred album
-resolves back to its songs after a folder is renamed. Decoding rejects control characters
-and `%XX`, because the payload is split on a newline and a forged id must not be able to
-move the boundary.
+`kind:base64url(libraryId \n path)`, kinds `s:`/`al:`/`alk:`/`ar:`/`dir:`/`vid:`/`mf:`/`dira:`.
+Artist ids derive from the artist grouping's **name**. Album ids derive from the album's
+**grouping key** — `ALBUM_GROUP_BY`, owned by `subsonic/albumKey.ts` and carried per request by
+`./albumIdentity` — and never from the album name, which is the part that changes.
+
+Three things about the album id, each of which is a way to lose a user's library:
+
+- **`alk:` is a new kind rather than a new payload under `al:`.** The payload of a key is
+  base64url segments, and `<b64>/<b64>` is itself a valid relative path — so a folder key
+  encoded the same way could not be told from a tag key. The prefix says which reading applies,
+  so a decode can refuse rather than guess.
+- **The payload cannot be a literal album name.** `decodeId` runs `normalizeRelativePath` over
+  it, refusing `..`, empty segments, control characters and `%XX` — and `Sgt. Pepper's`,
+  `100%`, and every Japanese folder in this product's live library carry them. An id minted
+  with the name plainly is one this server cannot read back: `getAlbum` answers `code=70`,
+  `getCoverArt` serves the placeholder, nothing says why.
+- **`al:` is still accepted and resolves to the whole group.** A client is holding thousands of
+  them — every starred album and every album rating. It resolves through the directory and then
+  that directory's rows' key, so a pre-change star points at the **merged** album rather than
+  the half of it that happened to be its folder. `albumModel` therefore looks a star up under the
+  current id *and* under the folder id each row would have had: checking only the current one
+  reports a correctly-stored star by nothing at all.
+
+`getAlbumList` and `getAlbumList2` share one grouping on purpose, against the protocol's own
+description of them as two views — two album identities would make a client's album id whichever
+it saw last, and Navidrome answers both from one album table. The folder view is still reachable,
+through `getIndexes` and `getMusicDirectory`.
 
 Refusals are deliberately uniform. An id for a library the caller cannot see answers
 `code=70`, not `code=50`, and not `code=10`: `50` would confirm the id is real, turning

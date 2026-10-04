@@ -157,6 +157,17 @@
     "MAX_PAGE_SIZE": "500",
     "DEFAULT_PAGE_SIZE": "20",
 
+    // Which tracks are one album: `folder`, `album` or `album_artist`. A setting and not a
+    // rule because a folder and a release routinely disagree — a library laid out per
+    // performer holds one release across one directory per artist, and grouping on the
+    // folder publishes it once per performer. `album` groups on the ALBUM tag.
+    //
+    // Use `folder` for a library whose folders *are* releases and whose ALBUM tags are
+    // inconsistent; `album_artist` for properly tagged libraries, and note that it equals
+    // `album` wherever no file carries an ALBUMARTIST tag. Unrecognised values are refused
+    // by name at boot rather than silently replaced — see docs/issues/album-identity.md.
+    "ALBUM_GROUP_BY": "album",
+
     // Tag enrichment reads at most this many bytes from the front of a file. A prefix
     // read, never a whole file: a 4 GiB track must not be pulled through the Worker to
     // learn its length.

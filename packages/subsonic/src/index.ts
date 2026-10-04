@@ -10,6 +10,8 @@
  *
  * - `./params` parses *transport* (query string, form body, repeated params).
  * - `./ids` parses *untrusted IDs*.
+ * - `./albumKey` decides what an album **is**, and is the only place that question is asked.
+ * - `./albumId` is how an album's id carries that answer, and parses it back.
  * - `./envelope` is the only way a response leaves the process.
  * - `./builders` is the only place a Subsonic field name is spelled.
  * - `./extensions` is the OpenSubsonic layer over it, kept separate so a reader can tell
@@ -22,6 +24,8 @@ export * from './serialize';
 export * from './envelope';
 export * from './params';
 export * from './ids';
+export * from './albumKey';
+export * from './albumId';
 export * from './types';
 export * from './builders';
 export * from './extensions';
