@@ -391,6 +391,48 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **Untrusted names never reach a header unescaped.** `Content-Disposition` escapes
   quotes, control characters, **and path separators** — a WebDAV entry named
   `a";b/../../evil.flac` is a legal name and quoting it does nothing.
+- **An unbounded quantifier before a character that can fail is quadratic in the _input_,
+  and JavaScript cannot be told to stop backtracking.** Three CodeQL alerts, all
+  `js/polynomial-redos`, all on data that arrived from an untrusted WebDAV origin:
+  `/\/+$/` in `toLibraryPath` (twice — once per operand) and `/\s+[-–—]\s+/` in
+  `fromFlatAlbumFolder`. The mechanism is not a nested quantifier, which is why it is easy to
+  miss: an unanchored `/+$` over a run of *n* identical characters makes the engine retry every
+  length the run could have, from each of the *n* start positions inside it. 16 KB costs ~200 ms
+  and 100 KB costs ~8 s, against a **10 ms CPU limit on Workers Free**, and well inside the
+  8 MiB body cap `MAX_METADATA_BYTES` already allows — so one hostile `PROPFIND` is an
+  invocation the runtime kills. The rule is *unanchored quantifier, then something that can
+  fail*, and `[gimsuy]` cannot fix it: JS has no possessive quantifier and no atomic group, so
+  the fix is a scan. Five things, and each is how this one would have collapsed:
+  - **A quadratic regex without a nested quantifier is invisible to every linter this
+    repository runs.** Probed: `eslint-plugin-regexp`'s `no-super-linear-backtracking` and
+    `sonarjs`'s `slow-regex` both fire on `^(a+)+$`, only `slow-regex` fires on
+    `/\s+[-–—]\s+/`, and **neither fires on `/\/+$/`**. So the lint gate was green over a live
+    DoS and CodeQL — not a test, and not on every commit — was the only instrument that found
+    it. There is no lint rule for "quadratic in the input", so the guard is a measurement.
+  - **The expensive shape is the _interior_ run, and the obvious test input is the cheap
+    one.** A *leading* run is consumed by `replace(/^\/+/, '')` before `/+$/` runs; a
+    *trailing* run matches, and V8 fast-paths a successful `/[/]+$/`. Measured at 16,000
+    slashes: **0.0 ms leading, 0.0 ms trailing, 198 ms interior**. The first version of
+    `test/redos-linear-parsing.test.ts` asserted the leading and trailing runs, and both
+    passed against the regex it was written to catch — 48 of 48 green. So a guard built on the
+    wrong shape of the input is indistinguishable from no guard, and a hostile `DAV:href` is
+    `<base>/<path>`, so the expensive shape is also the ordinary one.
+  - **The rewrite is only equivalent because the caller discards what the regex measured.**
+    `findAlbumSeparator` returns the **dash's** index rather than the match index because both
+    sides of the split are `.trim()`ed by the caller, so the *extent* of the whitespace runs
+    cannot change the answer. Strip the trim and the equivalence argument goes with it.
+  - **A fixture that disagrees with the reader is the finding, and it was the fixture twice.**
+    The oracle is `split('/')`-based and was written *filtering every* empty segment, which
+    silently normalises the middle of the string; the seeded fuzz caught it on the first
+    interior run it met. An inverted `&&`/`||` in the whitespace test was caught the same way.
+    Both were bugs in the check, not in the code — which is the argument for the fuzz, since
+    "written from the spec" is a claim and the fuzz is the measurement.
+  - **A test must not trip the query it exists to close.** CodeQL's default configuration scans
+    `test/` as well as `packages/`, so the quadratic reference is built with `new RegExp` and
+    `prefer-regex-literals` is disabled there with that reason attached. Asserted: reintroducing
+    each original regex turns the file red, on the wall-clock bound and on nothing else — every
+    equivalence assertion stays green, which is what makes the timing assertion the only thing
+    distinguishing a linear implementation from a slow one.
 - **A dev bypass is gated on an allow-list of environments.** A deny-list enables it for
   `staging`, `Preview`, and a misspelled `prodcution`.
 - **A deployment placeholder is the exact sentinel, never a readable stand-in.**

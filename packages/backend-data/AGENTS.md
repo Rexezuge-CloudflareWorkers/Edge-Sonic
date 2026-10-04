@@ -129,6 +129,21 @@ a silent data loss rather than a filter.
     anything but a guess, and `getGenres` would publish a guessed genre with a song count
     beside it. An uninformative path yields NULL, never `''` — `''` groups under a blank
     name, the defect `NodeDAO.listRoots` had with the library root.
+  - **The `Artist - Album` split is a scan, and the scan is only equivalent because the
+    caller trims.** `findAlbumSeparator` used to be `/\s+[-–—]\s+/.exec(dirName)`, which is
+    quadratic on a folder name that reached this module from an untrusted `DAV:href` — 16 KB
+    costs ~280 ms against a 10 ms CPU limit on Workers Free, and `dir_path` is re-read on
+    every upsert *and* on every `songDerivation` poll, so one hostile `PROPFIND` is an
+    invocation the runtime kills. The replacement returns the **dash's** index rather than the
+    regex's match index, and that is sound for one specific reason: **both sides of the split
+    are `.trim()`ed by `fromFlatAlbumFolder`**, so the *extent* of the whitespace runs cannot
+    change the answer and never has to be measured. That argument dies with the trim — the
+    separator rule is a property of the convention *and* of the caller's cleanup together, not
+    of the convention alone. The adversarial input must be a run of spaces followed by a
+    **non-dash**: a run ending in a dash matches on the first attempt and costs nothing.
+    `test/redos-linear-parsing.test.ts` holds the oracle, the seeded fuzz and the wall-clock
+    bound, and it is the **only** guard — `eslint-plugin-regexp`'s
+    `no-super-linear-backtracking` is silent on this shape, so a green lint says nothing here.
 - **Deriving at index time was not enough, and the reason is that indexing only happens
   on change.** Every writer of the grouping columns is gated on the file having *moved*:
   the `Depth: 0` root probe, `isScanned: !changed`, `if (changed)` in `reconcileFolder`,
