@@ -98,7 +98,7 @@ describe('ScanWorker', () => {
     const before = harness.dav.propfinds.length;
     const status = await worker.getStatus('L1');
     expect(status.foldersVisited).toBe(0);
-    expect(status.webdavRequests).toBe(0);
+    expect(status.subrequests.total).toBe(0);
     expect(harness.dav.propfinds).toHaveLength(before);
   });
 

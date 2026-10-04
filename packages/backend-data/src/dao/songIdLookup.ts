@@ -75,6 +75,10 @@ class SongIdLookupDAO extends BaseDAO {
    */
   public async listIdsAcrossLibraries(ids: readonly string[]): Promise<SongRow[]> {
     if (ids.length === 0) return [];
+    // Before the first statement, for the reason `songsForAlbumDirs` gives: the id list is the
+    // answer's identity, so resolving a subset of it is a shorter queue or a playlist that
+    // lost songs — both of which have shipped here before, from a different cause.
+    this.requireSubrequests(Math.ceil(ids.length / IDS_PER_STATEMENT), 'songs.listIdsAcrossLibraries');
     const found = new Map<string, SongRow>();
     for (const chunk of chunkArray(ids, IDS_PER_STATEMENT)) {
       const placeholders = chunk.map(() => '?').join(', ');
@@ -98,6 +102,10 @@ class SongIdLookupDAO extends BaseDAO {
 
   public async listIdsIn(libraryId: string, ids: readonly string[]): Promise<SongRow[]> {
     if (ids.length === 0) return [];
+
+    // Refuse rather than resolve a subset, for the reason `listIdsAcrossLibraries` gives: the
+    // caller's id list *is* the answer, and a shorter one is a wrong answer.
+    this.requireSubrequests(Math.ceil(ids.length / IDS_PER_STATEMENT), 'songs.listIdsIn');
 
     const found = new Map<string, SongRow>();
     for (const chunk of chunkArray(ids, IDS_PER_STATEMENT)) {

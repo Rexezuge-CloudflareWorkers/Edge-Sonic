@@ -4,7 +4,7 @@ export { ScanService } from './ScanService';
 export type { ChunkResult, ScanStatus } from './ScanService';
 export { ScanBudget, stopReason } from './scanBudget';
 export type { ScanBudgetOptions, ChunkStopReason } from './scanBudget';
-export { MAX_REQUESTS_PER_TRACK } from './scanEnrichment';
+export { REQUESTS_PER_ENRICHED_TRACK } from './scanEnrichment';
 export { reconcileFolder } from './scanFolder';
 export { DERIVE_MAX_ROWS_PER_CHUNK } from './deriveBackfill';
 export type { ScanDeps, ScanNodeInput, ScanSongInput, ScanDerivationStore } from './scanTypes';

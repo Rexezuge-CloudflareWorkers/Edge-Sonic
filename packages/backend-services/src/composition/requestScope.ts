@@ -4,8 +4,9 @@
  * Table-driven DAO wiring and service wiring live in sibling modules; this file
  * owns only scope lifecycle and the two per-feature keys.
  */
+import { SubrequestCounter } from '@edge-sonic/shared';
 import { Container } from '@edge-sonic/backend-runtime/di';
-import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
+import { AppConfiguration, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
@@ -39,10 +40,29 @@ function createRequestScope(env: RequestScopeEnv): Container {
   // not inherit the other's level.
   setLogLevel(config.getLogLevel());
 
+  // The invocation's subrequest budget, and the first thing constructed in this scope because
+  // everything below charges it.
+  //
+  // **One per scope**, because a scope is one invocation: the DAOs, the KV cache, the WebDAV
+  // client's `onRequest` and the scan's own budget all hold a reference to *this* object, and
+  // a second counter anywhere would be a second number that disagrees with the platform's.
+  // `ScanBudget` resets it at the start of each chunk and then reads it, which is what makes
+  // "how much has this chunk spent" and "how much has this invocation spent" one measurement
+  // at two windows rather than two measurements.
+  //
+  // It used not to exist, and every bound that needed one invented its own — which is how a
+  // chunk of 40 folders came to be budgeted at 40 requests while spending ~240 of them.
+  const subrequests = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
+  scope.bindValue(Tokens.SubrequestMeter, subrequests);
+
   // Fail-soft: an absent `CACHE` binding yields a cache that misses, and every
   // read falls through to D1. That is the whole "works when KV is down"
   // requirement, and it starts here.
-  scope.bindValue(Tokens.KvCache, new KvCache((env as { CACHE?: KvNamespaceLike }).CACHE ?? null));
+  //
+  // The meter is passed because a KV operation is a subrequest like any other. It was not, so
+  // a cold scan chunk spent 20 cache reads per folder against a budget that had never heard of
+  // them — see `docs/issues/free-plan-subrequest-ceiling.md`.
+  scope.bindValue(Tokens.KvCache, new KvCache((env as { CACHE?: KvNamespaceLike }).CACHE ?? null, subrequests));
   scope.bindValue(Tokens.AppConfig, config);
 
   // Per-feature keys. Two separate bindings on purpose:
@@ -61,6 +81,7 @@ function createRequestScope(env: RequestScopeEnv): Container {
       (env as { SUBSONIC_USER_ENCRYPTION_KEY?: string }).SUBSONIC_USER_ENCRYPTION_KEY,
       'SUBSONIC_USER_ENCRYPTION_KEY_SECRET',
       'SUBSONIC_USER_ENCRYPTION_KEY',
+      subrequests,
     ),
   );
   scope.bindValue(
@@ -70,22 +91,27 @@ function createRequestScope(env: RequestScopeEnv): Container {
       (env as { WEBDAV_ENCRYPTION_KEY?: string }).WEBDAV_ENCRYPTION_KEY,
       'WEBDAV_ENCRYPTION_KEY_SECRET',
       'WEBDAV_ENCRYPTION_KEY',
+      subrequests,
     ),
   );
 
   // DAOs. Bound as thunks so construction stays lazy and a handler that never
   // touches songs does not construct the songs DAO.
+  // Every DAO is given the scope's counter. A DAO without one still works — its writes are
+  // simply issued whole and nothing counts them — which is exactly why the wiring is asserted
+  // in `test/subrequest-budget.test.ts` rather than trusted: an unmetered DAO is a path that
+  // spends nothing because nothing was watching it, and it fails by being invisible.
   const db = env.DB as D1Queryable;
-  scope.bindValue(Tokens.UserDAO, async () => new UserDAO(db));
-  scope.bindValue(Tokens.LibraryDAO, async () => new LibraryDAO(db));
-  scope.bindValue(Tokens.NodeDAO, async () => new NodeDAO(db));
-  scope.bindValue(Tokens.SongDAO, async () => new SongDAO(db));
-  scope.bindValue(Tokens.SongDerivationDAO, async () => new SongDerivationDAO(db));
-  scope.bindValue(Tokens.SongIndexDAO, async () => new SongIndexDAO(db));
-  scope.bindValue(Tokens.PlaylistDAO, async () => new PlaylistDAO(db));
-  scope.bindValue(Tokens.AnnotationDAO, async () => new AnnotationDAO(db));
-  scope.bindValue(Tokens.AuthThrottleDAO, async () => new AuthThrottleDAO(db));
-  scope.bindValue(Tokens.ScanStateDAO, async () => new ScanStateDAO(db));
+  scope.bindValue(Tokens.UserDAO, async () => new UserDAO(db, subrequests));
+  scope.bindValue(Tokens.LibraryDAO, async () => new LibraryDAO(db, subrequests));
+  scope.bindValue(Tokens.NodeDAO, async () => new NodeDAO(db, subrequests));
+  scope.bindValue(Tokens.SongDAO, async () => new SongDAO(db, subrequests));
+  scope.bindValue(Tokens.SongDerivationDAO, async () => new SongDerivationDAO(db, subrequests));
+  scope.bindValue(Tokens.SongIndexDAO, async () => new SongIndexDAO(db, subrequests));
+  scope.bindValue(Tokens.PlaylistDAO, async () => new PlaylistDAO(db, subrequests));
+  scope.bindValue(Tokens.AnnotationDAO, async () => new AnnotationDAO(db, subrequests));
+  scope.bindValue(Tokens.AuthThrottleDAO, async () => new AuthThrottleDAO(db, subrequests));
+  scope.bindValue(Tokens.ScanStateDAO, async () => new ScanStateDAO(db, subrequests));
 
   const userKey = scope.get(Tokens.UserKey);
   const webdavKey = scope.get(Tokens.WebdavKey);
@@ -115,7 +141,13 @@ function createRequestScope(env: RequestScopeEnv): Container {
   // rather than at each service so a range read and a `PROPFIND` are charged to the
   // same budget by the same rule — the scan's chunk bound only works because the
   // enrichment reads inside its loop are counted too.
-  const clientFor = async (row: LibraryRow, onRequest?: () => void) => await scope.get(Tokens.LibraryService).clientFor(row, onRequest);
+  //
+  // The **default** `onRequest` charges the scope's counter, so every WebDAV request in the
+  // product is counted even when the caller had no budget of its own to pass — `getCoverArt`,
+  // the read-through browse, `stream`. The scan still passes its own callback, which charges
+  // the same counter through its budget, so the two paths cannot drift apart.
+  const clientFor = async (row: LibraryRow, onRequest?: () => void) =>
+    await scope.get(Tokens.LibraryService).clientFor(row, onRequest ?? (() => subrequests.charge(1, 'fetch')));
 
   scope.bindValue(
     Tokens.TreeService,
@@ -167,19 +199,23 @@ function createRequestScope(env: RequestScopeEnv): Container {
       // library nobody has touched since it was indexed would otherwise never group —
       // and `getArtists`/`getAlbumList2`/`getGenres`/`search3` would answer `[]` while
       // the per-track endpoints looked healthy, because the song mapper falls back to the
-      // folder name for display. It reads `dir_path` off the row and spends no
-      // subrequests, so it runs ahead of the walk on every poll.
+      // folder name for display. It reads `dir_path` off the row, so it spends no *WebDAV*
+      // subrequests and it runs ahead of the walk on every poll — but its two D1 statements
+      // are charged like every other, because the claim that D1 "cannot spend" the ceiling is
+      // what let a 200-row batch run unbudgeted at the top of every poll.
       derivation: {
         listNeedingDerivation: async (libraryId, limit) => (await scope.get(Tokens.SongDerivationDAO)()).listNeedingDerivation(libraryId, limit),
         applyDerivation: async (writes) => (await scope.get(Tokens.SongDerivationDAO)()).applyDerivation(writes),
       },
+      subrequests,
       clientFor,
       timeoutMs: config.getWebdavTimeoutMs(),
       chunkFolders: config.getScanChunkFolders(),
-      // The two bounds a chunk runs under. `chunkMaxRequests` is the platform's
-      // external subrequest ceiling and `chunkDeadlineMs` is what makes a poll
-      // return on a slow origin; `chunkFolders` above is a separate bound on D1
-      // work. Defaults are sized for the Free plan — see `ConfigurationDefaults`.
+      // The three bounds a chunk runs under, and all three are derived from the platform's
+      // subrequest ceiling rather than typed beside the code that has to honour them:
+      // `chunkMaxRequests` is the ceiling less the invocation's own overhead,
+      // `chunkDeadlineMs` is what makes a poll return on a slow origin, and
+      // `chunkFolders` shapes one level of the tree. See `ConfigurationDefaults`.
       chunkMaxRequests: config.getScanChunkMaxRequests(),
       chunkDeadlineMs: config.getScanChunkDeadlineMs(),
       // The scan enriches what it changed, through the same `EnrichmentService` a

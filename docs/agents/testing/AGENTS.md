@@ -89,15 +89,24 @@ Two more from the scan's subrequest budget, and the second is the subtler one:
   on elapsed milliseconds: a wall-clock assertion is a flaky assertion, and a bound is a
   decision rather than a duration.
 - **A double that drops a callback cannot see what the callback counts.** The scan's
-  `webdavRequests` is charged inside `WebDavClient.request()`, so a test whose
-  `clientFor` ignored the caller's `onRequest` reported **zero** for a chunk that had
-  done real work. That is not a service defect — it is the double being structurally
-  unable to observe the thing, which is precisely how the real under-counting survived:
-  the field was `+= 1` in the walk's loop, so it charged the `PROPFIND`s and nothing the
-  scan's own enrichment caused, under-reporting by up to 40x while its comment described
-  it as instrumented "so the budget is testable". **A comment is not a measurement**, and
-  `test/scan-budget.test.ts` now asserts `webdavRequests` against what the double
-  actually received.
+  subrequest total is charged inside `WebDavClient.request()`, so a test whose `clientFor`
+  ignored the caller's `onRequest` reported **zero** for a chunk that had done real work.
+  That is not a service defect — it is the double being structurally unable to observe the
+  thing, which is precisely how the real under-counting survived: the field was `+= 1` in
+  the walk's loop, so it charged the `PROPFIND`s and nothing the scan's own enrichment
+  caused, under-reporting by up to 40x while its comment described it as instrumented "so
+  the budget is testable". **A comment is not a measurement**, and `test/scan-budget.test.ts`
+  now asserts the `fetch` half against what the double actually received.
+- **A double that does not charge a subrequest cannot see a chunk that exceeds one.** The
+  same mistake one level up, and it shipped: `ScanBudget` counted `fetch` alone, because D1
+  was a double whose calls answered on the next microtask and cost nothing. So the suite saw
+  the WebDAV half of a chunk precisely and the half that killed the invocation not at all,
+  and reported the product as comfortably inside a ceiling of 50 while a chunk spent ~240.
+  `test/scan-budget.test.ts`'s store double now **charges** the meter and truncates batches as
+  `runWriteBatch` does, at the real ceiling, and a test asserts the whole library drains in
+  more chunks rather than dying partway through one. The generalisation: a double must model
+  the platform's *constraints*, not just its results — `bindChunkSize` for 100 parameters,
+  the receiver check for `Illegal invocation`, and now the subrequest ceiling.
 
 Two more rules that are easy to get wrong:
 

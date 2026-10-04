@@ -221,7 +221,9 @@ async function buildContext(
     tree: scope.get(Tokens.TreeService),
     scan: scope.get(Tokens.ScanService),
     enrichment: scope.get(Tokens.EnrichmentService),
-    scanStubFor: (libraryId: string) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId) : null),
+    // Charged through the scope's own counter, so the DO RPC is inside the same 50 as the D1
+    // statements and the WebDAV reads this same request makes.
+    scanStubFor: (libraryId: string) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null),
     songs: await scope.get(Tokens.SongDAO)(),
     songIndex: await scope.get(Tokens.SongIndexDAO)(),
     users: await scope.get(Tokens.UserDAO)(),

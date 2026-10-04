@@ -252,8 +252,19 @@ ceiling and a wall-clock deadline, and returns when it reaches either;
 reading "still scanning" is reading a *status*, and one reading "still scanning, because
 your origin takes two seconds a request and the chunk is capped at twenty" is reading a
 **diagnosis** — the second has an action and the first does not. The two limits are named
-separately because their remedies differ (`SCAN_CHUNK_MAX_REQUESTS` against
-`SCAN_CHUNK_DEADLINE_MS`), and "it stopped" is neither. It is rendered **muted**, not in
+separately because their remedies differ (`SCAN_CHUNK_DEADLINE_MS` against the subrequest
+ceiling), and "it stopped" is neither.
+
+**The request sentence no longer names a knob, because on Free there is none.** It used to
+say *"Raise `SCAN_CHUNK_MAX_REQUESTS` to index more per poll"*, and `test/spa-decisions.test.ts`
+asserted the sentence **contained** that variable name — so the harmful advice was the
+contract. Workers Free allows 50 subrequests per invocation and does not raise it from the
+wrangler config, the server clamps the value to what fits, and a chunk that spends more is
+*terminated* by the runtime rather than slowed. Following the old advice therefore turned a
+scan that pauses into a scan that cannot finish. The sentence now says the two things that
+are true — this is the plan's limit rather than a fault, and the scan is still advancing — and
+`stoppedBy: 'requests'` is a state a Free-plan deployment reaches **by design**, not a
+misconfiguration. It is rendered **muted**, not in
 the error tone: a chunk that hit a bound did its job and left the rest of the frontier
 for the next poll, and colouring that as a fault would train an operator to ignore the
 line that does mean something went wrong.

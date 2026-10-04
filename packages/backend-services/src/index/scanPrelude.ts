@@ -19,6 +19,7 @@ import { derivePending } from './deriveBackfill';
 import { decideStep, idleResult, stalledResult, unableToAdvance } from './scanRetry';
 import type { ScanBudget } from './scanBudget';
 import type { ChunkResult, ScanDeps } from './scanTypes';
+import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 
 /**
@@ -38,10 +39,12 @@ import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
  * aggregates answer `[]` for ever. It shipped: 113 rows, every one indexed before the
  * deploy, every one with `album_ci` NULL.
  *
- * It reads `dir_path` off the row, so it spends **no subrequests** — one indexed read and
- * one bounded write batch — and is charged only against the chunk's wall-clock deadline.
+ * It reads `dir_path` off the row, so it spends no **WebDAV** subrequests — one indexed read
+ * and one bounded write batch. It is charged against the subrequest ceiling like everything
+ * else, though, because a D1 statement is a subrequest: the claim that this phase "cannot
+ * spend" the ceiling is what let a 200-row backfill run unbudgeted at the top of every poll.
  * Once a library is current the read returns no rows and the batch is never issued, so a
- * poll on a healthy library stays free. It never stamps `enriched_at`, because
+ * poll on a healthy library still spends two statements. It never stamps `enriched_at`, because
  * `EnrichmentService` short-circuits on that: claiming a row was read would leave a track
  * with `duration: 0` never re-read on first play — a backfill that repairs the grouping by
  * breaking enrichment.
@@ -66,7 +69,7 @@ async function finished(deps: ScanDeps, library: LibraryRow, state: ScanStateRow
     indexVersion,
     lastError: null,
     foldersVisited: 0,
-    webdavRequests: 0,
+    subrequests: NO_SUBREQUESTS_SPENT,
     // The backfill's rows, not zero. This path is reached by a library that is already
     // fully walked, which is the *usual* case for a library being repaired, so reporting
     // `0` here would report the repair as no work at all.

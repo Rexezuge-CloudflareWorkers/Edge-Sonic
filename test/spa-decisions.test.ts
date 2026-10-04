@@ -161,12 +161,22 @@ describe('describeStopReason', () => {
     expect(describeStopReason('frontier')).toBeNull();
   });
 
-  it('names the request ceiling, and the knob that raises it', () => {
+  it('names the request ceiling without telling an operator to raise a knob that cannot help', () => {
     const sentence = describeStopReason('requests', STOP_REASON_LABELS);
     expect(sentence).toBe(STOP_REASON_LABELS.requests);
-    // The sentence is useless without the knob: an operator who knows it paused cannot act
-    // on "paused" alone.
-    expect(sentence).toContain('SCAN_CHUNK_MAX_REQUESTS');
+
+    // It used to say "Raise SCAN_CHUNK_MAX_REQUESTS to index more per poll", and that was
+    // **wrong on the plan this deployment runs**. Workers Free allows 50 subrequests per
+    // invocation and does not raise it from the wrangler config; the server clamps the value to
+    // what fits; and a chunk that spends more is terminated by the runtime rather than slowed.
+    // So the advice walked an operator into a scan that could not finish at all — and the
+    // sentence was asserted to *contain the knob*, which made the harmful advice the contract.
+    //
+    // The sentence still has to be actionable, so it says the two things that are true: this is
+    // the plan's limit rather than a fault, and the scan is still advancing.
+    expect(sentence).not.toContain('SCAN_CHUNK_MAX_REQUESTS');
+    expect(sentence).toMatch(/limit/i);
+    expect(sentence).toMatch(/continues|still/i);
   });
 
   it('names the deadline separately, because the two have different remedies', () => {

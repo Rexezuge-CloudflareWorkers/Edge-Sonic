@@ -1,3 +1,16 @@
+import {
+  
+  SCAN_CHUNK_FOLDER_LIMIT,
+  SCAN_CHUNK_SUBSREQUEST_BUDGET,
+  SCAN_ENRICH_MAX_PER_FOLDER,
+} from './subrequests';
+
+/**
+ * Re-exported rather than re-declared: the derivation and this default are one fact, and a
+ * second copy of `MAX_PAGE_SIZE_CEILING` is a second thing that can be wrong.
+ */
+
+
 export const DEFAULT_DEBUG_MODE = 'false';
 export const DEFAULT_ENVIRONMENT = 'production';
 export const DEFAULT_SITE_URL = '';
@@ -13,38 +26,35 @@ Per-WebDAV-request timeout.
 export const DEFAULT_WEBDAV_TIMEOUT_MS = '10000';
 
 /**
- * Folders a single scan chunk will descend into.
- *
- * This bounds **D1 work** — frontier rows read and rows written — against the
- * 5,000-rows/day allowance, and it is deliberately *not* the subrequest bound:
- * that is `SCAN_CHUNK_MAX_REQUESTS`, and the two are separate because a chunk can
- * run out of either first.
- *
- * It was once documented as a subrequest budget ("one folder costs one `PROPFIND`,
- * and Workers allow 1,000 subrequests per request"). Both halves of that are now
- * wrong: the ceiling is per *external* subrequest, and it is 50 on the Free plan.
- */
-export const DEFAULT_SCAN_CHUNK_FOLDERS = '40';
+Folders a single scan chunk will descend into.
+
+**Derived** from the platform's subrequest ceiling, in `subrequests.ts` — not typed here,
+because a number typed beside the code that has to honour it is a number that is wrong by
+the time the platform changes. It was `40`, documented as a bound on D1 *row writes* against
+the 5,000-rows/day allowance — which it still is, and which is not what stopped working.
+
+What stopped working is the subrequest ceiling, and the same 40 folders are ~42 external
+requests and ~160 D1 statements, so the chunk died at the ceiling with 40 folders of
+indexing still ahead of it. The two bounds guard different resources and both are needed;
+they are simply not independent, so the folder count is now computed from the ceiling
+instead of chosen beside it.
+*/
+export const DEFAULT_SCAN_CHUNK_FOLDERS = String(SCAN_CHUNK_FOLDER_LIMIT);
 
 /**
- * Subrequests one scan chunk may issue.
- *
- * The platform counts subrequests per invocation, and exceeding the ceiling does
- * not make a chunk slow — it makes it **fail**. So this is a hard ceiling, not a
- * target.
- *
- * ### Why 40, and not 1,000
- *
- * The number this replaces was sized against "1,000 subrequests per request",
- * which Cloudflare retired on 2026-02-11. The current limits are **50 external**
- * subrequests on the Free plan and 10,000 on Paid, so a default of 1,000 was a
- * chunk that fails outright on a Free-plan account. 40 leaves ten for redirect
- * chains, which the platform also counts.
- *
- * A deployment on Workers Paid should raise this, or set `limits.subrequests` in
- * its own wrangler config. The conservative default is the one that cannot fail.
- */
-export const DEFAULT_SCAN_CHUNK_MAX_REQUESTS = '40';
+Subrequests one scan chunk may issue.
+
+**Derived**: the platform's ceiling less the invocation's own overhead — see
+`subrequests.ts`, which is where the arithmetic lives. It was a literal `40`, which was wrong
+twice over: it counted only `fetch`, and the `40` was reached by subtracting from a ceiling
+of 50 as if nothing else in the invocation spent anything.
+
+A **total**: D1 statements, KV operations and WebDAV requests alike, because D1 states its
+own limit as *queries per Worker invocation — 50 (Free)*. Exceeding it does not make a chunk
+slow, it **kills the invocation**, with an error no `catch` in the chunk can see. So this is
+a hard ceiling and not a target, and it is spent deliberately rather than overrun.
+*/
+export const DEFAULT_SCAN_CHUNK_MAX_REQUESTS = String(SCAN_CHUNK_SUBSREQUEST_BUDGET);
 
 /**
  * Milliseconds one scan chunk may take.
@@ -66,29 +76,17 @@ Upper bound on a single page of results, matching the protocol's own maximum.
 export const DEFAULT_MAX_PAGE_SIZE = '500';
 
 /**
- * The largest page this server will accept, whatever `MAX_PAGE_SIZE` says.
- *
- * ### A limit the platform imposes is not a number the code may choose
- *
- * `MAX_PAGE_SIZE` was raised by an operator the same way `SCAN_CHUNK_MAX_REQUESTS` is
- * meant to be, and the two do not behave alike. The scan ceiling is a *budget* the chunk
- * spends and leaves the remainder of; a page size is a promise to **answer** — so raising it
- * does not make a page slower, it makes a request unservable.
- *
- * A page of *N* album groups costs one grouped query plus `ceil(N / groupsPerStatement)`
- * further statements to fetch their songs, and each of those statements binds
- * `D1_MAX_BIND_PARAMETERS` parameters (`backend-data`'s `bindChunkSize`, which derives the
- * 49 from the platform's 100-parameter ceiling rather than carrying the number). D1 queries
- * are subrequests, so the page has to fit inside the same budget as everything else: on the
- * Free plan that is **50**. Leaving headroom for the grouped query itself, for the
- * annotation reads every list endpoint makes, and for redirect chains — also counted — caps
- * the statement count well below 50.
- *
- * So the ceiling is derived from two numbers the platform sets rather than chosen to be
- * comfortable, exactly as `bindChunkSize` is derived from the 100-parameter ceiling. The
- * value below is what that derivation produces.
- */
-export const MAX_PAGE_SIZE_CEILING = 2200;
+The largest page this server will accept, whatever `MAX_PAGE_SIZE` says.
+
+**Derived** in `subrequests.ts` from the same ceiling a scan chunk is sized against, and
+exported here so the configuration layer has one name for it. It was `2200`, derived from the
+right principle — a page of N groups costs a grouped query plus `ceil(N / groupsPer…)`
+statements — but from a quantity that does not bound what the page *spends*: the follow-on
+statement count is driven by the page's **track** count, so 2,200 albums of twelve tracks
+each fetches 26,400 rows in 45 statements before the annotation reads are counted. See the
+derivation there for the arithmetic, and `test/subrequest-budget.test.ts` for the assertion
+that the relationship holds rather than the numeral.
+*/
 
 /**
 Default page size when a client does not send `size`.
@@ -112,16 +110,21 @@ export const DEFAULT_TAG_READ_TAIL_BYTES = '65536';
 /**
 Tracks the scan enriches per folder, per chunk.
 
-A bound on the *shape* of a folder, not on the chunk: the chunk's own ceiling is
-`SCAN_CHUNK_MAX_REQUESTS`, and enrichment shares whatever the `PROPFIND`s leave of it.
-This number exists so one album of 500 changed tracks cannot take the whole budget and
-starve the walk of the folders behind it.
+**Derived** from the chunk budget in `subrequests.ts`, and a bound on the *shape* of a
+folder rather than on the chunk: without it, one album of 500 changed tracks takes every
+poll for itself and the folders behind it are never walked.
 
-An Ogg track costs two range reads — a prefix and a tail — and the scan admits one on the
-cost of two. What does not fit keeps `enriched_at = null` and is enriched on first play
-instead: a degraded answer, rather than a chunk that fails.
+It was `20`, and the number that actually mattered — the per-track cost it was checked
+against — was `MAX_REQUESTS_PER_TRACK = 2`, counting the two **external** range reads and
+forgetting the `songMeta` KV read, the `applyMetadata` write and the `songMeta` KV write
+that every enriched track also costs. A cold chunk therefore spent 20 × 5 against a ceiling
+that charged it none of that, and died partway through its first album. See
+`docs/issues/free-plan-subrequest-ceiling.md`.
+
+What does not fit keeps `enriched_at = null` and is enriched on first play instead: a
+degraded answer, rather than a chunk that dies.
 */
-export const DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER = '20';
+export const DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER = String(SCAN_ENRICH_MAX_PER_FOLDER);
 
 /**
 Failed logins from one (user, IP) pair before the throttle engages.
@@ -142,3 +145,5 @@ export const DEFAULT_STREAM_RATE_LIMIT = '600';
 Upstream connection/response timeout for streaming, separate from metadata.
 */
 export const DEFAULT_STREAM_TIMEOUT_MS = '30000';
+
+export {MAX_PAGE_SIZE_CEILING} from './subrequests';

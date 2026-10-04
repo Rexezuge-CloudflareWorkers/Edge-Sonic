@@ -12,17 +12,43 @@
  * they were all empty for a library of 81 artists. The scan already knows which rows
  * changed and already holds their facts, so this is where the read belongs.
  *
- * ### Why it is bounded twice
+ * ### Why it is bounded three times
  *
- * Two bounds, and they are not the same one:
+ * Three bounds, and they are not the same one:
  *
  * - `maxPerFolder` bounds the *shape* of a folder. Without it, one album of 500
- *   changed tracks takes the whole chunk budget on its first folder and the walk never
- *   advances.
- * - `budget` bounds the *chunk*, and is shared with the `PROPFIND`s the walk itself
- *   issues. Enrichment takes the remainder: a wide-changed album can end its own chunk.
- *   That is the trade this makes deliberately, because a chunk that ends early is
- *   resumable and a chunk that exceeds the platform's ceiling is not.
+ *   changed tracks takes every poll for itself and the walk never advances.
+ * - `budget` bounds the *chunk*, and is shared with everything else the chunk does —
+ *   the `PROPFIND`s, the D1 statements, the prune. Enrichment takes the remainder: a
+ *   wide-changed album can end its own chunk. That is the trade this makes
+ *   deliberately, because a chunk that ends early is resumable and a chunk that exceeds
+ *   the platform's ceiling is not — it is an invocation the platform terminates with an
+ *   error nothing in here can catch.
+ * - `canAfford(REQUESTS_PER_ENRICHED_TRACK)` is the per-track reservation, and it is the
+ *   one that was wrong.
+ *
+ * ### Why the reservation was `2` and had to become `5`
+ *
+ * `MAX_REQUESTS_PER_TRACK` counted the two **external** requests — a prefix read and, for a
+ * container whose length is recorded at the end of the file, a tail read. It is now
+ * `SUBSREQUESTS_PER_ENRICHED_TRACK`, and the reason is the whole defect:
+ *
+ * | Step                                | Subrequest |
+ * | ----------------------------------- | ---------- |
+ * | `songMeta` KV read (miss on a cold row) | 1      |
+ * | prefix ranged `GET`                 | 1          |
+ * | tail ranged `GET` (Ogg only)        | 0–1        |
+ * | `songs.applyMetadata`               | 1          |
+ * | `songMeta` KV write                 | 1          |
+ *
+ * Five, or six for an Ogg track, against a ceiling of 50 for the whole invocation. Admitting
+ * twenty tracks per folder on the cost of two each is admitting a hundred subrequests of work
+ * onto a budget of fifty, which is not a slow chunk — it is a terminated one.
+ *
+ * So the reservation is the **worst case**, and it is derived in `subrequests.ts` rather than
+ * written here, for the reason every other bound in this codebase is derived: a number typed
+ * beside the code that has to honour it is a number that is wrong by the time the platform
+ * changes.
  *
  * ### Why failures are swallowed
  *
@@ -31,25 +57,26 @@
  * discard them — which is what a throw here would do.
  */
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
+import { SUBSREQUESTS_PER_ENRICHED_TRACK } from '@edge-sonic/backend-runtime/config';
 import type { ScanBudget } from './scanBudget';
 import type { ScanEnrichFacts, ScanSongInput } from './scanTypes';
 
 /**
  * The most subrequests one track's enrichment can issue.
  *
- * A prefix read, plus a tail read for a container whose length is only recorded at the
- * end of the file (Ogg). Admitting a track on the cost of one is how a budget gets spent
- * past its ceiling, and the cost is knowable up front precisely because the second read
- * is conditional on the container the first one identified.
+ * Re-exported under its old name as well, because the tests that pin the shape of the budget
+ * name it, and a rename that silently left them importing a deleted symbol would turn a
+ * behaviour change into a compile error rather than a decision.
  */
-const MAX_REQUESTS_PER_TRACK = 2;
+const REQUESTS_PER_ENRICHED_TRACK = SUBSREQUESTS_PER_ENRICHED_TRACK;
 
 /**
  * Enrich the tracks a listing changed, within both bounds.
  *
  * @param enrich The caller's `enrichSong`, absent when a deployment has not opted in.
- * @param budget The chunk's budget. Its meter is forwarded to `enrich`, so a range read
- *   is charged to the same ceiling as the `PROPFIND` that found the file.
+ * @param budget The chunk's budget. The meter it wraps is the *same* counter the DAOs and the
+ *   KV cache charge, so a range read and the statement that records it are counted against one
+ *   ceiling rather than two.
  */
 async function enrichChanged(
   library: LibraryRow,
@@ -62,9 +89,10 @@ async function enrichChanged(
 
   const bounded = songInputs.slice(0, Math.max(0, maxPerFolder));
   for (const input of bounded) {
-    // Checked before each track, so the chunk stops taking on work rather than
-    // discovering afterwards that it overran.
-    if (!budget.canAfford(MAX_REQUESTS_PER_TRACK)) return;
+    // Checked before each track, so the chunk stops taking on work rather than discovering
+    // afterwards that it overran. `canAfford` takes the worst case, so an Ogg track's second
+    // range read is inside the reservation rather than an overrun discovered afterwards.
+    if (!budget.canAfford(REQUESTS_PER_ENRICHED_TRACK)) return;
     try {
       await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () => budget.charge());
     } catch {
@@ -73,4 +101,4 @@ async function enrichChanged(
   }
 }
 
-export { enrichChanged, MAX_REQUESTS_PER_TRACK };
+export { enrichChanged, REQUESTS_PER_ENRICHED_TRACK };

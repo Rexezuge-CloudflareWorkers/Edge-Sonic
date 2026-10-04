@@ -171,7 +171,13 @@ class SongDerivationDAO extends BaseDAO {
           write.id,
         );
     });
-    return await this.runWriteBatch(statements, 'songs.applyDerivation');
+    // All-or-nothing, unlike the index write. A partially stamped backfill would leave rows
+    // that are neither derived nor un-derived, and the selection is on `derived_version` — so
+    // the ones that were stamped would never be revisited and the rest would be re-derived on
+    // every poll, for ever. Refusing costs one poll; truncating costs a scan that never
+    // converges.
+    const written = await this.runWriteBatch(statements, 'songs.applyDerivation', { requireComplete: true });
+    return written.changes;
   }
 
   /**

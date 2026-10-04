@@ -1,7 +1,19 @@
 import { EnvParser } from './EnvParser';
 import { isLogLevel } from '../logger';
 import type { LogLevel } from '../logger';
-import { DEFAULT_DEBUG_MODE, DEFAULT_SITE_URL, MAX_PAGE_SIZE_CEILING } from './ConfigurationDefaults';
+import {
+  DEFAULT_DEBUG_MODE,
+  DEFAULT_SITE_URL,
+  MAX_PAGE_SIZE_CEILING,
+} from './ConfigurationDefaults';
+import {
+  SCAN_CHUNK_FOLDER_LIMIT,
+  SCAN_CHUNK_SUBSREQUEST_BUDGET,
+  SCAN_ENRICH_MAX_PER_FOLDER,
+  SUBSREQUESTS_PER_ENRICHED_TRACK,
+  SUBSREQUESTS_PER_FOLDER_BASE,
+  WORKER_SUBSREQUEST_CEILING,
+} from './subrequests';
 import { AuthConfig } from './sections/AuthConfig';
 import { AuthThrottleConfig, LibraryLimits, RequestLimits, ScanLimits } from './sections/LibraryLimits';
 
@@ -211,6 +223,37 @@ class AppConfiguration {
         `Configuration: MAX_PAGE_SIZE=${requestedPageSize} exceeds the ${MAX_PAGE_SIZE_CEILING} this server can answer in one request; ` +
           `it is clamped. A page is a promise to answer, not a budget to spend — raise it only with ` +
           `limits.subrequests in the wrangler config.`,
+      );
+    }
+
+    // The three scan bounds, clamped for the same reason and reported for the same reason.
+    //
+    // The scan's is the sharper case, because the operator surface *tells people to raise this
+    // one*: `stoppedBy: 'requests'` renders as "Paused at the per-chunk request limit. Raise
+    // SCAN_CHUNK_MAX_REQUESTS to index more per poll." On a Free-plan account that advice is
+    // actively harmful — the platform's ceiling is 50 and cannot be raised from here — so a
+    // deployment that took it would get chunks terminated by the runtime instead of paused by
+    // their own budget. The clamp makes the advice harmless and the warning says why.
+    const requestedChunkRequests = this.scan.getRequestedScanChunkMaxRequests();
+    if (requestedChunkRequests > SCAN_CHUNK_SUBSREQUEST_BUDGET) {
+      warnings.push(
+        `Configuration: SCAN_CHUNK_MAX_REQUESTS=${requestedChunkRequests} exceeds the ${SCAN_CHUNK_SUBSREQUEST_BUDGET} a chunk may spend ` +
+          `under the platform's ${WORKER_SUBSREQUEST_CEILING}-subrequest ceiling; it is clamped. Workers Free does not raise that ceiling, ` +
+          `so a chunk that spends more is terminated rather than slowed.`,
+      );
+    }
+    const requestedChunkFolders = this.scan.getRequestedScanChunkFolders();
+    if (requestedChunkFolders > SCAN_CHUNK_FOLDER_LIMIT) {
+      warnings.push(
+        `Configuration: SCAN_CHUNK_FOLDERS=${requestedChunkFolders} exceeds the ${SCAN_CHUNK_FOLDER_LIMIT} a chunk can afford at ` +
+          `${SUBSREQUESTS_PER_FOLDER_BASE} subrequests a folder; it is clamped. Raising it cannot make a chunk finish.`,
+      );
+    }
+    const requestedEnrichCap = this.scan.getRequestedScanEnrichMaxPerFolder();
+    if (requestedEnrichCap > SCAN_ENRICH_MAX_PER_FOLDER) {
+      warnings.push(
+        `Configuration: SCAN_ENRICH_MAX_PER_FOLDER=${requestedEnrichCap} exceeds the ${SCAN_ENRICH_MAX_PER_FOLDER} a chunk can afford at ` +
+          `${SUBSREQUESTS_PER_ENRICHED_TRACK} subrequests a track; it is clamped.`,
       );
     }
 

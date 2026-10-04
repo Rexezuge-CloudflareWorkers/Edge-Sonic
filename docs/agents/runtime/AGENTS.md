@@ -68,28 +68,54 @@ one is present but inert, because that is the case one config edit from being li
 | Group  | Vars (default)                                                             |
 | ------ | -------------------------------------------------------------------------- |
 | App    | `DEBUG_MODE` (`false`), `SITE_URL` (`""`), `ENVIRONMENT` (`development`) |
-| Scan   | `SCAN_CHUNK_FOLDERS` (`40`), `SCAN_CHUNK_MAX_REQUESTS` (`40`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`20`), `WEBDAV_TIMEOUT_MS` (`10000`), `TAG_READ_BYTES`, `TAG_READ_TAIL_BYTES` |
+| Scan   | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`), `WEBDAV_TIMEOUT_MS` (`10000`), `TAG_READ_BYTES`, `TAG_READ_TAIL_BYTES` |
 | Limits | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`) |
 | Auth   | `TEAM_DOMAIN`, `POLICY_AUD` (no default — see above)                       |
 | SSRF   | `ALLOW_PRIVATE_WEBDAV_HOSTS` (unset)                                       |
 
-### Size a subrequest budget against the plan that runs it
+### Size a subrequest budget against the plan that runs it — and count *everything*
 
-Cloudflare retired the 1,000-subrequest-per-invocation ceiling on **2026-02-11**. The
-current limits are **50 external** subrequests on Workers **Free** and 10,000 on Paid,
-raiseable to 10M with `limits.subrequests` in the wrangler config; internal service
-subrequests (D1, KV) are 1,000 on Free.
+Workers **Free** allows **50 subrequests per invocation**; Paid allows 10,000, raiseable
+to 10M with `limits.subrequests`. A subrequest is any request a Worker makes with the
+Fetch API **or to a Cloudflare service — R2, KV and D1 included**. D1 says so on its own
+limits page:
 
-Every other quota in this codebase is sized against the free tier, so
-`SCAN_CHUNK_MAX_REQUESTS` defaults to **40** — ten under the ceiling, for redirect
-chains, which the platform also counts. A default of 1,000 is not a slow chunk, it is a
-**failed** chunk on a Free-plan account. A deployment on Workers Paid should raise it, or
-set `limits.subrequests`; scans then finish in proportionally fewer polls. The
-conservative default is the one that cannot fail on an account that never raised it.
+> **Queries per Worker invocation** (read [subrequest limits]) — 1000 (Workers Paid) / **50 (Free)**
 
-`SCAN_CHUNK_FOLDERS` is a **different** bound — D1 work, against the 5,000-rows/day
-allowance — and `SCAN_CHUNK_DEADLINE_MS` a third: wall clock, so a poll returns on a slow
-origin. All three guard different resources, so none of them is redundant with the others.
+So a D1 statement, a KV operation, a Durable Object RPC and a Secrets Store read each
+spend one of the same 50, and exceeding it does not slow a request down — it **terminates
+the invocation**, with an error no `catch` in this codebase can see.
+
+**This deployment targets Workers Free, and there is deliberately no plan switch.** One
+ceiling, in `config/subrequests.ts`, with every bound below computed from it by arithmetic
+rather than typed beside the code that has to honour it — the same rule `bindChunkSize`
+follows from D1's 100-parameter ceiling.
+
+| Var                            | Default | Derived as                        |
+| ------------------------------ | ------- | --------------------------------- |
+| `SCAN_CHUNK_MAX_REQUESTS`      | `42`    | `50 − 8` for the invocation's own |
+| `SCAN_CHUNK_FOLDERS`           | `7`     | `floor(42 / 6)`, a folder's base   |
+| `SCAN_ENRICH_MAX_PER_FOLDER`   | `8`     | `floor(42 / 5)`, a track's full cost |
+| `MAX_PAGE_SIZE_CEILING`        | `500`   | the statement budget, capped at the protocol maximum |
+
+The reserve is for authentication, the library grant and `scan_state`, which are spent
+before the walk begins and are not the chunk's to skip. **All three scan vars are clamped
+to their derived ceilings and `validate()` reports the clamp** — a configured maximum is
+not a permission, and the operator surface was actively telling people to raise one of them
+(`stoppedBy: 'requests'` rendered as *"Raise `SCAN_CHUNK_MAX_REQUESTS` to index more per
+poll"*), which on Free converts a chunk that pauses into a chunk the runtime terminates.
+
+`SCAN_CHUNK_DEADLINE_MS` is a different resource and still needed: the ceiling bounds
+*count*, the deadline bounds *time*, and on a slow origin the deadline is what makes a poll
+return. `SCAN_CHUNK_FOLDERS` still bounds D1 row writes against the 5,000-rows/day
+allowance as well — two resources, one number, which is why it is derived rather than typed.
+
+**Never trust the Workers limits page's "subrequests to internal services: 1,000 on Free"
+row over D1's own page.** This repository did, for long enough to ship a scan that died in
+its first album on every chunk: the budget metered `fetch` and nothing else, so a chunk
+charged 40 and spent ~240. Full account, including why the pessimistic reading was chosen
+because the cost of being wrong is asymmetric:
+`docs/issues/free-plan-subrequest-ceiling.md`.
 
 `ALLOW_PRIVATE_WEBDAV_HOSTS` gates whether a library may be registered at a private,
 loopback, or link-back address. The Worker fetches `baseUrl` with the library's **stored
