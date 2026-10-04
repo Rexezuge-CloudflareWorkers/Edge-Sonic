@@ -76,6 +76,47 @@ function decodeHrefPath(href: string): string {
 Text of the first prop element with this local name.
 */
 /**
+ * `/`, as a char code.
+ */
+const SLASH = 0x2f;
+
+/**
+ * Strip leading and trailing `/`.
+ *
+ * **A scan, not `replace(/^\/+/, '').replace(/\/+$/, '')`, because that regex is quadratic
+ * and its input is an untrusted `DAV:href`.** An unbounded `/+` followed by `$` that can
+ * fail is enough: for each of the *n* start positions inside a run of *n* slashes the engine
+ * retries every length the run could have. 16 KB of href costs ~200 ms of CPU and 100 KB
+ * costs ~8 s — against a 10 ms CPU limit on Workers Free, and comfortably inside the 8 MiB
+ * body cap `MAX_METADATA_BYTES` already allows. One hostile `PROPFIND` is then an invocation
+ * the runtime kills, or a slow request on Paid.
+ *
+ * **The run has to be _interior_ to cost anything, which is why the obvious test input does
+ * not catch this.** A leading run is consumed by `replace(/^\/+/, '')` before `/+$/` sees it,
+ * and a trailing run *matches*, which V8 fast-paths. Both measure in microseconds. A run with
+ * a segment on each side has neither escape, and a `DAV:href` is `<base>/<path>` — so the
+ * expensive shape is also the ordinary one. Measured at 16,000 slashes: 0.0 ms leading,
+ * 0.0 ms trailing, 198 ms interior.
+ *
+ * `^\/+` is anchored and so linear on its own, but it is gone too: one function with no
+ * regex in it cannot be pointed at by a scanner, and the two replacements were one operation
+ * written twice.
+ *
+ * Each `while` walks its own run at most once, so the work is bounded by the *length* of the
+ * input rather than its square. `test/redos-linear-parsing.test.ts` asserts this against an
+ * oracle written from the specification, and bounds the worst case — because the two
+ * analysers this repository already runs both miss this shape, so a green lint is not
+ * evidence about it.
+ */
+function stripSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === SLASH) start++;
+  while (end > start && value.charCodeAt(end - 1) === SLASH) end--;
+  return start === end ? '' : value.slice(start, end);
+}
+
+/**
  * Map a `DAV:href` to a library-relative path.
  *
  * A server returns absolute hrefs rooted at its own base, which may or may not
@@ -90,8 +131,8 @@ Text of the first prop element with this local name.
  * `/Music`, an href of `/MusicOld/a.flac` is a different library and must not match.
  */
 function toLibraryPath(hrefPath: string, rootPath: string): string | null {
-  const normalizedHref = hrefPath.replace(/^\/+/, '').replace(/\/+$/, '');
-  const normalizedRoot = rootPath.replace(/^\/+/, '').replace(/\/+$/, '');
+  const normalizedHref = stripSlashes(hrefPath);
+  const normalizedRoot = stripSlashes(rootPath);
   if (normalizedRoot.length === 0) return normalizedHref.length === 0 ? '' : normalizedHref;
   if (normalizedHref === normalizedRoot) return '';
   return normalizedHref.startsWith(`${normalizedRoot}/`) ? normalizedHref.slice(normalizedRoot.length + 1) : null;

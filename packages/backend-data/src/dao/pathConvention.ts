@@ -90,14 +90,65 @@ const DERIVED_MARKER = ' (derived)';
 const DERIVED_VERSION = 1;
 
 /**
+ * Whitespace, as the engine defines it.
+ *
+ * `\S` rather than a hand-copied list of code points, so the class stays one shared fact
+ * and this module cannot drift from what `\s` meant — the same reason the DAOs run against
+ * `node:sqlite` rather than against a double. It has no quantifier, so it is linear on the
+ * one-character strings it is handed here.
+ */
+const NON_SPACE = /\S/;
+
+/**
+`-`, `–` (U+2013), `—` (U+2014).
+*/
+const HYPHEN = 0x2d;
+const EN_DASH = 0x20_13;
+const EM_DASH = 0x20_14;
+
+/**
  * The separator in an `Artist - Album` folder name.
  *
  * A spaced en-dash or hyphen, and only the *first* one: an album titled
  * `Symphony No. 5 - 1949` must not be split into artist `Symphony No. 5` and album
  * `1949`. The first occurrence after a plausible artist name is the convention's,
  * because the artist part cannot itself contain the separator in this layout.
+ *
+ * **The index of the dash, not the regex's match index — and that is what makes the scan
+ * below equivalent.** Both sides of the split are `.trim()`ed by the caller, so the *extent*
+ * of either whitespace run cannot change the answer; `slice(0, dashIndex)` is
+ * `slice(0, match.index)` after a trim. A regex would have had to consume the runs to find
+ * them, which is the expensive part.
+ *
+ * **Which is also the DoS.** `/\s+[-–—]\s+/.exec(dirName)` is quadratic: one unbounded `\s+`
+ * followed by a character that can fail is enough, because for each of the *n* start
+ * positions inside a run of *n* spaces the engine retries every run length. 16 KB of folder
+ * name costs ~280 ms and 100 KB costs ~11 s, against a 10 ms CPU limit on Workers Free. The
+ * name reached this module from an untrusted `DAV:href` and is re-read on every upsert and on
+ * every backfill poll, so one hostile `PROPFIND` is an invocation the runtime kills. `[gimsuy]`
+ * cannot fix it — JavaScript has no possessive quantifier or atomic group — which is why the
+ * fix is a scan and not a flag. `test/redos-linear-parsing.test.ts` asserts the equivalence
+ * and bounds the worst case, because the two analysers this repository already runs both
+ * miss this shape and a green lint was never evidence about it.
+ *
+ * Note the shape the adversarial input has to take: a run of spaces **followed by a
+ * non-dash**. A run that ends in a dash matches on the first attempt and costs nothing, so
+ * `' '.repeat(n) + '- Album'` is cheap and `' '.repeat(n) + 'a'` is not.
  */
-const ALBUM_SEPARATOR = /\s+[-–—]\s+/;
+function findAlbumSeparator(dirName: string): number {
+  // The bounds keep `i - 1` and `i + 1` in range, so a separator cannot sit at either end
+  // and no sentinel comparisons are needed. That is also the convention's own rule: `- Album`
+  // has no artist and `Artist -` has no album.
+  for (let i = 1; i + 1 < dirName.length; i++) {
+    const code = dirName.charCodeAt(i);
+    if (code !== HYPHEN && code !== EN_DASH && code !== EM_DASH) continue;
+    // Whitespace on **both** sides is the convention; a dash with a non-space on either
+    // side is just a dash in a word, which is most of them.
+    if (NON_SPACE.test(dirName.charAt(i - 1)) || NON_SPACE.test(dirName.charAt(i + 1))) continue;
+    return i;
+  }
+  return -1;
+}
 
 interface DerivedNames {
   readonly artist: string | null;
@@ -128,10 +179,10 @@ function fromNestedPath(dirPath: string): DerivedNames {
  * split this module exists to remove.
  */
 function fromFlatAlbumFolder(dirName: string): DerivedNames {
-  const match = ALBUM_SEPARATOR.exec(dirName);
-  if (match === null) return { artist: null, album: dirName };
-  const artist = dirName.slice(0, match.index).trim();
-  const album = dirName.slice(match.index + match[0].length).trim();
+  const separator = findAlbumSeparator(dirName);
+  if (separator === -1) return { artist: null, album: dirName };
+  const artist = dirName.slice(0, separator).trim();
+  const album = dirName.slice(separator + 1).trim();
   // A separator at either end is a name that happens to contain a dash, not the
   // convention. `- Album` has no artist and `Artist -` has no album.
   if (artist.length === 0 || album.length === 0) return { artist: null, album: dirName };
