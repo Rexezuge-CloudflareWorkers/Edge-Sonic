@@ -233,6 +233,42 @@ describe('getCoverArt with embedded artwork', () => {
     expect(harness.dav.requestCount()).toBe(afterFirst);
   });
 
+  it('reads the cached picture back as bytes, because the default read type is text', async () => {
+    // The whole embedded-artwork feature died here, and the endpoint said nothing.
+    //
+    // KV's `get()` defaults to `type: 'text'`, and UTF-8 is not a byte-preserving codec:
+    // a stored JPEG read back as text is lossy-decoded — every invalid sequence replaced
+    // by U+FFFD, three bytes each on the way back out. So `ff d8 ff db` came back as
+    // `ef bf bd ef bf bd ef bf bd ef bf bd`, `sniffImageType` answered `null`, and every
+    // request after the one that extracted the picture served `PLACEHOLDER_PNG` — for the
+    // entry's full 30-day TTL, under a key only the track's mtime and size can
+    // invalidate. Against a live library of 80 Opus albums: **42 covers on the first
+    // sweep of every album, 0 of 80 on the second.**
+    //
+    // What made it survivable is worth stating, because it is this repository's own rule
+    // arriving through an encoding rather than a shape: `fakeKv` returned whatever `put`
+    // was given, so every round-trip in the suite was byte-exact while the real binding
+    // was lossy. The assertion that would have caught it — *this* file's second-request
+    // checks — was already written and already correct, and it was green, because the
+    // double shared the defect instead of the platform.
+    //
+    // So both halves are asserted. The bytes, because a cover that changes shape between
+    // two requests for one album is not a cover; and the requested type, because that is
+    // the decision, and the damage it causes is silent — a non-zero length that is no
+    // longer an image cannot be mistaken for the cached *absence* an album with no
+    // artwork leaves behind, so nothing upstream ever sees an error.
+    const first = await coverFor(subsonicId('al', ALBUM_DIR));
+    expect([...new Uint8Array(await first.arrayBuffer())]).toEqual([...COVER]);
+    const readsAfterFirst = harness.dav.requestCount();
+
+    const second = await coverFor(subsonicId('al', ALBUM_DIR));
+    // Same bytes, and served from KV — a second extraction would be indistinguishable here
+    // and would hide the defect, because extraction was never broken.
+    expect([...new Uint8Array(await second.arrayBuffer())]).toEqual([...COVER]);
+    expect(harness.dav.requestCount()).toBe(readsAfterFirst);
+    expect(harness.cache.requestedTypes).toContain('arrayBuffer');
+  });
+
   it('does not answer before its cache write has settled, so the write is not abandoned', async () => {
     // The cache test above passes either way, which is the whole problem. `fakeKv`'s `put`
     // is an `async` function with no `await` in it, so it settles on the microtask queue —

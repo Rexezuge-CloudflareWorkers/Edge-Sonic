@@ -17,6 +17,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KvCache, resetBreakerForTests } from '@edge-sonic/backend-runtime/kv';
+import { sniffImageType } from '@edge-sonic/media-tags';
 import { deadKv, fakeKv } from './helpers/fakeKv';
 
 const PART = 'lib1';
@@ -69,6 +70,101 @@ describe('KvCache is a cache, not a dependency', () => {
     const cache = new KvCache(fakeKv().ns);
     const oversized = 'x'.repeat(600 * 1024);
     expect(await cache.putText(DOMAIN, [PART, 'big'], oversized)).toBe(false);
+  });
+});
+
+/**
+ * The binary domain, and the one default that destroyed it.
+ *
+ * ### A round-trip test is only worth what the double loses
+ *
+ * `get()`'s default type is **`text`**, and UTF-8 is not a byte-preserving codec: a
+ * JPEG read as text comes back lossy-decoded, with every invalid sequence replaced by
+ * U+FFFD and re-encoded as three bytes. So `getBytes` must ask for `'arrayBuffer'`,
+ * and an assertion that only the *bytes* are equal cannot tell a correct reader from
+ * one that got lucky on a fixture whose magic happens to survive a UTF-8 round trip.
+ *
+ * That is why the negative below is not "the wrong type throws". It is the actual
+ * damage: the same key, the same stored bytes, read the way the platform reads by
+ * default, and **not** equal. Without it, a double that returned values verbatim —
+ * which is what `fakeKv` did — makes this whole block pass while production loses
+ * every cover in the library.
+ */
+describe('binary values survive the cache', () => {
+  beforeEach(() => {
+    resetBreakerForTests();
+  });
+
+  // `ff d8 ff db` — a JPEG whose fourth byte is a quantization table, which is what
+  // every cover in a real library starts with. It is chosen because it is *not*
+  // valid UTF-8, so it is destroyed by a text read; a fixture starting `ff d8 ff e0`
+  // (JFIF) would hide the defect it exists to catch.
+  const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x84, 0x00, 0x08, 0x00, 0x00]);
+  const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+
+  it('returns the exact bytes that were written', async () => {
+    for (const domain of ['albumArt', 'songMeta'] as const) {
+      const cache = new KvCache(fakeKv().ns);
+      expect(await cache.putBytes(domain, [PART, 'cover'], JPEG)).toBe(true);
+      const read = await cache.getBytes(domain, [PART, 'cover']);
+      expect(read).not.toBeNull();
+      expect([...(read ?? [])]).toEqual([...JPEG]);
+    }
+  });
+
+  it('states the type it reads, because the default is text', async () => {
+    // The decision itself, asserted rather than inferred from the bytes: a reader that
+    // omits the argument is the defect, and on a real binding the bytes come back
+    // corrupted rather than absent, so nothing else in the request would report it.
+    const store = fakeKv();
+    const cache = new KvCache(store.ns);
+    await cache.putBytes('albumArt', [PART, 'cover'], JPEG);
+    await cache.getBytes('albumArt', [PART, 'cover']);
+    expect(store.requestedTypes.at(-1)).toBe('arrayBuffer');
+  });
+
+  it('a default-typed read of the same value is not the same value', async () => {
+    // The paired negative, and the reason the positive one means anything: the double
+    // reproduces the platform's lossy decode, so this is the corruption production
+    // served — silently, with a non-zero length, so it cannot be mistaken for the
+    // cached *absence* an album with no artwork leaves behind.
+    const store = fakeKv();
+    const cache = new KvCache(store.ns);
+    expect(await cache.putBytes('albumArt', [PART, 'cover'], JPEG)).toBe(true);
+
+    const asText = await store.ns.get('albumArt:v1:lib1:cover');
+    const asBytes = await cache.getBytes('albumArt', [PART, 'cover']);
+
+    expect(typeof asText).toBe('string');
+    expect(new TextEncoder().encode(asText as string)).not.toEqual(JPEG);
+    // And the consequence, stated as the endpoint sees it: the magic is gone, which is
+    // what `sniffImageType` answers on, and `null` is what becomes the placeholder.
+    expect(sniffImageType(new TextEncoder().encode(asText as string))).toBeNull();
+    expect(sniffImageType(asBytes ?? new Uint8Array(0))).toBe('image/jpeg');
+  });
+
+  it('keeps PNG magic that a text read also destroys', async () => {
+    // One format is not enough evidence: `89` is a UTF-8 continuation byte, so a PNG
+    // is mangled differently from a JPEG and a reader that handled only one of them
+    // would still look correct.
+    const store = fakeKv();
+    const cache = new KvCache(store.ns);
+    await cache.putBytes('albumArt', [PART, 'cover'], PNG);
+    expect(sniffImageType((await cache.getBytes('albumArt', [PART, 'cover'])) ?? new Uint8Array(0))).toBe('image/png');
+    const asText = await store.ns.get('albumArt:v1:lib1:cover');
+    expect(sniffImageType(new TextEncoder().encode(asText as string))).toBeNull();
+  });
+
+  it('an empty value stays empty, because that is the cached absence', async () => {
+    // `embeddedAlbumArt` writes a zero-length entry to mean "this album has no
+    // artwork", and reads it back as exactly that. A reader that turned empty into
+    // `null` — or into a byte of padding — would turn a correct negative into a
+    // re-probe on every request, or a corrupt cover.
+    const cache = new KvCache(fakeKv().ns);
+    expect(await cache.putBytes('albumArt', [PART, 'none'], new Uint8Array(0))).toBe(true);
+    const read = await cache.getBytes('albumArt', [PART, 'none']);
+    expect(read).not.toBeNull();
+    expect(read?.byteLength).toBe(0);
   });
 });
 

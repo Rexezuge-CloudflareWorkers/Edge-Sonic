@@ -703,6 +703,45 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   one about the same bytes, and the suite could not see it because the formats were asserted
   through the path that already worked. One answer per question, and the second answer must
   be the first one's callee rather than its twin.
+- **A cache read that does not say what it wants is given the platform's default, and two
+  readers of the same namespace do not get the same answer.** `KvCache.getBytes` called
+  `ns.get(key)`; KV's default is `type: 'text'`, and UTF-8 is not a byte-preserving codec, so
+  a stored JPEG came back lossy-decoded — every invalid sequence replaced by U+FFFD and
+  re-encoded as three bytes — and `ff d8 ff db` arrived as `ef bf bd ef bf bd ef bf bd ef bf
+  bd`. Every entry under the `albumArt` key was therefore correct on the way in and
+  unrecognisable on the way out, and the one branch that re-identifies a cached image answered
+  `null`, so the placeholder was served for the entry's full 30-day TTL under a key only the
+  file's revision can invalidate. It took the whole embedded-artwork feature with it, on a
+  live library that is 100% Opus: **42 covers on the first sweep of 80 albums, 0 of 80 on the
+  second.** Four things, and each is how the others would have collapsed:
+  - **A lossy read is silent, and it is not an absence.** The corrupt entry has a *non-zero*
+    length, so it cannot be mistaken for the zero-length entry that means "this album has no
+    artwork" — which is why every answer was a *successful* `200` with a decodable image, why
+    each client cached the placeholder, and why nothing anywhere named a cause. A defect that
+    reports itself as a cache hit cannot be found by looking for errors.
+  - **The re-identification from the previous entry is what turned corruption into an
+    answer.** Storing the type beside the bytes would have survived this; deriving it from
+    them is right for a *stored* value and is exactly wrong for a value the reader mangled.
+    So the reader on that branch now logs, because the only writer on that path is
+    `resolveImageBytes`, which refuses a non-image — an entry that is a picture on the way in
+    and not on the way out means the **bytes changed in transit**, and that is worth a line.
+  - **A narrowed hand-written interface hid it as surely as a wrong one.** `KvNamespaceLike.get`
+    was declared `get(key: string)`, with no `type` parameter, so the platform's `arrayBuffer`
+    overload could not be expressed: the correct call was a compile error and the wrong one was
+    the only one available. Widening a type to `string | ArrayBuffer` modelled the *return*
+    and left the decision — which is the whole defect — unmodelled.
+  - **The double was byte-exact, so the right assertion was already written and already
+    green.** `test/cover-art-embedded.test.ts` has asserted that the second request serves the
+    same bytes out of KV since the feature landed. `fakeKv` returned whatever `put` was given,
+    so it passed against a production read that loses data. **A double must model the
+    platform's _defaults_, not only its shapes** — the same rule as the D1 double lowercasing
+    both sides of a predicate, one encoding down. `fakeKv` now reproduces the lossy decode and
+    records the requested type. Asserted in `test/kv-outage.test.ts`, paired with the negative
+    that reads the same key the way the platform reads by default and shows it is **not** the
+    same value — a byte-exact round-trip assertion proves nothing about a lossy read, and
+    without the pair a `getBytes` that forgot the type again would pass on a fixture whose
+    magic happened to survive UTF-8. Full account:
+    `docs/issues/kv-default-text-read-corrupts-artwork.md`.
 - **A value the protocol declares as a timestamp cannot be published from a `Set`.**
   `getArtists` decorated a starred artist with `starred: undefined`, and `undefined` is
   dropped by **both** serializers — so no attribute in XML and no key in JSON, for a star
@@ -877,6 +916,16 @@ from this repository's own history:
 - `fakeDav` used to answer any `Range` with the whole file and a `Content-Range` header
   claiming a prefix. That models a server lying about what it served, and it hid the one
   bug this product exists to avoid. It truncates now, and answers `416` past the end.
+- `fakeKv` returned whatever `put` was given, so every cache round-trip in the suite was
+  byte-exact while the real binding was **lossy**: KV's `get()` defaults to
+  `type: 'text'`, and UTF-8 replaces every invalid sequence with U+FFFD, so a stored JPEG
+  read back as text is *changed*. It destroyed the whole embedded-artwork feature and
+  nothing failed — see `docs/issues/kv-default-text-read-corrupts-artwork.md`. The rule is
+  the generalisation of every bullet above: **a double must model the platform's
+  _defaults_, not only its shapes.** A default nobody wrote down is the part that ships,
+  and a byte-exact round-trip test proves nothing about a lossy one. `fakeKv` now
+  reproduces the decode and records the requested type, so `getBytes` has to say
+  `'arrayBuffer'` or the suite reads a corrupted value exactly as production does.
 
 ## Commands
 
