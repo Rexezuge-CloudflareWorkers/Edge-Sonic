@@ -146,6 +146,18 @@ So a D1 statement, a KV operation, a Durable Object RPC and a Secrets Store read
 spend one of the same 50, and exceeding it does not slow a request down — it **terminates
 the invocation**, with an error no `catch` in this codebase can see.
 
+> **Measured 2026-10-05, and there are two budgets.** External `fetch` is 50; **D1 statements are
+> 1,000**, in a separate pool — 1,000 D1 statements plus 50 outbound requests in one invocation
+> survive together, and a DO reached by RPC runs on a fresh budget the caller's ceiling cannot see.
+> Charging D1 against the 50 is therefore **conservatism, not correction**, and it remains the
+> right direction: an *external* overrun kills the invocation, so bounding both by that one is
+> what cannot take the product down. `SCAN_CHUNK_MAX_REQUESTS = 42` is ~21× stricter than the D1
+> headroom this deployment has. A **D1** overrun also *throws* (`Too many API requests by single
+> Worker invocation`) rather than killing the invocation, so it is diagnosable where an external
+> one is not — which is what `D1ErrorClassifier` exploits. KV, Secrets Store reads and DO storage
+> were **not** measured. Full account, method and limits:
+> `docs/issues/subrequest-budgets-are-two-not-one.md`.
+
 **This deployment targets Workers Free, and there is deliberately no plan switch.** One
 ceiling, in `config/subrequests.ts`, with every bound below computed from it by arithmetic
 rather than typed beside the code that has to honour it — the same rule `bindChunkSize`

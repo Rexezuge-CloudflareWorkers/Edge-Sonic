@@ -1,36 +1,46 @@
 /**
- * The platform's subrequest ceiling, and every number in this codebase derived from it.
+ * The platform's subrequest ceilings, and every number in this codebase derived from them.
  *
  * ### The limit itself
  *
  * Workers Free allows **50 subrequests per invocation**. Workers Paid allows 10,000, raiseable
- * to 10M with `limits.subrequests`. A subrequest is any request a Worker makes with the Fetch
- * API **or to a Cloudflare service — R2, KV and D1 included**. D1 says so on its own limits
- * page:
+ * to 10M with `limits.subrequests`. Exceeding it does not slow a request down: the runtime
+ * terminates the invocation, everything after the ceiling is lost, and the caller sees a
+ * platform error rather than the product's masked envelope.
  *
- * > Queries per Worker invocation (read subrequest limits) — 1000 (Workers Paid) / **50 (Free)**
+ * ### There are TWO budgets, and this file spends both from one
  *
- * Exceeding it does not slow a request down and does not raise a catchable error: the runtime
- * terminates the invocation with `Too many subrequests by single Worker invocation`. Everything
- * after the ceiling is lost, and the caller sees a platform error rather than the product's
- * masked envelope.
+ * A subrequest is a request to the internet with `fetch`, **or** a request to a Cloudflare
+ * service — R2, KV, D1, DO RPC. Those are counted separately, and the Workers limits page says
+ * so:
  *
- * ### The two doc pages that disagree, and what this file does about it
+ * > Workers on the free plan remain limited to **50 external subrequests** and **1,000
+ * > subrequests to Cloudflare services** per invocation.
  *
- * Cloudflare's Workers limits page carries a second row, *Subrequests to internal services:
- * 1,000 on Free*, which reads as "D1 and KV have their own budget". This repository spent a
- * long time believing that — `scanBudget.ts` and `docs/agents/runtime/AGENTS.md` both stated it,
- * and `ScanBudget` therefore metered `fetch` alone. D1's page, updated more recently on the
- * subrequests point, contradicts it.
+ * **Measured on a Free account on 2026-10-05, and confirmed:** 50 outbound `fetch` requests die
+ * at the 51st; 1,000 D1 statements die at the 1,001st; 1,000 D1 statements *plus* 50 outbound
+ * requests in one invocation survive together. A Durable Object reached by RPC runs on a fresh
+ * budget, and the caller's ceiling is untouched by whatever the callee spent.
  *
- * **This file takes the pessimistic reading and charges D1 and KV against the 50.** Two
- * reasons, and the second is the one that decides it:
+ * So `WORKER_SUBSREQUEST_CEILING` below is the **external** ceiling, and this file deliberately
+ * charges D1 and KV against it anyway. Full account, including the measurements and the
+ * reasoning this replaces: `docs/issues/subrequest-budgets-are-two-not-one.md`.
  *
- * 1. The D1 page is the specific authority for D1, and it names the subrequest limit.
- * 2. The cost of being wrong is not symmetric. A ceiling sized for 1,000 that is really 50
- *    kills invocations; a ceiling sized for 50 that is really 1,000 only makes the scan
- *    slower. "Free must work, even if slow" resolves the ambiguity in the direction that
- *    cannot take the product down.
+ * That choice is now **conservatism rather than correction**, and the distinction matters to the
+ * next reader. The previous text here claimed the pessimistic reading was forced by the
+ * platform; the measurement shows it was not. `SCAN_CHUNK_MAX_REQUESTS` is roughly 21× more
+ * conservative than the D1 statements it bounds. Nothing is broken by that — a ceiling that is
+ * too small costs throughput, which is the direction that cannot take the product down — but
+ * anyone deciding whether to raise it is being told something false, so the reason is stated
+ * rather than left to be re-derived.
+ *
+ * ### The two ceilings also fail differently, and only one is catchable
+ *
+ * An **external** overrun kills the invocation with no catchable error. A **D1** overrun
+ * *throws* — `Too many API requests by single Worker invocation` — and an ordinary `catch` sees
+ * it. That asymmetry is not licence to catch and continue: a swallowed limit is still a limit,
+ * and handling it has converted a loud failure into a quiet one. It does mean a D1 overrun is
+ * diagnosable where an external one is not, which is what `D1ErrorClassifier` exists to exploit.
  *
  * ### Why there is no plan switch
  *
@@ -45,7 +55,11 @@
 /**
  * Subrequests one Worker invocation may issue on the Free plan.
  *
- * The platform number, not a choice. `50`.
+ * **The external ceiling**, and the platform number rather than a choice. `50`.
+ *
+ * D1, KV and DO RPC have 1,000 of their own — measured, and recorded above. They are charged
+ * against this one deliberately, so a chunk's budget is bounded by the resource that cannot be
+ * handled when it runs out.
  */
 const WORKER_SUBSREQUEST_CEILING = 50;
 

@@ -30,6 +30,16 @@ D1 counts against the same 50, and says so on its own limits page:
 A `fetch`, a D1 query, a KV operation, a Durable Object RPC and a Secrets Store read are all
 subrequests. A redirect hop is counted too.
 
+> **Measured 2026-10-05 — this document's central claim is half right, and the fix below is 21×
+> more conservative than it needed to be.** There are **two** budgets, not one: external `fetch`
+> is 50 and **D1 statements are 1,000**, and 1,000 D1 statements plus 50 outbound requests in one
+> invocation survive together. The pessimism below was right about which error is worse and wrong
+> about the platform forcing it. Nothing here is broken — a too-small ceiling costs throughput —
+> but the *stated reason* has been corrected in `subrequests.ts` and `SubrequestMeter.ts`, and the
+> measurements are in
+> [`subrequest-budgets-are-two-not-one.md`](./subrequest-budgets-are-two-not-one.md). Read that
+> one before deciding whether to raise `SCAN_CHUNK_MAX_REQUESTS`.
+
 ### The two doc pages that disagree
 
 Cloudflare's [Workers limits page](https://developers.cloudflare.com/workers/platform/limits/#subrequests)
@@ -51,6 +61,11 @@ contradicts it.
 decides it: a ceiling sized for 1,000 that is really 50 kills invocations; a ceiling sized for
 50 that is really 1,000 only makes the scan slower. "Free must work, even if slow" resolves the
 ambiguity in the direction that cannot take the product down.
+
+> The asymmetry argument was sound and the premise it rested on was not. Measured, D1 has 1,000
+> of its own, so this choice is **conservatism rather than correction** — see the banner above.
+> The reasoning below is kept as written because *how the wrong number was arrived at correctly*
+> is the transferable part; the banner is what stops the next reader acting on it.
 
 ## What the code was doing
 

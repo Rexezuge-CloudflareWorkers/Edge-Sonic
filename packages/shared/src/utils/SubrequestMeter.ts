@@ -31,6 +31,23 @@
  * availability problem. That asymmetry is the whole reason to choose it: an over-count is a
  * slow scan, an under-count is a dead one.
  *
+ * ### The opening paragraph is true of one ceiling and false of the other
+ *
+ * "It does not throw something a `catch` can see" describes the **external** ceiling, which
+ * kills the invocation outright. Measured on a Free account on 2026-10-05, there are two
+ * budgets: external `fetch` is 50, and **D1 statements are 1,000**, in a separate pool — 1,000
+ * D1 statements and 50 outbound requests in one invocation survive together.
+ *
+ * A **D1** overrun *throws* `Too many API requests by single Worker invocation` and an ordinary
+ * `catch` sees it. So this counter's single ceiling covers two resources that fail differently,
+ * and this file's own header asserted the stricter one's behaviour as if it were both.
+ *
+ * That is not a licence to catch and continue — a swallowed limit is still a limit, and handling
+ * it turns a loud failure into a quiet one. It is a reason to keep charging D1 against the
+ * external 50: bounding both by the resource that cannot be handled when it runs out is the
+ * choice that cannot take the product down. Full account, and what was not measured:
+ * `docs/issues/subrequest-budgets-are-two-not-one.md`.
+ *
  * ### Why it is an interface and not a class everywhere
  *
  * `backend-data` may only import layer 0, and `webdav` may import nothing at all — so the
