@@ -195,8 +195,12 @@ function createRequestScope(env: RequestScopeEnv): Container {
         find: async (libraryId) => (await scope.get(Tokens.ScanStateDAO)()).find(libraryId),
         ensure: async (libraryId) => (await scope.get(Tokens.ScanStateDAO)()).ensure(libraryId),
         markScanning: async (libraryId, total) => (await scope.get(Tokens.ScanStateDAO)()).markScanning(libraryId, total),
-        saveProgress: async (libraryId, scanned, cursor) => (await scope.get(Tokens.ScanStateDAO)()).saveProgress(libraryId, scanned, cursor),
-        complete: async (libraryId, scanned) => (await scope.get(Tokens.ScanStateDAO)()).complete(libraryId, scanned),
+        saveProgress: async (libraryId, scanned, cursor, indexChanged) =>
+          (await scope.get(Tokens.ScanStateDAO)()).saveProgress(libraryId, scanned, cursor, indexChanged),
+        // The third argument is forwarded, not defaulted away: it is how the caller that
+        // changed the index outside a scan — the library-root-gone branch — says so, and a
+        // composition root that dropped it would make that unreachable.
+        complete: async (libraryId, scanned, changed) => (await scope.get(Tokens.ScanStateDAO)()).complete(libraryId, scanned, changed),
         fail: async (libraryId, error) => (await scope.get(Tokens.ScanStateDAO)()).fail(libraryId, error),
       },
       // The derived-grouping backfill, for rows the file-change path will never revisit.
@@ -237,7 +241,9 @@ function createRequestScope(env: RequestScopeEnv): Container {
       // `onRequest` is the chunk's meter. Forwarding it is what keeps a range read
       // counted against the same budget as the `PROPFIND` that found the file.
       enrichSong: async (library, facts, onRequest) => {
-        await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts, onRequest);
+        // The row count, not the tags: this is the seam the day's row-write budget is
+        // metered through, and it was returning nothing at all. See `EnrichmentOutcome`.
+        return (await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts, onRequest)).rowsWritten;
       },
       enrichMaxPerFolder: config.getScanEnrichMaxPerFolder(),
     }),

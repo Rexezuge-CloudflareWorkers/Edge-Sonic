@@ -219,8 +219,10 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
         `songCount` is tracks, not folders: it is the figure `getScanStatus` publishes as
         `count`, and it is the only progress number that means the same thing to this surface
         and to a Subsonic client watching the same library. `scanned` (folders visited) is
-        deliberately not shown as a fraction — `total_count` is written as `0` and never
-        updated, so a "12 of 0" bar is the arithmetic the server actually holds.
+        deliberately not shown as a fraction — there is no denominator to show it against.
+        The server wrote `total_count` as `0` and never updated it, so the `ChunkResult`
+        field built from it was `0` on every path but one, and the one exception carried
+        `scanned_count` instead; both are gone rather than documented.
       */}
       <p className="mt-1 text-xs text-[var(--color-text-muted)]">
         {scanPresented.detail}

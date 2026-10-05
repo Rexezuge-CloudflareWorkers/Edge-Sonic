@@ -55,6 +55,22 @@
  * A track that cannot be read keeps `enriched_at = null` and is retried by `getSong`. The
  * scan's rows are already written by this point, and one unavailable origin must not
  * discard them — which is what a throw here would do.
+ *
+ * ### Why this returns a row count
+ *
+ * Because `rowsWritten` is the only input to `ScanDailyBudget.rowsWrittenToday` — the guard
+ * that stops the scan spending the account's D1 row-write allowance — and this function used
+ * to return `void`. Every row `applyMetadata` wrote was therefore invisible to it, while the
+ * **subrequest** meter saw each one, because `BaseDAO.withRetry` charges every statement. One
+ * counter blind to a quarter of a cold scan's writes, beside one that counted them all, is the
+ * shape of the defect this fixes: a hand-summed count at the call site is a claim about the
+ * work, and the class of writer most likely to be forgotten is the one that is not the caller.
+ *
+ * The count is rows **written**, not tracks asked about, and the difference is not academic:
+ * a `songMeta` cache hit returns without touching D1, and a transient failure returns without
+ * touching D1 — the second deliberately, since stamping the row over a `503` is what made four
+ * tracks of a live library report `duration: 0` for ever. Counting those would pace the scan
+ * against writes that never happened, and would stop it early rather than late.
  */
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { SUBSREQUESTS_PER_ENRICHED_TRACK } from '@edge-sonic/backend-runtime/config';
@@ -77,28 +93,34 @@ const REQUESTS_PER_ENRICHED_TRACK = SUBSREQUESTS_PER_ENRICHED_TRACK;
  * @param budget The chunk's budget. The meter it wraps is the *same* counter the DAOs and the
  *   KV cache charge, so a range read and the statement that records it are counted against one
  *   ceiling rather than two.
+ * @returns Rows written to `songs`, which is `0` for a track served from cache, `0` for one
+ *   that failed transiently, and `0` for a track the budget had no room for.
  */
 async function enrichChanged(
   library: LibraryRow,
   songInputs: readonly ScanSongInput[],
-  enrich: ((library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<void>) | undefined,
+  enrich: ((library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<number>) | undefined,
   maxPerFolder: number,
   budget: ScanBudget,
-): Promise<void> {
-  if (enrich === undefined || songInputs.length === 0) return;
+): Promise<number> {
+  if (enrich === undefined || songInputs.length === 0) return 0;
 
+  let rowsWritten = 0;
   const bounded = songInputs.slice(0, Math.max(0, maxPerFolder));
   for (const input of bounded) {
     // Checked before each track, so the chunk stops taking on work rather than discovering
     // afterwards that it overran. `canAfford` takes the worst case, so an Ogg track's second
     // range read is inside the reservation rather than an overrun discovered afterwards.
-    if (!budget.canAfford(REQUESTS_PER_ENRICHED_TRACK)) return;
+    if (!budget.canAfford(REQUESTS_PER_ENRICHED_TRACK)) break;
     try {
-      await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () => budget.charge());
+      rowsWritten += await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () => budget.charge());
     } catch {
-      // Left for `getSong` to retry, for the reason in the header.
+      // Left for `getSong` to retry, for the reason in the header. And it wrote nothing, so
+      // it contributes nothing to `rowsWritten` — which is the one place a swallowed
+      // exception and a counted write have to be told apart.
     }
   }
+  return rowsWritten;
 }
 
 export { enrichChanged, REQUESTS_PER_ENRICHED_TRACK };

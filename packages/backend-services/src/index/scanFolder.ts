@@ -18,6 +18,7 @@ import { basename, isAudioFile, suffixOf } from './libraryNames';
 import { enrichChanged } from './scanEnrichment';
 import { nodeRowNeedsWrite } from './nodeWrite';
 import type { ScanBudget } from './scanBudget';
+import type { FolderWrites } from './scanAccounting';
 import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
 
 /**
@@ -50,7 +51,13 @@ import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
  * truncated, and the folder closes: 49 rows, then 31, then nothing. `test/scan-convergence.test.ts`
  * asserts that arithmetic, because a comment about it is what the code carried instead.
  */
-async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: NodeRow, resources: readonly DavResource[], budget: ScanBudget): Promise<number> {
+async function reconcileFolder(
+  deps: ScanDeps,
+  library: LibraryRow,
+  folder: NodeRow,
+  resources: readonly DavResource[],
+  budget: ScanBudget,
+): Promise<FolderWrites> {
   // The folder's own entry in this listing, kept for the `is_scanned` write further down —
   // where the comment on why it must be the *fresh* mtime lives, beside the write.
   const self = resources.find((resource) => toLibraryPath(resource.path, library.root_path) === folder.path);
@@ -169,6 +176,12 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
   }
 
   let writes = 0;
+  // The **index-changed** signal, kept apart from `writes` because they answer different
+  // questions about the same rows. `writes` is the day's row-write allowance, where every
+  // row counts; `indexChanged` is whether a cached answer is now stale, where a frontier
+  // flag flipping does not count. Deriving one from the other is wrong in both directions —
+  // see the own-row write below, and `scanTypes.FolderWrites`.
+  let indexChanged = false;
   // The children go first, and the folder's own row — the one carrying `is_scanned: true`,
   // the flag that takes this folder off the frontier — goes **last, and only if every child
   // landed**.
@@ -182,8 +195,10 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
   // rows it already wrote, and writes only the ones that are missing.
   const childNodes = await deps.nodes.upsertMany(nodeInputs);
   writes += childNodes.changes;
+  indexChanged ||= childNodes.changes > 0;
   const songRows = songInputs.length > 0 ? await deps.songs.upsertFileFacts(songInputs) : { changes: 0, truncated: false };
   writes += songRows.changes;
+  indexChanged ||= songRows.changes > 0;
 
   const truncated = childNodes.truncated || songRows.truncated;
   if (truncated) {
@@ -195,9 +210,23 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
     //
     // So the folder returns here, unfinished, on the frontier. Nothing is lost: the next chunk
     // re-reads the same `Depth: 1` listing and finishes it.
-    return writes;
+    return { rowsWritten: writes, indexChanged };
   }
 
+  // Counted into `writes` and deliberately **not** into `indexChanged`.
+  //
+  // This row is frontier bookkeeping plus a re-observation of a folder whose children were
+  // just compared, one entry at a time, against the very rows this call is about to leave
+  // alone. `is_scanned` is a scan cursor; `mtime_ms`/`etag` on this row are what the *parent*
+  // reads to decide whether to descend here. Nothing a cached aggregate reads — a name, a
+  // path, a song, a grouping — is touched by this write.
+  //
+  // So counting it would make `index_version` a function of how many times the library was
+  // rescanned rather than of whether it changed, which is the defect: an origin that stamps a
+  // collection's `getlastmodified` per request makes this row differ on every pass, and since
+  // `start`'s cheap path compares that same column it can never short-circuit — so every
+  // `startScan`, and `startScan` runs on every client login, would invalidate every cached
+  // album, artist, genre and search in the deployment for a rescan that moved nothing.
   writes += (
     await deps.nodes.upsertMany([
       {
@@ -225,7 +254,19 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
   //
   // Only the rows this listing changed, which is exactly the set whose `enriched_at`
   // the upsert just cleared. An unchanged track costs nothing.
-  await enrichChanged(library, songInputs, deps.enrichSong, deps.enrichMaxPerFolder, budget);
+  //
+  // Counted, and this line is the whole of the fix. `enrichChanged` reports rows **written**
+  // rather than tracks attempted, because `rowsWritten` is the only input to the day's
+  // row-write budget: leaving this term out made roughly a quarter of a cold scan's D1
+  // writes invisible to the guard that exists to stop the scan spending them, while
+  // `BaseDAO.withRetry` charged every one of them to the subrequest meter. One counter blind
+  // to a class of writer beside one that counted them all. See `scanEnrichment.ts`.
+  const enriched = await enrichChanged(library, songInputs, deps.enrichSong, deps.enrichMaxPerFolder, budget);
+  writes += enriched;
+  // A duration or an album tag landing on a song *is* a change the aggregates read, and it is
+  // the one writer here that is invisible to the two upserts above — which is why this is
+  // counted separately from them and not folded into `songRows.changes`.
+  indexChanged ||= enriched > 0;
 
   // Prune. Unconditional, and both calls return 0 without issuing a statement when
   // nothing vanished.
@@ -239,17 +280,21 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
     .map((node) => node.path)
     .filter((path) => path !== folder.path && !keptPaths.has(path));
 
-  writes += (await deps.songs.deleteInDirectoryNotIn(library.id, folder.path, songPaths)).changes;
+  const prunedSongs = (await deps.songs.deleteInDirectoryNotIn(library.id, folder.path, songPaths)).changes;
+  writes += prunedSongs;
+  indexChanged ||= prunedSongs > 0;
   for (const path of vanished) {
     // A vanished *folder* takes its subtree with it, on both planes. A one-level
     // delete would leave the folder's own songs behind, and their `dir_path` is
     // deeper than the folder — so they would stay indexed, pointing at files that
     // no longer exist, which is the entire failure this prune exists to prevent.
-    writes += await deps.nodes.deleteSubtree(library.id, path);
-    writes += await deps.songs.deleteSubtree(library.id, path);
+    const removedNodes = await deps.nodes.deleteSubtree(library.id, path);
+    const removedSubtree = await deps.songs.deleteSubtree(library.id, path);
+    writes += removedNodes + removedSubtree;
+    indexChanged ||= removedNodes > 0 || removedSubtree > 0;
   }
 
-  return writes;
+  return { rowsWritten: writes, indexChanged };
 }
 
 export { reconcileFolder };

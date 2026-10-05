@@ -154,28 +154,28 @@ class ScanService {
   public async step(library: LibraryRow, dailyBudget?: () => ScanDailyBudget): Promise<ChunkResult> {
     // ### The `try` opens here, not below
     //
-    // It used to open after the frontier read, which left five awaited calls — `ensure`,
-    // `derivePending`, `listFrontier`, `fail`, `complete` — able to reject *outside* it.
-    // A rejection there propagates out of `step`, and in production the only caller is
-    // `ScanWorker.alarm`, which had no handler of its own: the alarm was consumed, the
-    // re-arm never ran, and D1's `scan_state.status` was still `scanning`. So
-    // `getStatus` answered `scanning: true` for ever — which every client reads as *keep
-    // polling* — while nothing was scheduled to answer. Nothing reconciles the two
-    // stores: the alarm lives in DO storage, the status in D1, and `getAlarm()` is called
-    // from nowhere. `startScan` was the only recovery and it runs at client startup, not
-    // while browsing.
+    // It used to open after the frontier read, leaving five awaited calls — `ensure`,
+    // `derivePending`, `listFrontier`, `fail`, `complete` — able to reject *outside* it. In
+    // production the only caller is `ScanWorker.alarm`, which had no handler: the alarm was
+    // consumed, the re-arm never ran, and D1 still said `scanning`. So `getStatus` answered
+    // `scanning: true` for ever — which every client reads as *keep polling* — while nothing
+    // was scheduled to answer, and nothing reconciles the two stores (`getAlarm()` is called
+    // from nowhere).
     //
-    // A failure that cannot be recorded is also a failure nobody can diagnose, so the
-    // whole body is inside the guard: a transient D1 error becomes one counted retry with
-    // a `last_error` an operator can read, and `isAdvancing('failed')` keeps the chain
-    // armed so the retry budget — not an unbounded loop — is what bounds it.
+    // A failure that cannot be recorded is also a failure nobody can diagnose, so the whole
+    // body is inside the guard: a transient D1 error becomes one counted retry with a
+    // `last_error` an operator can read, and `isAdvancing('failed')` keeps the chain armed so
+    // the retry budget — not an unbounded loop — is what bounds it.
     // Declared outside the `try` because the `catch` reads them, and because `state` being
-    // `null` **is** the signal for "the fault happened before any state was read" — a
-    // second boolean for the same fact would be free to disagree with it.
+    // `null` **is** the signal for "the fault happened before any state was read" — a second
+    // boolean for the same fact would be free to disagree with it.
     let state: ScanStateRow | null = null;
     let budget: ScanBudget | undefined;
     let derivedRows = 0;
     let rowsWritten = 0;
+    // Kept apart from `rowsWritten` on purpose: the day's row-write allowance counts every row,
+    // and the cache-invalidation signal counts only the ones a cached answer reads.
+    let indexChanged = false;
     let scanned = 0;
     let foldersVisited = 0;
 
@@ -184,19 +184,12 @@ class ScanService {
 
       // ### The day's row-write allowance, checked before the first write of the chunk
       //
-      // Placed here — after `ensure`, before the backfill — because it is a substitute for
-      // entering the chunk rather than a bound on it. A library that has already spent its share
-      // writes **nothing** until midnight UTC, which is the whole difference between a scan that
-      // pauses and one that spends the remainder of the allowance discovering that it should stop:
-      // the walk would otherwise put ~42 rows a second against a ceiling the platform enforces by
-      // refusing to answer anything at all.
-      //
-      // Before `ensure` would be tidier and is wrong: `ensure` is a read for a library that has
-      // been scanned, and this is the one write a library that has never been scanned needs, so
-      // the check costs nothing on the path it is protecting and buys real counts to report. After
-      // the backfill would be worthless: the backfill is a write batch.
+      // After `ensure`, before the backfill, because it substitutes for entering the chunk rather
+      // than bounding it: a library that has spent its share writes **nothing** until midnight UTC.
+      // Before `ensure` would be tidier and is wrong — `ensure` is a read for a scanned library
+      // and the one write an unscanned one needs. After the backfill would be worthless.
       const dailyPause = dailyAllowancePause(dailyBudget?.());
-      if (dailyPause) return { ...dailyPause, scanned: state.scanned_count, total: state.total_count };
+      if (dailyPause) return { ...dailyPause, scanned: state.scanned_count };
 
       budget = this.budget();
       derivedRows = await backfill(this.deps, library.id, budget);
@@ -209,6 +202,9 @@ class ScanService {
       if (settled !== null) return settled;
 
       rowsWritten = derivedRows;
+      // The backfill writes `songs` grouping, which every aggregate reads, so it counts. It is
+      // the one writer outside `reconcileFolder`.
+      indexChanged = derivedRows > 0;
       scanned = state.scanned_count;
 
       for (const folder of frontier) {
@@ -231,12 +227,17 @@ class ScanService {
           // The folder is gone. Removing its subtree is the prune half of the
           // design, scoped to a folder the scan already visited, so its cost is
           // proportional to the deletion rather than to library size.
-          rowsWritten += await this.deps.nodes.deleteSubtree(library.id, folder.path);
-          rowsWritten += (await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, [])).changes;
+          const removedNodes = await this.deps.nodes.deleteSubtree(library.id, folder.path);
+          const removedSongs = (await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, [])).changes;
+          rowsWritten += removedNodes + removedSongs;
+          // A subtree leaving the index *is* a change to it — the opposite of a flag flipping.
+          indexChanged ||= removedNodes > 0 || removedSongs > 0;
           scanned += 1;
           continue;
         }
-        rowsWritten += await reconcileFolder(this.deps, library, folder, listed, budget);
+        const reconciled = await reconcileFolder(this.deps, library, folder, listed, budget);
+        rowsWritten += reconciled.rowsWritten;
+        indexChanged ||= reconciled.indexChanged;
         scanned += 1;
       }
 
@@ -246,11 +247,13 @@ class ScanService {
       // two. `scanned` above is still the absolute count the result reports; only the write
       // is a delta. The two are deliberately not the same value, and conflating them is the
       // lost update.
-      await this.deps.scanState.saveProgress(library.id, foldersVisited, null);
+      //
+      // `indexChanged` rides along, and it is deliberately **not** `rowsWritten > 0` — see
+      // `scanAccounting`. It is what `complete` reads before bumping `index_version`.
+      await this.deps.scanState.saveProgress(library.id, foldersVisited, null, indexChanged);
       return {
         status: 'scanning',
         scanned,
-        total: state.total_count,
         indexVersion: state.index_version,
         lastError: null,
         foldersVisited,
@@ -321,7 +324,6 @@ class ScanService {
       // surfaces cannot disagree about whether a scan is over.
       status: storedStatus(state),
       scanned: state.scanned_count,
-      total: state.total_count,
       indexVersion: state.index_version,
       // Reported for `failed` only: an `idle` row's `last_error` is already `NULL`,
       // and an `idle` scan is the state an operator is not asking about.
@@ -356,7 +358,6 @@ class ScanService {
     const result: ChunkResult = {
       status: 'failed',
       scanned: partial?.scanned ?? state.scanned_count,
-      total: state.total_count,
       indexVersion: state.index_version,
       lastError: message,
       foldersVisited: partial?.foldersVisited ?? 0,

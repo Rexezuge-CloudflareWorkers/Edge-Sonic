@@ -344,6 +344,11 @@ describe('the migration lock', () => {
     // that is real to the code and absent from the database.
     const scanColumns = (handle.raw.prepare('PRAGMA table_info(scan_state)').all() as Array<{ name: string }>).map((row) => row.name);
     expect(scanColumns).toContain('consecutive_failures');
+    // And the one `complete()` reads before bumping `index_version`. Same reasoning: a column
+    // that is real to the DAO and absent from the database makes the *conditional* bump
+    // unreadable, which on a deployment that ran the earlier migrations fails the statement
+    // rather than falling back — so the scan fails on every completion.
+    expect(scanColumns).toContain('changed');
   });
 
   it('orders migrations the way Wrangler does, which is by filename', () => {
@@ -1975,5 +1980,98 @@ describe('album identity by grouping', () => {
     // And the order itself, so a change to both in the same direction fails: disc first, so a
     // two-disc album does not interleave, and `name` not `name_ci` on the tie.
     expect(comparatorOrder).toEqual(['apple', 'Banana', 'zebra']);
+  });
+});
+
+describe('the index_version bump is conditional, over real SQL', () => {
+  // Everything else about this invariant is asserted against doubles, and a double cannot
+  // observe it. `complete()` decides in **SQL** — `index_version + CASE WHEN changed = 1 …`
+  // — so the decision lives in a statement no service-level test executes. Reinstating the
+  // unconditional bump in `ScanStateDAO` left all 38 scan tests green.
+  //
+  // So this runs the real DAO over real SQLite. It is the only place the claim can fail.
+
+  async function seededScan(id: string): Promise<{ libraryId: string; scanState: ScanStateDAO }> {
+    const userId = await seedUser(`VersionBump-${id}`);
+    const libraryId = await seedLibrary(userId, id);
+    const scanState = new ScanStateDAO(handle.db);
+    await scanState.ensure(libraryId);
+    return { libraryId, scanState };
+  }
+
+  const version = async (scanState: ScanStateDAO, libraryId: string): Promise<number> =>
+    (await scanState.find(libraryId))?.index_version ?? -1;
+
+  it('bumps when the scan changed the index, and does not when it only moved the frontier', async () => {
+    const { libraryId, scanState } = await seededScan('LVB1');
+
+    await scanState.markScanning(libraryId, 0);
+    // `false`: the chunk visited folders and rewrote the root's own `is_scanned`, which is a
+    // real D1 row and no change to anything a cached aggregate reads.
+    await scanState.saveProgress(libraryId, 1, null, false);
+    const unchanged = await scanState.complete(libraryId, 1);
+
+    expect(unchanged).toBe(await version(scanState, libraryId));
+    expect(unchanged).toBe(1);
+
+    await scanState.markScanning(libraryId, 0);
+    // `true`, and the accumulation across chunks is the other half: the flag is set by the
+    // chunk that changed something, while `complete` runs on whichever chunk empties the
+    // frontier. Saving `true` here and finishing in a *separate* statement is the shape.
+    await scanState.saveProgress(libraryId, 1, null, true);
+    // Read before `complete`, so this case cannot be satisfied by `complete` happening to
+    // agree for a reason of its own — it pins that `saveProgress` is the writer of the flag.
+    expect(await version(scanState, libraryId)).toBe(1);
+    expect((await scanState.find(libraryId))?.changed).toBe(1);
+    const changed = await scanState.complete(libraryId, 2);
+
+    expect(changed).toBe(2);
+    expect(changed).toBe(await version(scanState, libraryId));
+    // And the flag is cleared by the completion, so the next scan starts from a clean answer.
+    expect((await scanState.find(libraryId))?.changed).toBe(0);
+  });
+
+  it('accumulates across chunks, so the chunk that finishes does not decide it', async () => {
+    const { libraryId, scanState } = await seededScan('LVB2');
+
+    await scanState.markScanning(libraryId, 0);
+    await scanState.saveProgress(libraryId, 1, null, true);
+    // A later chunk that changed nothing must not clear its predecessor's answer — the same
+    // reason `scanned_count` takes a delta rather than an assignment.
+    await scanState.saveProgress(libraryId, 1, null, false);
+
+    expect(await scanState.complete(libraryId, 2)).toBe(2);
+  });
+
+  it('zeroes the flag at the start of a scan, so the next no-op rescan does not bump', async () => {
+    // The bug this catches is carrying the previous scan's answer forward: then the *first*
+    // no-op rescan bumps and every one after it does not, which is the worst possible shape —
+    // it looks like the guard works and is wrong about exactly one rescan in N.
+    const { libraryId, scanState } = await seededScan('LVB3');
+
+    await scanState.markScanning(libraryId, 0);
+    await scanState.saveProgress(libraryId, 1, null, true);
+    expect(await scanState.complete(libraryId, 1)).toBe(2);
+
+    // The column itself, and read while the scan is still running: `markScanning` is the only
+    // writer that can clear it, so a version that omits `changed = 0` from that statement
+    // leaves the previous scan's answer in place — and the assertion above cannot see it,
+    // because the error is one bump *late* rather than absent.
+    await scanState.markScanning(libraryId, 0);
+    expect((await scanState.find(libraryId))?.changed).toBe(0);
+
+    await scanState.saveProgress(libraryId, 1, null, false);
+    expect(await scanState.complete(libraryId, 1)).toBe(2);
+  });
+
+  it('bumps anyway for a caller that changed the index outside a scan', async () => {
+    // The library-root-gone branch deletes every row and has no scan that wrote them, so it
+    // has to insist. A deleted index served from cache is the failure this argument exists for.
+    const { libraryId, scanState } = await seededScan('LVB4');
+
+    await scanState.markScanning(libraryId, 0);
+    await scanState.saveProgress(libraryId, 1, null, false);
+
+    expect(await scanState.complete(libraryId, 0, true)).toBe(2);
   });
 });

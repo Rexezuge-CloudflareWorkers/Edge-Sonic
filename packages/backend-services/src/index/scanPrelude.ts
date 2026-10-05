@@ -68,7 +68,6 @@ async function finished(deps: ScanDeps, library: LibraryRow, state: ScanStateRow
   return {
     status: 'idle',
     scanned: state.scanned_count,
-    total: state.total_count,
     indexVersion,
     lastError: null,
     foldersVisited: 0,

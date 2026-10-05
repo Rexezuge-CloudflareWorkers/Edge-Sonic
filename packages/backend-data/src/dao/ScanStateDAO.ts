@@ -123,7 +123,7 @@ class ScanStateDAO extends BaseDAO {
       async () =>
         await this.database
           .prepare(
-            "UPDATE scan_state SET status = 'scanning', total_count = ?, scanned_count = 0, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, started_at = ?, updated_at = ? WHERE library_id = ?",
+            "UPDATE scan_state SET status = 'scanning', total_count = ?, scanned_count = 0, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, started_at = ?, updated_at = ?, changed = 0 WHERE library_id = ?",
           )
           .bind(totalCount, nowSeconds(), nowSeconds(), libraryId)
           .run(),
@@ -186,36 +186,85 @@ class ScanStateDAO extends BaseDAO {
    *
    * Same reason `fail` increments its counter in the statement rather than reading it,
    * writing it back and reading it again — which is why the two are now written alike.
+   *
+   * ### `indexChanged` is OR-ed in, and it is the only record that this scan changed anything
+   *
+   * `scan_state.changed` is what `complete()` consults before bumping `index_version`, so it
+   * has to accumulate across the chunks that changed something rather than be decided in the
+   * one that finishes — `finished()` runs wherever the frontier happens to empty, which is not
+   * the chunk that reconciled the last folder. So the flag is set here, in the statement every
+   * scanning chunk already issues, and it is **OR-ed** rather than assigned: an overlapped
+   * chunk that changed nothing must not clear a sibling's answer, which is the same reason
+   * `scanned_count` takes a delta.
+   *
+   * A boolean and not a row count, and the distinction is the point rather than a convenience:
+   * most of the rows a rescan writes are frontier bookkeeping — `is_scanned` flipping both ways,
+   * and a re-observation of a folder whose children were just compared and left alone. Deriving
+   * this from `rowsWritten > 0` would make `index_version` a function of how many times a
+   * library was rescanned. See `FolderWrites` in `scanTypes.ts`.
    */
-  public async saveProgress(libraryId: string, scannedDelta: number, cursorPath: string | null): Promise<void> {
+  public async saveProgress(
+    libraryId: string,
+    scannedDelta: number,
+    cursorPath: string | null,
+    indexChanged: boolean,
+  ): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database
           .prepare(
-            "UPDATE scan_state SET status = 'scanning', scanned_count = scanned_count + ?, cursor_path = ?, consecutive_failures = 0, updated_at = ? WHERE library_id = ?",
+            "UPDATE scan_state SET status = 'scanning', scanned_count = scanned_count + ?, cursor_path = ?, consecutive_failures = 0, updated_at = ?, changed = CASE WHEN ? = 1 THEN 1 ELSE changed END WHERE library_id = ?",
           )
-          .bind(scannedDelta, cursorPath, nowSeconds(), libraryId)
+          .bind(scannedDelta, cursorPath, nowSeconds(), indexChanged ? 1 : 0, libraryId)
           .run(),
       'scanState.saveProgress',
     );
   }
 
   /**
-   * Finish a scan and bump `index_version`.
+   * Finish a scan, bumping `index_version` **only if it changed something**.
    *
    * The bump is what invalidates every cached aggregate for this library — not by
    * deleting anything, but by making the old keys unreachable. See `KvDomains.ts` for
    * why that matters against a 1,000-writes-per-day plan. The retry budget is cleared
    * because a finished scan has, by definition, stopped failing.
+   *
+   * ### Why the bump is conditional, and what that cost before it was
+   *
+   * Unconditional meant every finished scan invalidated the whole cache, on the strength of
+   * a scan that had changed nothing being indistinguishable from one that had. `start`'s cheap
+   * path hides that: with a stable root mtime, `complete()` is never reached without a walk, so
+   * the case does not arise — and the test asserting it did not arose was exercising a *double*
+   * that shared the assumption. On a real origin whose root collection stamps `getlastmodified`
+   * on every observation, the cheap path cannot match, so `startScan` — which every Subsonic
+   * client calls on login — walked the root, drained the frontier and bumped the version of
+   * every cached aggregate in the deployment. The free plan allots 1,000 KV writes a day.
+   *
+   * So `scan_state.changed` decides, and it is read **in the statement** rather than by the
+   * caller: `finished()` runs on whichever chunk emptied the frontier and holds no value for
+   * what the earlier ones wrote, so a caller-side check could only ever see its own chunk.
+   *
+   * @param changed Force the bump regardless of the stored flag. For the caller that changed
+   * the index outside a scan — the library-root-gone branch deletes the whole subtree, and a
+   * deleted index must not be served from cache. Absent the argument, a caller that *knows* it
+   * changed something has no way to say so.
+   *
+   * The decision is read in the statement rather than by the caller, so it cannot race a
+   * concurrent `saveProgress` between the read and the write. The `SET` order is **not**
+   * load-bearing and is not load-bearing by accident: measured against `node:sqlite`, every
+   * right-hand side in a `SET` list reads the row as it was *before* the statement, so
+   * `changed = 0` and the `index_version` expression both see this scan's answer regardless of
+   * which is written first. It is written last because that is the readable order — the bump
+   * decides, then the flag is cleared — and not because the other order would be wrong.
    */
-  public async complete(libraryId: string, scannedCount: number): Promise<number> {
+  public async complete(libraryId: string, scannedCount: number, changed: boolean = false): Promise<number> {
     await this.withRetry(
       async () =>
         await this.database
           .prepare(
-            "UPDATE scan_state SET status = 'idle', scanned_count = ?, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, updated_at = ?, index_version = index_version + 1 WHERE library_id = ?",
+            "UPDATE scan_state SET status = 'idle', scanned_count = ?, cursor_path = NULL, last_error = NULL, consecutive_failures = 0, updated_at = ?, changed = 0, index_version = index_version + CASE WHEN changed = 1 OR ? = 1 THEN 1 ELSE 0 END WHERE library_id = ?",
           )
-          .bind(scannedCount, nowSeconds(), libraryId)
+          .bind(scannedCount, nowSeconds(), changed ? 1 : 0, libraryId)
           .run(),
       'scanState.complete',
     );

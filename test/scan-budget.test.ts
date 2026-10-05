@@ -582,9 +582,16 @@ function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number,
               await client.readTail(facts.path, 4096, facts.size, 1000);
               index.meter.charge(1, 'd1');
               index.meter.charge(1, 'kv');
+              // One `applyMetadata` is one row, and the scan's day-row budget is metered
+              // from this return value — so a double that modelled the cost of a track but
+              // not its row write would leave the budget untested. Paired with the failure
+              // below, because "wrote a row" and "was asked to" are different answers.
+              return 1;
             } catch {
               // The scan swallows a failed enrichment and leaves the track for
-              // `getSong`; these cases are about cost, not decoding.
+              // `getSong`; these cases are about cost, not decoding. And it wrote
+              // nothing, so it contributes nothing to `rowsWritten`.
+              return 0;
             }
           },
         }),
