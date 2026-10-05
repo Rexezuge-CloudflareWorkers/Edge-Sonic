@@ -59,6 +59,7 @@
     "scanScanning": "Scanning.",
     "scanFailed": "Retrying after an error.",
     "scanStalled": "Stopped retrying. Fix the cause, then rescan.",
+    "scanPaused": "D1's daily write allowance is spent. Paused until {{time}} UTC; the scan resumes itself.",
     "scanTracks": "{{count}} tracks indexed",
     "stale": "Showing the last known state — the most recent update could not be read.",
     "scanPausedRequests": "Paused at the per-chunk request limit. This is the plan limit, not a fault — the scan continues on the next tick.",
