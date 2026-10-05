@@ -11,7 +11,6 @@ export default tseslint.config(
   {
     ignores: [
       'eslint.config.mjs',
-      'scripts/**',
       'worker-configuration.d.ts',
       // Wrangler's local state and build artifacts. Nothing here is source, and a stale
       // bundle sitting in this directory was being linted as if it were.
@@ -22,7 +21,12 @@ export default tseslint.config(
       'apps/api/src/generated/**',
       'coverage/**',
       'node_modules/**',
-      // `test/**` was ignored here, so ~200 KB of test code was never linted even
+      // `scripts/**` used to be ignored here, so ~500 KB of tooling was never linted
+      // once — and `functions/**` sat outside every tsconfig, so the Pages entrypoint
+      // was neither linted nor typechecked. Both are now covered: `scripts/` by
+      // `typecheck:scripts` and `functions/` by `typecheck:functions`.
+      //
+      // `test/**` was ignored too, so ~200 KB of test code was never linted even
       // once. `test` is now a workspace project, so it is type-checked and linted
       // like everything else. Generated `worker-configuration.d.ts` and the
       // build artifacts under `apps/web/dist` stay ignored above.

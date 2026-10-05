@@ -1,4 +1,4 @@
-import { copyFileSync, readFileSync, writeFileSync } from 'fs';
+import { copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { applyEdits, modify, parse } from 'jsonc-parser';
 import { CONFIG_PATH, TEMPLATE_PATH, type WranglerConfig } from './types';
 
@@ -72,7 +72,7 @@ export function parseVarsPatch(): Record<string, string> | undefined {
       throw new Error('WRANGLER_VARS_PATCH_JSON contains an empty variable name.');
     }
     if (typeof value !== 'string') {
-      throw new Error(`WRANGLER_VARS_PATCH_JSON value for ${key} must be a string.`);
+      throw new TypeError(`WRANGLER_VARS_PATCH_JSON value for ${key} must be a string.`);
     }
     patch[key] = value;
   }

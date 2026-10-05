@@ -1,10 +1,12 @@
-import { writeFileSync } from 'fs';
+import { writeFileSync } from 'node:fs';
 import { parse } from 'jsonc-parser';
+import { parseWranglerTableRows } from '../wrangler-table';
 import {
   CONFIG_PATH,
   DEFAULT_HEX_ID,
   DEFAULT_KV_NAMESPACE_NAMES,
   DEFAULT_SECRET_STORE_NAME,
+  DEFAULT_WORKER_NAME,
   DEFAULT_UUID,
   VECTORIZE_DIMENSIONS,
   type D1Database,
@@ -43,12 +45,12 @@ export function listKVNamespaces(): KVNamespace[] {
 }
 
 export function getKVNamespaceName(config: WranglerConfig, binding: string): string {
-  return DEFAULT_KV_NAMESPACE_NAMES[binding] ?? `${config.name ?? 'edge-sonic'}-${binding.toLowerCase()}`;
+  return DEFAULT_KV_NAMESPACE_NAMES[binding] ?? `${config.name ?? DEFAULT_WORKER_NAME}-${binding.toLowerCase()}`;
 }
 
 export function ensureKVNamespace(config: WranglerConfig, binding: string): string {
   const namespaceName = getKVNamespaceName(config, binding);
-  const candidateNames = new Set([namespaceName, `${config.name ?? 'edge-sonic'}-${binding}`, binding]);
+  const candidateNames = new Set([namespaceName, `${config.name ?? DEFAULT_WORKER_NAME}-${binding}`, binding]);
   let namespace = listKVNamespaces().find((candidate) => {
     const candidateName = candidate.title ?? candidate.name;
     return candidate.id && candidateName && candidateNames.has(candidateName);
@@ -86,21 +88,18 @@ export function ensureRequiredKvBindings(content: string, config: WranglerConfig
 
 export function parseSecretStoresTable(output: string): SecretStore[] {
   const stores: SecretStore[] = [];
-  for (const line of output.split('\n')) {
-    if (!line.includes('│')) {
-      continue;
-    }
-
-    const cells = line
-      .split('│')
-      .map((cell) => cell.trim())
-      .filter(Boolean);
-    if (cells.length < 2 || cells[0] === 'Name' || cells[0].includes('─')) {
-      continue;
-    }
-
-    const [name, id] = cells;
-    if (/^[a-f0-9]{32}$/i.test(id)) {
+  // Through the shared table parser rather than a second inline split: `wrangler`
+  // renders through `cli-table3`, whose cells are separated by U+2502 and are *not*
+  // space-aligned, so a parser written for aligned output silently matches nothing —
+  // which reads as "the store does not exist" and makes provisioning create a
+  // duplicate. `init-secrets.ts` needs the same parse, and two parsers would be free
+  // to disagree about it.
+  for (const row of parseWranglerTableRows(output)) {
+    const name = row[0];
+    const id = row[1];
+    // Store ids are 32 hex characters; a row without one is a header, a border, or an
+    // unrelated column, and is skipped rather than stored with an undefined id.
+    if (name && id && /^[a-f0-9]{32}$/i.test(id)) {
       stores.push({ name, id });
     }
   }
@@ -112,26 +111,28 @@ export function listSecretStores(): SecretStore[] {
   try {
     return parseJsonArray<SecretStore>(output, 'wrangler secrets-store store list --remote');
   } catch {
+    // The subcommand prints a table rather than JSON on some versions.
     return parseSecretStoresTable(output);
   }
 }
 
 export function ensureSecretStore(): string {
-  let stores = listSecretStores();
-  if (stores.length > 0) {
-    const store = stores.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? stores[0];
-    return store.id;
+  const stores = listSecretStores();
+  const existing = stores.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? stores[0];
+  if (existing) {
+    return existing.id;
   }
 
   console.log(`Creating Secrets Store: ${DEFAULT_SECRET_STORE_NAME}`);
   const output = runWrangler(['secrets-store', 'store', 'create', DEFAULT_SECRET_STORE_NAME, '--remote']);
-  const createdStoreId = output.match(/ID:\s*([a-f0-9]{32})/i)?.[1];
+  const createdStoreId = /ID:\s*([a-f0-9]{32})/i.exec(output)?.[1];
   if (createdStoreId) {
     return createdStoreId;
   }
 
-  stores = listSecretStores();
-  const store = stores.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? stores[0];
+  // The create output did not name the id, so read it back rather than guessing.
+  const refreshed = listSecretStores();
+  const store = refreshed.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? refreshed[0];
   if (!store?.id) {
     throw new Error(`Unable to discover Secrets Store ID for ${DEFAULT_SECRET_STORE_NAME}.`);
   }
