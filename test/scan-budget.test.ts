@@ -42,6 +42,7 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ScanService } from '@edge-sonic/backend-services/index';
+import type { ScanDeps } from '@edge-sonic/backend-services/index';
 import { WebDavClient } from '@edge-sonic/webdav';
 import {
   DEFAULT_SCAN_CHUNK_DEADLINE_MS,
@@ -56,6 +57,7 @@ import {
   WORKER_SUBSREQUEST_CEILING,
 } from '@edge-sonic/backend-runtime/config';
 import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
@@ -279,6 +281,13 @@ function createIndex(options: IndexOptions = {}) {
         // cost was therefore running against a world in which no row is ever derived: a
         // double disagreeing with production about the very column under repair, which is
         // the failure mode the rule about doubles names.
+        //
+        // Which is what `derived_version` below used to get *wrong in the other direction*.
+        // Adding it here was recorded as agreeing with `UPSERT_FILE_FACTS` — and the
+        // statement did not stamp it, so both doubles were corrected to match a statement
+        // that did not exist and the real defect stood. `test/schema.int.test.ts` runs the
+        // statement itself now; that is what makes this line an assertion rather than a
+        // second copy of the claim.
         upsertFileFacts: async (inputs: readonly { id: string; path: string; size: number; mtimeMs: number }[]) => {
           const { written } = writeBatch(inputs.length);
           const result = await charge(() => {
@@ -436,6 +445,16 @@ interface ChunkOverrides {
    * rather than about how many range reads an album happened to need.
    */
   enrich?: boolean;
+  /**
+   * The derivation backfill, when a case is about the backfill and the walk sharing one
+   * budget.
+   *
+   * `undefined` — the default — is a harness with **no** derivation store, which is what
+   * every case in this file had until the one below. So the file that measures a chunk's
+   * cost never ran the phase that runs first on every poll and shares that cost. `backfill`
+   * answers `0` without it, which is a correct degradation and an invisible one.
+   */
+  derivation?: NonNullable<ScanDeps['derivation']>;
 }
 
 interface Harness {
@@ -513,6 +532,7 @@ function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number,
         // `enrichMaxPerFolder` is required — so omitting it would make this a different
         // shape of service rather than a differently configured one.
         enrichMaxPerFolder: overrides.enrich === false ? 0 : 20,
+        ...(overrides.derivation !== undefined && { derivation: overrides.derivation }),
         ...(overrides.enrich !== false && {
           enrichSong: async (libraryRow, facts, onRequest) => {
             const client = new WebDavClient(libraryRow.base_url, libraryRow.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest);
@@ -844,6 +864,129 @@ describe('a slow origin', () => {
     // And the work the deadline cut short is picked up rather than abandoned.
     expect(harness.index.frontier().length).toBeGreaterThan(0);
     expect((await service.step(harness.row)).foldersVisited).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The backfill and the walk share one chunk budget.
+ *
+ * ### Why this needed its own instrument
+ *
+ * Because this file's harness had **no derivation store at all** until now, so `backfill`
+ * answered `0` and the phase that runs *first* on every poll — ahead of `decideStep`, ahead
+ * of `listFrontier` — was absent from every case here. A correct degradation, and an
+ * invisible one: the file that measures a chunk's cost measured a chunk with one fewer
+ * phase than production runs.
+ *
+ * ### The two failures it can have, and they are not the same
+ *
+ * **Refuse.** The page is one `UPDATE` per row with `requireComplete`, so a page the chunk
+ * cannot hold whole is refused — and the refusal is thrown from `backfill`, which is *before*
+ * `listFrontier`, so the walk never runs. That is the shipped defect: `scanning` for ever,
+ * with a `count` that never moves, on a library of ~100 tracks.
+ *
+ * **Starve.** Sized to fit, but sized without holding a folder back, the backfill spends the
+ * whole allowance and the loop's `canAfford(SUBSREQUESTS_PER_FOLDER_BASE)` refuses, so the
+ * chunk returns `scanning` having visited **zero** folders. Same symptom, no throw, and it is
+ * what a fix that only removed the throw would have shipped.
+ *
+ * One case asserts both halves, because either alone passes against the other.
+ */
+describe('the backfill and the walk share one chunk budget', () => {
+  /**
+   * A derivation double that charges and refuses, as `runWriteBatch` does.
+   *
+   * The same shape as the one in `test/scan-incremental.test.ts`, and for the same reason:
+   * a double that answers any write for free cannot observe a budget, so it reports a
+   * chunk that spends 200 statements as one that spends two.
+   */
+  function meteringDerivation(meter: SubrequestCounter, pending: number) {
+    const state = { remaining: pending };
+    return {
+      state,
+      store: {
+        listNeedingDerivation: async (_libraryId: string, limit: number) => {
+          meter.charge(1, 'd1');
+          return Array.from({ length: Math.min(limit, state.remaining) }, (_, index) => ({ id: `s${index}`, dir_path: 'Blur/Holocene' }));
+        },
+        applyDerivation: async (writes: readonly { id: string }[]) => {
+          if (!meter.canAfford(writes.length)) {
+            throw new SubrequestBudgetExhaustedError(
+              `Writing ${writes.length} rows for songs.applyDerivation needs ${writes.length} subrequests and ${meter.remaining} remain in this invocation.`,
+            );
+          }
+          meter.charge(writes.length, 'd1');
+          state.remaining -= writes.length;
+          return writes.length;
+        },
+      },
+    };
+  }
+
+  it('drains a backlog and still visits a folder, at the shipped defaults', async () => {
+    // The shipped numbers, not a generous ceiling: the defect lived *between* the page size
+    // and the chunk budget, so a case with a raised ceiling cannot see it.
+    const harness = createScanHarness(albumTree(4));
+    await harness.readyFullFrontier(4);
+    const { store, state } = meteringDerivation(harness.index.meter, 100);
+    const service = harness.makeService({
+      folders: SCAN_CHUNK_FOLDER_LIMIT,
+      maxRequests: SCAN_CHUNK_SUBSREQUEST_BUDGET,
+      derivation: store,
+      enrich: false,
+    });
+
+    const result = await service.step(harness.row);
+
+    // Not a failure. A refusal from the backfill arrives as `failed`, because `step`'s catch
+    // turns every fault into a recorded retry — which is exactly why the shipped defect read
+    // as a live scan rather than as an error.
+    expect(result.status).toBe('scanning');
+    expect(result.lastError).toBeNull();
+
+    // Half of the guarantee: the walk advanced. Zero folders here is the starvation failure
+    // — the same stuck scan with the throw removed — so this assertion is what distinguishes
+    // a page that fits from a page that merely fits.
+    expect(result.foldersVisited).toBeGreaterThanOrEqual(1);
+
+    // And the other half: the backlog shrank. Neither half implies the other, and a fix that
+    // only shrank the page would satisfy this and fail the assertion above.
+    expect(state.remaining).toBeLessThan(100);
+
+    // The ceiling that actually kills an invocation, which is **not** the chunk budget: a
+    // folder's cost is a base and not a total, so a chunk that reserved
+    // `SUBSREQUESTS_PER_FOLDER_BASE` for one may overshoot it, and the chunk budget is the
+    // inner limit checked at each reservation rather than a cap on the total. Asserting the
+    // chunk budget here would be asserting a number the design does not promise — the
+    // existing "keeps a rescan chunk inside the platform ceiling" case says the same thing
+    // for the same reason.
+    expect(harness.index.meter.spent).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
+    expect(result.subrequests.d1).toBeGreaterThan(0);
+  });
+
+  it('drains the whole backlog across chunks rather than one chunk', async () => {
+    // The pass is *bounded*, which is a different property from *converging*, and both are
+    // asserted across polls here because a single-chunk drain is what the old page size
+    // claimed and could not do.
+    const harness = createScanHarness(albumTree(4));
+    await harness.readyFullFrontier(4);
+    const { store, state } = meteringDerivation(harness.index.meter, 100);
+    const service = harness.makeService({
+      folders: SCAN_CHUNK_FOLDER_LIMIT,
+      maxRequests: SCAN_CHUNK_SUBSREQUEST_BUDGET,
+      derivation: store,
+      enrich: false,
+    });
+
+    let chunks = 0;
+    while (state.remaining > 0 && chunks < 20) {
+      const result = await service.step(harness.row);
+      expect(result.lastError).toBeNull();
+      chunks += 1;
+    }
+
+    expect(state.remaining).toBe(0);
+    expect(chunks).toBeGreaterThan(1);
   });
 });
 

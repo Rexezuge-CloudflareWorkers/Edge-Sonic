@@ -202,7 +202,10 @@ function createRequestScope(env: RequestScopeEnv): Container {
       // folder name for display. It reads `dir_path` off the row, so it spends no *WebDAV*
       // subrequests and it runs ahead of the walk on every poll — but its two D1 statements
       // are charged like every other, because the claim that D1 "cannot spend" the ceiling is
-      // what let a 200-row batch run unbudgeted at the top of every poll.
+      // what let a 200-row batch run unbudgeted at the top of every poll. Its page size is
+      // derived from the chunk budget for the same reason: the write refuses rather than
+      // truncating, so an oversized page is not a slow repair but a permanent failure that
+      // fires before `listFrontier` and stops the walk running at all. See `deriveBackfill`.
       derivation: {
         listNeedingDerivation: async (libraryId, limit) => (await scope.get(Tokens.SongDerivationDAO)()).listNeedingDerivation(libraryId, limit),
         applyDerivation: async (writes) => (await scope.get(Tokens.SongDerivationDAO)()).applyDerivation(writes),

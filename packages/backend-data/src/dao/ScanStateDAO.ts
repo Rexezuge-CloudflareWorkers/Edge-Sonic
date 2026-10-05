@@ -162,15 +162,39 @@ class ScanStateDAO extends BaseDAO {
    * failed. Carrying the count forward would mean one flaky folder eventually exhausts
    * the retry budget across an otherwise healthy scan — a scan that stalls having done
    * most of its work, which is the worst time to stop.
+   *
+   * ### `scannedCount` is a delta, and that is the whole point
+   *
+   * `scanned_count = scanned_count + ?`, not `= ?`. `saveProgress` is the only write to
+   * that column a chunk makes, and a chunk can be **overlapped**: `ScanWorker.stepOnce` is
+   * reachable from an operator `POST` at any moment, including while the alarm is live, and
+   * the two interleave at every `await`. Read-modify-write across that gap publishes
+   * whichever writer read the smaller value and landed last, so the counter ends up
+   * permanently **under-reported** and a scan finishes having walked less than it reports
+   * having walked.
+   *
+   * `is_scanned` is advanced by the same statements, so the work is genuinely done — it is
+   * the count that goes backwards, which is exactly the "a row says one thing while its
+   * children say another" shape. `test/scan-do.test.ts` is written against this.
+   *
+   * It was passing by an accident of interleaving rather than by being correct: the losing
+   * order needs two chunks to read the same `scanned_count`, and before the derivation
+   * backfill's read sat at the top of every chunk a sibling's write usually landed first,
+   * so one chunk visited nothing and the sum the assertion compared against was smaller.
+   * Adding one `await` to the prelude moved the interleaving and the latent race surfaced.
+   * A guard that passes only because of a timing coincidence is not a guard.
+   *
+   * Same reason `fail` increments its counter in the statement rather than reading it,
+   * writing it back and reading it again — which is why the two are now written alike.
    */
-  public async saveProgress(libraryId: string, scannedCount: number, cursorPath: string | null): Promise<void> {
+  public async saveProgress(libraryId: string, scannedDelta: number, cursorPath: string | null): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database
           .prepare(
-            "UPDATE scan_state SET status = 'scanning', scanned_count = ?, cursor_path = ?, consecutive_failures = 0, updated_at = ? WHERE library_id = ?",
+            "UPDATE scan_state SET status = 'scanning', scanned_count = scanned_count + ?, cursor_path = ?, consecutive_failures = 0, updated_at = ? WHERE library_id = ?",
           )
-          .bind(scannedCount, cursorPath, nowSeconds(), libraryId)
+          .bind(scannedDelta, cursorPath, nowSeconds(), libraryId)
           .run(),
       'scanState.saveProgress',
     );

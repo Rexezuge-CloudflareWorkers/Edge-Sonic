@@ -701,7 +701,51 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   suite agreed with itself and with neither production, so every test passed against a
   deployment whose aggregates stayed empty. The double now calls `deriveFromPath` and
   stamps `DERIVED_VERSION` — because a double is evidence only to the extent it models
-  the platform, and *which* platform matters as much as modelling it.
+  the platform, and *which* platform matters as much as modelling it. **It then happened
+  again, on the same column and in the same files, in the opposite direction**: both doubles
+  stamped `derived_version` and each one's comment asserted that `UPSERT_FILE_FACTS` did —
+  which it did not, because that statement omitted the column entirely. So the *fix* for
+  the first occurrence was applied to the doubles only, agreeing with a statement that did
+  not exist. See the next bullet for what that cost.
+- **A page a chunk cannot write whole is a permanent failure, not a slow one.** The
+  derived-grouping backfill reads a page of rows and writes them **one `UPDATE` per row**
+  with `requireComplete`, so it refuses rather than truncating — correctly, because the
+  selection is on `derived_version` and a partial page leaves rows re-selected for ever.
+  That makes the page size a bound the chunk budget *imposes*. It was
+  `DERIVE_MAX_ROWS_PER_CHUNK = 200`, against a chunk budget of `42` and a platform ceiling
+  of `50`: it fitted on **no chunk under any configuration**, so every library with more
+  than ~48 rows owing a derivation threw `SubrequestBudgetExhaustedError` out of
+  `derivePending` — which runs *before* `listFrontier` — so the walk never ran, `step`'s
+  catch recorded a scan failure, `isAdvancing('failed')` is `true`, and `getScanStatus`
+  answered `scanning: true` for ever. Reported as *"stuck on Scanning after 2 hours with
+  ~100 tracks"*. Three rules, and each is how the other two collapse:
+  - **Both the debt and its repayment have to be bounded.** `UPSERT_FILE_FACTS` stamped no
+    `derived_version`, so every row the walk wrote took the migration's `DEFAULT 0` and was
+    *immediately owed* — permanently, since the selection is `derived_version < 1`. Neither
+    half produces the wedge alone: with the stamp and a `200` page it is a slow repair; with
+    a `32` page and no stamp it is a scan that re-stamps every row it wrote, every poll.
+  - **The bound is derived, and it holds a folder back.**
+    `SCAN_DERIVE_MAX_ROWS_PER_CHUNK = SCAN_CHUNK_SUBSREQUEST_BUDGET −
+    SUBSREQUESTS_PER_CHUNK_OVERHEAD − SUBSREQUESTS_PER_FOLDER_BASE` (`42 − 4 − 6 = 32`).
+    `SUBSREQUESTS_PER_CHUNK_OVERHEAD` is the four statements a chunk spends belonging to no
+    folder (`ensure`, the backfill's read, `listFrontier`, `saveProgress`) and the count
+    matters: size the page without the two that *bracket* the walk and the loop's
+    `canAfford(SUBSREQUESTS_PER_FOLDER_BASE)` refuses, so the chunk returns `scanning`
+    having visited **zero** folders — the same stuck scan with the throw removed, and what a
+    fix that only deleted the throw would have shipped.
+  - **A guard that passes by an accident of interleaving is not a guard.** Making the page
+    fit cost one extra `await` at the top of every chunk, which moved the interleaving in
+    `test/scan-do.test.ts` and exposed a latent lost update: `saveProgress` wrote
+    `scanned_count = ?` where `fail` one method below increments in its own statement, so
+    two overlapped chunks published the smaller of the two. The work was done — the counter
+    went backwards. Now a delta, and the test that was written for it passes for the
+    reason it was written.
+
+  Asserted in `test/schema.int.test.ts` (the real statement over real SQLite: a scanned row
+  is owed nothing, on both the `INSERT` and the `ON CONFLICT` clause), `test/scan-budget.test.ts`
+  (a chunk that drains a 100-row backlog **and** still visits a folder — either assertion
+  alone passes against the other failure), and `test/subrequest-budget.test.ts` (the
+  relationship, not the numeral).
 - **A failure that says nothing about the file earns no stamp.** `enriched_at` means
   "already read", and `shouldEnrich` trusts it — so writing it over a `503`, a timeout,
   or a reset connection makes a transient fault permanent: the row reports duration `0`

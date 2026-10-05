@@ -42,12 +42,15 @@ import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
  * It reads `dir_path` off the row, so it spends no **WebDAV** subrequests — one indexed read
  * and one bounded write batch. It is charged against the subrequest ceiling like everything
  * else, though, because a D1 statement is a subrequest: the claim that this phase "cannot
- * spend" the ceiling is what let a 200-row backfill run unbudgeted at the top of every poll.
- * Once a library is current the read returns no rows and the batch is never issued, so a
- * poll on a healthy library still spends two statements. It never stamps `enriched_at`, because
- * `EnrichmentService` short-circuits on that: claiming a row was read would leave a track
- * with `duration: 0` never re-read on first play — a backfill that repairs the grouping by
- * breaking enrichment.
+ * spend" the ceiling is what let a 200-row batch run unbudgeted at the top of every poll —
+ * and then, once the ceiling was charged, made that same batch **unwritable**, because the
+ * write refuses rather than truncating and 200 statements fit in no chunk. The page is
+ * `SCAN_DERIVE_MAX_ROWS_PER_CHUNK` and the check is `derivePending`'s; see it. Once a
+ * library is current the read returns no rows and the batch is never issued, so a
+ * poll on a healthy library still spends two statements. It never stamps `enriched_at`,
+ * because `EnrichmentService` short-circuits on that: claiming a row was read would leave a
+ * track with `duration: 0` never re-read on first play — a backfill that repairs the grouping
+ * by breaking enrichment.
  */
 async function backfill(deps: ScanDeps, libraryId: string, budget: ScanBudget): Promise<number> {
   return deps.derivation ? await derivePending(deps.derivation, libraryId, budget) : 0;

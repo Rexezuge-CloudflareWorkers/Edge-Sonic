@@ -25,8 +25,9 @@
  * `test/scan-budget.test.ts`; this file is about the walk.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { DERIVE_MAX_ROWS_PER_CHUNK, MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-services/index';
-import { WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
+import { MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-services/index';
+import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
+import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
@@ -224,9 +225,15 @@ function createIndex() {
               // about which rows need re-reading — and that disagreement is invisible
               // until a reader changes.
               reader_version: 0,
-              // The upsert stamps the current derivation version, so a row the indexer
-              // just wrote is not also owed to the backfill. A double that left this at 0
-              // would make the backfill re-select every row the walk had just written.
+              // The real `UPSERT_FILE_FACTS` stamps `DERIVED_VERSION` on both the `INSERT`
+              // and the `ON CONFLICT` clause, so a row the indexer just wrote is not also
+              // owed to the backfill. It did not, once: the statement left the column at the
+              // migration's `DEFAULT 0`, and because the backfill's selection is
+              // `derived_version < 1`, *every row this double wrote* was permanently owed —
+              // which is the failure `test/schema.int.test.ts` now runs the real statement
+              // over real SQLite to catch. This double agreeing with production about the
+              // very column under repair is therefore not cosmetic: it is the only reason
+              // this file stayed green through it.
               derived_version: DERIVED_VERSION,
               created_at: 0,
               updated_at: 0,
@@ -854,8 +861,13 @@ describe('ScanService', () => {
      * Built the same way the `beforeEach` service is, rather than from `index.deps` alone:
      * `deps` is the three stores, and a service without `clientFor` and `timeoutMs` is not
      * a service — it typechecks-fails, and at runtime it fails on the first walk.
+     *
+     * `chunk` overrides the generous default, for the case that is about a chunk too small to
+     * hold a page. It has to be a *bound* rather than a pre-charged counter, because
+     * `ScanBudget` resets the counter on construction — a meter filled before `step` is a
+     * meter that measures nothing, which is a fixture that cannot fail.
      */
-    function withDerivation(store: NonNullable<ScanDeps['derivation']>): ScanService {
+    function withDerivation(store: NonNullable<ScanDeps['derivation']>, chunk: Partial<typeof UNBOUNDED_CHUNK> = {}): ScanService {
       return new ScanService({
         ...index.deps,
         derivation: store,
@@ -863,21 +875,48 @@ describe('ScanService', () => {
           new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
         timeoutMs: 1000,
         ...UNBOUNDED_CHUNK,
+        ...chunk,
         enrichMaxPerFolder: 0,
       });
     }
 
     /**
-    A `derivation` double over an explicit pending set, so the test controls both ends.
-    */
+     * A `derivation` double over an explicit pending set, so the test controls both ends.
+     *
+     * ### Why it charges, and why it refuses
+     *
+     * Because this is the double that could not see the shipped defect. It answered
+     * `applyDerivation` for any number of writes and spent nothing, while production issues
+     * **one statement per row** through `runWriteBatch(..., { requireComplete: true })` —
+     * which charges each one and *refuses* rather than truncating. So a backlog larger than
+     * a chunk could hold was, to this double, a backlog written in one poll for free; in
+     * production it was a `SubrequestBudgetExhaustedError` thrown before `listFrontier`, on
+     * every poll, with the walk never running at all.
+     *
+     * A double is evidence only to the extent it models the platform, and here the platform
+     * is `runWriteBatch`'s contract. So the refusal is modelled: the read charges one, the
+     * write charges one per row, and a page that does not fit raises the error the DAO
+     * raises rather than inventing a shape of its own.
+     */
     function derivationOver(pending: string[], dirPaths: Record<string, string> = {}) {
       const state = { remaining: [...pending], written: 0 };
+      const meter = index.deps.subrequests;
       return {
         state,
         store: {
-          listNeedingDerivation: async (_libraryId: string, limit: number) =>
-            state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '' })),
+          listNeedingDerivation: async (_libraryId: string, limit: number) => {
+            meter.charge(1, 'd1');
+            return state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '' }));
+          },
           applyDerivation: async (writes: readonly { id: string }[]) => {
+            // `requireComplete`, so this is a refusal and not a truncation. Nothing is
+            // written — which is what leaves the rows owed for the next poll.
+            if (!meter.canAfford(writes.length)) {
+              throw new SubrequestBudgetExhaustedError(
+                `Writing ${writes.length} rows for songs.applyDerivation needs ${writes.length} subrequests and ${meter.remaining} remain in this invocation.`,
+              );
+            }
+            meter.charge(writes.length, 'd1');
             state.remaining = state.remaining.filter((id) => writes.every((write) => write.id !== id));
             state.written += writes.length;
             return writes.length;
@@ -949,7 +988,7 @@ describe('ScanService', () => {
       const bounded = withDerivation(store);
 
       const first = await bounded.step(row);
-      expect(first.rowsWritten).toBeLessThanOrEqual(DERIVE_MAX_ROWS_PER_CHUNK);
+      expect(first.rowsWritten).toBeLessThanOrEqual(SCAN_DERIVE_MAX_ROWS_PER_CHUNK);
       expect(state.remaining).toHaveLength(5 - state.written);
 
       // Converges across polls, and the first poll does not do the whole job.
@@ -957,6 +996,75 @@ describe('ScanService', () => {
         await bounded.step(row);
       }
       expect(state.remaining).toEqual([]);
+    });
+
+    it('drains a backlog larger than one chunk, and reports the poll rather than refusing', async () => {
+      // ### The shipped symptom
+      //
+      // ~100 tracks, reported as "stuck on Scanning for two hours". The page was
+      // `DERIVE_MAX_ROWS_PER_CHUNK = 200` — one `UPDATE` per row, `requireComplete` — against
+      // a chunk budget of `42` and a platform ceiling of `50`. It fitted on no chunk under
+      // any configuration, so `applyDerivation` **refused**, the throw left `backfill`
+      // before `listFrontier`, and the walk never ran a folder. `step`'s catch recorded it
+      // as a scan failure; `isAdvancing('failed')` is `true`, so the alarm stayed armed and
+      // `getScanStatus` answered `scanning: true` for ever, with a `count` that never moved.
+      //
+      // The size is the report's own: a hundred tracks is past the point where the page
+      // stops fitting, and small enough that the page is the only bound in play.
+      const backlog = Array.from({ length: 100 }, (_, index) => `s${index}`);
+      const { store, state } = derivationOver(backlog, Object.fromEntries(backlog.map((id) => [id, 'Blur/Holocene'])));
+      const service = withDerivation(store);
+
+      let polls = 0;
+      let previous = backlog.length;
+      while (state.remaining.length > 0 && polls < 20) {
+        const result = await service.step(row);
+
+        // Not `failed`. A refusal here is the whole defect, and it presents as a scan that
+        // looks alive, so the status is the assertion that matters most.
+        expect(result.status).toBe('idle');
+        expect(result.lastError).toBeNull();
+
+        // And it made progress: strictly fewer rows owed than the poll before. A backlog
+        // that does not shrink is a permanent failure wearing a `scanning` label.
+        expect(state.remaining.length).toBeLessThan(previous);
+        previous = state.remaining.length;
+        polls += 1;
+      }
+
+      expect(state.remaining).toEqual([]);
+      // More than one poll, because a page that fits in a chunk is a *bound*, not a drain —
+      // and a single poll here is how the original bug was invisible.
+      expect(polls).toBeGreaterThan(1);
+      expect(state.written).toBe(backlog.length);
+      // The counter the chunk budgets against is the one the double charged, and it never
+      // crossed the platform's ceiling — which is the guard that used to be absent, so the
+      // refusal could not have been observed here at all.
+      expect(index.deps.subrequests.spent).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);
+    });
+
+    it('leaves the whole page for the next poll rather than half-writing it', async () => {
+      // The refusal is correct and must survive: the selection is on `derived_version`, so a
+      // partial page leaves rows stamped and rows not stamped, and the un-stamped ones are
+      // re-selected on every poll for ever. What changed is the *size* of the page and the
+      // check before it, never the all-or-nothing.
+      //
+      // Driven by a chunk **bound**, not a pre-charged meter: `ScanBudget` resets the counter
+      // on construction, so a meter filled before `step` would measure nothing — a fixture
+      // that cannot fail is not a fixture. Ten statements is less than `ensure` plus the
+      // read plus one page of 32, so the read answers and the write does not fit.
+      const backlog = Array.from({ length: 100 }, (_, index) => `s${index}`);
+      const { store, state } = derivationOver(backlog);
+      const service = withDerivation(store, { chunkMaxRequests: 10 });
+
+      const result = await service.step(row);
+
+      expect(result.status).toBe('idle');
+      // Not written, and not attempted — which is the distinction between a bounded pass and
+      // a chunk that throws on every poll. `derivePending` checks `canAfford` and returns 0.
+      expect(state.written).toBe(0);
+      expect(state.remaining).toHaveLength(backlog.length);
+      expect(result.rowsWritten).toBe(0);
     });
 
     it('a scan without a derivation store still walks, which is the right degradation', async () => {

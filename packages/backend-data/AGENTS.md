@@ -190,6 +190,23 @@ a silent data loss rather than a filter.
   - **It never stamps `enriched_at`.** `EnrichmentService` short-circuits on it, so
     claiming a row was read would mean a track with `duration: 0` is never range-read on
     first play — a backfill that repairs the grouping by breaking enrichment.
+  - **The index write stamps `derived_version` too, and that is load-bearing.** It stamped
+    no version, so every row `upsertFileFacts` produced took the migration's `DEFAULT 0`
+    and was *immediately owed* to the backfill — permanently, since the selection is
+    `derived_version < 1`. The backfill's page is one `UPDATE` per row with
+    `requireComplete`, so on any library past ~48 owing rows it **refused**, and the refusal
+    is thrown from `derivePending`, which runs before `listFrontier`: the walk never ran,
+    `step`'s catch recorded a scan failure, and `getScanStatus` answered `scanning: true` for
+    ever. Stamped unconditionally on both the `INSERT` and the `ON CONFLICT` clause, like
+    `APPLY_DERIVATION` stamps in all three of its `CASE` branches — a row holding a real
+    enrichment tag is equally not owed a derivation, so the two statements cannot disagree
+    about which rows the backfill owns. The value is interpolated from `DERIVED_VERSION`,
+    because a number typed beside a query is wrong by the time somebody bumps the version.
+    Asserted over real SQLite in `test/schema.int.test.ts` against `upsertFileFacts` itself:
+    two doubles in `test/scan-incremental.test.ts` and `test/scan-budget.test.ts` had been
+    made to stamp it under comments asserting this statement did, so the suite agreed with
+    itself and with neither production — which is this file's own recorded rule about
+    doubles, arriving on the same column for the second time.
   - `idx_songs_derived (library_id, derived_version)` is load-bearing: the query runs on
     **every** poll, and a table scan there would cost a full `songs` pass on a fully
     repaired library. Asserted with `EXPLAIN QUERY PLAN`.

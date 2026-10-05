@@ -185,7 +185,13 @@ class ScanService {
         scanned += 1;
       }
 
-      await this.deps.scanState.saveProgress(library.id, scanned, null);
+      // The **delta**, not the running total: `saveProgress` increments in its own statement
+      // because a chunk can be overlapped — an operator `POST` while the alarm is live — and
+      // a read-modify-write of `scanned_count` across that gap publishes the smaller of the
+      // two. `scanned` above is still the absolute count the result reports; only the write
+      // is a delta. The two are deliberately not the same value, and conflating them is the
+      // lost update.
+      await this.deps.scanState.saveProgress(library.id, foldersVisited, null);
       return {
         status: 'scanning',
         scanned,
