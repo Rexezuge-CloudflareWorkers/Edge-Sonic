@@ -16,6 +16,26 @@
  * an error no `catch` in the scan can see — and the scan only ever "finished" because each
  * dead invocation left a little progress behind.
  *
+ * ### The fix was right and its stated reason was not, and that is now measured
+ *
+ * Taking the pessimistic reading cost this product ~21× the D1 headroom it actually had.
+ * Measured on a Free account on 2026-10-05: **external `fetch` is 50 and D1 statements are
+ * 1,000**, in *separate* budgets — 1,000 D1 statements and 50 outbound requests in one
+ * invocation survive together, and a DO reached by RPC runs on a fresh budget the caller's
+ * ceiling cannot see.
+ *
+ * Nothing here is broken by that, and the suite below is deliberately unchanged in what it
+ * asserts: a too-small ceiling costs throughput, and a too-large one costs invocations. What
+ * changes is the record. The two claims that were wrong are stated where they were made:
+ *
+ * - `subrequests.ts` claimed the platform *forced* the pessimistic reading. It did not — this is
+ *   conservatism now, and saying otherwise would stop the next reader from ever finding out.
+ * - `SubrequestMeter` claims an overrun "does not raise a catchable error". True of the external
+ *   ceiling; **false of D1**, which throws and is caught by an ordinary `try`. A D1 overrun is
+ *   therefore diagnosable where an external one is not.
+ *
+ * Full account, method and limits: `docs/issues/subrequest-budgets-are-two-not-one.md`.
+ *
  * ### Why the assertions are per charge point, and why there is a negative for each
  *
  * A total is the easiest thing in the world to assert and the least informative: every charge
@@ -66,6 +86,26 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const MIGRATIONS = fileURLToPath(new URL('../migrations', import.meta.url));
+
+/**
+ * D1 statements one invocation may issue on the Free plan, as **measured** on 2026-10-05.
+ *
+ * Not a configuration value and deliberately not in `subrequests.ts`: the product does not spend
+ * from this budget, it spends from the stricter external one. It is here so the test that
+ * documents the conservatism can name the headroom being given up, rather than asserting a
+ * relationship against a figure nobody wrote down.
+ *
+ * Measured: 1,000 statements survive, 1,001 throws
+ * `Too many API requests by single Worker invocation`. 1,000 statements **plus** 50 outbound
+ * requests in one invocation survive together, which is what establishes the two budgets as
+ * separate rather than one pool with a different error message. Full account:
+ * `docs/issues/subrequest-budgets-are-two-not-one.md`.
+ *
+ * **KV, Secrets Store reads and DO storage were not measured.** They are assumed to share this
+ * pool on the strength of the platform's own wording ("1,000 subrequests to Cloudflare
+ * services"), which is an inference rather than a result.
+ */
+const D1_MEASURED_CEILING = 1000;
 
 /**
  * The real schema, over the real engine, with one library row so the foreign keys hold.
@@ -152,6 +192,47 @@ describe('the counter', () => {
 describe('every bound is derived from the one platform number', () => {
   it('states the platform ceiling as the platform states it', () => {
     expect(WORKER_SUBSREQUEST_CEILING).toBe(50);
+  });
+
+  /**
+   * The ceiling is the **external** one, and the product charges internal-service calls against
+   * it anyway. That is a deliberate choice, not a statement about the platform, and the two were
+   * routinely confused.
+   *
+   * Measured against a Free account on 2026-10-05 — see
+   * `docs/issues/subrequest-budgets-are-two-not-one.md`:
+   *
+   * | Budget | Ceiling | Overrun |
+   * | --- | --- | --- |
+   * | external `fetch` | 50 | kills the invocation, uncatchable |
+   * | D1 statements | 1,000 | **throws**, catchable |
+   *
+   * So `SCAN_CHUNK_MAX_REQUESTS` is ~21× more conservative than the D1 statements it bounds.
+   * Nothing is broken by that — a too-small ceiling costs throughput and a too-large one costs
+   * availability, so erring this way is right. What is wrong is the *reason* it was originally
+   * given, which claimed the platform forced it.
+   *
+   * This assertion pins the *safety property* rather than the size of the headroom being given
+   * up: the budget must stay under the external ceiling whichever number it is, because that
+   * ceiling is the one that **kills** the invocation. Pinning the ratio instead would turn this
+   * test red the day somebody legitimately raised the budget — which is how a guard gets
+   * deleted rather than read.
+   */
+  it('spends D1 and KV from the external ceiling, which is stricter than the platform requires', () => {
+    // 50 is the external figure the platform states.
+    expect(WORKER_SUBSREQUEST_CEILING).toBe(50);
+
+    // The property that makes bounding *both* resources by the external ceiling safe: the chunk
+    // budget leaves room for the invocation's own external calls. Were this `>=`, a chunk could
+    // spend the whole external budget and the invocation hosting it would be terminated — the
+    // exact failure this ceiling was adopted to prevent, and one that raising the budget toward
+    // D1's measured 1,000 would reintroduce.
+    expect(SCAN_CHUNK_SUBSREQUEST_BUDGET).toBeLessThan(WORKER_SUBSREQUEST_CEILING);
+
+    // The headroom being given up is *recorded* rather than asserted, so it is visible to whoever
+    // considers raising the budget: 42 against a measured 1,000 is ~4%. Which is why no ratio is
+    // pinned here.
+    expect(SCAN_CHUNK_SUBSREQUEST_BUDGET).toBeLessThan(D1_MEASURED_CEILING);
   });
 
   it('leaves room in a chunk for the invocation that hosts it', () => {
