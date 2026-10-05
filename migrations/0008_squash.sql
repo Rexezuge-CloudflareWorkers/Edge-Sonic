@@ -1,30 +1,108 @@
--- Migration 0001: Edge-Sonic baseline.
+-- Migration 0008: squash. The baseline, holding the combined schema of every
+-- migration before it.
 --
--- Edge-Sonic is a Subsonic API server backed by WebDAV. This schema holds two
--- unrelated kinds of state, and keeping them apart is the whole design:
+-- Absorbs, in full:
 --
---   1. THE INDEX — `nodes` + `songs`. A materialized view of a WebDAV library
---      that makes `getArtists`, `getAlbumList2` and `search3` answerable in one
---      query. WebDAV is authoritative for *what exists*; these tables are
---      authoritative for *what we know about it*.
---   2. USER STATE — `users`, `playlists`, `stars`, `ratings`, `bookmarks`,
---      `play_queue`, `play_counts`, `now_playing`. A filesystem cannot hold
---      any of it, and a client keeps these across devices.
+--   0001_edge_sonic_init.sql     the schema as it shipped
+--   0001_router_init.sql         dead code from the project this repository was
+--                                scaffolded from; see "What is NOT here"
+--   0002_songs_reader_version.sql
+--   0004_scan_retry_budget.sql
+--   0005_songs_derived_version.sql
+--   0006_songs_grouping_source.sql
+--   0007_scan_state_changed.sql
+--   0003_drop_router_tables.sql  the drops themselves; see "What is NOT here"
 --
--- WHY D1 IS THE PRIMARY STORE AND KV IS ONLY A CACHE
--- `nodes` and `songs` live here, not in KV, so that the server answers
--- identically when the `CACHE` binding is absent or throwing. Every KV value in
--- this system is reconstructible from these tables plus a `PROPFIND`, which is
--- what makes that guarantee hold. See AGENTS.md, invariant 1.
+-- WHY SQUASH
 --
--- WHY ONE MIGRATION
--- D1 cannot disable foreign keys mid-migration: every statement runs in an
--- implicit transaction, so `PRAGMA foreign_keys = OFF` is unavailable. A
--- `DROP TABLE <parent>` therefore performs an implicit `DELETE FROM parent` and
--- fires every `ON DELETE CASCADE` beneath it — destroying all child rows. Only
--- a CHILD table may ever be rebuilt. The schema is therefore correct on the
--- first migration and later changes must be additive.
-
+-- A migration that has been applied must never change. D1 records applied
+-- migrations by FILENAME in `d1_migrations`, so an edit to a shipped file is
+-- skipped on every later `wrangler d1 migrations apply` — silently, with no
+-- warning. The code starts naming a column the database does not have and every
+-- statement that names it fails at runtime. `migrations/migrations.lock.json`
+-- exists to make that a CI failure, and a lock cannot stop the *number* of
+-- migrations growing.
+--
+-- So the first eight files are collapsed into one baseline, which is the form a
+-- fresh database and every future development branch actually build from. The
+-- lock records `0008_squash.sql` as its `baseline`; from here a schema change is
+-- one new numbered file, and the immutable set is one entry.
+--
+-- WHAT THIS COSTS, STATED PLAINLY
+--
+-- D1's `d1_migrations` on an existing database still lists the eight absorbed
+-- filenames, and this repository no longer describes what they contained. That
+-- history is not reproducible from here. D1 itself keeps it, which is why the
+-- baseline is safe to adopt, and why adopting one is a deliberate act rather
+-- than a formatting change.
+--
+-- WHY EVERY STATEMENT IS IDEMPOTENT — read this before editing
+--
+-- This file does NOT run only on a fresh database. `d1_migrations` records the
+-- absorbed filenames, so those files are skipped here and THIS one is
+-- unapplied: it executes against production databases that already have every
+-- table, every column and every index below.
+--
+-- Hence `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`
+-- throughout, and hence one rule that governs the whole file:
+--
+--   **This file must contain only statements that are no-ops against a database
+--   that already has the full schema.**
+--
+-- Concretely, the four `ALTER TABLE ... ADD COLUMN` statements that the
+-- absorbed migrations used are NOT reproduced. SQLite has no
+-- `ADD COLUMN IF NOT EXISTS`, so re-running one fails with "duplicate column
+-- name" — on every existing database, which is the only place this file runs
+-- after its first application. Those columns are folded into their table's
+-- `CREATE TABLE` instead, in the order the ALTERs appended them, so the
+-- resulting `sqlite_schema` is identical to what the absorbed sequence
+-- produced.
+--
+-- `test/schema.int.test.ts` asserts both properties against real SQLite: that
+-- this file alone yields the same schema as the sequence it replaces, and that
+-- applying it AFTER that sequence leaves the schema unchanged.
+--
+-- WHAT IS NOT HERE, AND WHY
+--
+-- `namespaces` and `router_backends` are not created, so nothing needs dropping.
+-- They came from `0001_router_init.sql`, inherited from Durable-DAV-Router:
+-- nothing in this codebase reads either table, and `0003` dropped both. Its
+-- `users` declaration was always a no-op — both files say
+-- `CREATE TABLE IF NOT EXISTS` and `0001_edge_sonic_init.sql` sorts first, so
+-- Edge-Sonic's own `users` won.
+--
+-- That file also carried a **broken foreign key**:
+--
+--     owner_email TEXT, FOREIGN KEY (owner_email) REFERENCES users(email)
+--
+-- while `users` is keyed on `id` and its `email` is nullable and non-unique.
+-- SQLite resolves a foreign key to a *unique* index on the parent column, so
+-- the reference did not resolve at all: `PRAGMA foreign_key_check` failed with
+-- `foreign key mismatch`. D1 enforces foreign keys, so that was a landmine whose
+-- error named a table no operator knew existed. Deleting the file removes the
+-- landmine permanently rather than leaving a `DROP` to keep carrying.
+--
+-- Two `0001_` files sharing a prefix was itself the defect that forced this
+-- squash: D1 orders migrations by the REST of the filename, so which of the two
+-- landed on a given database depended on a lexicographic tiebreak nobody
+-- intended, and a database that had run one could never run the other.
+-- `scripts/migrations/lock-check.ts` fails on exactly that.
+--
+-- OMITTED DATA MIGRATION
+--
+-- `0006` carried an `UPDATE songs SET grouping_source = 'derived' WHERE artist
+-- LIKE '% (derived)' OR album LIKE '% (derived)' OR album_artist LIKE '%
+-- (derived)'`. It is absent here, and that omission is checked rather than
+-- assumed:
+--
+--   - On a fresh database `songs` is empty, so it would match nothing.
+--   - On an existing database `0006` has already run and stamped every row it
+--     matched, and every row written since carries `grouping_source = 'derived'`
+--     directly, so it would again match nothing.
+--
+-- `test/schema.int.test.ts` seeds rows bearing the old marker and asserts that
+-- running the absorbed sequence leaves no row carrying it.
+--
 -- ---------------------------------------------------------------------------
 -- Identity
 -- ---------------------------------------------------------------------------
@@ -44,7 +122,8 @@ CREATE TABLE IF NOT EXISTS users (
   -- AES-256-GCM under SUBSONIC_USER_ENCRYPTION_KEY_SECRET. Reversible *by
   -- necessity*, not by choice: navidrome#202 documents that token auth cannot
   -- work otherwise. This is obfuscation against a D1 dump, not protection
-  -- against a full worker compromise.
+  -- against a full worker compromise — which is precisely why the daily backup
+  -- refuses to leave D1 unencrypted.
   password_ciphertext TEXT NOT NULL,
   password_iv TEXT NOT NULL,
   -- Ships at 1 and is read by nothing. It exists so rotating a leaked key is a
@@ -156,6 +235,10 @@ CREATE INDEX IF NOT EXISTS idx_nodes_frontier ON nodes(library_id, is_scanned, d
 -- REVERSIBLE (`s:base64url(libraryId + "\n" + path)`), so resolving an id to a
 -- path is a base64 decode rather than a query. This table is what makes search,
 -- album lists and genre queries answerable.
+--
+-- The four columns after `updated_at` were each `ALTER TABLE ... ADD COLUMN` in
+-- an absorbed migration. They are folded in here, in the order the ALTERs
+-- appended them, so the schema is identical to the sequence this file replaces.
 CREATE TABLE IF NOT EXISTS songs (
   id TEXT PRIMARY KEY,
   library_id TEXT NOT NULL,
@@ -200,6 +283,26 @@ CREATE TABLE IF NOT EXISTS songs (
   enriched_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  -- Which version of the *tag reader* produced `enriched_at`. Staleness is a
+  -- function of two things and only one used to be recorded: the file's bytes
+  -- (via `mtime_ms`) and the reader that extracted from them. A corrected reader
+  -- otherwise leaves every row it already wrote looking current, because the
+  -- file genuinely has not moved. It shipped — a fixed Ogg reader left a live
+  -- library reporting a 240.61s track as 3s at 15329 kbps with no tags, and no
+  -- rescan re-read it.
+  reader_version INTEGER NOT NULL DEFAULT 0,
+  -- Which convention version last *examined* this row's path-derived grouping.
+  -- A version, not "is the column NULL": once a derivation has written a value
+  -- the columns are no longer NULL, so a later and better `pathConvention` could
+  -- never reach the rows an earlier one wrote.
+  derived_version INTEGER NOT NULL DEFAULT 0,
+  -- `'derived'` means all three of artist/album/album_artist came from
+  -- `dir_path`; anything else is NULL. A column rather than a marker suffix in
+  -- the value, because the marker was configuration and a `LIKE` is not a
+  -- string — see `migrations/0006` history, absorbed here. Deliberately
+  -- unindexed: it is read only inside a `WHERE id = ?` and is never a selection
+  -- predicate.
+  grouping_source TEXT,
   FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
 );
 
@@ -224,6 +327,13 @@ CREATE INDEX IF NOT EXISTS idx_songs_dir ON songs(library_id, dir_path, track);
 -- scan. The day a query plan says otherwise, this is the note to revisit.
 CREATE INDEX IF NOT EXISTS idx_songs_title_ci ON songs(library_id, title_ci);
 CREATE INDEX IF NOT EXISTS idx_songs_album_title_ci ON songs(library_id, album_ci);
+-- Serves the derived-grouping backfill's own selection, `derived_version < ?`,
+-- scoped to one library. The existing `(library_id, album_ci)` index cannot: a
+-- drained library has every row at the current version, so the predicate is a
+-- range scan on a column nothing else filters by. This makes it a seek that
+-- returns nothing immediately once the library is caught up, which is what keeps
+-- a poll on a fully-derived library costing one indexed read and zero rows.
+CREATE INDEX IF NOT EXISTS idx_songs_derived ON songs(library_id, derived_version);
 
 -- ---------------------------------------------------------------------------
 -- Scan state
@@ -247,6 +357,17 @@ CREATE TABLE IF NOT EXISTS scan_state (
   last_error TEXT,
   started_at INTEGER,
   updated_at INTEGER NOT NULL,
+  -- Bounded retry budget, and it lives in D1 because it has to survive the
+  -- isolate: a module-level counter resets whenever a different isolate serves
+  -- the next poll. Bounded rather than unlimited because retrying a *permanent*
+  -- fault is a loop that spends the operator's subrequest budget to reach the
+  -- same conclusion — `markScanning` resets it and is the escape hatch.
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  -- Did THIS scan change the index. `rows_written > 0` is the wrong signal: most
+  -- rows a rescan writes are frontier bookkeeping, and invalidating a cache for
+  -- them is a false answer. Set from what a cached aggregate depends on, never
+  -- from the folder's own frontier row.
+  changed INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (library_id) REFERENCES libraries(id) ON DELETE CASCADE
 );
 
@@ -387,5 +508,6 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- Default settings, written by the migration so a fresh database is usable
--- without a seeding step.
+-- without a seeding step. `OR IGNORE` rather than `INSERT`, so this is a no-op
+-- against a database that already seeded it.
 INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('schema_initialized', '1', 0);

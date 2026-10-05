@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "baseline": "0008_squash.sql",
+  "migrations": {
+    "0008_squash.sql": "sha256:d741c27b5ae3295db5df5b73b5da5a910a1809101467c37ae2155dd456eddee2"
+  }
+}

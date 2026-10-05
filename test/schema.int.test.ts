@@ -39,7 +39,14 @@ import { albumIdOf } from '@edge-sonic/subsonic';
 // restated: a copy here would pass against itself, and the assertion it exists for is that
 // the row fetch's SQL order and this order agree.
 import { compareAlbumTracks } from '../apps/api/src/rest/albumIdentity';
-import { migrationDrift, migrationFiles, migrationSql, readLock, sha256 } from './helpers/migrations';
+import { migrationDigests, migrationFiles, migrationFindingsOfKind, migrationSql } from './helpers/migrations';
+import { checkMigrations } from '../scripts/migrations/lock-check';
+
+/**
+ * The squashed baseline. Everything at or before it is exempt from the lock's
+ * `edited` and `orphan` checks; everything after it is immutable.
+ */
+const BASELINE = '0008_squash.sql';
 
 /**
  * The order `getAlbumList2?type=alphabeticalByName` asks for.
@@ -83,6 +90,130 @@ beforeEach(() => {
   // Every migration, in order — see `helpers/migrations.ts`. Naming one file here
   // would make a new migration and an edit to an old one indistinguishable.
   handle.raw.exec(migrationSql());
+});
+
+/**
+ * The squash's contract, in the properties that remain checkable from here.
+ *
+ * `0008_squash.sql` replaces eight migrations, and it does NOT run only on a fresh
+ * database: `d1_migrations` records the eight absorbed filenames, so they are skipped
+ * and this file is unapplied — it runs against production databases that already have
+ * every table, column and index. So it has to be idempotent, and the failure mode is
+ * invisible in the text: the absorbed migrations used `ALTER TABLE … ADD COLUMN`, and
+ * SQLite has no `ADD COLUMN IF NOT EXISTS`, so a squash written as a concatenation fails
+ * on exactly the databases it exists to serve, with "duplicate column name", at deploy
+ * time.
+ *
+ * Equivalence to the sequence it replaced is the other half, and it is **not** asserted
+ * here: those eight files are absorbed and deleted, so the comparison has nothing left to
+ * compare against, and a checked-in copy of them would be a fixture nothing keeps honest.
+ * It was established when the squash was written — same tables, same 138 columns in name,
+ * type, nullability, default and primary key, same 17 indexes with the same columns and
+ * uniqueness — and the durable half of it survives as the assertions below, plus the
+ * column inventory the DAO block checks further down. What this block guards is that the
+ * squash stays idempotent, which is the property that makes the absorption safe at all.
+ */
+describe('the squashed baseline', () => {
+  /**
+   * The whole schema as a comparable value: every table, every column with its
+   * type/constraint/default, and every index with its columns and uniqueness.
+   *
+   * Deliberately NOT `sqlite_schema.sql`. That column stores the original CREATE TABLE
+   * verbatim *including its comments*, so a comparison pinned to it would assert that
+   * nobody may ever improve a comment in a squashed file — the one edit a squashed file
+   * most needs to allow. Comments are not schema.
+   *
+   * Ordinal column position is excluded for the same class of reason: SQLite resolves
+   * columns by name, nothing here addresses one positionally, and the folded ALTERs
+   * happen to preserve position anyway.
+   */
+  function structureOf(db: SqliteQueryable): string {
+    const tables = (
+      db.raw.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name);
+
+    const columns: string[] = [];
+    for (const table of tables) {
+      for (const column of db.raw.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all() as Array<Record<string, unknown>>) {
+        columns.push(
+          `${table}|${String(column['name'])}:${String(column['type'])}:${String(column['notnull'])}:${String(column['dflt_value'])}:${String(column['pk'])}`,
+        );
+      }
+    }
+
+    const indexes: Record<string, unknown> = {};
+    for (const row of db.raw
+      .prepare("SELECT name, tbl_name FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+      .all() as Array<{ name: string; tbl_name: string }>) {
+      const listed = db.raw.prepare(`PRAGMA index_list(${JSON.stringify(row.tbl_name)})`).all() as Array<{ name: string; unique: number }>;
+      indexes[row.name] = {
+        table: row.tbl_name,
+        unique: listed.find((entry) => entry.name === row.name)?.unique === 1,
+        columns: (db.raw.prepare(`PRAGMA index_info(${JSON.stringify(row.name)})`).all() as Array<{ name: string }>).map((c) => c.name),
+      };
+    }
+
+    return JSON.stringify({ tables, columns: columns.toSorted(), indexes }, null, 2);
+  }
+
+  it('is one file, and it is the last one, so a future migration cannot sort before it', () => {
+    expect(migrationFiles()).toEqual([BASELINE]);
+  });
+
+  it('leaves the schema unchanged when applied to a database that already has it', () => {
+    // The property that makes the squash safe on an existing deployment. This is the
+    // only path it takes after its first application, so it is the one that matters.
+    const before = structureOf(handle);
+
+    expect(() => handle.raw.exec(migrationSql())).not.toThrow();
+
+    expect(structureOf(handle)).toBe(before);
+  });
+
+  it('touches no rows, so re-running it cannot lose data', () => {
+    handle.raw.exec(
+      `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, created_at, updated_at)
+       VALUES ('u1', 'alice', 'alice', 'c', 'iv', 0, 0);
+       INSERT INTO libraries (id, slug, slug_ci, base_url, root_path, dav_username, password_ciphertext, password_iv, created_at, updated_at)
+       VALUES ('l1', 'main', 'main', 'https://dav.example.com', '', 'dav', 'c', 'iv', 0, 0);`,
+    );
+    const usersBefore = handle.raw.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number };
+    const librariesBefore = handle.raw.prepare('SELECT COUNT(*) AS n FROM libraries').get() as { n: number };
+
+    handle.raw.exec(migrationSql());
+
+    expect(handle.raw.prepare('SELECT COUNT(*) AS n FROM users').get()).toEqual(usersBefore);
+    expect(handle.raw.prepare('SELECT COUNT(*) AS n FROM libraries').get()).toEqual(librariesBefore);
+  });
+
+  it('contains no statement that cannot be re-run against a full schema', () => {
+    // The execution test above is the measurement — it does what a deploy does. These
+    // two are the named early warnings, because an unguarded statement is invisible in
+    // a passing suite until a real database runs it:
+    //
+    //  - `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS` form at all, so it fails
+    //    with "duplicate column name" on every already-migrated database. This is
+    //    precisely how the absorbed migrations added their columns, which is why the
+    //    squash folds them into the `CREATE TABLE`s instead.
+    //  - `DROP TABLE` would be a no-op rather than an error, which is exactly why the
+    //    absorbed `namespaces`/`router_backends` drops are absent instead: the tables
+    //    are never created, so there is nothing to drop.
+    //
+    // Matched against the file with its `--` line comments stripped, because this file
+    // *documents* both of the statements it forbids — it has to, to explain why they
+    // are gone — and a regex over the raw text matches its own explanation. Safe here
+    // because the file uses only `--` line comments and holds no string literal
+    // containing `--`; a block comment or one would need a real tokenizer instead.
+    const statements = migrationSql()
+      .split('\n')
+      .map((line) => line.replace(/--.*$/, ''))
+      .join('\n');
+
+    expect(statements, 'an ALTER TABLE cannot be guarded — fold the column into its CREATE TABLE').not.toMatch(/ALTER\s+TABLE/i);
+    expect(statements, 'a DROP TABLE has nothing to drop — the baseline never creates these').not.toMatch(/DROP\s+TABLE/i);
+  });
 });
 
 /** Encode a Subsonic id exactly as the product does, so a test cannot pass on a
@@ -198,15 +329,19 @@ describe('schema', () => {
   });
 
   it('leaves no dead table behind, and no foreign key that does not resolve', () => {
-    // The full-directory read (0003) is what makes the two visible. Both were invisible
-    // while this suite applied one hardcoded file, so neither could ever be reported.
+    // The reference project's `router_backends`/`namespaces`, inherited from
+    // Durable-DAV-Router via `0001_router_init.sql`. Dead code here, and
+    // `router_backends` referenced `users(email)` — a nullable, non-unique column —
+    // so `PRAGMA foreign_key_check` failed outright with a foreign key mismatch. D1
+    // enforces foreign keys, so that was a landmine in the live schema, not a
+    // cosmetic leftover.
+    //
+    // Both tables are now *never created*: `0008_squash.sql` is the baseline and
+    // omits them, so the drops that used to clean them up are gone too. Asserting
+    // their absence still matters — it is what would catch a future squash or a
+    // hand-written migration reintroducing them.
     const tables = (handle.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map((row) => row.name);
 
-    // The reference project's `router_backends`/`namespaces`, inherited from
-    // Durable-DAV-Router. Dead code here, and `router_backends` referenced
-    // `users(email)` — a nullable, non-unique column — so `PRAGMA foreign_key_check`
-    // failed outright with a foreign key mismatch. D1 enforces foreign keys, so that
-    // is a landmine in the live schema, not a cosmetic leftover.
     expect(tables).not.toContain('router_backends');
     expect(tables).not.toContain('namespaces');
 
@@ -214,29 +349,39 @@ describe('schema', () => {
     expect(handle.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
-  it('builds the SAME `users` table production has, from the same migration set', () => {
-    // `migrations/0001_router_init.sql` is inherited from the reference project and
-    // also declares `users` — with an incompatible shape (`email TEXT PRIMARY KEY`,
-    // no `username_ci`, no credential columns). Both files use
-    // `CREATE TABLE IF NOT EXISTS`, so whichever runs first wins, silently.
+  it('builds the SAME `users` table production has, and cannot be raced into building another', () => {
+    // `migrations/0001_router_init.sql` was inherited from the reference project and
+    // also declared `users` — with an incompatible shape (`email TEXT PRIMARY KEY`,
+    // no `username_ci`, no credential columns). Both files used
+    // `CREATE TABLE IF NOT EXISTS`, so whichever ran first won, silently.
     //
     // This suite used to `exec` only `0001_edge_sonic_init.sql`, so it asserted a
     // table list that no real database has: it never saw the router's tables, and it
-    // never saw the collision. Applying the whole directory in Wrangler's order
-    // exposes both — which is the argument for reading the directory.
+    // never saw the collision. Reading the directory exposed both.
     //
-    // Production is correct today, and only because of the filename sort:
-    // `0001_edge_sonic_init.sql` < `0001_router_init.sql`, so Edge-Sonic's `users`
-    // is created first and the router's is a no-op. That is a load-bearing
-    // alphabetical accident between two projects' migrations, and this assertion is
-    // what stops it from being a silent outage the day either file is renamed.
+    // Production was correct only because of the filename sort:
+    // `0001_edge_sonic_init.sql` < `0001_router_init.sql`, so Edge-Sonic's `users` was
+    // created first and the router's was a no-op. That is a load-bearing alphabetical
+    // accident between two projects' migrations, and it was the reason the squash was
+    // worth doing rather than merely tidy.
+    //
+    // Both files are absorbed by `0008_squash.sql`, which declares `users` once — so
+    // the accident is gone rather than merely still-lucky. The first half asserts the
+    // shape production has; the second asserts the *structural* property that makes a
+    // second declaration impossible, because a comparison of two column lists would
+    // still pass on a schema carrying both.
     const columns = (handle.raw.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((row) => row.name);
     expect(columns).toContain('username_ci');
     expect(columns).toContain('password_ciphertext');
     expect(columns).toContain('token_epoch');
 
-    // And the two files that collide are ordered the way the database needs.
-    expect(migrationFiles().indexOf('0001_edge_sonic_init.sql')).toBeLessThan(migrationFiles().indexOf('0001_router_init.sql'));
+    // Exactly one file may claim a 4-digit prefix. D1 orders migrations by the REST of
+    // the filename, so two files numbered `0001_` land in an order decided by a
+    // lexicographic tiebreak nobody intended — and a database that ran one of them
+    // can never run the other. `lock-check.ts` fails on this; asserted here too so the
+    // property is measured against the real directory rather than the lock's copy of it.
+    const prefixes = migrationFiles().map((name) => name.slice(0, 4));
+    expect(new Set(prefixes).size).toBe(prefixes.length);
   });
 });
 
@@ -257,38 +402,98 @@ describe('schema', () => {
  * finished scan. 489 tests passed throughout, because a suite that hardcodes one
  * migration filename cannot tell a new migration from an edit to an old one.
  *
- * So the fact the deployment actually depends on is recorded and asserted.
+ * So the fact the deployment actually depends on is recorded and asserted. The
+ * comparison lives in `scripts/migrations/lock-check.ts` — the same module
+ * `pnpm run validate:migrations` runs — so this block and the CI gate cannot
+ * disagree about what drift is.
  */
 describe('the migration lock', () => {
-  it('records a migration file that has been applied and not changed since', () => {
-    const { added, changed } = migrationDrift();
-    // Adding a schema change means adding a numbered file *and* an entry here, in the
-    // same commit. A new migration with no entry is a migration nobody has applied.
-    expect(added).toEqual([]);
-    // A changed hash is the defect above: the bytes moved, so the database did not.
-    expect(changed).toEqual([]);
+  it('reports no drift between the directory and the lock', () => {
+    // `unlocked` and `edited` are the two halves of the defect above. A new
+    // migration with no entry is a migration nobody has applied; a changed digest is
+    // bytes that moved while the database kept the schema it had.
+    expect(migrationFindingsOfKind('unlocked', 'edited')).toEqual([]);
   });
 
-  it('has a hash for every migration on disk, and every hash is a real digest', () => {
+  it('reads a lock the tool understands, and every file has a `sha256:` digest', () => {
     // Asserted separately from the drift check so a failure names which direction
     // broke: an unreadable lock otherwise surfaces as "no migrations recorded".
-    const lock = readLock().migrations;
-    for (const name of migrationFiles()) {
-      expect(lock[name], `${name} is not recorded in applied.lock.json`).toMatch(/^[0-9a-f]{64}$/);
+    const digests = migrationDigests();
+    expect(digests.length).toBeGreaterThan(0);
+    for (const { name, digest } of digests) {
+      expect(digest, `${name} was not hashed as sha256:<hex>`).toMatch(/^sha256:[0-9a-f]{64}$/);
     }
-    for (const [name, hash] of Object.entries(lock)) {
-      expect(hash, `${name} has a malformed hash`).toMatch(/^[0-9a-f]{64}$/);
-    }
+    // `baseline` must name a file that is actually on disk. Derived from the files on
+    // disk rather than trusted from the lock, so a stale or forged `baseline` cannot
+    // widen the set of migrations exempt from the `edited` and `orphan` checks.
+    expect(migrationFindingsOfKind('malformed', 'baseline', 'absent')).toEqual([]);
   });
 
   it('detects an edit to a shipped migration rather than trusting the absence of one', () => {
     // The guard is worthless if it cannot fail, and a test that only asserts "no drift"
-    // is exactly the shape that would pass forever with the check removed. So this
-    // computes the comparison the guard performs, against a value that is wrong.
-    const lock = readLock().migrations;
-    const real = sha256('0001_edge_sonic_init.sql');
-    expect(lock['0001_edge_sonic_init.sql']).toBe(real);
-    expect(lock['0001_edge_sonic_init.sql']).not.toBe(sha256('0002_songs_reader_version.sql'));
+    // is exactly the shape that would pass forever with the check removed.
+    //
+    // The baseline is deliberately exempt from `edited` — a squash rewrites its own
+    // file, which is the entire reason the exemption exists. So what this exercises is
+    // the case a squash leaves behind: a migration *strictly after* the baseline whose
+    // digest no longer matches. That is what a real edit would be.
+    const squashed = migrationDigests().find((file) => file.name === BASELINE);
+    expect(squashed, 'the baseline migration is missing from the directory').toBeDefined();
+    const baselineDigest = squashed?.digest as string;
+
+    const locked = 'sha256:2222222222222222222222222222222222222222222222222222222222222222';
+    const onDisk = 'sha256:3333333333333333333333333333333333333333333333333333333333333333';
+    const findings = checkMigrations(
+      [
+        { name: BASELINE, digest: baselineDigest },
+        { name: '0009_future.sql', digest: onDisk },
+      ],
+      {
+        version: 1,
+        baseline: BASELINE,
+        migrations: { [BASELINE]: baselineDigest, '0009_future.sql': locked },
+      },
+    ).findings;
+
+    const edited = findings.filter((finding) => finding.kind === 'edited');
+    expect(edited).toHaveLength(1);
+    expect(edited[0]?.subject).toBe('0009_future.sql');
+    // Both digests in the message: which file moved, and what it was locked as.
+    expect(edited[0]?.detail).toContain(locked);
+    expect(edited[0]?.detail).toContain(onDisk);
+
+    // And the paired negative, without which the assertion above would also pass
+    // against a check that reports every file as edited.
+    const unchanged = checkMigrations(
+      [
+        { name: BASELINE, digest: baselineDigest },
+        { name: '0009_future.sql', digest: locked },
+      ],
+      {
+        version: 1,
+        baseline: BASELINE,
+        migrations: { [BASELINE]: baselineDigest, '0009_future.sql': locked },
+      },
+    ).findings;
+    expect(unchanged.filter((finding) => finding.kind === 'edited')).toEqual([]);
+  });
+
+  it('refuses a second migration claiming the same 4-digit prefix', () => {
+    // The reason the squash happened. D1 orders migrations by the REST of the
+    // filename, so two files numbered `0001_` land in an order decided by a
+    // lexicographic tiebreak nobody intended, and a database that ran one of them can
+    // never run the other. `0001_edge_sonic_init.sql` and `0001_router_init.sql` were
+    // exactly that, from two different projects.
+    const files = [
+      { name: '0001_edge_sonic_init.sql', digest: 'sha256:aaaa' },
+      { name: '0001_router_init.sql', digest: 'sha256:bbbb' },
+    ];
+    const findings = checkMigrations(files, null).findings;
+    const duplicates = findings.filter((finding) => finding.kind === 'duplicate-prefix');
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0]?.subject).toBe('0001');
+    expect(duplicates[0]?.detail).toContain('0001_edge_sonic_init.sql');
+    expect(duplicates[0]?.detail).toContain('0001_router_init.sql');
   });
 
   it('ships every column the DAOs name, because a migration is a promise about the schema', () => {
@@ -356,7 +561,9 @@ describe('the migration lock', () => {
     // that can pass on a schema production never had.
     const files = migrationFiles();
     expect(files).toEqual([...files].sort());
-    expect(files[0]).toBe('0001_edge_sonic_init.sql');
+    // The baseline sorts last on purpose: it absorbs everything before it, so a
+    // migration added after the squash must be numbered above `0008`.
+    expect(files.at(-1)).toBe(BASELINE);
   });
 });
 
