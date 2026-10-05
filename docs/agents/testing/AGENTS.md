@@ -151,7 +151,7 @@ Two more rules that are easy to get wrong:
   enriched and does nothing. A test that passes while asserting nothing.
 
 - **A checker that only compares things to each other checks nothing when there is one of
-  them.** `scripts/validate_locales.mjs` compared every locale bundle against `en`, so with
+  them.** `scripts/i18n/validate_locales.ts` compared every locale bundle against `en`, so with
   `SUPPORTED_LANGUAGES = ['en']` its entire per-tag body was skipped by
   `if (tag === 'en') continue` and it printed `ALL OK` having examined the application not at
   all. It could not see `libraries.scanPausedRequests` being used and absent — the string in
@@ -159,6 +159,34 @@ Two more rules that are easy to get wrong:
   both directions (a referenced key must exist; an unreferenced one is warned), which is the
   comparison a bundle-to-bundle diff cannot express. It is in CI; it was not, and it is a
   check that fails on a merge rather than on a machine.
+
+- **A parser with no test is a parser that ships broken, and the symptoms are silent.**
+  `locale-checks.ts` — the pure half of the locale validator — shipped three wrong shapes of
+  its `t()` call parser in one afternoon, and **no test caught any of them**, because until the
+  rules were split out of the entrypoint there was nothing to call. A shared `[^\\]` class
+  matches a string literal's own closing quote, so the capture ran past its terminator and
+  returned pages of source as a "default". Excluding `'` as well fixed that and broke the
+  reverse case, and this repository has one: a double-quoted default containing an unescaped
+  apostrophe. That failure is the worse of the two, because the affected call site simply
+  **stopped being checked** — which looks identical to a passing run. A third, found by a test
+  written after the fact, matched the default by searching forward from the key and picked up
+  a *later* call's comma.
+
+  So the rule the parser now follows is **one delimiter per concern**: the key closes on a
+  backreference (`(['"])([\w.]+)\1`, sound because `[a-zA-Z0-9_.]` cannot contain a quote) and
+  the default is a separate **sticky** match anchored where the key ended. Each is far under
+  the repo's `sonarjs/regex-complexity` ceiling, which a single alternated pattern is not — it
+  scored 30 against a limit of 20. Reintroducing any of the three shapes turns
+  `test/scripts/locale-checks.test.ts` red (1, 10 and 10 failures), and a fourth candidate
+  regression correctly does *not*, because it is equivalent.
+
+- **A rule module with no test is a rule nothing measures.** Every rule under `scripts/` —
+  `scripts/i18n/locale-checks.ts`, `scripts/migrations/lock-check.ts`, `scripts/lib/cli-args.ts`,
+  `scripts/build/spa-shell-checks.ts`, `scripts/backup/*` — is split from its entrypoint precisely so it can
+  be tested without touching the filesystem. Each has a paired case that runs the comparison
+  against a value that is **wrong** and asserts the finding names the file or key it is about.
+  A test asserting only "no drift" would pass forever against a check that had been removed,
+  which is the shape of defect this repository has already shipped twice.
 
 One more, and it is the same rule applied to an *expectation* rather than to a double: an
 assertion written from our own reading of the spec shares that reading with the code it
@@ -208,6 +236,12 @@ answered `ping` and authenticated correctly.
 | `endpoint-registry.test.ts`              | The `/rest` registry as a contract: `code=70` for all 33, no name in two maps, the exact error key set |
 | `spa-decisions.test.ts`                  | The SPA's error decoder across both dialects and a non-JSON body, and `describeStopReason` |
 | `web-landing.test.tsx`                   | The signed-out surface: all three `authorized` states, and the sign-in-that-changed-nothing hint |
+| `test/scripts/locale-checks.test.ts`          | The locale rules as rules, and the `t()` parser's three wrong shapes — each pinned |
+| `test/scripts/migration-lock.test.ts`         | Every lock finding kind, `--write` add-only behaviour, and the duplicate-prefix rule |
+| `test/scripts/cli-args.test.ts`               | Flag parsing rejects rather than ignores: unknown, repeated, and valueless |
+| `test/scripts/spa-shell-checks.test.ts`       | Each way a served shell can be wrong, and the shell that is fine passing |
+| `backup/naming-and-prune.test.ts`        | Where a backup lands, and every object the retention prune may **not** delete |
+| `backup/resolve-d1-target.test.ts`       | The export target, the empty-database refusal, and the fail-closed encryption policy |
 
 ## Rules for writing an assertion here
 

@@ -476,7 +476,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **A dev bypass is gated on an allow-list of environments.** A deny-list enables it for
   `staging`, `Preview`, and a misspelled `prodcution`.
 - **A deployment placeholder is the exact sentinel, never a readable stand-in.**
-  `scripts/prepare-wrangler-config.ts` patches a D1 `database_id` only when it equals
+  `scripts/deploy/prepare-wrangler-config.ts` patches a D1 `database_id` only when it equals
   `DEFAULT_UUID`, and a KV `id` or Secrets Store `store_id` only when it equals
   `DEFAULT_HEX_ID` (32 zeros). A friendlier placeholder is skipped silently, the unpatched
   value reaches `wrangler deploy`, and it fails there as Cloudflare error 10182 rather
@@ -541,13 +541,40 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   through 489 passing tests. Two rules, and the second exists because the first did not
   stop it:
   - **A schema change is a new numbered file.** Never an edit to one that has shipped.
-  - **`migrations/applied.lock.json` records the sha256 of everything applied**, and
+  - **`migrations/migrations.lock.json` records the sha256 of everything applied**, and
     `test/schema.int.test.ts` asserts both directions — every file on disk is listed, and
     every listed hash matches. Adding a migration means adding a lock entry in the same
     commit; editing an applied one fails the suite instead of the deployment.
-    `scripts/hash-migrations.ts` regenerates it and **exits non-zero** on a changed
-    existing entry, so the operator running it cannot quietly bless the edit they just
-    made.
+    `pnpm run migrations:lock` records a newly-added file and **refuses to touch an
+    existing entry**, so it cannot quietly bless an edit the operator just made. There is
+    deliberately no `--force`: a write that could adopt a new digest for a file already
+    applied *is* the bug, offered as a flag.
+- **Eight migrations were squashed into one baseline, and the cost is stated rather than
+  absorbed.** `migrations/0008_squash.sql` holds the combined schema of every file before
+  it and those files are deleted. A lock can stop an *edit*; nothing stopped the file count
+  growing. Three things the squash had to get right, each of which the next one collapses:
+  - **It is not a concatenation.** `d1_migrations` records the absorbed filenames, so they
+    are skipped and the squash is unapplied — it runs against production databases that
+    already have every table, column and index. The four `ALTER TABLE … ADD COLUMN` the
+    absorbed migrations used have **no** `IF NOT EXISTS` form, so a concatenated squash
+    fails with "duplicate column name" on exactly the databases it exists to serve. The
+    columns are folded into their `CREATE TABLE`s, in the order the ALTERs appended them,
+    so the resulting `sqlite_schema` is identical.
+  - **It resolves what a squash is for.** `namespaces` and `router_backends` are never
+    created, which retires the inherited `owner_email → users(email)` foreign key that did
+    not resolve at all (`PRAGMA foreign_key_check` failed; D1 enforces foreign keys), and
+    it removes the **duplicate `0001_` prefix** — two files from two different projects,
+    ordered by a lexicographic tiebreak nobody intended, on a database that could run only
+    one. `lock-check.ts` fails on a duplicate prefix, which is what forced this.
+  - **It omits 0006's data migration, and that omission is checked rather than assumed.**
+    On a fresh database `songs` is empty; on an existing one 0006 already stamped every row
+    it matched. Asserted by seeding the old marker rows *between* 0005 and 0006 — seeding
+    them afterwards tests nothing, because 0006 has already run.
+
+  The cost: D1's `d1_migrations` on an existing database still lists the eight absorbed
+  filenames, and this repository no longer describes what they contained. D1 keeps that
+  history, which is what makes adopting a baseline safe — and it is why the baseline is a
+  deliberate act recorded in the lock, not a formatting change.
   The suite was blind to all of it because it `exec`'d one hardcoded migration file, which
   cannot tell *a new migration* from *an edit to an old one* — both produce identical
   bytes on the database it is building. `test/helpers/migrations.ts` reads the **directory
@@ -745,8 +772,8 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   - **Changing the marker is a migration, and it costs stars.** It re-derives every wholly
     derived row, so `_ci` moves, the album grouping key moves, and `alk:` album ids move with
     it. Accepted rather than papered over with a fallback lookup, and stated in
-    `migrations/0006_songs_grouping_source.sql` beside the `' (derived)'` literal that is now
-    the only place it is written down.
+    `migrations/0008_squash.sql` beside the `' (derived)'` literal that is now
+    the only place it is written down (it was introduced in `0006`, which that file absorbs).
 - **An Ogg page is not a packet, and a granule is only a duration on the last page.**
   Packets are delimited by the **segment table** — a packet ends where a lacing entry is
   below 255, and one page may carry several. `libavformat` writes an Opus identification
@@ -1028,7 +1055,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   rendered as `Edge--Sonic`: `brand.rest` held `"-Sonic"` while the markup rendered its own `-`
   between two spans. Every surface was individually defensible — one well-formed key, a default
   that matched intent, correct markup — so it passed review and reached production, and it is
-  only wrong to somebody who already knows the product's name. `scripts/validate_locales.mjs`
+  only wrong to somebody who already knows the product's name. `scripts/i18n/validate_locales.ts`
   compared two *bundles* and checked that keys exist, and with one shipped language the per-tag
   body is skipped entirely: nothing in it read what a value **is**. It now captures the optional
   second argument of `t('key', 'default')` and **fails** on a disagreement, across all 88 call
@@ -1154,13 +1181,20 @@ from this repository's own history:
 
 ```bash
 pnpm install --ignore-scripts
-pnpm run checks        # pnpm -r typecheck + lint + god-files + SPA shell
-pnpm -r typecheck
-pnpm run lint          # eslint --fix
+pnpm run checks          # everything below except the tests; use checks:fast for that
+pnpm run checks:fast     # typecheck + lint + god-files + migrations + locales + SPA shell
+pnpm run typecheck       # -r, plus scripts/ and functions/
+pnpm run lint            # eslint --fix
+pnpm run check:god-files
+pnpm run validate:migrations   # read-only; refuses an edited or unlocked migration
+pnpm run migrations:lock       # records a NEW migration; never re-hashes an applied one
+pnpm run validate:locales
+pnpm run verify:spa-shell      # needs `pnpm run build` first
 pnpm run test
-pnpm run test:coverage # with the coverage gate
-pnpm run build         # apps/web -> apps/api/src/generated/spa-shell.ts
-pnpm run typegen       # wrangler types from the template
+pnpm run test:coverage   # with the coverage gate
+pnpm run test:integration
+pnpm run build           # apps/web -> apps/api/src/generated/spa-shell.ts
+pnpm run typegen         # wrangler types from the template
 pnpm exec wrangler dev
 ```
 
@@ -1170,6 +1204,13 @@ carries a `DEV_AUTH_EMAIL` bypass and the two raw 32-zero placeholder keys;
 `worker-configuration.d.ts` is generated and gitignored. The god-file guard is 300 warn /
 400 error, and `test/` is a workspace project so both `pnpm -r typecheck` and `pnpm run
 lint` reach it.
+
+**`scripts/` and `functions/` are checked by `pnpm run typecheck` but are not workspace
+packages**, so they need their own `typecheck:*` scripts to be reached at all. `functions/`
+is a deployed Cloudflare Pages entrypoint whose `service` binding is the one place the two
+wrangler templates are coupled, so it was outside every tsconfig until recently — a rename
+in one template that missed the other was a deploy-time failure with no local signal. See
+`scripts/README.md` for the layout and the entrypoint/module convention.
 
 Coverage floors are a **measured** floor (79/66/81/82 against 80/67/82/83), not an
 aspiration — lower one to make CI green and the gate stops saying anything.
@@ -1199,6 +1240,8 @@ Enforced by ESLint `no-restricted-imports` in `eslint.config.mjs`.
 | Services, auth, composition   | `packages/backend-services/AGENTS.md`         |
 | Bindings, wrangler, secrets   | `docs/agents/runtime/AGENTS.md`               |
 | Tests, thresholds, doubles    | `docs/agents/testing/AGENTS.md`               |
+| Repo tooling (`scripts/`)     | `scripts/README.md`                           |
+| Backup, restore, Time Travel  | `docs/db-backup-recovery.md`                  |
 
 ## Commit Policy
 

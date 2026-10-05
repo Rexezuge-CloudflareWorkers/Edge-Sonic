@@ -10,7 +10,7 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
 - `apps/web/vite.config.ts` proxies `/user` and `/rest` to `http://localhost:8787` in
   dev, and its `closeBundle` embeds `dist/index.html` into
   `apps/api/src/generated/spa-shell.ts` as `SPA_HTML`.
-  `scripts/verify-spa-shell.mjs` runs in `checks` and rejects a missing, stubbed, or
+  `scripts/build/verify-spa-shell.ts` runs in `checks` and rejects a missing, stubbed, or
   half-refreshed artifact — so a frontend change is not inert until `pnpm run build`.
 - `apps/api/wrangler.template.jsonc` is the **Worker** deployment template. The template
   sets `ENVIRONMENT=production` and deliberately omits `DEV_AUTH_EMAIL`/`DEMO_MODE`; site
@@ -31,15 +31,33 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
     equal `name` in the Worker template. A typo is a deploy-time failure, not a runtime
     one.
 - **A placeholder in a template must be the exact sentinel, not a readable stand-in.**
-  `scripts/prepare-wrangler-config.ts` patches a D1 `database_id` only when it equals
+  `scripts/deploy/prepare-wrangler-config.ts` patches a D1 `database_id` only when it equals
   `DEFAULT_UUID`, a KV `id` and a Secrets Store `store_id` only when they equal
-  `DEFAULT_HEX_ID` (32 zeros) — see `scripts/wrangler-config/types.ts`. A friendlier
+  `DEFAULT_HEX_ID` (32 zeros) — see `scripts/lib/wrangler-config/types.ts`. A friendlier
   placeholder such as `REPLACE_WITH_YOUR_SECRETS_STORE_ID` is skipped **silently**, the
   unpatched value reaches `wrangler deploy`, and it fails there as Cloudflare error
   10182 rather than at the step that caused it.
-- Bindings: D1 `DB`, KV `CACHE`, and two Secrets Store secrets. **No Durable Objects, no
-  cron triggers, no queues, no R2.** The scan is advanced by `getScanStatus`, so nothing
-  runs on a schedule.
+- **Provisioning reports what it created, because a caller has to act on the difference.**
+  `provisionWranglerResources()` returns the resources it had to create as `<kind>:<name>`,
+  and `prepare-wrangler-config.ts` publishes them as a step output. The backup workflow needs
+  to know whether the D1 database **existed** or was created moments ago: one created now holds
+  no user data, and uploading its empty dump nightly is a false sense of safety. Re-reading the
+  placeholder id out of `wrangler.jsonc` instead is checking an artefact the same call has
+  already rewritten, so the guard could never fire — a check that cannot fail is
+  indistinguishable from the absence of data. `scripts/backup/resolve-d1-target.ts` is where
+  it is consumed.
+- **The D1 database is backed up daily, and the backup is encrypted by construction.**
+  `.github/workflows/backup-d1.yml` exports at 04:15 UTC → xz → AES-256-CBC → S3 and/or
+  WebDAV, with a `check-secrets` preflight that fails when a destination is configured
+  without `BACKUP_ENCRYPTION_KEY`. That is mandatory rather than advisory because
+  `migrations/0008_squash.sql` describes the in-database credential encryption as *"obfuscation
+  against a D1 dump"* — an unencrypted backup inverts that assumption — and because the dump is
+  a listening history (`play_counts`, `now_playing`, `stars`, `ratings`) plus the whole library
+  topology. Playbook: `docs/db-backup-recovery.md`.
+- Bindings: D1 `DB`, KV `CACHE`, and two Secrets Store secrets. **No Queues, no R2, no
+  Vectorize in the templates.** The scan runs on a Durable Object when the `SCAN` binding is
+  configured and is otherwise advanced by `getScanStatus`; nothing runs on a *cron*, though
+  `backup-d1.yml` is one — it is a GitHub Actions schedule, not a Worker trigger.
 - `AppConfiguration.validate()` runs **once per isolate** on the first request and logs
   to `console.error`. It is the only place unsafe configuration is reported, because
   every failure mode it checks is silent at request time: a malformed numeric var falls
@@ -111,8 +129,9 @@ the marker is appended to every derived name and therefore reaches every sort or
 
 **Changing it is a migration, not a toggle.** It re-derives every wholly-derived row, so
 `album_ci` moves, the album grouping key moves, and `alk:` album ids move with it — stars and
-ratings on those albums are lost. That is stated in `migrations/0006_songs_grouping_source.sql`
-beside the `' (derived)'` literal that is now the only place the old value is written down.
+ratings on those albums are lost. That is stated in `migrations/0008_squash.sql`
+beside the `' (derived)'` literal that is now the only place the old value is written down
+(introduced in `0006`, which that file absorbs).
 
 ### Size a subrequest budget against the plan that runs it — and count *everything*
 
@@ -189,8 +208,8 @@ re-entering every user's password, and a compromise of one store would yield bot
 live in one store, and `ensureSecretStore()` writes a single resolved id into every entry,
 so rotating one key never has to move the other.
 
-**Who creates what.** `scripts/prepare-wrangler-config.ts` (`provisionWranglerResources`)
-creates the **store** and patches its id into the config. `scripts/init-secrets.ts` then
+**Who creates what.** `scripts/deploy/prepare-wrangler-config.ts` (`provisionWranglerResources`)
+creates the **store** and patches its id into the config. `scripts/deploy/init-secrets.ts` then
 reads the patched config and creates each **secret value** in it. Two scripts, one
 pipeline, in that order — a script that claims to do both has silently skipped one.
 

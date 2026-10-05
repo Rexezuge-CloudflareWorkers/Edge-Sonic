@@ -36,7 +36,9 @@ packages/backend-errors    the error taxonomy
 packages/backend-data      DAOs over D1Queryable
 packages/backend-runtime   config, KV cache + breaker, the worker base class
 packages/backend-services  auth, library, scan, enrichment, composition
-migrations        one baseline schema
+functions        the Cloudflare Pages catch-all that forwards to the Worker
+scripts          repo tooling, grouped by who runs it; see scripts/README.md
+migrations        one squashed baseline schema
 test              the suite; runs under Node, no workerd
 ```
 
@@ -47,7 +49,7 @@ The layer rules are in [`eslint.config.mjs`](eslint.config.mjs) and summarized i
 
 ```bash
 pnpm install --ignore-scripts
-pnpm run checks            # typecheck + lint + god-files + SPA shell
+pnpm run checks            # typecheck + lint + god-files + migrations + locales + SPA shell
 pnpm run test              # the whole suite
 pnpm run test:coverage     # with the coverage gate
 pnpm run build             # builds apps/web into the worker
@@ -74,8 +76,8 @@ pnpm exec wrangler dev
 ]
 ```
 
-The 32-zero `store_id` is a **placeholder**: `scripts/prepare-wrangler-config.ts` creates
-the store and patches the real id in, then `scripts/init-secrets.ts` writes both 32-byte
+The 32-zero `store_id` is a **placeholder**: `scripts/deploy/prepare-wrangler-config.ts` creates
+the store and patches the real id in, then `scripts/deploy/init-secrets.ts` writes both 32-byte
 key values. Use that exact sentinel — the patcher matches it by string equality, and any
 other placeholder is skipped without a word and fails at deploy time as Cloudflare error
 10182. Each value is AES-256-GCM under its own key: user passwords under one, WebDAV
@@ -95,10 +97,16 @@ wrong but not fatal, including a bypass variable that is live in production and 
 
 ## What is deliberately not here
 
-No `dav-store`, no Durable Objects, no cron triggers, no queues, no transcoding, no
-FTS5 (the migration names it as the answer to the one search that has to scan), and no
-second identity system: `/rest` is a Subsonic password and `/user` is Cloudflare
-Access, and neither credential opens the other surface.
+No `dav-store`, no Worker cron triggers, no transcoding, no FTS5 (the migration names
+it as the answer to the one search that has to scan), and no second identity system:
+`/rest` is a Subsonic password and `/user` is Cloudflare Access, and neither credential
+opens the other surface.
+
+The database **is** backed up: `backup-d1.yml` exports it daily at 04:15 UTC, encrypts,
+and uploads to any combination of S3-compatible storage and WebDAV. Set at least
+`BACKUP_ENCRYPTION_KEY` plus one destination — the preflight refuses to run a destination
+without it, because the in-database credential encryption is described in the schema as
+*obfuscation against a D1 dump*. See [`docs/db-backup-recovery.md`](docs/db-backup-recovery.md).
 
 ## Where to read next
 
@@ -110,4 +118,6 @@ Access, and neither credential opens the other surface.
 | Services, auth, composition   | [`packages/backend-services/AGENTS.md`](packages/backend-services/AGENTS.md) |
 | Bindings, wrangler, secrets   | [`docs/agents/runtime/AGENTS.md`](docs/agents/runtime/AGENTS.md) |
 | Tests and the doubles         | [`docs/agents/testing/AGENTS.md`](docs/agents/testing/AGENTS.md) |
+| Backup and restore            | [`docs/db-backup-recovery.md`](docs/db-backup-recovery.md) |
+| Repo tooling                  | [`scripts/README.md`](scripts/README.md) |
 | The invariants                | [`AGENTS.md`](AGENTS.md) |

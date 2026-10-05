@@ -140,13 +140,16 @@ pins it against being widened into something that shadows `/user/me`.
 
 **`pnpm run build`.** The Worker serves `SPA_HTML` from the *last local build*, and both
 `dist/` and `apps/api/src/generated/` are gitignored, so a source change here is inert
-until `vite build` runs again. `scripts/verify-spa-shell.mjs` runs in `pnpm run checks` and
-rejects a missing, stubbed, or mismatched artifact. It cannot detect a stale-but-
-self-consistent pair, which is why the rebuild is an operational duty and not only a
-checked one. It is in `pnpm run checks` but **not** in
-`.github/workflows/continuous-integration.yml`, which runs `pnpm -r typecheck`,
-`pnpm run lint` and `check-god-files.mjs` — so a PR can merge a stale artifact that
-`checks` would have caught locally.
+until `vite build` runs again. `scripts/build/verify-spa-shell.ts` rejects a missing,
+stubbed, or mismatched artifact, and it runs in `pnpm run checks`.
+
+It is **also** a CI job now — `spa-shell` in
+`.github/workflows/continuous-integration.yml`, which builds and then verifies. It used not
+to be, which is a gap worth recording because the reasoning generalises: a check that
+only runs locally fails on a merge rather than on a machine, and this one guards an
+artifact the *deploy* serves. It cannot detect a stale-but-self-consistent pair, which is
+why the rebuild before `wrangler deploy` remains an operational duty and not only a
+checked one.
 
 ## Data loading owns its own cancellation
 
@@ -379,7 +382,7 @@ well-formed key with one well-formed value, the inline default said `"Sonic"` an
 the author meant, and the markup was correct — which is why it survived review. It is only wrong
 to somebody who already knows the product is called "Edge-Sonic".
 
-So `scripts/validate_locales.mjs` now captures the optional second argument of `t('key',
+So `scripts/i18n/validate_locales.ts` now captures the optional second argument of `t('key',
 'default')` and **fails** when it disagrees with the bundle, across all 88 call sites. Everything
 else in that script compares two bundles or checks that a key exists; nothing in it read what a
 value *is*, and with one shipped language the per-tag body is skipped entirely. Verified by

@@ -38,7 +38,7 @@ jobs:
       - name: Prepare Wrangler Configuration
         uses: ./.github/actions/retry-step
         with:
-          command: pnpm exec tsx scripts/prepare-wrangler-config.ts
+          command: pnpm exec tsx scripts/deploy/prepare-wrangler-config.ts
           max_attempts: '3'
         env:
           WRANGLER_JSONC: ${{ vars.WRANGLER_JSONC }}
@@ -50,7 +50,7 @@ jobs:
       - name: Initialize Cloudflare Secrets
         uses: ./.github/actions/retry-step
         with:
-          command: pnpm exec tsx scripts/init-secrets.ts
+          command: pnpm exec tsx scripts/deploy/init-secrets.ts
           max_attempts: '3'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -68,10 +68,23 @@ jobs:
       - name: Build Web App
         run: pnpm --filter @edge-sonic/web build
 
+      # A gate, not a rehearsal. Separate from the deploy below and deliberately
+      # **not** retried: a dry run that fails is a real defect — a bundle over the size
+      # limit, a binding the template no longer declares — and retrying it three times
+      # only delays the report by thirty seconds while making the log harder to read.
+      # Chaining it as `deploy --dry-run && deploy` put both behind one retry budget, so
+      # a genuine failure was retried and a transient network blip on the real deploy
+      # was indistinguishable from it.
+      - name: Dry Run Deploy with Wrangler
+        run: pnpm exec wrangler deploy --dry-run
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       - name: Deploy with Wrangler
         uses: ./.github/actions/retry-step
         with:
-          command: pnpm exec wrangler deploy --dry-run && pnpm exec wrangler deploy
+          command: pnpm exec wrangler deploy
           max_attempts: '3'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
