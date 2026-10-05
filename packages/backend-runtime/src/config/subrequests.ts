@@ -99,6 +99,52 @@ const SUBSREQUESTS_PER_FOLDER_BASE = 6;
 const SUBSREQUESTS_PER_ENRICHED_TRACK = 5;
 
 /**
+ * Statements a chunk spends that belong to no folder.
+ *
+ * Four, and the count is the whole reason the backfill's page is 32 rather than the 35 a
+ * reader is likely to reach for first. One chunk spends:
+ *
+ * | Statement                                   | Spent by            |
+ * | ------------------------------------------- | ------------------- |
+ * | `scanState.ensure`                          | `step`, first       |
+ * | `listNeedingDerivation`                     | the backfill, first |
+ * | `listFrontier`                              | `step`, before the walk |
+ * | `saveProgress`                              | `step`, after the walk  |
+ *
+ * The two bracket the walk, so a page sized without counting them leaves five of a folder's
+ * six, the loop's `canAfford(SUBSREQUESTS_PER_FOLDER_BASE)` refuses, and the chunk returns
+ * `scanning` having visited **zero** folders — a scan that reports progress and never moves,
+ * which is the defect `SCAN_DERIVE_MAX_ROWS_PER_CHUNK` exists to make structurally
+ * impossible. A bound that is satisfied on paper and leaves the walk nothing is not a bound.
+ */
+const SUBSREQUESTS_PER_CHUNK_OVERHEAD = 4;
+
+/**
+ * Rows the derivation backfill may stamp in one chunk.
+ *
+ * One statement per row — `APPLY_DERIVATION` is a per-row `UPDATE`, not a set-based one — plus
+ * the read that selected them, and `applyDerivation` passes `requireComplete`, so the page
+ * must fit **whole** or the DAO refuses rather than truncating. That refusal is right: the
+ * selection is on `derived_version`, so a partial page leaves rows stamped and rows not
+ * stamped, and the un-stamped ones are re-selected on every poll for ever.
+ *
+ * Which makes the page size a *bound the chunk budget imposes*, not a number chosen for how
+ * fast a library repairs. It was `200`, against a chunk budget of 42 and a platform ceiling
+ * of 50 — so it could never fit, on any chunk, under any configuration. A library with more
+ * than ~48 rows owing a derivation therefore threw `SubrequestBudgetExhaustedError` from the
+ * backfill on every poll, before `listFrontier`, which meant the walk never ran, which
+ * `step`'s catch recorded as a scan failure. See `deriveBackfill.ts`.
+ *
+ * `SUBSREQUESTS_PER_FOLDER_BASE` is held back so a chunk that spends its whole backfill
+ * allowance still visits one folder. The arithmetic is asserted as a relationship rather
+ * than as this numeral in `test/subrequest-budget.test.ts`.
+ */
+const SCAN_DERIVE_MAX_ROWS_PER_CHUNK = Math.max(
+  1,
+  SCAN_CHUNK_SUBSREQUEST_BUDGET - SUBSREQUESTS_PER_CHUNK_OVERHEAD - SUBSREQUESTS_PER_FOLDER_BASE,
+);
+
+/**
  * Folders one chunk attempts before the walk's own bookkeeping is accounted for.
  *
  * Derived, never chosen: `SCAN_CHUNK_FOLDERS` used to be `40`, documented as a bound on D1
@@ -215,6 +261,8 @@ export {
   SCAN_CHUNK_SUBSREQUEST_BUDGET,
   SUBSREQUESTS_PER_FOLDER_BASE,
   SUBSREQUESTS_PER_ENRICHED_TRACK,
+  SUBSREQUESTS_PER_CHUNK_OVERHEAD,
+  SCAN_DERIVE_MAX_ROWS_PER_CHUNK,
   SCAN_CHUNK_FOLDER_LIMIT,
   SCAN_ENRICH_MAX_PER_FOLDER,
   PAGE_ALBUM_KEYS_PER_STATEMENT,

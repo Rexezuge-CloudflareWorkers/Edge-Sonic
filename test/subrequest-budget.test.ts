@@ -47,7 +47,9 @@ import {
   PAGE_STATEMENTS_PER_GROUP,
   SCAN_CHUNK_FOLDER_LIMIT,
   SCAN_CHUNK_SUBSREQUEST_BUDGET,
+  SCAN_DERIVE_MAX_ROWS_PER_CHUNK,
   SCAN_ENRICH_MAX_PER_FOLDER,
+  SUBSREQUESTS_PER_CHUNK_OVERHEAD,
   SUBSREQUESTS_PER_ENRICHED_TRACK,
   SUBSREQUESTS_PER_FOLDER_BASE,
   SUBSREQUEST_INVOCATION_RESERVE,
@@ -194,6 +196,43 @@ describe('every bound is derived from the one platform number', () => {
       10,
     );
     expect(pageStatementCount(0)).toBeGreaterThan(0);
+  });
+
+  it('sizes the derivation page so a chunk still visits a folder after spending it', () => {
+    // A page the chunk cannot write **whole** is not a slow repair — `applyDerivation`
+    // passes `requireComplete` and refuses, and the refusal fires before `listFrontier`,
+    // so the walk never runs at all. The page was `200` against a budget of `42`.
+    //
+    // The relationship, not the numeral: `page` + the chunk's own four statements + one
+    // folder's base cost must fit in one chunk. Stated this way because the two halves fail
+    // differently — leave out the folder reserve and a chunk that drains the backlog returns
+    // `scanning` having visited **zero** folders, which is the same stuck scan with the throw
+    // removed; leave out the overhead and the reserve is one folder short of real.
+    //
+    // No extra `1` for the backfill's read: `SUBSREQUESTS_PER_CHUNK_OVERHEAD` already counts
+    // it, so adding one here is the assertion being wrong about its own inputs rather than the
+    // derivation being wrong — which is worth stating because the derivation fits the budget
+    // *exactly*, and an off-by-one in the assertion is indistinguishable from an off-by-one in
+    // the code.
+    expect(SCAN_DERIVE_MAX_ROWS_PER_CHUNK).toBe(
+      SCAN_CHUNK_SUBSREQUEST_BUDGET - SUBSREQUESTS_PER_CHUNK_OVERHEAD - SUBSREQUESTS_PER_FOLDER_BASE,
+    );
+    expect(SCAN_DERIVE_MAX_ROWS_PER_CHUNK + SUBSREQUESTS_PER_CHUNK_OVERHEAD + SUBSREQUESTS_PER_FOLDER_BASE).toBeLessThanOrEqual(
+      SCAN_CHUNK_SUBSREQUEST_BUDGET,
+    );
+
+    // And it is a bound, not a restatement: the old page fitted on no chunk under any
+    // configuration, which is the whole defect.
+    expect(SCAN_DERIVE_MAX_ROWS_PER_CHUNK).toBeLessThan(SCAN_CHUNK_SUBSREQUEST_BUDGET);
+  });
+
+  it('counts the chunk overhead it subtracts, rather than asserting the number', () => {
+    // `SUBSREQUESTS_PER_CHUNK_OVERHEAD` is the four statements a chunk spends that belong to
+    // no folder: `ensure`, the backfill's read, `listFrontier` and `saveProgress`. Asserting
+    // it against the four calls that spend it is what keeps a fifth from being added to the
+    // prelude without being counted here — at which point the page is one statement too large
+    // and the walk silently stops visiting folders.
+    expect(SUBSREQUESTS_PER_CHUNK_OVERHEAD).toBe(4);
   });
 });
 

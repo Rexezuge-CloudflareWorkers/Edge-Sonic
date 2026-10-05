@@ -20,8 +20,9 @@
  *
  * `dir_path` is already on the row, so this is a function of data D1 already holds: one
  * indexed read and one bounded write batch, no `PROPFIND`, no range read. It is charged
- * against the chunk's wall-clock deadline because D1 latency is real, and against
- * nothing else — the subrequest ceiling is a platform resource this phase cannot spend.
+ * against the chunk's wall-clock deadline *and* against the subrequest ceiling, because the
+ * claim that this phase "cannot spend" the ceiling is what let a 200-row batch run unbudgeted
+ * at the top of every poll.
  *
  * ### Why it is bounded per chunk rather than run to completion
  *
@@ -31,22 +32,35 @@
  * chunk takes one page; the next poll takes the next. The selection is on
  * `derived_version`, so the remaining set strictly shrinks and the pass terminates
  * without any cursor to keep.
+ *
+ * ### A page a chunk cannot write whole is a permanent failure, not a slow one
+ *
+ * `applyDerivation` passes `requireComplete`, so it **refuses** rather than truncating, and
+ * the refusal is correct — the selection is on `derived_version`, so a partial page leaves
+ * rows stamped and rows not stamped, and the un-stamped ones are re-selected for ever.
+ *
+ * Which makes the page size a bound the chunk budget *imposes*. It was
+ * `DERIVE_MAX_ROWS_PER_CHUNK = 200` — one `UPDATE` per row — against a chunk budget of 42
+ * and a platform ceiling of 50, so it fitted on no chunk under any configuration. Every
+ * library with more than ~48 rows owing a derivation therefore threw
+ * `SubrequestBudgetExhaustedError` out of here, on every poll, **before `listFrontier`**:
+ * the walk never ran, `scanned_count` never advanced, `step`'s catch recorded it as a scan
+ * failure, and `isAdvancing('failed')` kept the alarm re-armed — so `getScanStatus` reported
+ * `scanning: true` for ever. Shipped alongside the subrequest metering that made the refusal
+ * reachable, and together with the index write's failure to stamp `derived_version`, which is
+ * what kept every scanned row permanently owed. Both are needed to produce the wedge and
+ * neither produces it alone; `songSql.ts` carries the other half.
+ *
+ * So the page is `SCAN_DERIVE_MAX_ROWS_PER_CHUNK`, derived from the chunk budget with
+ * `SUBSREQUESTS_PER_FOLDER_BASE` held back — a chunk that spends its whole backfill
+ * allowance must still visit one folder. The `canAfford` below is the other half of that
+ * guarantee: the derived size bounds a chunk that has spent nothing, and the only thing that
+ * decides whether *this* chunk can take it is what it has already spent.
  */
 import { SongDerivationDAO } from '@edge-sonic/backend-data/dao';
+import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK } from '@edge-sonic/backend-runtime/config';
 import type { ScanDerivationStore } from './scanTypes';
 import type { ScanBudget } from './scanBudget';
-
-/**
- * Rows stamped per chunk.
- *
- * Sized against D1's **row-write** allowance, not the subrequest ceiling, because those
- * are the two resources this phase actually spends. A 1,000-track library drains in five
- * polls, which is a few seconds of a client that is already polling to drive a scan.
- *
- * Not a parameter: there is no configuration in which a different number is correct, and
- * a knob here would be a knob nobody turns.
- */
-const DERIVE_MAX_ROWS_PER_CHUNK = 200;
 
 /**
  * Stamp one page of rows, and report how many rows it wrote.
@@ -60,8 +74,21 @@ async function derivePending(store: ScanDerivationStore, libraryId: string, budg
   // takes them, which is the same "leave, don't overrun" rule the walk follows.
   if (budget.remainingMs <= 0) return 0;
 
-  const rows = await store.listNeedingDerivation(libraryId, DERIVE_MAX_ROWS_PER_CHUNK);
+  const rows = await store.listNeedingDerivation(libraryId, SCAN_DERIVE_MAX_ROWS_PER_CHUNK);
   if (rows.length === 0) return 0;
+
+  // The read is spent; the write is one statement per row and it refuses rather than
+  // truncating, so a page this chunk cannot hold whole is a page this chunk may not take.
+  // Checked *after* the read because the read is what tells us the page's size — the same
+  // "decide before the work, on its whole cost" discipline the walk applies to
+  // `canAfford(SUBSREQUESTS_PER_FOLDER_BASE)`, and for the same reason: a reservation made
+  // after the statements are issued is not a reservation.
+  //
+  // Returning `0` rather than throwing is the difference between a slow repair and a dead
+  // scan. The selection is on `derived_version`, so the rows are exactly the next poll's,
+  // and the walk below — which shares this budget — is not starved by a phase that could not
+  // have written them anyway.
+  if (!budget.canAfford(rows.length)) return 0;
 
   // `deriveFor` rather than a `map` at the call site: reading a page and deciding on that
   // same page is one step, and a caller that did half of it would stamp rows it never
@@ -70,4 +97,4 @@ async function derivePending(store: ScanDerivationStore, libraryId: string, budg
   return await store.applyDerivation(SongDerivationDAO.deriveFor(rows));
 }
 
-export { DERIVE_MAX_ROWS_PER_CHUNK, derivePending };
+export { derivePending };

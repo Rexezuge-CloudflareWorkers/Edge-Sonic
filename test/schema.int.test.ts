@@ -961,6 +961,106 @@ describe('path-derived grouping', () => {
       expect(await dao.listNeedingDerivation(libraryId, 50)).toHaveLength(3);
       expect(await drain(libraryId)).toBe(3);
     });
+
+    /**
+     * The index write stamps the version, so the backfill has nothing to do on a row the
+     * walk just wrote.
+     *
+     * ### Why this is the test and not the other five
+     *
+     * Every case above seeds through `seedUngrouped` — a direct `INSERT` leaving
+     * `derived_version` at the migration's `DEFAULT 0` — because they are about repairing
+     * rows the indexer *did not* write. So none of them can see the index path's own stamp,
+     * and the defect this exists for lived entirely on that path.
+     *
+     * `UPSERT_FILE_FACTS` did not stamp `derived_version`, so every row the scan wrote took
+     * the default and was immediately owed to the backfill — permanently, because the
+     * selection is `derived_version < 1`. The backfill's page is one `UPDATE` per row with
+     * `requireComplete`, sized `200` against a chunk budget of `42`, so the write **refused**
+     * on every poll, before `listFrontier`, and the walk never ran. A library of ~100 tracks
+     * reported `scanning` for ever.
+     *
+     * ### Why the suite was green, and why this shape finds it
+     *
+     * Two doubles stamped `DERIVED_VERSION` — `test/scan-incremental.test.ts` and
+     * `test/scan-budget.test.ts` — each under a comment asserting that the statement did.
+     * The comment was false, so both were corrected to agree with a statement that did not
+     * exist, and neither file could see the defect. A double is evidence only to the extent
+     * it models the platform, and here the platform is *this statement*; so the assertion
+     * runs the statement, over the real engine, and asks the backfill's own selection
+     * whether it owes anything.
+     */
+    it('owes the backfill nothing for a row the index write just produced', async () => {
+      const userId = await seedUser('BackfillIndexStamps');
+      const libraryId = await seedLibrary(userId, 'LDIS');
+
+      const written = await new SongDAO(handle.db).upsertFileFacts([
+        { id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+      ]);
+      expect(written.written).toBe(1);
+
+      const dao = new SongDerivationDAO(handle.db);
+      // The whole assertion. A row the walk wrote is not owed a derivation, so the
+      // backfill's selection returns nothing and the pass costs one empty indexed seek.
+      expect(await dao.listNeedingDerivation(libraryId, 50)).toEqual([]);
+
+      // The grouping is still there — the stamp is not a way of skipping the derivation,
+      // it is a record that the index path already did it.
+      const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+      expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
+      expect(row?.derived_version).toBe(DERIVED_VERSION);
+    });
+
+    it('owes the backfill nothing after the row is *changed*, which is the conflict clause', async () => {
+      // The same statement on its second pass: `ON CONFLICT (library_id, path) DO UPDATE`.
+      // A file whose bytes moved is written again, and a writer that stamps only the
+      // `INSERT` leaves every re-indexed row permanently owed — so this is a distinct
+      // branch of the same statement and a distinct bug.
+      const userId = await seedUser('BackfillConflictStamps');
+      const libraryId = await seedLibrary(userId, 'LDCS');
+      const dao = new SongDAO(handle.db);
+      const facts = {
+        id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'),
+        libraryId,
+        path: 'Bonobo/Black Sands/01 Kerala.opus',
+        dirPath: 'Bonobo/Black Sands',
+        name: '01 Kerala.opus',
+        contentType: 'audio/ogg',
+        suffix: 'opus',
+      };
+
+      await dao.upsertFileFacts([{ ...facts, size: 1000, mtimeMs: 1000 }]);
+      // The bytes moved. `enriched_at` is cleared with it, so the row is genuinely
+      // re-indexed rather than re-asserted.
+      await dao.upsertFileFacts([{ ...facts, size: 2000, mtimeMs: 2000 }]);
+
+      const after = await dao.findById(facts.id);
+      expect(after?.size).toBe(2000);
+      expect(after?.enriched_at).toBeNull();
+      expect(await new SongDerivationDAO(handle.db).listNeedingDerivation(libraryId, 50)).toEqual([]);
+    });
+
+    it('still re-derives a stamped row when the convention changes, so the stamp is not a dead end', async () => {
+      // The paired negative for the two cases above, and the reason a version column rather
+      // than a predicate is the right shape. Removing the stamp from the index write turns
+      // the first two red; removing this turns *it* red. A guard that cannot be shown to
+      // have teeth is a fixture, and this one is the teeth.
+      const userId = await seedUser('BackfillStampIsNotFinal');
+      const libraryId = await seedLibrary(userId, 'LDSNF');
+      await new SongDAO(handle.db).upsertFileFacts([
+        { id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+      ]);
+
+      // At the current version: caught up, so nothing is selected and nothing is written.
+      const dao = new SongDerivationDAO(handle.db);
+      expect(await dao.listNeedingDerivation(libraryId, 50, DERIVED_VERSION)).toEqual([]);
+      expect(await drain(libraryId, DERIVED_VERSION)).toBe(0);
+
+      // At a later version the same row is selected again — the stamp records *which*
+      // convention produced the grouping, not that nobody may ever look again.
+      expect(await dao.listNeedingDerivation(libraryId, 50, DERIVED_VERSION + 1)).toHaveLength(1);
+      expect(await drain(libraryId, DERIVED_VERSION + 1)).toBe(1);
+    });
   });
 
   /**

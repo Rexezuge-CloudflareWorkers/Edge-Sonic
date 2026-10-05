@@ -163,11 +163,44 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   walk at all. A backfill placed after the status check therefore never runs for exactly
   the libraries that need it, which is what the first attempt did: 113 rows, all indexed
   before the deploy, all with `album_ci` NULL, and every aggregate answering `[]`.
-  It reads `dir_path` off the row, so it spends **no subrequests** — one indexed read and
-  one bounded write batch — and is charged only against the chunk's wall-clock deadline,
-  because D1 latency is real and the subrequest ceiling is a resource it cannot spend.
-  Once a library is current the read returns no rows and the write batch is never issued,
-  so a poll on a healthy library stays free.
+  It reads `dir_path` off the row, so it spends **no WebDAV subrequests** — one indexed read
+  and one bounded write batch. Once a library is current the read returns no rows and the
+  write batch is never issued, so a poll on a healthy library stays free.
+- **The backfill shares the chunk's budget, and its page is sized from it.** It runs
+  *first*, so it competes with the walk for the same 42 statements, and its write is **one
+  `UPDATE` per row** with `requireComplete` — it refuses rather than truncating, because the
+  selection is on `derived_version` and a partial page leaves rows re-selected for ever.
+  A page of `200` therefore fitted on **no chunk under any configuration**, so every library
+  past ~48 owing rows threw `SubrequestBudgetExhaustedError` out of `derivePending` — which
+  runs *before* `listFrontier`, so the walk never ran a folder, `step`'s catch recorded a scan
+  failure, `isAdvancing('failed')` is `true`, and `getScanStatus` answered `scanning: true`
+  for ever on a library of ~100 tracks. Four rules, and each is how the others collapse:
+  - **The page is `SCAN_DERIVE_MAX_ROWS_PER_CHUNK`**, derived in `subrequests.ts` as
+    `42 − SUBSREQUESTS_PER_CHUNK_OVERHEAD(4) − SUBSREQUESTS_PER_FOLDER_BASE(6) = 32`. A number
+    typed beside the loop is wrong by the time the ceiling moves.
+  - **`SUBSREQUESTS_PER_CHUNK_OVERHEAD` counts the two statements that *bracket* the walk**
+    (`listFrontier` and `saveProgress`), not only the ones before it. Leave them out and the
+    page is 35, which leaves 5 of a folder's 6 — the loop's `canAfford` refuses, and the
+    chunk returns `scanning` having visited **zero** folders. Same symptom as the throw, no
+    error anywhere, and what a fix that only deleted the throw would have shipped.
+  - **`derivePending` checks `canAfford(rows.length)` and returns `0`.** The derived size
+    bounds a chunk that has spent nothing; what decides whether *this* chunk can take the
+    page is what it has already spent. Returning rather than throwing is the difference
+    between a slow repair and a dead scan, and the rows are exactly the next poll's.
+  - **It is charged against both bounds** — the wall-clock deadline, because D1 latency is
+    real, and the subrequest ceiling, because a D1 statement *is* one. The claim that this
+    phase "cannot spend" the ceiling is what let the oversized batch exist at all.
+- **`saveProgress` takes a delta: `scanned_count = scanned_count + ?`.** It was `= ?`,
+  read-modify-written by every chunk, while `fail` one method below already incremented its
+  own counter in its own statement. A chunk can be overlapped — an operator
+  `POST /user/libraries/:id/scan/step` while the alarm is live — so two chunks publishing the
+  same read left the counter permanently **under-reported**. The work is done (`is_scanned`
+  moves with the same statements); the count went backwards, which is exactly the "a row says
+  one thing while its children say another" shape `test/scan-do.test.ts` is written against.
+  It passed by an accident of interleaving: the losing order needs two chunks to read the
+  same value, and the backfill's extra `await` at the top of every chunk was what finally
+  made that order reachable. A guard that passes only because of a timing coincidence is not
+  a guard.
 - A failure leaves the frontier where it was, and the next poll **resumes** — bounded.
   `step` re-enters a `failed` scan rather than treating the status as terminal, because it
   used to, and that made one bad chunk permanent: the frontier sat intact in D1 and

@@ -6,7 +6,6 @@ export { ScanBudget, stopReason } from './scanBudget';
 export type { ScanBudgetOptions, ChunkStopReason } from './scanBudget';
 export { REQUESTS_PER_ENRICHED_TRACK } from './scanEnrichment';
 export { reconcileFolder } from './scanFolder';
-export { DERIVE_MAX_ROWS_PER_CHUNK } from './deriveBackfill';
 export type { ScanDeps, ScanNodeInput, ScanSongInput, ScanDerivationStore } from './scanTypes';
 export { MAX_CONSECUTIVE_FAILURES, isAdvancing, storedStatus } from './scanRetry';
 export { EnrichmentService, shouldEnrich } from './EnrichmentService';
