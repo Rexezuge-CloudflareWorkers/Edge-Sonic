@@ -150,6 +150,10 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
     scanning: t('libraries.scanScanning', 'Scanning.'),
     failed: t('libraries.scanFailed', 'Retrying after an error.'),
     stalled: t('libraries.scanStalled', 'Stopped retrying. Fix the cause, then rescan.'),
+    paused: t(
+      'libraries.scanPaused',
+      "D1's daily write allowance is spent. Paused until {{time}} UTC; the scan resumes itself.",
+    ),
     tracksIndexed: t('libraries.scanTracks', '{{count}} tracks indexed'),
   });
   const scanFailure = describeScan(scanState?.lastError);

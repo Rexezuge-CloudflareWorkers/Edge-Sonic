@@ -141,7 +141,11 @@ describe('libraries', () => {
       .run();
 
     const { body } = await call('/user/libraries');
-    expect(body.libraries?.[0]?.scan).toEqual({ status: 'scanning', scanned: 7, lastError: null });
+    // `resumeAt` is asserted present-and-null rather than omitted, because "there is no moment this
+    // resumes" and "the field is not here" are different facts and a client has to be able to tell
+    // them apart — the same reason `lastError` is nullable rather than optional. It is null for
+    // every status except `paused`, where it is the whole content of the status.
+    expect(body.libraries?.[0]?.scan).toEqual({ status: 'scanning', scanned: 7, lastError: null, resumeAt: null });
   });
 
   it('reports a stalled scan as stalled, not as a failure that reads as retrying', async () => {
@@ -507,6 +511,91 @@ describe('libraries', () => {
     const { status, body } = await call('/user/libraries/nope/scan/step', { method: 'POST' });
     expect(status).toBe(404);
     expect(body.Exception?.Message).toContain('not found');
+  });
+});
+
+describe('a spent D1 daily allowance', () => {
+  /**
+   * Cloudflare's refusal, verbatim, wrapped the way `executeD1WithRetry` wraps it.
+   *
+   * Since 2026-09-01 this is what a Free-plan account over its daily row allowance gets — for
+   * **every** query, reads included, until midnight UTC. Subsonic authentication reads `users`, so
+   * the whole product is down, and this file is the surface an operator opens to find out why.
+   */
+  const LIMIT_ERROR = `Failed to statement: Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.`;
+
+  /**
+   * Make every D1 statement fail, at the one choke point all of them share.
+   *
+   * Replacing anything narrower would leave a path where a write quietly succeeds inside a
+   * write-refused deployment — a state these tests must be unable to construct, because the whole
+   * subject is what each surface does when nothing succeeds.
+   */
+  function refuseEveryD1Statement(error: string = LIMIT_ERROR): void {
+    vi.spyOn(harness.db.db, 'prepare').mockImplementation((sql: string) => {
+      const statement = {
+        bind: () => statement,
+        run: async () => {
+          throw new Error(error);
+        },
+        first: async () => {
+          throw new Error(error);
+        },
+        all: async () => {
+          throw new Error(error);
+        },
+      };
+      void sql;
+      return statement as never;
+    });
+  }
+
+  it('answers 503 naming the limit and the hour it resumes, rather than a masked 500', async () => {
+    // The shape of this page's failure, and the sentence is the whole content of it. `libraries` is
+    // itself a D1 read, so there is nothing to enumerate and the honest answer is *unavailable*,
+    // not *empty* — and "No libraries yet" is the one sentence on this page that means something
+    // is genuinely absent. A `500` would also send an operator to debug a database that is fine and
+    // merely refusing queries.
+    refuseEveryD1Statement();
+    vi.stubGlobal('fetch', harness.dav.fetch);
+
+    const { status, body } = await call('/user/libraries');
+
+    expect(status).toBe(503);
+    expect(body.Exception?.Message).toContain('row write limit');
+    expect(body.Exception?.Message).toContain('00:00 UTC');
+    // And it must not disclose the schema, which is why the message is a sentence rather than the
+    // D1 error: the masking rule exists because a D1 message names tables and columns.
+    expect(body.Exception?.Message).not.toMatch(/SELECT|INSERT|FROM /i);
+  });
+
+  it('answers the scan routes without a 500, so a rescan reports the pause', async () => {
+    // The operator's two buttons. Unclassified, both surfaced as a masked 500 — which says "this
+    // server is broken" to somebody whose only problem is a clock.
+    refuseEveryD1Statement();
+    vi.stubGlobal('fetch', harness.dav.fetch);
+
+    const started = await call('/user/libraries/L1/scan', { method: 'POST' });
+    const stepped = await call('/user/libraries/L1/scan/step', { method: 'POST' });
+
+    expect(started.status).toBe(503);
+    expect(started.body.Exception?.Message).toContain('00:00 UTC');
+    expect(stepped.status).toBe(503);
+    expect(stepped.body.Exception?.Message).toContain('00:00 UTC');
+  });
+
+  it('keeps a genuinely broken D1 a masked 500, because a spent allowance is not every fault', async () => {
+    // The negative, and it is the half that stops the fix being an over-correction. A missing table is
+    // a deployment fault with no scheduled end: reporting it as "resumes at 00:00 UTC" would be a lie
+    // that also suppresses the masking a 5x is supposed to get. So this one is `500` and generic,
+    // while the case above is `503` and specific.
+    refuseEveryD1Statement('Failed to libraries.list: no such table: libraries');
+    vi.stubGlobal('fetch', harness.dav.fetch);
+
+    const { status, body } = await call('/user/libraries');
+    expect(status).toBe(500);
+    expect(body.Exception?.Message).not.toContain('00:00 UTC');
+    expect(body.Exception?.Message).not.toMatch(/no such table/);
   });
 });
 

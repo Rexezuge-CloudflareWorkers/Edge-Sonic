@@ -229,6 +229,66 @@ const PAGE_FIXED_STATEMENTS = 4;
 const PAGE_STATEMENTS_PER_GROUP = 1 / PAGE_ALBUM_KEYS_PER_STATEMENT + 1 / PAGE_ALBUMS_PER_STATEMENT + PAGE_ANNOTATION_READS / PAGE_IDS_PER_STATEMENT;
 
 /**
+ * Rows D1 accepts written per day on the Free plan.
+ *
+ * The platform number, not a choice. `5,000`.
+ *
+ * And since 2026-09-01 it is **enforced**: Cloudflare fails every query on the database,
+ * reads included, until the allowance resets at midnight UTC. So this is not a throughput
+ * number that degrades a scan into "takes a couple of days" — it is the boundary between a
+ * slow product and an unreachable one, which is why the scan now paces itself against it
+ * (`SCAN_DAILY_ROW_WRITE_BUDGET`) rather than discovering it.
+ */
+const D1_DAILY_ROW_WRITE_LIMIT = 5000;
+
+/**
+ * Rows the scan leaves alone for everything that is not a scan.
+ *
+ * The scan is not the only writer: a client stars a track, rates it, saves a play queue or a
+ * playlist, a failed login increments the credential throttle, a completed scan bumps
+ * `index_version`. Those are all rows against the same daily allowance, and the scan is by
+ * far the largest consumer of it — so the scan's budget is the allowance **less** what
+ * everything else might need.
+ *
+ * A thousand is a reserve, not a derivation: there is no arithmetic that produces it, and
+ * pretending otherwise would be the "a number typed beside a query is wrong by the time
+ * somebody raises a page size" defect in a new place. What *is* load-bearing is that it is
+ * non-zero, and that is asserted as a relationship in `test/subrequest-budget.test.ts` —
+ * because a zero reserve makes the two constants below identical, and a scan that may spend
+ * the entire allowance leaves nothing for the stars a client presses while it runs.
+ */
+const D1_DAILY_ROW_WRITE_RESERVE = 1000;
+
+/**
+ * Rows one scan may write per UTC day, across every library on the account.
+ *
+ * D1's allowance is per **account**, not per database, so a per-library budget is unsound the
+ * moment a second library exists: two libraries each capped at the whole allowance write
+ * twice it. So the scan takes a *share*, derived from the number of libraries actually
+ * registered — which `ScanWorker` already reads, because it looks the library up before every
+ * chunk, so dividing by it costs nothing.
+ *
+ * One library (the ordinary deployment) therefore gets the whole budget, and N libraries
+ * together cannot exceed it. That is the direction the arithmetic has to err in: a pessimistic
+ * share makes a scan take longer, and the cost of that is time, while an optimistic one is an
+ * outage until midnight UTC.
+ */
+const SCAN_DAILY_ROW_WRITE_BUDGET = D1_DAILY_ROW_WRITE_LIMIT - D1_DAILY_ROW_WRITE_RESERVE;
+
+/**
+ * One library's share of the day's row-write budget.
+ *
+ * `max(1, …)` so that a day still gets a budget when the share would round to zero — which is
+ * what a hundred libraries on the Free plan would produce. A scan that may write nothing a day
+ * never completes, and a scan that cannot complete is the same class of permanent failure this
+ * whole mechanism exists to avoid; so at that scale the budget degrades to "slow", deliberately,
+ * and the reactive pause in `D1ErrorClassifier` is what stops it going further.
+ */
+function dailyRowWriteShare(enabledLibraries: number): number {
+  return Math.max(1, Math.floor(SCAN_DAILY_ROW_WRITE_BUDGET / Math.max(1, Math.floor(enabledLibraries))));
+}
+
+/**
  * The largest page this server will accept, whatever `MAX_PAGE_SIZE` says.
  *
  * Derived from the ceiling and the measured statement denominators, floored so the answer is a
@@ -265,6 +325,10 @@ export {
   SCAN_DERIVE_MAX_ROWS_PER_CHUNK,
   SCAN_CHUNK_FOLDER_LIMIT,
   SCAN_ENRICH_MAX_PER_FOLDER,
+  D1_DAILY_ROW_WRITE_LIMIT,
+  D1_DAILY_ROW_WRITE_RESERVE,
+  SCAN_DAILY_ROW_WRITE_BUDGET,
+  dailyRowWriteShare,
   PAGE_ALBUM_KEYS_PER_STATEMENT,
   PAGE_ALBUMS_PER_STATEMENT,
   PAGE_IDS_PER_STATEMENT,

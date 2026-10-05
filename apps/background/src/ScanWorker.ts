@@ -4,29 +4,37 @@
  * Facade (Git `RepoWorker` pattern): routing + composition only. The folder walk
  * lives in `ScanService`, tag parsing in `EnrichmentService`/`media-tags`, picture
  * extraction in `embeddedAlbumArt` — this class only decides *where* they run and
- * chains the alarm that advances the scan without a client polling.
+ * chains the alarm that advances the scan without a client polling. The pause and
+ * the day's write budget live in `scanPause.ts`, for the same reason the walk lives
+ * in `ScanService`: this file is a router, and a decision with a state machine in it
+ * does not belong in one.
  *
- * D1 stays authoritative; DO storage holds only the library id and the alarm.
- * KV stays a non-load-bearing cache. That is what makes a DO restart safe: the
- * frontier lives in D1, so a lost isolate resumes rather than restarts.
+ * D1 stays authoritative; DO storage holds the library id, the alarm, the day's row-write count and
+ * any pause. KV stays a non-load-bearing cache. That is what makes a DO restart safe: the frontier
+ * lives in D1, so a lost isolate resumes rather than restarts.
+ *
+ * ### The exception to "DO storage holds the library id and the alarm", and why it is one
+ *
+ * A pause is the one piece of scan state that **cannot** be stored in D1, because it is usually
+ * caused by D1 refusing writes: since 2026-09-01 an account over its daily row allowance has every
+ * query fail until midnight UTC. The scan knows that is what happened, and there is nowhere in D1
+ * to write it down — so it is written here, and `getStatus` reads it back, which is what lets the
+ * operator's page say "paused until 00:00 UTC" instead of a 500 or an empty list.
+ *
+ * The day's row-write count is here for the same reason and one more: metering D1 writes must not
+ * itself spend D1 writes.
+ *
+ * Nothing else moved. The frontier, every indexed row, the retry counter and the index version are
+ * D1's, and a lost isolate still resumes rather than restarts.
  */
 import { DurableObject } from 'cloudflare:workers';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { embeddedAlbumArt, isAdvancing } from '@edge-sonic/backend-services/index';
-import type { ArtSource, ChunkResult, ResolvedArt } from '@edge-sonic/backend-services/index';
+import { d1AllowancePause, embeddedAlbumArt, pausedResult } from '@edge-sonic/backend-services/index';
+import type { ArtSource, ChunkResult, ResolvedArt, ScanDailyBudget } from '@edge-sonic/backend-services/index';
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import { ScanPauseStore, isDailyLimitRefusal, SCAN_ALARM_DELAY_MS } from './scanPause';
 import { createScanWorkerScope } from './ScanWorkerFactory';
-
-/**
- * Milliseconds between alarm-driven chunks.
- *
- * Non-zero so a chunk's `waitUntil` work settles before the next alarm fires,
- * and small enough that a scan of many chunks finishes while an operator
- * watches. The chunk itself is still bounded by `ScanBudget`, so this is a
- * pacing delay, not a work bound.
- */
-const SCAN_ALARM_DELAY_MS = 1000;
 
 /**
  * The alarm the chain re-arms itself with after a fault it could not record.
@@ -37,6 +45,10 @@ const SCAN_ALARM_DELAY_MS = 1000;
  * writes is cheap, and it stops the instant the store recovers — which is the only moment
  * it should stop, because the alternative (`stalled`, and therefore no alarm) is a
  * permanent end to a scan over a transient fault.
+ *
+ * It is also why a pause does not use it: a pause's end is known and written down, so
+ * re-arming a second later re-runs the whole failure path to reach the same conclusion
+ * until midnight UTC. See `ScanPauseStore.arm`.
  */
 const RETRY_ARM_DELAY_MS = SCAN_ALARM_DELAY_MS;
 
@@ -48,8 +60,11 @@ interface EnrichFactsInput {
 }
 
 class ScanWorker extends DurableObject<Cloudflare.Env> {
+  private readonly pause: ScanPauseStore;
+
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
+    this.pause = new ScanPauseStore(ctx.storage);
   }
 
   private scope(): ReturnType<typeof createScanWorkerScope> {
@@ -57,17 +72,52 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
   }
 
   private async libraryFor(libraryId: string): Promise<LibraryRow | null> {
-    const scope = this.scope();
-    const libraries = await scope.get(Tokens.LibraryService).listAll();
+    const libraries = await this.libraries();
     return libraries.find((candidate) => candidate.id === libraryId) ?? null;
   }
 
-  private async armIfAdvancing(result: ChunkResult): Promise<void> {
-    if (isAdvancing(result.status)) {
-      await this.ctx.storage.setAlarm(Date.now() + SCAN_ALARM_DELAY_MS);
-    } else {
-      await this.ctx.storage.deleteAlarm();
+  /**
+   * Every registered library, which is also the divisor of the day's row-write budget.
+   *
+   * Returned whole rather than as a count because `libraryFor` needs the row anyway and D1 charges
+   * one statement per query: reading the list once and using it for both is the difference between
+   * one statement and two, on a path every chunk takes.
+   */
+  private async libraries(): Promise<LibraryRow[]> {
+    return await this.scope().get(Tokens.LibraryService).listAll();
+  }
+
+  /**
+   * Every registered library, or `null` when D1 is refusing queries for a spent daily allowance.
+   *
+   * The first thing a spent allowance refuses is this read, so it is reached before any of the
+   * scan's own logic. `null` rather than a throw, and the distinction is load-bearing: a thrown
+   * refusal reaching `alarm`'s catch cannot be told from any other fault without re-classifying, so
+   * it would re-arm at `RETRY_ARM_DELAY_MS` and the one-second loop would run for the hours until
+   * the reset. Anything that is *not* a spent allowance still throws.
+   */
+  private async librariesOrPause(): Promise<LibraryRow[] | null> {
+    try {
+      return await this.libraries();
+    } catch (error) {
+      if (isDailyLimitRefusal(error)) return null;
+      throw error;
     }
+  }
+
+  /**
+   * Hold the pause in storage and arm the chain for its end.
+   *
+   * Shared by all three entry points that can reach a pause — the alarm, a manual step and the
+   * operator's `startScan` — because "record it, then arm for it" is one operation and three copies
+   * of it would be free to disagree about which comes first. Order matters: the pause is recorded
+   * **before** the alarm is armed, so a crash between the two leaves an over-armed chain rather than
+   * a paused scan with nothing scheduled to lift it.
+   */
+  private async pauseAndArm(pause: ChunkResult): Promise<ChunkResult> {
+    await this.pause.record(pause);
+    await this.pause.arm(pause);
+    return pause;
   }
 
   /**
@@ -76,24 +126,55 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
    * Stores the library id so `alarm()` knows what to advance after a restart.
    */
   public async startScan(libraryId: string): Promise<ChunkResult> {
-    const library = await this.libraryFor(libraryId);
-    if (library === null) throw new Error(`Unknown library "${libraryId}".`);
+    // The library lookup is a D1 read, so it is refused first when the allowance is spent — before
+    // any of the scan's own logic. Answering `paused` here is what makes the operator's Rescan button
+    // report the pause and the hour it ends, instead of a masked 500 from the one surface whose job
+    // is to explain what is wrong.
+    const libraries = await this.librariesOrPause();
+    if (libraries === null) return await this.pauseAndArm(await this.pause.pauseForRefusal());
+
+    const library = libraries.find((candidate) => candidate.id === libraryId);
+    if (library === undefined) throw new Error(`Unknown library "${libraryId}".`);
     // Unconditional, and it must be: `start` is what *seeds* the frontier and clears the
     // retry counter, so this is the one entry point that legitimately re-points the object
     // at a different library.
     await this.ctx.storage.put('libraryId', libraryId);
-    const scope = this.scope();
-    const result = await scope.get(Tokens.ScanService).start(library);
-    await this.armIfAdvancing(result);
+    const result = await this.scope()
+      .get(Tokens.ScanService)
+      .start(library, await this.pause.budget(libraries.length));
+    await this.pause.arm(result);
+    await this.pause.record(result);
     return result;
   }
 
   /**
    * Read-only status. Never advances the scan — that is what the alarm is for.
+   *
+   * Overlaid with this object's own pause, because the one status D1 cannot report is the status
+   * whose cause is D1 refusing to answer. A `scan_state` read during a spent allowance throws, so the
+   * honest alternative would be a 500 on the one call whose job is to say what is happening.
+   *
+   * The overlay is **only** ever applied to a pause this object is holding, and it is dropped the
+   * moment a chunk runs, so it cannot report a condition that has ended. It is deliberately not used
+   * to fill in any other field: the counters come from D1 when it answers and are zero when it does
+   * not, because a fabricated `scanned` count on a page an operator reads as progress is the failure
+   * this file has spent three separate fixes on.
    */
   public async getStatus(libraryId: string): Promise<ChunkResult> {
-    const scope = this.scope();
-    return await scope.get(Tokens.ScanService).status(libraryId);
+    const held = await this.pause.held();
+    let stored: ChunkResult;
+    try {
+      stored = await this.scope().get(Tokens.ScanService).status(libraryId);
+    } catch (error) {
+      const fromError = d1AllowancePause(error, Date.now());
+      if (fromError) return fromError;
+      throw error;
+    }
+    // A held pause **overrides** the stored status rather than being reported beside it. D1 cannot
+    // know about a pause entered *because* it was refusing writes, so its row is guaranteed stale
+    // about it — it says `scanning`, which an operator reads as working and a client reads as
+    // poll-me. D1 still fills the counts when it answers.
+    return held === null ? stored : pausedResult(held.resumeAt, held.reason, stored.scanned, stored.total);
   }
 
   /**
@@ -102,11 +183,14 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
    * The operator `POST .../scan/step` and `alarm()` share this: a manual step
    * is one chunk of the same loop, not a second implementation.
    */
-  public async stepOnce(libraryId: string): Promise<ChunkResult> {
-    const library = await this.libraryFor(libraryId);
-    if (library === null) throw new Error(`Unknown library "${libraryId}".`);
+  public async stepOnce(libraryId: string, dailyBudget?: () => ScanDailyBudget): Promise<ChunkResult> {
+    const libraries = await this.librariesOrPause();
+    if (libraries === null) return await this.pauseAndArm(await this.pause.pauseForRefusal());
+
+    const library = libraries.find((candidate) => candidate.id === libraryId);
+    if (library === undefined) throw new Error(`Unknown library "${libraryId}".`);
     await this.rememberLibrary(libraryId);
-    return await this.runChunk(library);
+    return await this.runChunk(library, dailyBudget ?? (await this.pause.budget(libraries.length)));
   }
 
   public override async alarm(): Promise<void> {
@@ -122,7 +206,7 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
     // called from nowhere in this repository.
     //
     // So the handler cannot reject, and a failure is recorded rather than discarded —
-    // `isAdvancing('failed')` is true, so `armIfAdvancing` keeps the chain armed and
+    // `willResumeWithoutAPoll('failed')` is true, so `arm` keeps the chain armed and
     // `consecutive_failures` bounds it. That is the difference between a bounded retry
     // and an unbounded one, and the reason the catch is here rather than around
     // `ScanService.step` alone: this is the code that owns the alarm, so this is where
@@ -130,13 +214,26 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
     try {
       const libraryId = await this.ctx.storage.get<string>('libraryId');
       if (!libraryId) return;
-      const library = await this.libraryFor(libraryId);
-      if (library === null) {
+      const libraries = await this.librariesOrPause();
+      if (libraries === null) {
+        // Reached before the scan service is even called, because the library lookup is itself a D1
+        // read. The old path re-armed one second later — ~86,400 times before the reset, each
+        // attempt a failed read. The chain sleeps to the reset instead.
+        await this.pauseAndArm(await this.pause.pauseForRefusal());
+        return;
+      }
+      const library = libraries.find((candidate) => candidate.id === libraryId);
+      if (library === undefined) {
         await this.ctx.storage.deleteAlarm();
         return;
       }
-      await this.runChunk(library);
+      await this.runChunk(library, await this.pause.budget(libraries.length));
     } catch (error) {
+      const pause = d1AllowancePause(error, Date.now());
+      if (pause) {
+        await this.pauseAndArm(pause);
+        return;
+      }
       console.error('[ScanWorker] alarm failed; the chain stays armed for a bounded retry', error);
       // Re-arm unconditionally, and after the same delay a normal chunk would use. The
       // chunk's own failure already records `last_error` and counts against the retry
@@ -154,10 +251,11 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
    * chunk of the same walk, not a second implementation of it, and having them diverge
    * is how the two started disagreeing about whether a chunk was `idle`.
    */
-  private async runChunk(library: LibraryRow): Promise<ChunkResult> {
+  private async runChunk(library: LibraryRow, dailyBudget: () => ScanDailyBudget): Promise<ChunkResult> {
     const scope = this.scope();
-    const result = await scope.get(Tokens.ScanService).step(library);
-    await this.armIfAdvancing(result);
+    const result = await scope.get(Tokens.ScanService).step(library, dailyBudget);
+    await this.pause.arm(result);
+    await this.pause.record(result);
     return result;
   }
 
@@ -240,5 +338,6 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
   }
 }
 
-export { ScanWorker, SCAN_ALARM_DELAY_MS };
+export { ScanWorker,  };
 export type { EnrichFactsInput };
+export {SCAN_ALARM_DELAY_MS} from './scanPause';

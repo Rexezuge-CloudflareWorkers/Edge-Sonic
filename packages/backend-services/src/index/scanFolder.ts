@@ -14,8 +14,9 @@ import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
 import { encodeId, IdKind } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
-import { basename, isAudioFile, suffixOf } from './TreeService';
+import { basename, isAudioFile, suffixOf } from './libraryNames';
 import { enrichChanged } from './scanEnrichment';
+import { nodeRowNeedsWrite } from './nodeWrite';
 import type { ScanBudget } from './scanBudget';
 import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
 
@@ -24,8 +25,8 @@ import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
  *
  * Two decisions per child, and they are **not the same question**:
  *
- * - **Does this node row need rewriting?** Answered by the child's own mtime and
- *   etag. `upsertFileFacts` deliberately leaves derived metadata alone, so a
+ * - **Does this node row need rewriting?** `nodeRowNeedsWrite`, against the child's
+ *   stored row. `upsertFileFacts` deliberately leaves derived metadata alone, so a
  *   redundant write would spend a row to rewrite values that are already correct.
  * - **Does this folder need descending into?** Answered by `is_scanned` *as well
  *   as* by the mtime — see `needsDescent` below, which is where this file's one
@@ -33,6 +34,21 @@ import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
  *
  * The second is what makes a one-album change cost one request instead of one per
  * folder, so it has to be right rather than merely cheap.
+ *
+ * ### The first is what makes a folder that fits in one invocation finish
+ *
+ * It was described here and not implemented, and the omission was a scan that could not
+ * complete. Without the compare, `nodeInputs` is every child of the folder, changed or not,
+ * so `runWriteBatch` truncates it against the invocation's ceiling — and the rows it had
+ * already written are the rows it re-offers first, so the truncation lands at the same offset
+ * every time. `truncated` is therefore permanently true on a folder with more entries than fit,
+ * the folder's own `is_scanned: true` is never written, the folder never leaves the frontier,
+ * and each chunk rewrites the same ~45 rows against a 5,000-rows/day allowance. 231,620 rows
+ * on an 80-album library of 110 tracks, and a scan that reported `scanning` for ever.
+ *
+ * With it, the second pass offers only what is still missing, the batch stops being
+ * truncated, and the folder closes: 49 rows, then 31, then nothing. `test/scan-convergence.test.ts`
+ * asserts that arithmetic, because a comment about it is what the code carried instead.
  */
 async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: NodeRow, resources: readonly DavResource[], budget: ScanBudget): Promise<number> {
   // The folder's own entry in this listing, kept for the `is_scanned` write further down —
@@ -73,18 +89,16 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
     // because `settle` found an empty frontier and called it finished.
     //
     // So `is_scanned` is an **input** to this decision and not only its output, and it is
-    // the only one of the two that says "someone actually descended". The browse path
-    // writes `0` (`isScanned` is optional and `undefined` binds to `0`), so `0` and
-    // "absent" both mean *not reconciled* and both descend.
+    // the only one of the two that says "someone actually descended". A folder the *browse*
+    // materialized is written `is_scanned = 0`, so `0` and "absent" both mean *not reconciled*
+    // and both descend.
     //
     // This is the `reader_version` invariant one level up: a row's meaning is a function
     // of the bytes *and* of what read them, and keying on only one makes the other
     // unreachable.
     const needsDescent = resource.isCollection && (known?.is_scanned !== 1 || mtimeMoved || etagMoved);
 
-    nodeInputs.push({
-      libraryId: library.id,
-      path,
+    const desired = {
       parentPath: folder.path,
       name,
       mtimeMs: resource.lastModifiedMs,
@@ -92,7 +106,15 @@ async function reconcileFolder(deps: ScanDeps, library: LibraryRow, folder: Node
       depth: path.split('/').length,
       // A new or moved folder must be opened; an unreconciled one must be too.
       isScanned: !needsDescent,
-    });
+    };
+
+    // Only the rows whose stored state differs. The etag rule here and the one in
+    // `TreeService` are now one function, because they were two and they disagreed: the
+    // browse's comparison ignored a row whose etag went from a value to none, which froze
+    // the subtree that only an etag had changed.
+    if (nodeRowNeedsWrite(known, desired)) {
+      nodeInputs.push({ libraryId: library.id, path, ...desired });
+    }
 
     // Non-audio files are still nodes — they show in a folder listing — but never
     // become songs, so they never reach an index or a search result.

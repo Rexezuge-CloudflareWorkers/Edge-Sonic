@@ -19,13 +19,21 @@
  * two are asserted against the same status vocabulary in `test/scan-progress.test.ts`. Import
  * it when the SPA gains runtime dependencies; do not add them for this.
  *
- * ### Why polling stops at `stalled`
+ * ### Why polling stops at `stalled` and at `paused`
  *
- * `stalled` is the only status where more polling buys nothing: the retry budget is spent and
- * nothing is scheduled to retry. A page that keeps polling it is spending the operator's
- * `/user/*` rate-limit budget to re-read an answer that cannot change. `failed` is the
- * opposite case and **is** still advancing — it is retried within its bound — which is the
- * distinction `isAdvancing` records on the server.
+ * Both are states where more polling buys nothing, and for the same reason: the answer cannot
+ * change. `stalled`'s retry budget is spent and nothing is scheduled to retry; a `paused` scan
+ * waits for a wall-clock moment and no amount of asking moves it. A page that keeps polling either
+ * spends the operator's `/user/*` rate-limit budget to re-read an answer that will be identical,
+ * which is the one thing the 60-requests-per-minute bucket cannot afford.
+ *
+ * `failed` is the opposite case and **is** still advancing — it is retried within its bound —
+ * which is the distinction `isAdvancing` records on the server. `paused` is `true` there and
+ * `false` here, and that is not an inconsistency: the server's `isAdvancing` answers *the alarm's*
+ * question ("will this resume by itself?"), which is `yes` for a pause, and this one answers
+ * *the page's* ("will looking again change what I read?"), which is `no`. Both answers are needed
+ * and neither is the other's, so `test/scan-progress.test.ts` pins this one to the server's and
+ * `test/d1-daily-limit.test.ts` pins the server's to both halves.
  */
 import type { LibraryScanSummary, Notice, ScanStatus } from '../types';
 
@@ -33,7 +41,11 @@ import type { LibraryScanSummary, Notice, ScanStatus } from '../types';
  * Whether more work will happen if someone looks again.
  *
  * Mirrors `isAdvancing` in `backend-services`; see the header for why it is not that
- * function imported.
+ * function imported. `paused` is in neither, and for the same reason in both: the server's
+ * `isAdvancing` answers the **alarm's** question ("will this resume by itself?" — yes, at a
+ * known moment) and this one answers the **page's** ("will looking again change what I read?" —
+ * no). Two questions, two functions, and `test/scan-progress.test.ts` pins both halves so neither
+ * is written against the other's answer.
  */
 function isAdvancingStatus(status: ScanStatus | null | undefined): boolean {
   return status === 'scanning' || status === 'failed';
@@ -64,6 +76,12 @@ interface ScanLabels {
   readonly scanning: string;
   readonly failed: string;
   readonly stalled: string;
+  /**
+   * A pause the scan will lift itself. `{{time}}` is substituted by this module, not by the
+   * caller, for the same reason `tracksIndexed` is: a component that formats the value is a
+   * decision with no test.
+   */
+  readonly paused: string;
   readonly tracksIndexed: string;
 }
 
@@ -93,8 +111,27 @@ const SCAN_LABELS: ScanLabels = {
   scanning: 'Scanning.',
   failed: 'Retrying after an error.',
   stalled: 'Stopped retrying. Fix the cause, then rescan.',
+  paused: "D1's daily write allowance is spent. Paused until {{time}} UTC; the scan resumes itself.",
   tracksIndexed: '{{count}} tracks indexed',
 };
+
+/**
+ * A wall-clock moment as an operator reads it, in UTC and to the minute.
+ *
+ * UTC because that is the clock D1's reset is defined in, and a local-time rendering would be
+ * wrong twice a day — once by the offset, and once because the two midnights disagree. `HH:MM`
+ * rather than a date because a pause is at most a few hours long: the date is noise, and rendering
+ * a second format an operator then has to interpret is a second thing to get wrong.
+ *
+ * `null` for an unusable timestamp, so a client that receives one falls back to the label without
+ * a substitution rather than rendering `Invalid Date`.
+ */
+function formatResumeAt(resumeAt: number | null | undefined): string | null {
+  if (typeof resumeAt !== 'number' || !Number.isFinite(resumeAt)) return null;
+  const at = new Date(resumeAt);
+  if (Number.isNaN(at.getTime())) return null;
+  return `${String(at.getUTCHours()).padStart(2, '0')}:${String(at.getUTCMinutes()).padStart(2, '0')}`;
+}
 
 /**
  * Derive the badge, the count line and the notice from one scan state.
@@ -125,6 +162,20 @@ function describeScanState(scan: LibraryScanSummary | null, songCount: number, l
     // The reason is rendered under the row instead, which outlives any notice.
     return { tone: 'warning', label: labels.failed, detail, notice: void 0 };
   }
+  if (scan.status === 'paused') {
+    // Warning, not error, and `notice: void 0` rather than a notice. A pause is a limit that will
+    // lift itself at a stated time, so it is not a fault an operator has to act on and raising a
+    // notice on every poll would interrupt them repeatedly for something already handled. The
+    // reason and the time are on the row, where they outlive any notice — the same treatment a
+    // failed scan gets, for the same reason.
+    const at = formatResumeAt(scan.resumeAt);
+    return {
+      tone: 'warning',
+      label: at === null ? labels.paused.replaceAll('{{time}}', '00:00') : labels.paused.split('{{time}}').join(at),
+      detail,
+      notice: void 0,
+    };
+  }
   if (scan.status === 'stalled') {
     // Terminal: the retry budget is spent and nothing will re-attempt it. An error tone is
     // right here, and the label names the remedy, because this is the one status where the
@@ -148,5 +199,5 @@ function describeScanState(scan: LibraryScanSummary | null, songCount: number, l
   return { tone: 'success', label: labels.idle, detail, notice: void 0 };
 }
 
-export { describeScanState, isAdvancingStatus, SCAN_LABELS };
+export { describeScanState, isAdvancingStatus, formatResumeAt, SCAN_LABELS };
 export type { ScanLabels, ScanPresentation, ScanTone };

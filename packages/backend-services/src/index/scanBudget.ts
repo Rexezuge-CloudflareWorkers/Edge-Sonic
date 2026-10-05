@@ -77,6 +77,12 @@ class ScanBudget {
     this.now = options.now ?? Date.now;
     this.startedAt = this.now();
     this.options.meter.reset();
+    // The chunk's ceiling on the meter, so the charge points below this layer enforce it too.
+    // `canAfford` below was the only thing that knew it, and the write batch was not one of
+    // those things: `BaseDAO.fitCount` read `meter.remaining`, so a batch could issue up to the
+    // platform's 50 while this budget said 42 — spending the invocation's reserve, after which
+    // `saveProgress` crosses the ceiling and the runtime terminates the invocation.
+    this.options.meter.setCeiling(options.maxRequests);
   }
 
   /**

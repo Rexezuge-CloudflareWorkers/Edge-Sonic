@@ -29,6 +29,7 @@
  * signature" is a free oracle for building a valid token.
  */
 import { ConflictError, DatabaseError, NotFoundError, ServiceError, UnauthorizedError } from '@edge-sonic/backend-errors';
+import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
 import { getBackendStrings } from '@edge-sonic/shared/i18n';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
 import { ErrorCode, isSubsonicError, SubsonicError } from '@edge-sonic/subsonic';
@@ -61,7 +62,8 @@ function toSubsonicError(error: unknown): SubsonicError {
   if (isSubsonicError(error)) return error;
   if (error instanceof DatabaseError) {
     console.error('Database error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
-    return new SubsonicError(ErrorCode.Generic);
+    const spentAllowance = d1AllowanceSentence(error);
+    return spentAllowance === null ? new SubsonicError(ErrorCode.Generic) : new SubsonicError(ErrorCode.Generic, spentAllowance);
   }
   if (error instanceof ServiceError) {
     // The 4xx service errors have a direct protocol counterpart, and collapsing them
@@ -96,6 +98,16 @@ function toSubsonicError(error: unknown): SubsonicError {
 function toUserResponse(error: unknown, locale?: string | null): { status: number; body: UserErrorBody } {
   const strings = getBackendStrings(locale).common;
 
+  // Before the `ServiceError` branch, and deliberately: a spent daily D1 allowance is a 5xx that
+  // is **not** a fault of the deployment's code, it is a plan limit with a known end. Masking it
+  // into "internal error" would leave an operator with a masked message and a database they cannot
+  // read for the next several hours — the one failure this file exists to prevent, and it is the
+  // same shape as `probe` reporting a missing Secrets Store binding as "library unreachable".
+  const spentAllowance = d1AllowanceSentence(error);
+  if (spentAllowance !== null) {
+    return { status: 503, body: { Exception: { Type: 'ServiceUnavailable', Message: spentAllowance } } };
+  }
+
   if (error instanceof ServiceError) {
     const status = USER_STATUSES.has(error.getErrorCode()) ? error.getErrorCode() : 500;
     const masked = status >= 500;
@@ -110,5 +122,26 @@ function toUserResponse(error: unknown, locale?: string | null): { status: numbe
   return { status: 500, body: { Exception: { Type: 'InternalServerError', Message: strings.internalError } } };
 }
 
-export { toSubsonicError, toUserResponse, USER_STATUSES };
+/**
+ * The sentence for a spent D1 daily allowance, or `null` for any other fault.
+ *
+ * Shared by both dialects because both are answering the same operator or listener with the same
+ * fact, and two spellings of it would be free to disagree about what time it ends — which is the
+ * one part of the answer somebody acts on. It is also safe to say out loud where the masking rule
+ * is not: the message names no table, no column and no schema. It states a platform limit and the
+ * hour it resets, both of which the caller could learn from the console and neither of which
+ * discloses anything about this deployment.
+ *
+ * `503` rather than `500` on the user surface because it is the honest class: the service is
+ * temporarily unable to answer, it is not broken, and a client that distinguishes them should not
+ * be told the second. The Subsonic envelope has no code for "try later" and keeps `code=0` with
+ * the sentence attached, because its clients render the message and nothing else.
+ */
+function d1AllowanceSentence(error: unknown): string | null {
+  const limit = isD1DailyLimitError(error);
+  if (!limit) return null;
+  return `This server's D1 account has exceeded its free tier daily row ${limit.kind} limit, so D1 is refusing queries. Queries resume at 00:00 UTC and the scan resumes itself.`;
+}
+
+export { toSubsonicError, toUserResponse, USER_STATUSES, d1AllowanceSentence };
 export type { UserErrorBody };

@@ -187,6 +187,14 @@ interface ScanDeps {
   instead — a track with no duration until someone opens it, rather than a chunk that dies.
   */
   enrichMaxPerFolder: number;
+  /**
+   * Clock, for the midnight-UTC arithmetic. Absent means `Date.now()`.
+   *
+   * Injected rather than reached for so the boundary can be asserted: a reset computed as
+   * already-past is a pause of zero length, and a zero-length pause is the one-second loop the
+   * pause exists to stop.
+   */
+  now?: () => number;
 }
 
 /**
@@ -206,8 +214,25 @@ interface ScanDeps {
  * its retry budget and will not be. Collapsing them is what let a wedged scan report
  * as finished — `getScanStatus` derives `scanning` from this value, and both `failed`
  * and a completed scan serialize as `scanning: false`.
+ *
+ * `paused` is a third thing again, and it is the reason the two above are not enough. It
+ * means **retried by itself, at a known time, needing no operator**: the chunk will not run
+ * until a wall-clock moment arrives, so retrying is not merely useless (as it is for
+ * `stalled`) but *actively harmful*, and the retry counter has nothing to say about it.
+ *
+ * It exists because D1's Free-plan daily row allowance is **enforced**: since 2026-09-01 an
+ * account over it has every query fail — reads included — until midnight UTC, so the whole
+ * product is down and the old path through this machine treated it as a scan failure. `step`
+ * caught the refusal, tried to record it with a D1 write that could not succeed, and returned
+ * `failed`; `isAdvancing('failed')` is true, so `ScanWorker` re-armed one second later and did
+ * it again, roughly 86,000 times before the reset. Nothing was retried in any useful sense, no
+ * reason reached an operator, and the allowance was spent long before that.
+ *
+ * It is not persisted as a `scan_state.status`, and that is deliberate rather than convenient:
+ * a pause entered *because D1 is refusing writes* has nowhere to be written. It lives in the
+ * Durable Object's storage, which is the one store still accepting them. See `ScanWorker`.
  */
-type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled';
+type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled' | 'paused';
 
 /**
  * How many consecutive failed chunks a scan may spend before it is declared stalled.
@@ -220,6 +245,39 @@ type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled';
  * operator's escape hatch, needing no surface of its own.
  */
 const MAX_CONSECUTIVE_FAILURES = 3;
+
+/**
+ * What the caller knows about the account's row-write allowance for today.
+ *
+ * Supplied by `ScanWorker`, which owns the Durable Object's storage and therefore the count,
+ * because **metering D1 writes must not itself spend D1 writes**: a counter in `scan_state`
+ * would cost a row per chunk against the very allowance it enforces, and one extra statement out
+ * of a 42-statement chunk is 2.4% of a budget that is already the binding constraint.
+ *
+ * The limit is a *share*, not the whole allowance — D1's is per account, so a per-library cap
+ * is unsound as soon as a second library exists. See `dailyRowWriteShare`.
+ */
+interface ScanDailyBudget {
+  /**
+   * Rows written today across every library, as the caller counts them.
+   *
+   * A **lower bound**, deliberately: the count is persisted at most once per
+   * `SCAN_ROW_COUNT_PERSIST_INTERVAL` rows, so a crash can overshoot the day's budget by at
+   * most that interval. That is why the interval is inside the platform's reserve rather than
+   * taken out of it.
+   */
+  readonly rowsWrittenToday: number;
+  /**
+   * Rows this library may write today. `dailyRowWriteShare` of the account's budget.
+   */
+  readonly limit: number;
+  /**
+   * Epoch milliseconds, injectable so the midnight boundary is testable — the boundary is where
+   * a reset computed as already-past becomes a pause of zero length and the whole mechanism
+   * turns back into a one-second loop.
+   */
+  readonly now: () => number;
+}
 
 interface ChunkResult {
   readonly status: ScanStatus;
@@ -273,6 +331,23 @@ interface ChunkResult {
   nothing to do: no scan running, or a library not yet configured.
   */
   readonly stoppedBy: ChunkStopReason;
+  /**
+   * When this chunk will be attempted again on its own, epoch milliseconds, or `null`.
+   *
+   * `null` for every chunk that is not `paused`, including one that ran out of frontier — the
+   * next chunk is the next alarm and nothing needs saying about it. A value means the opposite:
+   * **this scan will not advance until this moment**, and it will do so without a client, an
+   * operator, or a `startScan`.
+   *
+   * It is a field rather than something derived from `status` because the two consumers want
+   * opposite things from the same status. `ScanWorker.armIfAdvancing` needs to know that the
+   * alarm stays armed and when; `getScanStatus`'s `scanning` needs to know that a client's poll
+   * buys nothing, because polling *cannot* buy anything and a client told otherwise polls for
+   * hours. One predicate answering both is how `scanning: false` once stopped every scan in the
+   * product — so `willResumeWithoutAPoll` and `isAdvancing` are separate functions and both are
+   * asserted.
+   */
+  readonly resumeAt: number | null;
 }
 
 /**
@@ -292,6 +367,7 @@ export type {
   ScanSongStore,
   ScanStateStore,
   ScanDerivationStore,
+  ScanDailyBudget,
   ScanStatus,
   ChunkResult,
   ScanEnrichFacts,

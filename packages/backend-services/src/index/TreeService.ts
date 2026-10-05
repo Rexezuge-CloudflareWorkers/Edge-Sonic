@@ -15,14 +15,30 @@
  *
  * The consequence is stated in the invariant rather than left implicit: **the
  * index has two writers, the scan and this path, and both must compare before
- * writing so an unchanged folder costs zero rows.** Both go through
- * `persistChildren`, which is the only place a node row is written.
+ * writing so an unchanged folder costs zero rows.** Both use `nodeRowNeedsWrite`,
+ * which is the whole of that invariant's enforcement.
+ *
+ * It did not used to be true, and the sentence above claimed it while the opposite was the
+ * case. This module had a compare; `scanFolder.ts` had a comment describing one it did not
+ * have. So the two writers disagreed about when a node row may be written, the one without a
+ * compare re-offered every row it had already written, and a folder with more entries than fit
+ * in one invocation could never be closed — which cost 231,620 rows on an 80-album library
+ * against a 5,000-rows/day allowance. "Both go through `persistChildren`, which is the only
+ * place a node row is written" was the sentence that hid it: the scan never went through it.
+ *
+ * `is_scanned` is the other half of this module's half of the deal, and it now means what it
+ * says. This path reads a `Depth: 1` listing and nothing below it, so it does not get to
+ * decide that a folder has been descended into — see `persistChildren`.
  */
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
 import type { LibraryRow, NodeRow, SongRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
 import { encodeId, IdKind } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
+import { nodeRowNeedsWrite } from './nodeWrite';
+// `AUDIO_SUFFIXES` is not imported here: `isAudioFile` is the question this module asks, and the
+// set is `libraryNames`' own business. Re-exporting it from here is what made it look importable.
+import { COVER_NAMES, basename, depthOf, isAudioFile, parentOf, suffixOf } from './libraryNames';
 
 interface NodeStore {
   find(libraryId: string, path: string): Promise<NodeRow | null>;
@@ -37,6 +53,7 @@ interface NodeStore {
       mtimeMs: number | null;
       etag: string | null;
       depth: number;
+      isScanned?: boolean;
     }[],
   ): Promise<WriteBatchResult>;
   countByLibrary(libraryId: string): Promise<number>;
@@ -67,58 +84,12 @@ interface TreeDeps {
 }
 
 /**
-File suffixes the indexer treats as playable audio.
-*/
-const AUDIO_SUFFIXES: ReadonlySet<string> = new Set([
-  'mp3',
-  'flac',
-  'ogg',
-  'oga',
-  'opus',
-  'm4a',
-  'mp4',
-  'aac',
-  'wav',
-  'wma',
-  'aiff',
-  'aif',
-  'ape',
-  'wv',
-  'mpc',
-  'dsf',
-  'dff',
-  'alac',
-]);
-
-/**
-Cover art filenames probed in an album folder, in preference order.
-*/
-const COVER_NAMES: readonly string[] = ['cover', 'folder', 'front', 'album', 'albumart', 'thumb'];
-
-function isAudioFile(name: string): boolean {
-  const dot = name.lastIndexOf('.');
-  return dot <= 0 ? false : AUDIO_SUFFIXES.has(name.slice(dot + 1).toLowerCase());
-}
-
-function suffixOf(name: string): string {
-  const dot = name.lastIndexOf('.');
-  return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase();
-}
-
-function parentOf(path: string): string {
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? '' : path.slice(0, slash);
-}
-
-function depthOf(path: string): number {
-  return path.length === 0 ? 0 : path.split('/').length;
-}
-
-function basename(path: string): string {
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? path : path.slice(slash + 1);
-}
-
+ * A folder plus its children, as `children()` answers.
+ *
+ * `node` is the folder's own row — synthesized for the library root, which has nowhere to persist
+ * one — so a caller never has to branch on the root, which is the one folder every caller would
+ * otherwise have to special-case.
+ */
 interface MaterializedFolder {
   readonly path: string;
   readonly node: NodeRow;
@@ -128,10 +99,13 @@ interface MaterializedFolder {
 /**
  * A stand-in row for the library root, which has no `nodes` row of its own.
  *
- * The root is the empty path, and the schema keys rows on `path`, so there is
- * nowhere to persist it. Returning a synthesized row keeps callers from having to
- * special-case the root — which is the point: the root is the one folder every
- * caller would otherwise branch on.
+ * The root is the empty path, and the schema keys rows on `path`, so there is nowhere to persist it.
+ * Returning a synthesized row keeps callers from having to special-case the root — which is the
+ * point: the root is the one folder every caller would otherwise branch on.
+ *
+ * `is_scanned: 0` is stated rather than defaulted, because it is *not* a neutral value here. It
+ * means "not reconciled", so a caller that used this row to decide whether to descend would descend
+ * into the root — which is correct, and which a fabricated `1` would silently prevent.
  */
 function syntheticRootNode(libraryId: string, self: DavResource | undefined): NodeRow {
   return {
@@ -152,10 +126,10 @@ function syntheticRootNode(libraryId: string, self: DavResource | undefined): No
 /**
  * The listing a `PROPFIND` returned, as `NodeRow`s, without writing any of them.
  *
- * Only the fields a folder listing publishes, and only for the answer this module gives when
- * its writes did not fit. A row read here is never persisted, so it never becomes the answer
- * to a *later* read — the folder's own row is deliberately absent, so the next browse re-lists
- * rather than trusting this.
+ * Only the fields a folder listing publishes, and only for the answer this module gives when its
+ * writes did not fit. A row read here is never persisted, so it never becomes the answer to a
+ * *later* read — the folder's own row is deliberately absent, so the next browse re-lists rather
+ * than trusting this.
  */
 function materialized(libraryId: string, resources: readonly DavResource[], parentPath: string): NodeRow[] {
   return resources
@@ -233,15 +207,16 @@ class TreeService {
   }
 
   /**
-   * The single write path for nodes and songs.
+   * The single write path for nodes and songs, on this module's half of the tree.
    *
-   * Both the scan and read-through materialization come through here, which is
-   * what makes "an unchanged folder writes nothing" enforceable rather than
-   * aspirational: there is nowhere else a node row is created.
+   * Rows are written for entries that are new, or whose stored state differs from what this
+   * listing says. An entry present in both listings with nothing changed is skipped entirely,
+   * which is what makes a repeat browse of an unchanged folder free — and "free" matters more
+   * than usual here, because a browse runs on a `GET` a client issues while browsing, against
+   * the same daily D1 write allowance the scan is spending.
    *
-   * Rows are written for files that are new or whose `mtime_ms` changed. A file
-   * present in both listings with an identical mtime is skipped entirely, which is
-   * what makes a repeat browse of an unchanged folder free.
+   * The claim that the scan also came through here was false, and `nodeWrite.ts` now owns the
+   * comparison both writers use instead.
    */
   private async persistChildren(
     library: LibraryRow,
@@ -267,13 +242,29 @@ class TreeService {
       const isCollection = resource.isCollection;
       const known = existing.get(path);
 
-      // A node is rewritten only when its own mtime or etag moved. The etag
-      // comparison matters because some servers round `getlastmodified` to the
-      // minute, which would otherwise freeze a subtree as permanently unchanged.
-      const nodeChanged =
-        !known ||
-        known.mtime_ms !== resource.lastModifiedMs ||
-        (resource.etag !== null && known.etag !== null && known.etag !== resource.etag);
+      // A node is rewritten only when its stored state differs from what this listing says.
+      // `nodeRowNeedsWrite` is the scan's predicate too — it was this module's alone, and the
+      // scan described one in a comment without having it, which is how a folder too large for
+      // one invocation came to be un-closable. The etag comparison is two-sided null because
+      // some servers round `getlastmodified` to the minute, and a row whose etag went from a
+      // value to none is a change rather than an absence of one.
+      //
+      // `is_scanned` is **preserved**, not cleared, and this is a change of behaviour rather
+      // than a refactor. It used to bind to `0` for every child, which put every folder a client
+      // merely *looked at* back on the scan frontier — so a browse of the root re-walked the
+      // whole library, once per browse, spending rows from the same 5,000/day allowance the
+      // scan is trying not to exhaust. The flag means "someone descended into this", and this
+      // path demonstrably has not: it read a `Depth: 1` listing and nothing below it. A folder
+      // discovered *here* is new, so it is written `0` and the scan descends into it — which is
+      // the invariant `reconcileFolder`'s `needsDescent` reads, and it still holds.
+      const nodeChanged = nodeRowNeedsWrite(known, {
+        parentPath,
+        name,
+        mtimeMs: resource.lastModifiedMs,
+        etag: resource.etag,
+        depth: depthOf(path),
+        isScanned: known?.is_scanned === 1,
+      });
 
       if (nodeChanged) {
         nodeInputs.push({
@@ -284,6 +275,7 @@ class TreeService {
           mtimeMs: resource.lastModifiedMs,
           etag: resource.etag,
           depth: depthOf(path),
+          isScanned: known?.is_scanned === 1,
         });
       }
 
@@ -291,12 +283,17 @@ class TreeService {
       // but never become songs, so they never reach an index or a search result.
       if (isCollection || !isAudioFile(name)) continue;
 
-      // The song row mirrors the node row's mtime and size, so the same
-      // comparison answers for both. `upsertFileFacts` deliberately leaves derived
-      // metadata alone, so skipping a redundant write is a real saving rather
-      // than a cosmetic one.
-      const sizeChanged = !known;
-      if (nodeChanged || sizeChanged) {
+      // The song row mirrors the node row's mtime, so the same comparison answers for both.
+      // `upsertFileFacts` deliberately leaves derived metadata alone, so skipping a redundant
+      // write is a real saving rather than a cosmetic one.
+      //
+      // It used to read `nodeChanged || sizeChanged` with `sizeChanged = !known`, which is the
+      // same predicate written twice: a row that did not exist is already `nodeChanged`, so the
+      // second term could never be true on its own. It *looked* like it was checking `size`, and
+      // a file whose length changed without its mtime moving is detected by nothing here — `nodes`
+      // has no `size` column, so a folder listing cannot answer it. Stated plainly rather than
+      // implied by a comparison that never fires.
+      if (nodeChanged) {
         songInputs.push({
           id: encodeId(IdKind.Song, library.id, path),
           libraryId: library.id,
@@ -330,6 +327,12 @@ class TreeService {
 
     // Materialize the folder's own row, so the next read finds it in D1 and skips
     // the PROPFIND entirely. Skipped for the library root, which has no path.
+    //
+    // `isScanned: false` is stated rather than left to bind, because on **this** path it is the
+    // right answer and only here: the folder's own mtime moved, so its contents moved, so it
+    // genuinely has not been reconciled and belongs back on the scan frontier. The children
+    // above take the opposite rule, because a child's own mtime says nothing about whether
+    // anyone descended into *it*.
     if (parentPath !== '' && self) {
       const own = await this.deps.nodes.find(library.id, parentPath);
       if (!own || own.mtime_ms !== self.lastModifiedMs || own.etag !== self.etag) {
@@ -342,6 +345,7 @@ class TreeService {
             mtimeMs: self.lastModifiedMs,
             etag: self.etag,
             depth: depthOf(parentPath),
+            isScanned: false,
           },
         ]);
       }
@@ -383,7 +387,7 @@ class TreeService {
   }
 }
 
-export { TreeService, isAudioFile, suffixOf,  parentOf, depthOf, basename, AUDIO_SUFFIXES, COVER_NAMES };
+export { TreeService };
 export type { TreeDeps, MaterializedFolder };
 
 export {toLibraryPath} from '@edge-sonic/webdav';
