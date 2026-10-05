@@ -36,17 +36,20 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseError } from '@edge-sonic/backend-errors';
 import { isD1DailyLimitError, isD1ErrorRetryable, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
-import { ScanService, d1AllowancePause, isAdvancing, willResumeWithoutAPoll } from '@edge-sonic/backend-services/index';
+import { ScanService, d1AllowancePause, dailyWriteAllowanceSpent, isAdvancing, willResumeWithoutAPoll } from '@edge-sonic/backend-services/index';
+import { SCAN_ROW_COUNT_PERSIST_INTERVAL } from '@edge-sonic/background/scanPause';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import {
   D1_DAILY_ROW_WRITE_LIMIT,
   D1_DAILY_ROW_WRITE_RESERVE,
+  D1_DAILY_ROW_WRITE_RESERVE_SHARE,
   SCAN_CHUNK_SUBSREQUEST_BUDGET,
   SCAN_DAILY_ROW_WRITE_BUDGET,
   WORKER_SUBSREQUEST_CEILING,
   dailyRowWriteShare,
 } from '@edge-sonic/backend-runtime/config';
+import { billedRowsForTable } from '@edge-sonic/backend-data/dao';
 
 function library(): LibraryRow {
   return {
@@ -370,6 +373,61 @@ describe('the budget is derived from the platform number, not typed beside it', 
     expect(SCAN_DAILY_ROW_WRITE_BUDGET).toBeGreaterThan(0);
   });
 
+  it('is 100,000, the published Free-plan number, and not a stale one', () => {
+    // Cloudflare's pricing page, billing metrics table (last updated 2026-04-21):
+    // Workers Free, "Rows written — 100,000 / day".
+    //
+    // Pinned rather than derived, because this is the one number in the repository that is a
+    // **platform fact** rather than a choice, and the constant's own comment used to claim to be
+    // exactly that while holding 5,000 — a fifth of it. Nothing measured the claim, so it stood
+    // through every suite. A test that re-derives it from a formula cannot catch this; only the
+    // numeral itself can, and that is the point: this fails the day Cloudflare changes the number,
+    // which is when somebody has to go and read the page again.
+    expect(D1_DAILY_ROW_WRITE_LIMIT).toBe(100_000);
+  });
+
+  it('reserves a share of the limit rather than a flat number', () => {
+    // The reserve is a *fraction*, so it scales with the platform. It was a flat 1,000 chosen
+    // against a 5,000 limit — 20% — and carried forward onto a 100,000 limit as 1%, which does
+    // not cover a few hundred stars on a busy day nor the counter's own overshoot. Asserting the
+    // relationship is what stops the next change repeating that: a flat number beside a platform
+    // number is the shape of the defect, and only the ratio survives the platform moving.
+    expect(D1_DAILY_ROW_WRITE_RESERVE_SHARE).toBeGreaterThan(0);
+    expect(D1_DAILY_ROW_WRITE_RESERVE_SHARE).toBeLessThan(1);
+    expect(D1_DAILY_ROW_WRITE_RESERVE).toBe(Math.ceil(D1_DAILY_ROW_WRITE_LIMIT * D1_DAILY_ROW_WRITE_RESERVE_SHARE));
+
+    // And the specific thing that would break if it were flat: a day's worth of client writes
+    // must fit inside the reserve, at the scale they plausibly happen. 10,000 covers ~5,000 stars
+    // at the two billed rows a star costs, plus the login throttle and the `index_version` bumps.
+    expect(D1_DAILY_ROW_WRITE_RESERVE).toBeGreaterThanOrEqual(2000 * billedRowsForTable('stars', 1));
+  });
+
+  it('leaves the reserve large enough to absorb the counter persist interval', () => {
+    // `ScanPauseStore` persists the day's count at most once per
+    // `SCAN_ROW_COUNT_PERSIST_INTERVAL` rows, so a crash or eviction loses at most that many and
+    // the scan overshoots its share by at most that many. An interval **above** the reserve is a
+    // metering scheme that can overshoot the thing it meters, and nothing else would say so — so
+    // the relationship is asserted rather than the numeral.
+    expect(D1_DAILY_ROW_WRITE_RESERVE).toBeGreaterThanOrEqual(SCAN_ROW_COUNT_PERSIST_INTERVAL);
+  });
+
+  it('is denominated in billed rows, which is what the platform meters', () => {
+    // The reason the ceiling could not simply be raised by twenty on its own. D1 bills a write
+    // as the row plus every index entry it rewrote, so a budget that counted *table* rows would
+    // have admitted ten times what the allowance accepts on the `songs` path — an outage at
+    // midnight UTC rather than a slow scan.
+    //
+    // So: a chunk writing 50 `songs` rows spends 500 of this budget, not 50. If `ScanDailyBudget`
+    // were fed `changes` anywhere, this is the number it would be fed instead, and every budget
+    // in the product would be ten times too generous.
+    expect(billedRowsForTable('songs', 50)).toBe(500);
+    expect(billedRowsForTable('nodes', 50)).toBe(200);
+    // Sanity: a 1,000-folder / 5,000-track cold scan bills ~61,000 against a ~90,000 budget, so
+    // it fits in one day. At the old table-row accounting the same scan cost 6,100 and the
+    // platform would still have charged 61,000 — which is the whole defect in one comparison.
+    expect(61_000).toBeLessThan(SCAN_DAILY_ROW_WRITE_BUDGET);
+  });
+
   it('gives one library the whole budget, which is the ordinary deployment', () => {
     expect(dailyRowWriteShare(1)).toBe(SCAN_DAILY_ROW_WRITE_BUDGET);
   });
@@ -386,14 +444,34 @@ describe('the budget is derived from the platform number, not typed beside it', 
   it('never rounds a day budget down to zero', () => {
     // A scan allowed zero rows a day never completes, which is the same class of permanent failure
     // this mechanism exists to prevent — so the share floors at one. It is reached well before any
-    // realistic library count: `4000 / 1` needs 4,001 libraries, which is why this reads as
-    // theoretical and is asserted anyway. The cost of getting it wrong is a scan that never resumes
-    // and a day that never ends.
-    expect(dailyRowWriteShare(4001)).toBe(1);
+    // realistic library count, which is why this reads as theoretical and is asserted anyway. The
+    // cost of getting it wrong is a scan that never resumes and a day that never ends.
+    //
+    // The library count is derived from the budget rather than written as a numeral: the budget is
+    // now ~90,000 rather than 4,000, so the literal `4001` this used to carry was already stale —
+    // a copy of a derived value into prose, which is the "a number typed beside a query" defect one
+    // level down. Derived, it cannot drift when the platform number moves.
+    expect(dailyRowWriteShare(SCAN_DAILY_ROW_WRITE_BUDGET + 1)).toBe(1);
     expect(dailyRowWriteShare(1_000_000)).toBeGreaterThanOrEqual(1);
     for (const count of [1, 2, 10, 100, 5000, 100_000]) {
       expect(dailyRowWriteShare(count), `count=${count}`).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it('is zero when the deployment disables the pacing, which is the Paid case', () => {
+    // D1 Paid is billed monthly — 50 million rows included — with **no daily cliff** and no
+    // midnight-UTC refusal. A deployment on it that inherited the Free number would be throttled
+    // to ~90,000 rows a day, roughly 6% of what it is paying for, and nothing would say so: the
+    // plan is not detectable from inside a Worker.
+    //
+    // So `0` disables the pacing entirely, and `dailyWriteAllowanceSpent` already treats a
+    // non-positive limit as "no limit" — the disable path existed before there was a reason to
+    // use it. Paired with the default below, because "0 means unlimited" and "0 means unlimited
+    // because the limit is 0" are different claims and only the second is what a caller reads.
+    expect(dailyRowWriteShare(1, 0)).toBe(0);
+    expect(dailyWriteAllowanceSpent({ billedRowsWrittenToday: 10_000_000, limit: 0, now: Date.now })).toBe(false);
+    // And the default is the Free plan, which is the one that fails loudly rather than quietly.
+    expect(dailyRowWriteShare(1)).toBe(SCAN_DAILY_ROW_WRITE_BUDGET);
   });
 
   it('treats a zero or absent library count as one, rather than dividing by it', () => {

@@ -58,7 +58,7 @@ import {
 } from '@edge-sonic/backend-runtime/config';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
-import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { DERIVED_VERSION, billedRowsForTable, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
 import { DERIVED_MARKER } from './helpers/harness';
@@ -297,12 +297,12 @@ function createIndex(options: IndexOptions = {}) {
           }
           return changed;
         }, inputs.length);
-          return { changes: result, written, truncated: written < inputs.length };
+          return { changes: result, written, truncated: written < inputs.length, billedRows: billedRowsForTable('nodes', result) };
         },
         deleteSubtree: async (_libraryId: string, path: string) => {
           const doomed = [...nodes.values()].filter((node) => node.path === path || node.path.startsWith(`${path}/`));
           for (const node of doomed) nodes.delete(nodeKey(node.path));
-          return doomed.length;
+          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('nodes', doomed.length) };
         },
         countByLibrary: async () => nodes.size,
       },
@@ -370,7 +370,7 @@ function createIndex(options: IndexOptions = {}) {
           }
           return inputs.length;
         }, inputs.length);
-          return { changes: result, written, truncated: written < inputs.length };
+          return { changes: result, written, truncated: written < inputs.length, billedRows: billedRowsForTable('songs', result) };
         },
         // The prune path, made **visible**. It returned 0 unconditionally, so the largest
         // row-write cost in a cold scan — a folder of deleted files — was free in every
@@ -388,12 +388,12 @@ function createIndex(options: IndexOptions = {}) {
           const { written } = writeBatch(doomed.length);
           for (const song of doomed.slice(0, written)) songs.delete(song.id);
           if (doomed.length > 0) meter.charge(doomed.length, 'd1');
-          return { changes: written, written, truncated: written < doomed.length };
+          return { changes: written, written, truncated: written < doomed.length, billedRows: billedRowsForTable('songs', written) };
         },
         deleteSubtree: async (_libraryId: string, dirPath: string) => {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath);
           for (const song of doomed) songs.delete(song.id);
-          return doomed.length;
+          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
         },
         countByLibrary: async () => songs.size,
       },
@@ -522,6 +522,15 @@ interface Harness {
  * with one name and two contracts means the next reader who greps `createHarness` gets
  * whichever they expected.
  */
+/**
+ * An enrichment that wrote nothing, which is a different answer from one that was not asked.
+ *
+ * A value rather than an inline `{ rowsWritten: 0, billedRows: 0 }` at the one site that needs
+ * it, for the `NO_FOLDER_WRITES` reason: an object literal there is where a third count would be
+ * added to the type and not to the value.
+ */
+const NO_ENRICHMENT_WRITE = { rowsWritten: 0, billedRows: 0 } as const;
+
 function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number, d1LatencyMs?: number, meterCeiling?: number): Harness {
   const index = createIndex({
     ...(d1LatencyMs !== undefined && { d1LatencyMs }),
@@ -586,12 +595,19 @@ function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number,
               // from this return value — so a double that modelled the cost of a track but
               // not its row write would leave the budget untested. Paired with the failure
               // below, because "wrote a row" and "was asked to" are different answers.
-              return 1;
+              // `billedRows` is the `songs` figure, not the row count: an `UPDATE songs`
+              // rewrites nine index entries, and the day budget is denominated in that.
+              // A double returning `1` for both would make every budget here ten times
+              // larger than production's, which is the failure this suite exists to catch
+              // in the *opposite* direction.
+              return { rowsWritten: 1, billedRows: billedRowsForTable('songs', 1) };
             } catch {
               // The scan swallows a failed enrichment and leaves the track for
               // `getSong`; these cases are about cost, not decoding. And it wrote
-              // nothing, so it contributes nothing to `rowsWritten`.
-              return 0;
+              // nothing, so it contributes nothing to either count — which is the whole
+              // reason it is a pair: "asked to" and "wrote" are different answers, and a
+              // swallowed exception is the second one.
+              return NO_ENRICHMENT_WRITE;
             }
           },
         }),
@@ -962,7 +978,12 @@ describe('the backfill and the walk share one chunk budget', () => {
           }
           meter.charge(writes.length, 'd1');
           state.remaining -= writes.length;
-          return writes.length;
+          return {
+            changes: writes.length,
+            written: writes.length,
+            truncated: false,
+            billedRows: billedRowsForTable('songs', writes.length),
+          };
         },
       },
     };

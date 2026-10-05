@@ -161,9 +161,15 @@ function harness(maxRequests: number = SCAN_CHUNK_SUBSREQUEST_BUDGET): Harness {
   const meter = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
   const nodes = new NodeDAO(handle.db, meter);
   const songs = {
-    upsertFileFacts: async () => ({ changes: 0, written: 0, truncated: false }),
-    deleteInDirectoryNotIn: async () => ({ changes: 0, written: 0, truncated: false }),
-    deleteSubtree: async () => 0,
+    upsertFileFacts: async () => ({ changes: 0, written: 0, truncated: false, billedRows: 0 }),
+    deleteInDirectoryNotIn: async () => ({ changes: 0, written: 0, truncated: false, billedRows: 0 }),
+    // `nodes` bills four rows per row changed — the table row plus its three indexes — so a
+    // double returning `billedRows: 0` would be modelling a table with **no indexes at all**,
+    // which is not one in this schema. Nothing in this suite asserts on it, and that is
+    // precisely the point of it being faithful rather than convenient: the numbers this suite
+    // cares about come from the real `NodeDAO` above, and the doubles exist only to satisfy the
+    // port. `test/schema.int.test.ts` is where the factor is asserted against the schema.
+    deleteSubtree: async () => ({ changes: 0, written: 0, truncated: false, billedRows: 0 }),
     countByLibrary: async () => 0,
   };
 

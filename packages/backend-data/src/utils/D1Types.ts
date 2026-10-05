@@ -1,6 +1,15 @@
 // Minimal structural D1 types so backend-data (Layer 2) typechecks without
 // Cloudflare workers-types. Real D1Database satisfies these structurally.
 interface D1PreparedStatement {
+  /**
+   * The statement's own SQL, exactly as it was prepared.
+   *
+   * Read by `billedRowsFor` to work out which table a write bills index entries against,
+   * so it is required rather than optional: a statement that cannot name its own target
+   * would be charged the schema's worst case on every write, which is the right *direction*
+   * and an enormous silent throughput loss.
+   */
+  sql: string;
   bind(...values: unknown[]): D1PreparedStatement;
   first<T = unknown>(): Promise<T | null>;
   all<T = unknown>(): Promise<{ results: T[] }>;

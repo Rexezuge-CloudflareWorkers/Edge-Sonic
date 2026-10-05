@@ -9,9 +9,9 @@ limit resets at **midnight UTC**:
 > Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait
 > until tomorrow (midnight UTC) to continue.
 
-The Free allowance is 5,000 rows written per day. So this is not a scan that slows down. Subsonic
-authentication reads `users`; every endpoint does. **The product is down**, and it comes back on a
-clock.
+The Free allowance is **100,000** rows written per day (pricing page, billing metrics table, page
+last updated 2026-04-21). So this is not a scan that slows down. Subsonic authentication reads
+`users`; every endpoint does. **The product is down**, and it comes back on a clock.
 
 ## What this server did with it
 
@@ -81,25 +81,81 @@ index version are all still D1's.
 
 ## The preventive half, because the limit is reached by design
 
-Even a **correct** chunk writes about 42 rows, and a chunk runs about once a second. So
-**5,000 rows/day is roughly two minutes of scanning.** The runaway above was not the only way here,
-and a fix that only made the outage survivable would leave the outage frequent.
+A **correct** chunk bills a few hundred rows, and a chunk runs about once a second. So a day of
+scanning on a 5,000-track library is a couple of hours: the allowance is reached by design, and a
+fix that only made the outage survivable would leave it frequent.
 
 So the scan paces itself:
 
-- `SCAN_DAILY_ROW_WRITE_BUDGET` = the platform's 5,000 less a named reserve for non-scan writes
-  (stars, ratings, playlists, the login throttle, `index_version` bumps).
+- `SCAN_DAILY_ROW_WRITE_BUDGET` = the platform's 100,000 less a **10%** reserve for non-scan writes
+  (stars, ratings, playlists, the login throttle, `index_version` bumps). A share rather than a flat
+  figure, so it moves when the platform's number does — the flat `1,000` it replaced was 20% of the
+  old `5,000` and 1% of the real one.
 - Divided by the number of **registered** libraries, not `MAX_LIBRARIES` — the allowance is per
   *account*, so a per-library cap is unsound the moment a second library exists, and using the
   configured maximum would give a one-library deployment a tenth of the budget it could have had.
-- Counted from the chunk's own measured `rowsWritten`, so the number is a measurement rather than an
-  estimate.
+- **Counted in billed rows**, not table rows — see the next section. The number is a measurement
+  taken off each statement's own result, never a figure declared at a call site.
 - Held in Durable Object storage, because **metering D1 writes must not itself spend D1 writes**. A
   counter in `scan_state` is a D1 row per chunk against the allowance it enforces.
 
 The count is persisted at most once per 500 rows, which is what makes the placement cost Durable
 Object storage rather than the D1 allowance — and which makes it a **lower bound** by up to one
 chunk's worth beyond that interval. `D1_DAILY_ROW_WRITE_RESERVE` is what absorbs that.
+
+## The allowance is not denominated in rows, and neither is the guard
+
+Pricing page, definition 6:
+
+> Indexes will add an additional written row when writes include the indexed column, as there are
+> two rows written: one to the table itself, and one to the index.
+
+So the unit is a **billed row**, and the multiplier is a property of the *table*. `songs` carries
+**nine** indexes — eight declared plus the implicit unique index SQLite creates for
+`id TEXT PRIMARY KEY` — so one insert is ten rows of allowance; `nodes` is four, and `scan_state`,
+which declares no index at all, is two.
+
+The guard was counting **table rows**. `BaseDAO.runWriteBatch` summed `result.meta.changes`, which is
+SQLite's count of rows touched and knows nothing about indexes, and the one writer outside it
+declared its own figure: `EnrichmentService` hardcoded `rowsWritten = 1` for every enrichment
+because `applyMetadata` returned `void` — against a statement billing ten. So the budget believed it
+had roughly ten times its real headroom on the dominant write path, and the platform's refusal came
+first.
+
+Three consequences, and each is a separate defect:
+
+1. **The two counts are different numbers, so they are two fields.** `rowsWritten` is progress and
+   is what `test/scan-convergence.test.ts` measures; `billedRows` is cost and is what the daily budget
+   is charged. `ScanDailyBudget.rowsWrittenToday` was renamed `billedRowsWrittenToday` for the same
+   reason — a field whose name does not say which unit it is in cannot be compared against a limit
+   without anyone checking.
+2. **The multiplier is derived from the schema, not typed beside a query.** `billedRows.ts` declares
+   it and `test/schema.int.test.ts` asserts it against `sqlite_schema`, so a migration adding an
+   index turns the suite red. This is the `migrations.lock.json` mechanism applied to a different
+   fact: a number nothing checks is a number that drifts.
+3. **Neither writer is a second implementation.** `runWriteStatement` measures the single-statement
+   path and `runWriteBatch` measures the batched one, both through `billedRowsFor`, so
+   `applyMetadata` cannot disagree with `upsertFileFacts` about what a `songs` write costs. Both are
+   asserted separately, because a mutation to either one leaves every status- and budget-level
+   assertion in the scan suites green — those meter doubles that report their own `billedRows` and
+   never execute the DAO.
+
+### What it cost, and what raising the ceiling would have cost alone
+
+Correcting the constant from 5,000 to 100,000 *by itself* would have multiplied a ten-fold
+under-count by twenty — an outage, not a slow scan. The two corrections only make sense together,
+which is why they are one change.
+
+The reserve became a **share** for the same reason a flat number did not survive: 1,000 rows is 1% of
+100,000 and covers neither a few hundred stars on a busy day nor the counter's own 500-row overshoot.
+
+### A Paid account is throttled by a number it cannot detect
+
+D1 Paid is billed monthly (50 million rows included) with no daily cliff and no midnight-UTC refusal,
+so the Free number is not its allowance — and the plan is not visible from inside a Worker. So
+`dailyRowWriteShare` takes the limit as a parameter and `0` disables the pacing entirely, which
+`dailyWriteAllowanceSpent` already treated as "no limit". The default stays the Free plan because that
+is the one that fails loudly.
 
 ## What a client is told
 
@@ -130,6 +186,13 @@ from a test.
 
 `test/d1-daily-limit.test.ts` — the classifier with its negatives, the pause beside the ordinary
 fault, the two predicates, and the budget's derivation including the day/month/leap-day arithmetic.
+Also the **unit**: the limit pinned to the published 100,000 rather than derived from anything, the
+reserve asserted as a *share* rather than as a numeral, and `0` disabling the pacing.
+
+`test/schema.int.test.ts` — the billed-row model against `sqlite_schema`, in both directions. The
+load-bearing pair is the one that runs the **real DAO**: reverting either `runWriteBatch`'s batch
+branch or `runWriteStatement` to `sum(changes)` turns exactly one case red and leaves the whole scan
+suite green, because those suites meter doubles rather than executing the DAO.
 
 `test/scan-do.test.ts` — a real `ScanWorker`: the pause, the alarm armed for midnight rather than one
 second out, the pause held in storage, `getStatus` reporting it, the pause being dropped when D1

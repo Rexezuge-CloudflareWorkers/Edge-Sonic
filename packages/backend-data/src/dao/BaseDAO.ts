@@ -3,6 +3,7 @@ import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
 import type { SubrequestMeter } from '@edge-sonic/shared';
 import type { D1Queryable, D1Result } from '../utils/D1Types';
 import { executeD1WithRetry } from '../utils/D1Utils';
+import { billedRowsFor } from './billedRows';
 
 /**
  * What a write batch actually managed to write.
@@ -30,6 +31,19 @@ import { executeD1WithRetry } from '../utils/D1Utils';
  *
  * `truncated` is therefore not a diagnostic — it is a promise the caller is relying on, which
  * is why it is on the return value rather than logged.
+ *
+ * ### Why the result carries two row counts
+ *
+ * Because D1 bills **two different numbers** and this repository needed the wrong one. The
+ * daily row-write allowance is denominated in *billed* rows — the table row plus every index
+ * entry the write rewrote — while `meta.changes` is SQLite's count of table rows touched. For
+ * `songs` those differ by a factor of ten, so a scan pacing itself against `changes` writes
+ * roughly ten times the allowance it believes it is respecting, and on Free that is not a slow
+ * scan but an account-wide refusal until midnight UTC.
+ *
+ * Both are returned because they answer different questions. `changes` is progress — it is
+ * what convergence is measured in — and `billedRows` is cost. Collapsing them into one field
+ * would force one of the two claims to be a lie.
  */
 interface WriteBatchResult {
   /**
@@ -44,6 +58,19 @@ interface WriteBatchResult {
   Whether statements were left unwritten because the budget ran out.
   */
   readonly truncated: boolean;
+  /**
+  What those changes cost against D1's **daily row-write allowance**, in billed rows.
+
+  Not `changes`, and derived rather than defaulted. D1 bills an index entry as well as
+  the table row, so a `songs` insert bills ten rows for one row of data, and the allowance
+  is denominated in the billed figure.
+
+  `changes` is kept beside it rather than replaced, because it still answers a different
+  and load-bearing question: it is what `test/scan-convergence.test.ts` measures to prove a
+  folder converges, and a convergence assertion reading the index multiplier would be
+  measuring the schema rather than the scan's progress.
+  */
+  readonly billedRows: number;
 }
 
 /**
@@ -148,6 +175,32 @@ abstract class BaseDAO {
   }
 
   /**
+   * Run **one** write statement and report what it cost against the daily row-write allowance.
+   *
+   * The single-statement twin of `runWriteBatch`, and it exists because a write that never
+   * reaches the batch is a write whose *cost* nothing measures. `applyMetadata` is the case
+   * that mattered: it is one `UPDATE songs` per track a client opens, it goes through
+   * `withRetry` — which charges a **subrequest**, a different resource — and the scan's
+   * day-row budget counted it as a hardcoded `1` at the call site in `EnrichmentService`.
+   *
+   * That call site cannot know what the statement billed, and `1` is wrong by the table's
+   * index count: a `songs` update is ten rows against the allowance, so a library enriched
+   * track by track spent about ten times the budget it reported spending.
+   *
+   * Measured here, at the choke point, for the reason the subrequest meter is also measured
+   * there: a caller-incremented counter is a *claim* about work, and only a measurement of it
+   * can bound anything.
+   */
+  protected async runWriteStatement(
+    statement: ReturnType<D1Queryable['prepare']>,
+    context: string,
+  ): Promise<{ changes: number; billedRows: number }> {
+    const result: D1Result = await this.withRetry(async () => await statement.run(), context);
+    const changes = result?.meta?.changes ?? 0;
+    return { changes, billedRows: billedRowsFor(statement, changes) };
+  }
+
+  /**
    * Run a write batch, splitting it to fit the subrequest budget.
    *
    * Falls back to sequential statements when the binding does not support `batch`. The
@@ -174,7 +227,7 @@ abstract class BaseDAO {
     context: string,
     options?: { requireComplete?: boolean },
   ): Promise<WriteBatchResult> {
-    if (statements.length === 0) return { changes: 0, written: 0, truncated: false };
+    if (statements.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
 
     // Checked once, before anything is issued, so the refusal costs no writes. A caller that
     // needs all-or-nothing gets an error instead of a partial write; a caller that can resume
@@ -186,6 +239,7 @@ abstract class BaseDAO {
     }
 
     let changes = 0;
+    let billedRows = 0;
     let written = 0;
 
     for (let offset = 0; offset < statements.length; ) {
@@ -201,16 +255,23 @@ abstract class BaseDAO {
       if (this.database.batch) {
         const results: D1Result[] = await executeD1WithRetry(async () => await this.database.batch!(group), context);
         changes += (results ?? []).reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
+        // Zipped against `group` rather than summed on its own, because `billedRowsFor`
+        // needs the *statement* to know which table's index entries the change rewrote.
+        // `batch()` preserves order, so index `i` of the results is index `i` of the group;
+        // a mismatch here would silently attribute a folder's songs to its nodes.
+        billedRows += group.reduce((total, statement, at) => total + billedRowsFor(statement, results[at]?.meta?.changes ?? 0), 0);
       } else {
         for (const statement of group) {
           const result: D1Result = await executeD1WithRetry(async () => await statement.run(), context);
-          changes += result.meta?.changes ?? 0;
+          const changed = result.meta?.changes ?? 0;
+          changes += changed;
+          billedRows += billedRowsFor(statement, changed);
         }
       }
       offset += fits;
     }
 
-    return { changes, written, truncated: written < statements.length };
+    return { changes, written, truncated: written < statements.length, billedRows };
   }
 
   /**

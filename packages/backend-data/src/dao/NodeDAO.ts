@@ -88,7 +88,7 @@ interface NodeInput {
    *
    * This flag *is* the incrementality mechanism, so it belongs in the write rather
    * than in a follow-up `UPDATE`: a node row is written once, correctly, instead of
-   * twice — and a second write is a second spend from a 5,000/day allowance. It used to
+   * twice — and a second write is a second spend from the day's row-write allowance. It used to
    * be also patchable through a `NodeDAO.patch` that nothing called, so the second
    * spelling existed with no user.
    */
@@ -174,7 +174,7 @@ class NodeDAO extends BaseDAO {
    * See `BaseDAO`'s `WriteBatchResult`.
    */
   public async upsertMany(inputs: readonly NodeInput[]): Promise<WriteBatchResult> {
-    if (inputs.length === 0) return { changes: 0, written: 0, truncated: false };
+    if (inputs.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
     const timestamp = nowSeconds();
     const statements = inputs.map((input) =>
       this.database
@@ -196,19 +196,21 @@ class NodeDAO extends BaseDAO {
     return await this.runWriteBatch(statements, 'nodes.upsertMany');
   }
 
-  public async deleteSubtree(libraryId: string, path: string): Promise<number> {
+  public async deleteSubtree(libraryId: string, path: string): Promise<WriteBatchResult> {
     // Exact children plus a LIKE for deeper descendants. The LIKE is escaped so
     // a folder literally named `100%` does not match everything.
     const escaped = `${path.replaceAll(/[%_]/g, (char) => `\\${char}`)}/%`;
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(String.raw`DELETE FROM nodes WHERE library_id = ? AND (path = ? OR path LIKE ? ESCAPE '\')`)
-          .bind(libraryId, path, escaped)
-          .run(),
+    const result = await this.runWriteStatement(
+      this.database
+        .prepare(String.raw`DELETE FROM nodes WHERE library_id = ? AND (path = ? OR path LIKE ? ESCAPE '\')`)
+        .bind(libraryId, path, escaped),
       'nodes.deleteSubtree',
     );
-    return result.meta?.changes ?? 0;
+    // `truncated: false` and `written` from the statement's own change count, because a delete
+    // cannot be truncated: it is one statement, not a batch. `written` is 0 when the subtree
+    // was already absent, which is the ordinary case — the scan re-runs this on every rescan of a
+    // folder whose path no longer resolves.
+    return { changes: result.changes, written: result.changes, truncated: false, billedRows: result.billedRows };
   }
 
   public async countByLibrary(libraryId: string): Promise<number> {

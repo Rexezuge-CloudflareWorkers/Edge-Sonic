@@ -56,15 +56,21 @@
  * scan's rows are already written by this point, and one unavailable origin must not
  * discard them — which is what a throw here would do.
  *
- * ### Why this returns a row count
+ * ### Why this returns a row count — and why two of them
  *
- * Because `rowsWritten` is the only input to `ScanDailyBudget.rowsWrittenToday` — the guard
- * that stops the scan spending the account's D1 row-write allowance — and this function used
- * to return `void`. Every row `applyMetadata` wrote was therefore invisible to it, while the
- * **subrequest** meter saw each one, because `BaseDAO.withRetry` charges every statement. One
- * counter blind to a quarter of a cold scan's writes, beside one that counted them all, is the
- * shape of the defect this fixes: a hand-summed count at the call site is a claim about the
- * work, and the class of writer most likely to be forgotten is the one that is not the caller.
+ * Because this function used to return `void`, and the daily D1 row-write allowance it paces
+ * is the resource that silently ran out: the **subrequest** meter saw every `applyMetadata`,
+ * because `BaseDAO.withRetry` charges each statement, while the row-write budget saw none of
+ * them. One counter blind to a quarter of a cold scan's writes, beside one that counted them
+ * all, is the shape of the defect this fixes — a hand-summed count at the call site is a
+ * *claim* about the work, and the writer most likely to be forgotten is the one that is not the
+ * caller.
+ *
+ * Two counts now, and the second is the correction rather than a refinement. D1's allowance is
+ * denominated in **billed** rows — the row plus every index entry it rewrote — and `songs`
+ * carries nine indexes, so one of these writes bills ten. A function that could only report
+ * `1` per track had no way to say so, which is why the budget it feeds was short by an order of
+ * magnitude on the enrichment path for as long as it existed.
  *
  * The count is rows **written**, not tracks asked about, and the difference is not academic:
  * a `songMeta` cache hit returns without touching D1, and a transient failure returns without
@@ -93,19 +99,43 @@ const REQUESTS_PER_ENRICHED_TRACK = SUBSREQUESTS_PER_ENRICHED_TRACK;
  * @param budget The chunk's budget. The meter it wraps is the *same* counter the DAOs and the
  *   KV cache charge, so a range read and the statement that records it are counted against one
  *   ceiling rather than two.
- * @returns Rows written to `songs`, which is `0` for a track served from cache, `0` for one
- *   that failed transiently, and `0` for a track the budget had no room for.
+ * @returns Both counts for the tracks it admitted: `rowsWritten` is table rows written to
+ *   `songs` — `0` for a track served from cache, `0` for one that failed transiently, and `0`
+ *   for a track the budget had no room for — and `billedRows` is what those rows cost against
+ *   the day's D1 row-write allowance. The two are reported together because the scan needs both:
+ *   the first for `indexChanged`, the second for the daily budget, which is denominated in
+ *   billed rows and so cannot be fed a table-row count.
  */
+
+/**
+ * What a batch of enriched tracks wrote, and what it cost.
+ *
+ * `billedRows` is `0` whenever `rowsWritten` is, and otherwise ten per row: the `songs` factor.
+ * It is measured by `EnrichmentService` from the statement's own result rather than derived here,
+ * so a caller that changes what the enrichment write touches cannot leave this module's
+ * arithmetic describing something the database no longer does.
+ */
+interface EnrichmentCost {
+  readonly rowsWritten: number;
+  readonly billedRows: number;
+}
+
+/**
+ * No track admitted, so nothing written and nothing spent — a measured zero rather than an
+ * absent field, for the same reason every other empty result in this repository is a value.
+ */
+const NO_ENRICHMENT_COST: EnrichmentCost = { rowsWritten: 0, billedRows: 0 };
 async function enrichChanged(
   library: LibraryRow,
   songInputs: readonly ScanSongInput[],
-  enrich: ((library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<number>) | undefined,
+  enrich: ((library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<EnrichmentCost>) | undefined,
   maxPerFolder: number,
   budget: ScanBudget,
-): Promise<number> {
-  if (enrich === undefined || songInputs.length === 0) return 0;
+): Promise<EnrichmentCost> {
+  if (enrich === undefined || songInputs.length === 0) return NO_ENRICHMENT_COST;
 
   let rowsWritten = 0;
+  let billedRows = 0;
   const bounded = songInputs.slice(0, Math.max(0, maxPerFolder));
   for (const input of bounded) {
     // Checked before each track, so the chunk stops taking on work rather than discovering
@@ -113,14 +143,22 @@ async function enrichChanged(
     // range read is inside the reservation rather than an overrun discovered afterwards.
     if (!budget.canAfford(REQUESTS_PER_ENRICHED_TRACK)) break;
     try {
-      rowsWritten += await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () => budget.charge());
+      // Both counts come off the caller's own report, which is measured rather than declared.
+      // That distinction is the whole reason this returns a pair: the scan's daily budget is
+      // denominated in **billed** rows, `songs` bills ten per row written, and a
+      // caller-incremented `1` here would under-report the single most expensive write in a
+      // chunk by a factor of ten.
+      const written = await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () => budget.charge());
+      rowsWritten += written.rowsWritten;
+      billedRows += written.billedRows;
     } catch {
       // Left for `getSong` to retry, for the reason in the header. And it wrote nothing, so
-      // it contributes nothing to `rowsWritten` — which is the one place a swallowed
+      // it contributes nothing to either count — which is the one place a swallowed
       // exception and a counted write have to be told apart.
     }
   }
-  return rowsWritten;
+  return { rowsWritten, billedRows };
 }
 
-export { enrichChanged, REQUESTS_PER_ENRICHED_TRACK };
+export { enrichChanged, REQUESTS_PER_ENRICHED_TRACK, NO_ENRICHMENT_COST };
+export type { EnrichmentCost };

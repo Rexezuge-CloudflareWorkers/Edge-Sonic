@@ -12,6 +12,19 @@ was opened first.
 | `LibraryImportWorkflow.ts` | the import's **bounded** phases: playlists, stars, bookmarks, queue |
 | `PlayCountImportWorker.ts` | the import's **unbounded** half: walking a remote's albums for play counts |
 | `ScanWorkerFactory.ts` | the composition root both classes build their scope through |
+| `scanPause.ts` | the scan's day-row-write budget and the pause a spent allowance implies |
+
+## The scan's stored count is in *billed* rows
+
+`scanPause.ts` holds the day's row-write count so the scan paces itself against D1's allowance, and
+what it stores is `result.billedRows` — **not** `rowsWritten`. D1 bills a write as the row *plus
+every index entry it rewrote*, so a `songs` row costs ten rows of allowance; counting table rows
+told this budget it had ~10x its real headroom before the platform refused every query on the account
+until midnight UTC.
+
+The stored key is unchanged, deliberately: the unit was always *meant* to be D1's and was populated
+with the wrong number by accident, and a stored counter whose meaning changes is a migration
+question. `billedRows.ts` in `backend-data` owns the arithmetic.
 
 ## Why one is a Workflow and the other a Durable Object
 

@@ -39,6 +39,8 @@
  */
 import { isD1DailyLimitError, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
 import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { NO_DERIVATION } from './deriveBackfill';
+import type { DerivationCost } from './deriveBackfill';
 import { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES } from './scanTypes';
 import type { ChunkResult, ScanDailyBudget, ScanStatus } from './scanTypes';
 import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
@@ -85,7 +87,7 @@ function decideStep(state: ScanStateRow): StepDecision {
  * exactly `limit` has spent it, and the chunk after it is the one that must not start.
  */
 function dailyWriteAllowanceSpent(budget: ScanDailyBudget | undefined): boolean {
-  return budget !== undefined && budget.limit > 0 && budget.rowsWrittenToday >= budget.limit;
+  return budget !== undefined && budget.limit > 0 && budget.billedRowsWrittenToday >= budget.limit;
 }
 
 /**
@@ -93,9 +95,10 @@ function dailyWriteAllowanceSpent(budget: ScanDailyBudget | undefined): boolean 
  *
  * Separate from `d1AllowancePause` because the two are different events with the same remedy: this
  * one is decided *before* the walk from a count the caller keeps, and it is the reason a scan never
- * reaches the state the other one recovers from. A correct chunk writes ~42 rows at ~1/second, so
- * 5,000 rows/day is roughly two minutes of scanning — the platform's limit is reached by design, and
- * a fix that only made the outage survivable would leave it frequent.
+ * reaches the state the other one recovers from. A correct chunk bills a few hundred rows at
+ * ~1/second, so the Free plan's 100,000-row day is a couple of hours of scanning: the limit is
+ * reached by design on a cold library, and a fix that only made the outage survivable would leave it
+ * frequent.
  *
  * `null` rather than a boolean so a caller cannot forget the reset time, and `now` is read from the
  * budget rather than from `Date.now()` so the boundary is testable.
@@ -128,7 +131,15 @@ function pausedResult(resumeAt: number, lastError: string, scanned = 0): ChunkRe
     lastError,
     foldersVisited: 0,
     subrequests: NO_SUBREQUESTS_SPENT,
+    // Zero because the allowance check runs **before** the backfill: a pause is decided on the
+    // count the Durable Object already holds, so this chunk has issued no write beyond
+    // `scanState.ensure` (itself a write only for a library that has never been scanned) and has
+    // certainly not run the backfill. The backfill's cost is carried by the `idle`/`stalled`
+    // results in `scanPrelude`, which are reached *after* it — which is why those two paths take
+    // the backfill's cost and this one does not. Reporting the backfill's rows here would credit
+    // the day with a page of writing that did not happen.
     rowsWritten: 0,
+    billedRows: 0,
     stoppedBy: null,
     resumeAt,
   };
@@ -164,15 +175,26 @@ function d1AllowancePause(error: unknown, nowMs: number): ChunkResult | null {
 /**
  * A poll that will do no work, reported from stored state.
  *
- * `foldersVisited`, `subrequests` and `rowsWritten` are all zero because they are
- * **measured**, not defaulted: this call issued no request and wrote no row, and a
- * non-zero number here would be a claim the service cannot support — except for
- * `rowsWritten`, which the caller may have written to, by the derivation backfill, before
- * the status check decided the walk had nothing to do. `lastError` is carried so the
- * reason a scan is incomplete survives a poll that touched nothing — the operator API is
- * the only surface that can show it, and this is where it comes from.
+ * `foldersVisited` and `subrequests` are zero because they are **measured**, not defaulted: this
+ * call issued no request and walked no folder, and a non-zero number here would be a claim the
+ * service cannot support. `rowsWritten` and `billedRows` are the exception — the caller may have
+ * written to `songs`, by the derivation backfill, before the status check decided the walk had
+ * nothing to do, and both are carried so the day's allowance is charged for that page.
+ *
+ * `billedRows` is not optional on this path even though it is derived from `rowsWritten`: the
+ * factor is the number of indexes D1 rewrote, which the caller knows and this result does not,
+ * and the daily budget is denominated in billed rows. Defaulting it to `0` would let a repaired
+ * library's backfill cost the day nothing, for ever, which is the same silent gap the count was
+ * introduced to close.
+ *
+ * `lastError` is carried so the reason a scan is incomplete survives a poll that touched nothing —
+ * the operator API is the only surface that can show it, and this is where it comes from.
  */
-function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', rowsWritten = 0): ChunkResult {
+function idleResult(
+  state: ScanStateRow,
+  status: 'idle' | 'failed' | 'stalled',
+  derived: DerivationCost = NO_DERIVATION,
+): ChunkResult {
   return {
     status,
     scanned: state.scanned_count,
@@ -182,7 +204,8 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', 
     lastError: status === 'idle' ? null : state.last_error,
     foldersVisited: 0,
     subrequests: NO_SUBREQUESTS_SPENT,
-    rowsWritten,
+    rowsWritten: derived.rowsWritten,
+    billedRows: derived.billedRows,
     stoppedBy: null,
     resumeAt: null,
   };
@@ -195,8 +218,8 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', 
  * permanently broken library is not re-attempted, and a check that ran *after* the first
  * request would already have spent one.
  */
-function stalledResult(state: ScanStateRow, rowsWritten = 0): ChunkResult {
-  return idleResult(state, 'stalled', rowsWritten);
+function stalledResult(state: ScanStateRow, derived: DerivationCost = NO_DERIVATION): ChunkResult {
+  return idleResult(state, 'stalled', derived);
 }
 
 /**
@@ -209,10 +232,10 @@ function stalledResult(state: ScanStateRow, rowsWritten = 0): ChunkResult {
  * The stored reason is re-recorded rather than a new one invented: the cause has not
  * changed, and there is nothing to retry until `startScan` reseeds the frontier.
  */
-async function unableToAdvance(state: ScanStateRow, fail: (error: string) => Promise<number>, rowsWritten = 0): Promise<ChunkResult> {
+async function unableToAdvance(state: ScanStateRow, fail: (error: string) => Promise<number>, derived: DerivationCost = NO_DERIVATION): Promise<ChunkResult> {
   const message = state.last_error ?? 'The library root could not be read, so the scan has no folder to start from.';
   const consecutiveFailures = await fail(message);
-  return idleResult(state, consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed', rowsWritten);
+  return idleResult(state, consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed', derived);
 }
 
 /**
@@ -330,6 +353,11 @@ function unrecordedFailure(lastError: string): ChunkResult {
     foldersVisited: 0,
     subrequests: NO_SUBREQUESTS_SPENT,
     rowsWritten: 0,
+    // Zero here even though `billedRows` is never derived from it elsewhere: this failure
+    // happened before any write was measured, so there is nothing to convert. `runWriteBatch`
+    // reports `0` billed rows for a statement that matched nothing, which is the same number
+    // and the same fact.
+    billedRows: 0,
     stoppedBy: null,
     resumeAt: null,
   };

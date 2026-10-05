@@ -12,16 +12,15 @@
  * on is not a change here.
  */
 import type { DerivableRow, DerivationWrite, LibraryRow, NodeRow, ScanStateRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
+import type { EnrichmentCost } from './scanEnrichment';
 import type { SubrequestCounter, SubrequestSpend } from '@edge-sonic/shared';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { ChunkStopReason } from './scanBudget';
 
 /**
- * What a range read needs to enrich a track, and nothing else.
- *
- * Structural rather than a `SongRow`: the scan holds the facts it just upserted, and
- * fabricating a row to satisfy a signature would be a copy of the schema that rots
- * silently when a column is added.
+ * What a range read needs to enrich a track, and nothing else. Structural rather than a
+ * `SongRow`: the scan holds the facts it just upserted, and fabricating a row to satisfy a
+ * signature is a copy of the schema that rots silently when a column is added.
  */
 interface ScanEnrichFacts {
   id: string;
@@ -65,7 +64,11 @@ interface ScanNodeStore {
    * folder's own row carrying `is_scanned: true`.
    */
   upsertMany(inputs: readonly ScanNodeInput[]): Promise<WriteBatchResult>;
-  deleteSubtree(libraryId: string, path: string): Promise<number>;
+  /**
+   * `WriteBatchResult` and not a count, because a prune is billed like any other write and the
+   * day's allowance is denominated in billed rows. `scanAccounting` for the two counts.
+   */
+  deleteSubtree(libraryId: string, path: string): Promise<WriteBatchResult>;
   countByLibrary(libraryId: string): Promise<number>;
 }
 
@@ -78,7 +81,10 @@ interface ScanSongStore {
    * it deleted rows it did not.
    */
   deleteInDirectoryNotIn(libraryId: string, dirPath: string, keepPaths: readonly string[]): Promise<WriteBatchResult>;
-  deleteSubtree(libraryId: string, dirPath: string): Promise<number>;
+  /**
+  `WriteBatchResult` for the same reason as `ScanNodeStore`'s.
+  */
+  deleteSubtree(libraryId: string, dirPath: string): Promise<WriteBatchResult>;
   countByLibrary(libraryId: string): Promise<number>;
 }
 
@@ -96,17 +102,15 @@ interface ScanStateStore {
    */
   saveProgress(libraryId: string, scannedDelta: number, cursorPath: string | null, indexChanged: boolean): Promise<void>;
   /**
-   * @param changed Force the `index_version` bump for a caller that changed the index
-   *   outside a scan. The library-root-gone branch deletes every row and has no scan to
-   *   have written them.
+   * @param changed Force the `index_version` bump for a caller that changed the index outside a
+   *   scan. The library-root-gone branch deletes every row and has no scan to have written them.
    */
   complete(libraryId: string, scannedCount: number, changed?: boolean): Promise<number>;
   /**
    * Record a failure and report how many consecutive failures there have now.
    *
-   * The count is the return value rather than a second read, because the bound it
-   * feeds is the answer to "may this scan try again?" and a read after the write
-   * could observe a different writer's increment.
+   * The count is the return value rather than a second read, because the bound it feeds answers
+   * "may this scan try again?" and a read after the write could observe another writer's increment.
    */
   fail(libraryId: string, error: string): Promise<number>;
 }
@@ -114,25 +118,31 @@ interface ScanStateStore {
 /**
  * The store the derivation backfill needs.
  *
- * Separate from `ScanSongStore` because it answers a different question — "which rows are
- * behind the current naming convention, and stamp them" — over a selection no other scan
- * query makes. It is a *version* selection rather than a change selection, which is the
- * whole point: every other song write here happens because a file moved, and this is the
- * one that happens because the convention moved.
+ * Separate from `ScanSongStore` because it answers a different question — "which rows are behind
+ * the current naming convention, and stamp them" — over a **version** selection rather than a
+ * change selection, which is the whole point: every other song write here happens because a file
+ * moved, and this one happens because the convention moved.
  */
 interface ScanDerivationStore {
   listNeedingDerivation(libraryId: string, limit: number): Promise<readonly DerivableRow[]>;
   /**
    * Derive the names for a page, using the deployment's configured marker.
    *
-   * Part of the store rather than a `map` at the call site, because the marker is
-   * configuration and a call site that derived the page itself would have to know it — and a
-   * static `deriveFor` on the DAO could only have read a module constant, which is the value
-   * the operator is no longer forced to take. Reading a page and deciding on that same page
-   * is one step; a caller that did half of it would stamp rows it derived nothing for.
+   * Part of the store rather than a `map` at the call site: the marker is configuration, and a
+   * static `deriveFor` on the DAO could only have read a module constant — which is the value the
+   * operator is no longer forced to take. Reading a page and deciding on that same page is one
+   * step; a caller doing half of it would stamp rows it derived nothing for.
    */
   deriveFor(rows: readonly DerivableRow[]): Promise<readonly DerivationWrite[]>;
-  applyDerivation(writes: readonly DerivationWrite[]): Promise<number>;
+  /**
+ * Stamp a page of rows, reporting **both** what changed and what it cost.
+ *
+ * `WriteBatchResult` rather than a count, because the scan's daily budget is denominated in
+ * *billed* rows and this is a `songs` write — ten of them per row changed, against an
+ * allowance that refuses every query on the account once it is spent. Returning a bare count
+ * is what made the caller guess, and the guess was a tenth of the truth.
+ */
+applyDerivation(writes: readonly DerivationWrite[]): Promise<WriteBatchResult>;
 }
 
 interface ScanDeps {
@@ -164,11 +174,9 @@ interface ScanDeps {
   clientFor: (row: LibraryRow, onRequest?: () => void) => Promise<WebDavClient>;
   timeoutMs: number;
   /**
-  Folders descended into per chunk.
-
-  A bound on **D1 work** — frontier rows read and rows written — sized against the
-  5,000-rows/day allowance rather than against the subrequest ceiling. The two are
-  different resources, so both bounds exist; see `ScanBudget`.
+  Folders descended into per chunk. A bound on **D1 work** — frontier rows read and rows
+  written — against a different resource than the subrequest ceiling, which is why both bounds
+  exist; see `ScanBudget`.
   */
   chunkFolders: number;
   /**
@@ -207,8 +215,11 @@ interface ScanDeps {
   * library of 113 tracks those are about a quarter of a cold scan's writes. `0` for a
   * cache hit and `0` for a transient failure, which are the two cases where reporting a
   * track would pace the scan off writes that never happened.
+  *
+  * Two counts, per `scanAccounting`, and both measured by `EnrichmentService` off the
+  * statement's own result rather than derived here from a table name.
   */
-  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<number>;
+  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<EnrichmentCost>;
   /**
   Tracks enriched per folder, per chunk.
 
@@ -253,41 +264,36 @@ interface ScanDeps {
 type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled' | 'paused';
 
 /**
- * How many consecutive failed chunks a scan may spend before it is declared stalled.
- *
- * A bound, not a policy of one: an origin that 500s once must not end a scan, and a revoked
- * credential must not be re-attempted for ever. Three separates "flaked" from "broken", and
- * `startScan` resets it — the operator's escape hatch, needing no surface of its own.
+ * How many consecutive failed chunks a scan may spend before it is declared stalled. A bound, not a
+ * policy of one: an origin that 500s once must not end a scan, and a revoked credential must not be
+ * re-attempted for ever. Three separates "flaked" from "broken", and `startScan` resets it.
  */
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 /**
  * What the caller knows about the account's row-write allowance for today.
  *
- * Supplied by `ScanWorker`, which owns the Durable Object's storage and therefore the count,
- * because **metering D1 writes must not itself spend D1 writes**: a counter in `scan_state`
- * would cost a row per chunk against the very allowance it enforces. The limit is a *share* —
- * D1's is per account, so a per-library cap is unsound as soon as a second library exists.
- * See `dailyRowWriteShare`.
+ * Supplied by `ScanWorker`, which owns the Durable Object's storage and therefore the count, because
+ * **metering D1 writes must not itself spend D1 writes**: a counter in `scan_state` would cost a row
+ * per chunk against the very allowance it enforces. The limit is a *share* — D1's is per account, so
+ * a per-library cap is unsound as soon as a second library exists. See `dailyRowWriteShare`.
  */
 interface ScanDailyBudget {
   /**
-   * Rows written today across every library, as the caller counts them.
-   *
-   * A **lower bound**, deliberately: the count is persisted at most once per
-   * `SCAN_ROW_COUNT_PERSIST_INTERVAL` rows, so a crash can overshoot the day's budget by at
-   * most that interval. That is why the interval is inside the platform's reserve rather than
-   * taken out of it.
+   * **Billed** rows written today. `scanAccounting` owns the two-count arrangement and why this
+   * one is the billed half. A **lower bound**, deliberately: persisted at most once per
+   * `SCAN_ROW_COUNT_PERSIST_INTERVAL` rows, so a crash can overshoot by at most that interval.
    */
-  readonly rowsWrittenToday: number;
+  readonly billedRowsWrittenToday: number;
   /**
-   * Rows this library may write today. `dailyRowWriteShare` of the account's budget.
+   * Rows this library may write today. `dailyRowWriteShare` of the account's budget, and
+   * `0` when the deployment has disabled the pacing — which is the correct value for a Paid
+   * account, whose allowance is monthly and has no midnight-UTC cliff to pace against.
    */
   readonly limit: number;
   /**
-   * Epoch milliseconds, injectable so the midnight boundary is testable — the boundary is where
-   * a reset computed as already-past becomes a pause of zero length and the whole mechanism
-   * turns back into a one-second loop.
+   * Epoch milliseconds, injectable so the midnight boundary is testable: a reset computed as
+   * already-past becomes a pause of zero length, which turns the mechanism into a one-second loop.
    */
   readonly now: () => number;
 }
@@ -297,34 +303,26 @@ interface ChunkResult {
   /**
    * Folders this scan has visited, accumulated across its chunks.
    *
-   * **Not a denominator**, and there is deliberately nothing on this result that could be read
-   * as one. It used to carry a `total` beside it, from `scan_state.total_count` — which
-   * `markScanning` writes as `0` and which nothing updates, so the field was a hardcoded zero in
-   * five of the six places a `ChunkResult` is built and `scanned_count` in the sixth: the same
-   * number in a different unit. Progress a client can use is `songs.countByLibrary`, which is
-   * what `getScanStatus` publishes as `count`.
+   * **Not a denominator**, and there is deliberately nothing on this result that could be read as
+   * one. It used to carry a `total` from `scan_state.total_count` — which `markScanning` writes as
+   * `0` and nothing updates, so it was a hardcoded zero in five of the six places a `ChunkResult` is
+   * built and `scanned_count` in the sixth: one number in two units. Progress a client can use is
+   * `songs.countByLibrary`, which is what `getScanStatus` publishes as `count`.
    */
   readonly scanned: number;
   readonly indexVersion: number;
   /**
-  Why the last chunk failed, or `null`.
-
-  This is the `scan_state.last_error` the DAO has always written and nothing ever
-  read back. An operator polling a failed scan got `status: 'failed'` and no
-  reason, which is the same defect as a probe reporting "unreachable": the
-  diagnosis existed in the database and never reached the screen.
-
-  Truncated to `LAST_ERROR_MAX` by the service as well as by the DAO, so what the
-  operator is shown is exactly what was persisted rather than a longer string the
-  database never held.
+  Why the last chunk failed, or `null`. This is the `scan_state.last_error` the DAO has always
+  written and nothing ever read back: an operator polling a failed scan got `status: 'failed'` and
+  no reason, which is the same defect as a probe reporting "unreachable" — the diagnosis existed in
+  the database and never reached the screen. Truncated to `LAST_ERROR_MAX` by the service as well
+  as by the DAO, so what the operator is shown is exactly what was persisted.
   */
   readonly lastError: string | null;
   /**
-  Folders this chunk actually opened.
-
-  Folders visited, **not** the length of the frontier it was handed. A chunk
-  that leaves early because it hit a bound visited fewer than it asked for, and
-  reporting the frontier length would claim work that did not happen.
+  Folders this chunk actually opened. **Not** the length of the frontier it was handed: a chunk that
+  leaves early because it hit a bound visited fewer than it asked for, and reporting the frontier
+  length would claim work that did not happen.
   */
   readonly foldersVisited: number;
   /**
@@ -334,23 +332,25 @@ interface ChunkResult {
   `fetch`, `BaseDAO.withRetry` and `BaseDAO.runWriteBatch` for `d1`, `KvCache.guard` for `kv` —
   and all of them writing to the one counter the chunk reads.
 
-  It was `webdavRequests: number`, and the rename is the fix rather than cosmetics. A field
-  called `webdavRequests` on a chunk that spends most of its budget on D1 is a field whose name
-  contradicts its value, and the test that guarded it asserted the value equalled the WebDAV
-  double's count — so it was **green** while the chunk spent five times the ceiling on
-  statements nobody counted. `test/scan-budget.test.ts` now asserts the total against all three
-  doubles.
+  It was `webdavRequests: number`, and the rename is the fix rather than cosmetics: a field by
+  that name on a chunk spending most of its budget on D1 has a name contradicting its value, and
+  the test guarding it asserted equality with the WebDAV double — **green** while the chunk spent
+  five times the ceiling on statements nobody counted.
   */
   readonly subrequests: SubrequestSpend;
+  /**
+  Table rows changed: progress, and what `scan-convergence` measures. Not the allowance.
+  */
   readonly rowsWritten: number;
   /**
-  Which bound ended this chunk, or `null` for one that did no work.
-
-  `'frontier'` is the ordinary case. `'requests'` and `'deadline'` say the work
-  was cut short by a limit, which is the fact an operator watching a scan that is
-  not finishing needs — and the two have different remedies, so they are reported
-  separately rather than collapsed into "stopped". `null` is a chunk that had
-  nothing to do: no scan running, or a library not yet configured.
+  What they cost the platform, and what the scan paces itself on.
+  */
+  readonly billedRows: number;
+  /**
+  Which bound ended this chunk, or `null` for one that did no work. `'frontier'` is the ordinary
+  case; `'requests'` and `'deadline'` say the work was cut short by a limit — the fact an operator
+  watching a scan that is not finishing needs — and the two have different remedies, so they are
+  reported separately rather than collapsed into "stopped".
   */
   readonly stoppedBy: ChunkStopReason;
   /**

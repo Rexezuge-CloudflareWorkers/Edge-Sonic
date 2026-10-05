@@ -42,6 +42,7 @@
  * library wrongly. One implementation, called from here.
  */
 import { BaseDAO } from './BaseDAO';
+import type { WriteBatchResult } from './BaseDAO';
 import type { D1Queryable } from '../utils/D1Types';
 import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
 import type { SubrequestMeter } from '@edge-sonic/shared';
@@ -178,7 +179,8 @@ class SongDerivationDAO extends BaseDAO {
    * duration would never be range-read on first play. This writes the grouping and the
    * stamp, and nothing else.
    */
-  public async applyDerivation(writes: readonly DerivationWrite[], version = DERIVED_VERSION): Promise<number> {
+  public async applyDerivation(writes: readonly DerivationWrite[], version = DERIVED_VERSION): Promise<WriteBatchResult> {
+    if (writes.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
     const timestamp = nowSeconds();
     const statements = writes.map((write) => {
       const artistCi = write.artist?.toLowerCase() ?? null;
@@ -213,8 +215,11 @@ class SongDerivationDAO extends BaseDAO {
     // the ones that were stamped would never be revisited and the rest would be re-derived on
     // every poll, for ever. Refusing costs one poll; truncating costs a scan that never
     // converges.
-    const written = await this.runWriteBatch(statements, 'songs.applyDerivation', { requireComplete: true });
-    return written.changes;
+    // The whole `WriteBatchResult`, not `written.changes`. This runs **on every poll**, before
+    // the status check, so its cost is the one the daily allowance is most exposed to — and
+    // returning a count left the caller with no way to charge it. `requireComplete` means
+    // `truncated` is always false here; the field comes back because the type is the batch's.
+    return await this.runWriteBatch(statements, 'songs.applyDerivation', { requireComplete: true });
   }
 
   /**

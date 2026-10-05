@@ -111,14 +111,16 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   a subrequest is a `fetch`, a **D1 statement**, a KV operation, a DO RPC or a Secrets Store
   read — D1 states its own limit as *queries per Worker invocation — 50 (Free)*.
   `chunkDeadlineMs` (default 20 s) is what makes a poll *return* on a slow origin.
-  `chunkFolders` (default 7) bounds D1 work against the 5,000-rows/day allowance, and is
+  `chunkFolders` (default 7) bounds D1 work against the day's row-write allowance, and is
   **derived** from the ceiling rather than typed beside it: 40 folders is ~240 subrequests.
   The loop checks `budget.canAfford()` before each folder — at a folder's whole base cost of
   6, not at its one `PROPFIND`, because a chunk that starts a folder it cannot finish does
   not get a slow folder, it gets a terminated invocation — and before each enriched track at
   five, and **leaves early** rather than running itself out. A cold scan of 1,000 folders /
-  5,000 tracks is roughly 6,100 row writes against a 5,000/day allowance, survivable because
-  the scan is chunked and resumable and because every later scan writes zero rows.
+  5,000 tracks bills roughly **61,000** rows against the Free plan's 100,000/day — ten per
+  `songs` row rather than one, because D1 charges the row *and* every index entry it rewrote.
+  Survivable because the scan is chunked and resumable, and because every later scan writes zero
+  rows.
 - **Every subrequest is measured, not asserted.** `WebDavClient` charges a caller supplied
   `onRequest` inside its private `request()` — the single path `propfind`, `get`,
   `readPrefix` and `readTail` share — and the composition root makes the **scope's**
@@ -295,12 +297,20 @@ than wrong, because a client seeks by it.
   - **`step`, `start` and `status` all branch on it before touching `scan_state`**, because the
     fault *is* a refusal to write. Recording it costs a statement that cannot succeed and spends
     a retry budget meant for faults.
-  - **It is paced *before* the platform refuses, not only survived after.** A correct chunk
-    writes ~42 rows at ~1/second, so 5,000 rows/day is two minutes of scanning — the limit is
-    reached by design. `SCAN_DAILY_ROW_WRITE_BUDGET` is the platform allowance less a reserve,
-    divided by the number of *registered* libraries because D1's is per account.
-  - Full account: `docs/issues/d1-daily-write-limit.md`. Asserted in `test/d1-daily-limit.test.ts`
-    and `test/scan-do.test.ts`.
+  - **It is paced *before* the platform refuses, not only survived after.** A correct chunk bills
+    a few hundred rows at ~1/second, so the Free plan's 100,000-row day is a couple of hours of
+    scanning on a 5,000-track library — the limit is reached by design. `SCAN_DAILY_ROW_WRITE_BUDGET`
+    is the platform allowance less a 10% reserve, divided by the number of *registered* libraries
+    because D1's is per account.
+  - **The budget is denominated in *billed* rows, and the guard used to count table rows.** D1
+    charges a write as the row plus every index entry it rewrote, and `songs` has nine — so the
+    allowance was being read as ~10x larger than it was, on the dominant write path. `ChunkResult`
+    and `ScanDailyBudget` therefore carry **both** counts: `rowsWritten` is progress (what
+    `scan-convergence` measures) and `billedRows` is cost (what the day budget is charged).
+    `billedRows.ts` in `backend-data` owns the per-table arithmetic, derived from `sqlite_schema`
+    and asserted against it. See the parent index.
+  - Full account: `docs/issues/d1-daily-write-limit.md`. Asserted in `test/d1-daily-limit.test.ts`,
+    `test/schema.int.test.ts` and `test/scan-do.test.ts`.
 - **A listing that placed nothing is not a listing that found nothing.** `toLibraryPath`
   refusals are silent `continue`s, so a listing whose hrefs all fail containment empties
   `childPaths` and `songPaths` and the prune deletes the library as a mass deletion before

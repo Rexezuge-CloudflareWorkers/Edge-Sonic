@@ -23,6 +23,21 @@ import type { DavResource } from '@edge-sonic/webdav';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import { nextMidnightUtc } from '@edge-sonic/backend-data/utils';
 import { dailyWriteAllowanceSpent, d1AllowancePause, pausedResult } from './scanRetry';
+
+/**
+ * What one `scan_state` write costs against the day's allowance, in billed rows.
+ *
+ * One, plus the single index SQLite creates for `library_id TEXT PRIMARY KEY` — and `scan_state`
+ * is the one table in this schema with **no declared index at all**, which is exactly why the
+ * number is 2 rather than the 10 a `songs` write costs.
+ *
+ * Named rather than written as a literal at the call site because `markScanning` returns `void`
+ * and there is nothing to measure it from — and a hand-written `1` there is the same
+ * claim-about-work pattern `BaseDAO.runWriteStatement` exists to remove. `test/schema.int.test.ts`
+ * asserts every table's factor against the real schema, so a migration adding an index to
+ * `scan_state` turns that suite red rather than quietly making this wrong.
+ */
+const BILLED_SCAN_STATE_WRITE = 2;
 import type { ScanBudget } from './scanBudget';
 import type { ChunkResult, ScanDailyBudget, ScanDeps } from './scanTypes';
 
@@ -92,10 +107,10 @@ async function start(
     if (status === 404 || status === 410) {
       // The library root is gone. Clear the index rather than leaving rows that
       // point at paths which no longer exist.
-      await deps.nodes.deleteSubtree(library.id, '');
       // `true`, and this is the one caller that has to insist: it just deleted the whole
       // index outside a scan, so nothing carried `changed = 1` and the version bump that
       // makes the deleted rows unreachable would be skipped.
+      const cleared = await deps.nodes.deleteSubtree(library.id, '');
       const indexVersion = await deps.scanState.complete(library.id, 0, true);
       return {
         status: 'idle',
@@ -104,7 +119,11 @@ async function start(
         lastError: null,
         foldersVisited: 0,
         subrequests: budget.spend(),
-        rowsWritten: 0,
+        // A whole-library delete is one of the largest writes in the product, so reporting
+        // `0` here would have told the Durable Object's day-budget that nothing was spent — and
+        // this runs on a `startScan`, which runs on every client login.
+        rowsWritten: cleared.changes,
+        billedRows: cleared.billedRows,
         stoppedBy: null,
         resumeAt: null,
       };
@@ -172,6 +191,9 @@ async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, sta
       foldersVisited: 0,
       subrequests: budget.spend(),
       rowsWritten: 0,
+      // A measured zero: this branch issued one `PROPFIND` and no statement, so it spent
+      // nothing on either unit. Distinct from the branch above, which issued a delete.
+      billedRows: 0,
       stoppedBy: null,
       resumeAt: null,
     };
@@ -179,7 +201,7 @@ async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, sta
 
   // Seed the frontier with the root. Every other folder joins it as its parent is
   // reconciled, which is what bounds a chunk's subrequest count.
-  await deps.nodes.upsertMany([
+  const seeded = await deps.nodes.upsertMany([
     {
       libraryId: library.id,
       path: '',
@@ -200,7 +222,13 @@ async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, sta
     lastError: null,
     foldersVisited: 0,
     subrequests: budget.spend(),
-    rowsWritten: 0,
+    // Two writes, both real: the frontier row this just seeded and the `scan_state` row
+    // `markScanning` flipped. `startScan` runs on every client login, so a start that reports
+    // nothing spent is a start the day's allowance cannot see — and this is the path a
+    // **repeat** start takes, where the root mtime has moved, so it is not a once-per-library
+    // cost at all.
+    rowsWritten: seeded.changes + 1,
+    billedRows: seeded.billedRows + BILLED_SCAN_STATE_WRITE,
     stoppedBy: null,
     resumeAt: null,
   };

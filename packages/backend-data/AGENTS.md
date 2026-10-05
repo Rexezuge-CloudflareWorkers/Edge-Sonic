@@ -26,6 +26,7 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 | `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
 | `dao/songIdLookup.ts` | `IN (...)` id lookups, scoped to one library and across all of them    |
 | `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
+| `dao/billedRows.ts`| What D1 bills a write as: the row **plus every index entry it rewrote**  |
 | `utils/`         | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                     |
 
 `SongDAO` and `SongIndexDAO` are separate because they answer different-shaped questions.
@@ -106,6 +107,32 @@ a silent data loss rather than a filter.
   statement. This is the `fakeDav` receiver mistake one layer down: a double is evidence
   only to the extent it models the platform's constraints, and modelling *an* SQLite was
   not the same as modelling *D1's* SQLite.
+- **A write costs a *billed* row, not a row, and `meta.changes` is not that number.** D1's
+  pricing page, definition 6: *"Indexes will add an additional written row when writes include
+  the indexed column, as there are two rows written: one to the table itself, and one to the
+  index."* So the daily allowance is denominated in the row **plus every index entry it
+  rewrote**, and the multiplier is a property of the *table*: `songs` is ten (nine indexes),
+  `nodes` is four, `scan_state` is two (it declares none at all — only the implicit
+  `sqlite_autoindex` for `library_id TEXT PRIMARY KEY`).
+  `dao/billedRows.ts` owns that, and four rules keep it true:
+  - **`meta.changes` is SQLite's count of *table rows* touched.** `runWriteBatch` summed it, and
+    `EnrichmentService` declared a literal `1` because `applyMetadata` returned `void` — so the
+    scan's daily budget believed it had ~10x its real headroom on the dominant write path, and
+    the platform's refusal arrived first. `WriteBatchResult` therefore carries `billedRows`
+    beside `changes`, not in place of it: `changes` is progress and is what
+    `test/scan-convergence.test.ts` measures, `billedRows` is cost.
+  - **The counts are asserted against `sqlite_schema`, both directions.** A per-table index
+    count typed beside a query is right until the first `CREATE INDEX`, after which it
+    under-counts silently and in the direction that looks safe. This is the
+    `migrations.lock.json` mechanism applied to a different fact, in the same file.
+  - **Counting indexes by eye undercounts every table here by one.** SQLite creates an implicit
+    unique index for every `PRIMARY KEY` that is not an `INTEGER PRIMARY KEY` rowid alias, and
+    no table in this schema uses that one form. So `sqlite_schema` must be queried **without**
+    the `LIKE 'sqlite_%'` filter the structure comparison uses, or `songs` reads as eight.
+  - **One implementation, two call sites.** `runWriteStatement` (single) and `runWriteBatch`
+    (batched) both go through `billedRowsFor`, so the two cannot disagree — and each is
+    asserted over real SQLite, because the scan suites meter *doubles* that report their own
+    `billedRows` and never execute the DAO, so reverting the arithmetic turns nothing red there.
 - **What a group *is* is `ALBUM_GROUP_BY`, and the two halves of it are one function.**
   `albumKeySql.ts` writes the `GROUP BY` and `subsonic/albumKey.ts` derives the key in TypeScript;
   `projection.keyOf` rebuilds the key string from the grouped row so the page's membership and the
@@ -280,7 +307,7 @@ a silent data loss rather than a filter.
 - **A read that reports on a row must not create it.** `ScanStateDAO.ensure` writes an `idle` row
   on first sight, so `GET /user/libraries` uses `listByLibraries` — a plain read — and reports
   `null` for a library with no row. Two reasons, and the second is the one that would have been
-  missed: using `ensure` turns every `GET` into a write against the 5,000-rows/day allowance on
+  missed: using `ensure` turns every `GET` into a write against the day's row-write allowance on
   a page the operator **polls**; and it destroys the distinction the client depends on, because
   the row it wrote is exactly the row whose absence means *never scanned*. The same rule as
   `songs.countByLibraries`, which omits a library with no tracks rather than defaulting it to

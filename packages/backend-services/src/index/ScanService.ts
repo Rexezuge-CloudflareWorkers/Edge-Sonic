@@ -44,16 +44,17 @@
  * stored value is written with `is_scanned = 1` and never opened. So the cost of a
  * scan is one request per *changed* folder, not per folder.
  *
- * `is_scanned` is therefore the incrementality mechanism, and it is written as
- * part of the node's single `upsert` rather than as a follow-up `patch` — a second
- * write would spend a second row from a 5,000/day allowance.
+ * `is_scanned` is therefore the incrementality mechanism, and it is written as part of the node's
+ * single `upsert` rather than as a follow-up `patch` — a second write would spend a second row
+ * against the day's allowance.
  *
- * ### Why a cold scan can exceed the free tier, and why that is survivable
+ * ### What a cold scan costs, against the day's allowance
  *
- * A 1,000-folder / 5,000-track library writes ~6,100 rows, against a 5,000/day
- * allowance. Because the frontier lives in D1 and the scan is resumable, the
- * overshoot degrades to *"the scan takes a couple of days"* rather than *"the scan
- * fails"*.
+ * A 1,000-folder / 5,000-track library bills ~61,000 rows against the Free plan's 100,000 a day,
+ * because D1 charges a write as the row **plus every index entry it rewrote** and `songs` carries
+ * nine indexes. It fits — but it is two thirds of a day, and since the frontier lives in D1 an
+ * overrun degrades to *"a couple more days"* rather than *"the scan fails"*. `scanAccounting` for
+ * why the unit is not a row; `subrequests.ts` for the ceiling.
  *
  * ### A failure is retried, and the retry is bounded
  *
@@ -70,7 +71,8 @@
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
-import { backfill, settle } from './scanPrelude';
+import { backfill, settle, NO_DERIVATION } from './scanPrelude';
+import type { DerivationCost } from './deriveBackfill';
 import { start } from './scanStart';
 import { ScanBudget, stopReason } from './scanBudget';
 import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
@@ -84,8 +86,6 @@ import {
   unrecordedFailure,
 } from './scanRetry';
 import type { ChunkResult, ScanDailyBudget, ScanDeps } from './scanTypes';
-
-
 
 class ScanService {
   constructor(private readonly deps: ScanDeps) {}
@@ -166,13 +166,16 @@ class ScanService {
     // body is inside the guard: a transient D1 error becomes one counted retry with a
     // `last_error` an operator can read, and `isAdvancing('failed')` keeps the chain armed so
     // the retry budget — not an unbounded loop — is what bounds it.
-    // Declared outside the `try` because the `catch` reads them, and because `state` being
-    // `null` **is** the signal for "the fault happened before any state was read" — a second
-    // boolean for the same fact would be free to disagree with it.
+    // Declared outside the `try` because the `catch` reads them, and because `state === null` **is**
+    // the signal for "the fault happened before any state was read" — a second boolean for the
+    // same fact would be free to disagree with it.
     let state: ScanStateRow | null = null;
     let budget: ScanBudget | undefined;
-    let derivedRows = 0;
+    let derived: DerivationCost = NO_DERIVATION;
     let rowsWritten = 0;
+    // The day's allowance is denominated in **billed** rows, metered separately from
+    // `rowsWritten` because the ratio is not fixed: `songs` bills ten per row, `nodes` four.
+    let billedRows = 0;
     // Kept apart from `rowsWritten` on purpose: the day's row-write allowance counts every row,
     // and the cache-invalidation signal counts only the ones a cached answer reads.
     let indexChanged = false;
@@ -186,25 +189,25 @@ class ScanService {
       //
       // After `ensure`, before the backfill, because it substitutes for entering the chunk rather
       // than bounding it: a library that has spent its share writes **nothing** until midnight UTC.
-      // Before `ensure` would be tidier and is wrong — `ensure` is a read for a scanned library
-      // and the one write an unscanned one needs. After the backfill would be worthless.
+      // Before `ensure` would be tidier and is wrong — `ensure` is a read for a scanned library and
+      // the one write an unscanned one needs. After the backfill would be worthless.
       const dailyPause = dailyAllowancePause(dailyBudget?.());
       if (dailyPause) return { ...dailyPause, scanned: state.scanned_count };
 
       budget = this.budget();
-      derivedRows = await backfill(this.deps, library.id, budget);
+      derived = await backfill(this.deps, library.id, budget);
 
       const frontier = await this.deps.nodes.listFrontier(library.id, this.deps.chunkFolders);
-      const settled = await settle(this.deps, library, state, derivedRows, frontier);
-      // A `ChunkResult` means the chunk is already answered — `stalled`, `idle`, or
-      // `unableToAdvance` — and every one of those reasons is a return, not a value to
-      // carry on from. `null` means there is a frontier to walk.
+      const settled = await settle(this.deps, library, state, derived, frontier);
+      // A `ChunkResult` means the chunk is already answered — `stalled`, `idle`, `unableToAdvance`
+      // — and each of those is a return, not a value to carry on from. `null` means: walk.
       if (settled !== null) return settled;
 
-      rowsWritten = derivedRows;
+      rowsWritten = derived.rowsWritten;
+      billedRows = derived.billedRows;
       // The backfill writes `songs` grouping, which every aggregate reads, so it counts. It is
       // the one writer outside `reconcileFolder`.
-      indexChanged = derivedRows > 0;
+      indexChanged = derived.rowsWritten > 0;
       scanned = state.scanned_count;
 
       for (const folder of frontier) {
@@ -227,29 +230,28 @@ class ScanService {
           // The folder is gone. Removing its subtree is the prune half of the
           // design, scoped to a folder the scan already visited, so its cost is
           // proportional to the deletion rather than to library size.
-          const removedNodes = await this.deps.nodes.deleteSubtree(library.id, folder.path);
-          const removedSongs = (await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, [])).changes;
-          rowsWritten += removedNodes + removedSongs;
+          const removed = await this.deps.nodes.deleteSubtree(library.id, folder.path);
+          const removedSongs = await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, []);
+          rowsWritten += removed.changes + removedSongs.changes;
+          billedRows += removed.billedRows + removedSongs.billedRows;
           // A subtree leaving the index *is* a change to it — the opposite of a flag flipping.
-          indexChanged ||= removedNodes > 0 || removedSongs > 0;
+          indexChanged ||= removed.changes > 0 || removedSongs.changes > 0;
           scanned += 1;
           continue;
         }
         const reconciled = await reconcileFolder(this.deps, library, folder, listed, budget);
         rowsWritten += reconciled.rowsWritten;
+        billedRows += reconciled.billedRows;
         indexChanged ||= reconciled.indexChanged;
         scanned += 1;
       }
 
       // The **delta**, not the running total: `saveProgress` increments in its own statement
-      // because a chunk can be overlapped — an operator `POST` while the alarm is live — and
-      // a read-modify-write of `scanned_count` across that gap publishes the smaller of the
-      // two. `scanned` above is still the absolute count the result reports; only the write
-      // is a delta. The two are deliberately not the same value, and conflating them is the
-      // lost update.
+      // because a chunk can be overlapped — an operator `POST` while the alarm is live — and a
+      // read-modify-write of `scanned_count` across that gap publishes the smaller of the two.
+      // `scanned` above is still the absolute count the result reports; only the write is a delta.
       //
-      // `indexChanged` rides along, and it is deliberately **not** `rowsWritten > 0` — see
-      // `scanAccounting`. It is what `complete` reads before bumping `index_version`.
+      // `indexChanged` rides along, and is deliberately **not** `rowsWritten > 0` — `scanAccounting`.
       await this.deps.scanState.saveProgress(library.id, foldersVisited, null, indexChanged);
       return {
         status: 'scanning',
@@ -259,6 +261,9 @@ class ScanService {
         foldersVisited,
         subrequests: budget.spend(),
         rowsWritten,
+        // What those rows cost. Not derivable from `rowsWritten`: `nodes` and `songs` bill
+        // differently per row.
+        billedRows,
         // `frontier` when the loop ran out of folders to visit, and the bound that
         // cut it short otherwise — which is the fact an operator watching a scan
         // that is not finishing needs, and the two have different remedies.
@@ -274,20 +279,18 @@ class ScanService {
       // is not. It resolves at midnight UTC and needs no attempt.
       //
       // What the old path did with it is the whole of this fix. `ensure` threw, so `state` was
-      // `null`; `scanState.fail` threw for the same reason; the result was `unrecordedFailure`,
-      // whose status is `failed`; `isAdvancing('failed')` is true, so the alarm was re-armed a
-      // second later and the whole sequence ran again — roughly 86,000 times before the reset,
-      // each one a failed statement and a failed write, and none of them recorded anywhere an
-      // operator could read. The scan reported `scanning` for the entire time.
+      // `null`; `scanState.fail` threw for the same reason; the result was `unrecordedFailure`, whose
+      // status is `failed`; `isAdvancing('failed')` is true, so the alarm re-armed a second later and
+      // the sequence ran again — ~86,000 times before the reset, each a failed statement and a failed
+      // write, none recorded anywhere an operator could read. The scan reported `scanning` throughout.
       const allowancePause = d1AllowancePause(error, this.now());
       if (allowancePause) return allowancePause;
-      // `budget` and `state` are only meaningful once `ensure` succeeded. A failure in
-      // `ensure` itself — the one call that would have to work for `failChunk` to record
-      // anything — is reported as a fresh budget over an unknown row rather than
-      // rethrown, so the *caller* cannot be left holding an unhandled rejection that
-      // skips its re-arm. `failChunk`'s own `scanState.fail` is inside the same store,
-      // so it may also fail; that is caught here and turned into a result, because a
-      // handler that rejects is the wedge this whole restructure exists to close.
+      // `budget` and `state` are only meaningful once `ensure` succeeded. A failure in `ensure`
+      // itself is reported as a fresh budget over an unknown row rather than rethrown, so the
+      // *caller* cannot be left holding an unhandled rejection that skips its re-arm.
+      // `failChunk`'s own `scanState.fail` is in the same store, so it may also fail; that is caught
+      // here and turned into a result, because a handler that rejects is the wedge this restructure
+      // exists to close.
       if (budget === undefined) budget = this.budget();
       if (state === null) {
         const message = describeFailure(error);
@@ -310,18 +313,16 @@ class ScanService {
           return unrecordedFailure(`${message} (the failure could not be recorded: ${describeFailure(persistError)})`);
         }
       }
-      return await this.failChunk(library, state, error, budget, { rowsWritten, scanned, foldersVisited });
+      return await this.failChunk(library, state, error, budget, { rowsWritten, billedRows, scanned, foldersVisited });
     }
   }
 
     public async status(libraryId: string): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(libraryId);
     return {
-      // A read-only status reports `stalled` from the stored counter, so an operator
-      // opening the page sees the same terminal state a poll would have reported —
-      // rather than a `failed` that reads as "retrying" when it is not. The mapping
-      // itself is `storedStatus`, shared with the operator's library list so the two
-      // surfaces cannot disagree about whether a scan is over.
+      // A read-only status reports `stalled` from the stored counter, so an operator sees the same
+      // terminal state a poll would have reported — rather than a `failed` that reads as "retrying"
+      // when it is not. The mapping itself is `storedStatus`, shared with the library list.
       status: storedStatus(state),
       scanned: state.scanned_count,
       indexVersion: state.index_version,
@@ -331,10 +332,11 @@ class ScanService {
       foldersVisited: 0,
       subrequests: NO_SUBREQUESTS_SPENT,
       rowsWritten: 0,
-      // Which bound ended the *last* chunk is not persisted, so a read-only status
-      // cannot report one. `null` is honest: this call did no work, so nothing
-      // stopped it. The value is on the chunk itself, which the operator surface
-      // reaches through `POST /user/libraries/:id/scan/step`.
+      // A read measured nothing, so it spent nothing.
+      billedRows: 0,
+      // Which bound ended the *last* chunk is not persisted, so a read-only status cannot report
+      // one. `null` is honest: this call did no work. The value is on the chunk itself, which the
+      // operator surface reaches through `POST /user/libraries/:id/scan/step`.
       stoppedBy: null,
       resumeAt: null,
     };
@@ -345,14 +347,13 @@ class ScanService {
     state: ScanStateRow,
     error: unknown,
     budget: ScanBudget,
-    partial?: { rowsWritten: number; scanned: number; foldersVisited: number },
+    partial?: { rowsWritten: number; billedRows: number; scanned: number; foldersVisited: number },
   ): Promise<ChunkResult> {
-    // The frontier is left where it was, and `step` re-enters a failed scan rather
-    // than treating the status as terminal — so "the next poll resumes" is now a
-    // property of the code and not of this comment. The text can be upstream-controlled,
-    // so it is bounded to the same length the DAO persists, and the *bounded* value is
-    // what is returned: reporting the untruncated string would show the operator more
-    // than the database actually holds.
+    // The frontier is left where it was, and `step` re-enters a failed scan rather than treating
+    // the status as terminal — so "the next poll resumes" is a property of the code and not of this
+    // comment. The text can be upstream-controlled, so it is bounded to the length the DAO persists
+    // and the *bounded* value is what is returned: the untruncated string would show the operator
+    // more than the database holds.
     const message = describeFailure(error);
     const consecutiveFailures = await this.deps.scanState.fail(library.id, message);
     const result: ChunkResult = {
@@ -361,17 +362,20 @@ class ScanService {
       indexVersion: state.index_version,
       lastError: message,
       foldersVisited: partial?.foldersVisited ?? 0,
-      // The budget's own count rather than a `?? 1` fallback: it measures every
-      // request the failed chunk issued, including the ones that threw, which is
-      // the number an operator needs to tell a credential failure from a ceiling.
+      // The budget's own count rather than a `?? 1` fallback: it measures every request the failed
+      // chunk issued, including those that threw — the number that tells a credential failure from
+      // a ceiling.
       subrequests: budget.spend(),
       rowsWritten: partial?.rowsWritten ?? 0,
+      // Carried through a failure deliberately: a chunk that wrote rows and *then* threw has
+      // spent them, and a counter told only the row count would charge the day for a fraction.
+      billedRows: partial?.billedRows ?? 0,
       stoppedBy: null,
       resumeAt: null,
     };
-    // The last permitted failure reports as `stalled`, because it will not be retried
-    // and `failed` elsewhere means exactly that it will be. Both carry the reason; only
-    // this one is the end of the road without an explicit `startScan`.
+    // The last permitted failure reports as `stalled`, because it will not be retried and `failed`
+    // elsewhere means exactly that it will be. Both carry the reason; only this one is the end of the
+    // road without an explicit `startScan`.
     return consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? { ...result, status: 'stalled' } : result;
   }
 

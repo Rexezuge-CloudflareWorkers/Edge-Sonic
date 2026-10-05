@@ -245,61 +245,99 @@ const PAGE_STATEMENTS_PER_GROUP = 1 / PAGE_ALBUM_KEYS_PER_STATEMENT + 1 / PAGE_A
 /**
  * Rows D1 accepts written per day on the Free plan.
  *
- * The platform number, not a choice. `5,000`.
+ * The platform number, not a choice. `100,000`, from
+ * <https://developers.cloudflare.com/d1/platform/pricing/#billing-metrics> (page last
+ * updated 2026-04-21): *"Rows written — 100,000 / day"* on Workers Free.
  *
- * And since 2026-09-01 it is **enforced**: Cloudflare fails every query on the database,
- * reads included, until the allowance resets at midnight UTC. So this is not a throughput
- * number that degrades a scan into "takes a couple of days" — it is the boundary between a
- * slow product and an unreachable one, which is why the scan now paces itself against it
- * (`SCAN_DAILY_ROW_WRITE_BUDGET`) rather than discovering it.
+ * It was `5,000` here until this was checked against that page, under a comment already claiming to
+ * be *"the platform number, not a choice"*. That sentence was false — the recorded shape of defect
+ * this repository keeps meeting, where a comment asserting an invariant that nothing measures is the
+ * only reason a wrong number sits in a file indefinitely. The cost was a scan pacing itself at 5% of
+ * the allowance it had, which is harmless in direction: a scan that writes less cannot take the
+ * product down.
+ *
+ * Since 2026-09-01 it is **enforced**: Cloudflare fails every query on the database, reads included,
+ * until the allowance resets at midnight UTC. So this is not a throughput number that degrades a scan
+ * into "takes a couple of days" — it is the boundary between a slow product and an unreachable one,
+ * which is why the scan paces itself against it (`SCAN_DAILY_ROW_WRITE_BUDGET`) rather than
+ * discovering it.
+ *
+ * ### The unit is not a row
+ *
+ * D1 bills an index entry as well as the row — pricing page, definition 6: *"there are two rows
+ * written: one to the table itself, and one to the index"* — and `songs` carries nine indexes, so one
+ * insert is ten rows of allowance. Raising this ceiling while metering table rows would have
+ * multiplied the real overshoot by twenty, which is an outage rather than a slow scan. So the budget
+ * below is denominated in **billed** rows, and `backend-data`'s `billedRows.ts` owns the conversion.
  */
-const D1_DAILY_ROW_WRITE_LIMIT = 5000;
+const D1_DAILY_ROW_WRITE_LIMIT = 100_000;
 
 /**
- * Rows the scan leaves alone for everything that is not a scan.
+ * The share of the daily allowance the scan leaves for everything that is not a scan.
  *
- * The scan is not the only writer: a client stars a track, rates it, saves a play queue or a
- * playlist, a failed login increments the credential throttle, a completed scan bumps
- * `index_version`. Those are all rows against the same daily allowance, and the scan is by
- * far the largest consumer of it — so the scan's budget is the allowance **less** what
- * everything else might need.
+ * A **fraction of the platform limit, not a fixed number**, and the fraction is the
+ * derivation. The scan is not the only writer: a client stars a track, rates it, saves a play
+ * queue or a playlist, a failed login increments the credential throttle, a completed scan
+ * bumps `index_version`. Those are all rows against the same daily allowance, and the scan is
+ * by far the largest consumer — so the scan's budget is the allowance **less** what everything
+ * else might need.
  *
- * A thousand is a reserve, not a derivation: there is no arithmetic that produces it, and
- * pretending otherwise would be the "a number typed beside a query is wrong by the time
- * somebody raises a page size" defect in a new place. What *is* load-bearing is that it is
- * non-zero, and that is asserted as a relationship in `test/subrequest-budget.test.ts` —
- * because a zero reserve makes the two constants below identical, and a scan that may spend
- * the entire allowance leaves nothing for the stars a client presses while it runs.
+ * The old value was a flat `1,000`, chosen when the limit it sat under was `5,000` — 20%. At
+ * `100,000` the same *number* is 1%, which covers neither a few hundred stars on a busy day nor
+ * the counter's own documented overshoot. A flat reserve is only meaningful as a fraction, and the
+ * fraction is what had been preserved by accident.
+ *
+ * Ten percent is a judgement rather than a derivation in the strict sense — no arithmetic produces
+ * exactly this figure — and that is stated rather than dressed up. What *is* load-bearing, and
+ * asserted as relationships in `test/d1-daily-limit.test.ts`, is that it is non-zero, below the limit,
+ * and at least `SCAN_ROW_COUNT_PERSIST_INTERVAL`: the counter's maximum overshoot, which the reserve
+ * must absorb or the metering scheme can overshoot the thing it meters.
  */
-const D1_DAILY_ROW_WRITE_RESERVE = 1000;
+const D1_DAILY_ROW_WRITE_RESERVE_SHARE = 0.1;
+
+/**
+ * Rows the scan leaves alone, in billed rows.
+ *
+ * `ceil` so a share below one row still reserves a row: a share that rounds to zero would make
+ * the scan's budget the whole allowance, which is the exact case the reserve exists to prevent.
+ */
+const D1_DAILY_ROW_WRITE_RESERVE = Math.ceil(D1_DAILY_ROW_WRITE_LIMIT * D1_DAILY_ROW_WRITE_RESERVE_SHARE);
 
 /**
  * Rows one scan may write per UTC day, across every library on the account.
  *
- * D1's allowance is per **account**, not per database, so a per-library budget is unsound the
- * moment a second library exists: two libraries each capped at the whole allowance write
- * twice it. So the scan takes a *share*, derived from the number of libraries actually
- * registered — which `ScanWorker` already reads, because it looks the library up before every
- * chunk, so dividing by it costs nothing.
+ * D1's allowance is per **account**, not per database, so a per-library budget is unsound the moment
+ * a second library exists: two libraries each capped at the whole allowance write twice it. So the
+ * scan takes a *share*, divided by the number of libraries actually registered — which `ScanWorker`
+ * already reads, so dividing by it costs nothing.
  *
- * One library (the ordinary deployment) therefore gets the whole budget, and N libraries
- * together cannot exceed it. That is the direction the arithmetic has to err in: a pessimistic
- * share makes a scan take longer, and the cost of that is time, while an optimistic one is an
- * outage until midnight UTC.
+ * One library (the ordinary deployment) gets the whole budget and N libraries together cannot
+ * exceed it. That is the direction the arithmetic must err in: a pessimistic share costs time, an
+ * optimistic one costs an outage until midnight UTC. Denominated in **billed** rows, per the header
+ * above.
  */
 const SCAN_DAILY_ROW_WRITE_BUDGET = D1_DAILY_ROW_WRITE_LIMIT - D1_DAILY_ROW_WRITE_RESERVE;
 
 /**
- * One library's share of the day's row-write budget.
+ * One library's share of the day's row-write budget, in **billed** rows.
  *
  * `max(1, …)` so that a day still gets a budget when the share would round to zero — which is
  * what a hundred libraries on the Free plan would produce. A scan that may write nothing a day
  * never completes, and a scan that cannot complete is the same class of permanent failure this
  * whole mechanism exists to avoid; so at that scale the budget degrades to "slow", deliberately,
  * and the reactive pause in `D1ErrorClassifier` is what stops it going further.
+ *
+ * `limit` is a parameter rather than the module constant so a **Paid** deployment is not throttled
+ * to the Free plan's daily cliff. D1 Paid is billed monthly (50 million rows included) with no
+ * daily cliff and no midnight-UTC refusal, so capping it at 100,000 rows a day would leave an
+ * account paying for two orders of magnitude more throughput deliberately unused — and the
+ * operator cannot detect the plan from here, so the *default* must be the plan that fails loudly.
+ * `0` disables the pacing entirely, which `dailyWriteAllowanceSpent` already treats as "no limit".
  */
-function dailyRowWriteShare(enabledLibraries: number): number {
-  return Math.max(1, Math.floor(SCAN_DAILY_ROW_WRITE_BUDGET / Math.max(1, Math.floor(enabledLibraries))));
+function dailyRowWriteShare(enabledLibraries: number, limit = SCAN_DAILY_ROW_WRITE_BUDGET): number {
+  const effective = Math.max(0, Math.floor(limit));
+  if (effective === 0) return 0;
+  return Math.max(1, Math.floor(effective / Math.max(1, Math.floor(enabledLibraries))));
 }
 
 /**
@@ -341,6 +379,7 @@ export {
   SCAN_ENRICH_MAX_PER_FOLDER,
   D1_DAILY_ROW_WRITE_LIMIT,
   D1_DAILY_ROW_WRITE_RESERVE,
+  D1_DAILY_ROW_WRITE_RESERVE_SHARE,
   SCAN_DAILY_ROW_WRITE_BUDGET,
   dailyRowWriteShare,
   PAGE_ALBUM_KEYS_PER_STATEMENT,

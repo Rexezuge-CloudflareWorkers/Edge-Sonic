@@ -1,19 +1,23 @@
 /**
  * Songs: the queryable half of the index.
  *
- * `nodes` answers "what is in this folder"; `songs` answers "which track matches
- * this text" and "which albums does this artist have". Both are required: a
- * recursive `PROPFIND` per request cannot answer `search3` or `getAlbumList2`, and
- * a D1 table cannot be walked cheaply per level for `getMusicDirectory`.
+ * `nodes` answers "what is in this folder"; `songs` answers "which track matches this text" and
+ * "which albums does this artist have". Both are required: a recursive `PROPFIND` per request cannot
+ * answer `search3` or `getAlbumList2`, and a D1 table cannot be walked cheaply per level for
+ * `getMusicDirectory`.
  *
- * ### Writes are budgeted
+ * ### Writes are budgeted, and the unit is not a row
  *
- * The D1 free plan allows 5,000 row writes per day. A cold scan of a 1,000-folder
- * / 5,000-track library writes ~6,100 rows, so it *exceeds* the daily allowance
- * once. That is acceptable rather than a blocker because the scan is chunked and
- * resumable from a D1 cursor — the overshoot degrades to "the scan takes a couple
- * of days", not "the scan fails" — and because every subsequent scan writes zero
- * rows. The arithmetic is in `migrations/0001` so nobody is surprised by it.
+ * D1's Free plan allows **100,000 row writes per day** and *enforces* it: an account over its
+ * allowance has every query fail until midnight UTC, so the whole product is down rather than slow.
+ *
+ * The unit is a **billed row** — the table row plus every index entry the write rewrote — and
+ * `songs` carries **nine** indexes, so one insert is ten rows of allowance. A cold scan of a
+ * 1,000-folder / 5,000-track library therefore bills ~61,000 rows rather than ~6,100: it fits in one
+ * day, where the same scan metered in table rows looked ten times cheaper than it was.
+ *
+ * Every write here reports its cost in billed rows. `billedRows.ts` owns the model, and
+ * `test/schema.int.test.ts` asserts it against the real schema.
  */
 import { BaseDAO } from './BaseDAO';
 import type { WriteBatchResult } from './BaseDAO';
@@ -27,7 +31,9 @@ import { SongCountDAO } from './songCounts';
 import { UPSERT_FILE_FACTS } from './songSql';
 import type { SongMetadataInput } from './songSql';
 import { deriveFromPath } from './pathConvention';
-import { buildMetadataPatch } from './songMetadata';
+import { buildMetadataPatch, NO_METADATA_WRITE } from './songMetadata';
+import type { MetadataWriteResult } from './songMetadata';
+
 
 /**
  * Library ids per statement: one variable each, and nothing else.
@@ -79,11 +85,8 @@ class SongDAO extends BaseDAO {
   }
 
   /**
-   * The count DAO, built from `this` so it holds the request scope's meter.
-   *
-   * Constructed on each call rather than cached because it is two tiny wrappers over a
-   * statement and a cache would be state this DAO has to keep correct — the shape the
-   * god-file split was meant to avoid.
+   * The count DAO, built from `this` so it holds the request scope's meter. Constructed per call
+   * rather than cached: it is two tiny wrappers, and a cache would be state this DAO keeps correct.
    */
   private counts(): SongCountDAO {
     return new SongCountDAO(this.database, this.subrequests);
@@ -126,12 +129,12 @@ class SongDAO extends BaseDAO {
   /**
    * Write song rows, as many as the subrequest budget allows.
    *
-   * `WriteBatchResult` rather than a count: a cold album of 500 tracks is ~500 statements
-   * against a ceiling of 50, so truncation is the *expected* case on Free, and the caller has
-   * to see it or it will mark a half-written folder reconciled.
+   * `WriteBatchResult` rather than a count: a cold album of 500 tracks is ~500 statements against a
+   * ceiling of 50, so truncation is the *expected* case on Free, and the caller must see it or it
+   * will mark a half-written folder reconciled.
    */
   public async upsertFileFacts(inputs: readonly SongUpsertInput[]): Promise<WriteBatchResult> {
-    if (inputs.length === 0) return { changes: 0, written: 0, truncated: false };
+    if (inputs.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
     const timestamp = nowSeconds();
     // Derived once per input rather than per bound parameter. `upsertFileFacts` used to accept
     // a caller-supplied `derivedAlbum`/`derivedArtist` and prefer it, on the reasoning that the
@@ -181,25 +184,30 @@ class SongDAO extends BaseDAO {
    * Split from `upsertFileFacts` because the two have different costs: a rescan
    * calls the first for every file it sees, while this is called at most once per
    * song a client actually opens.
+   *
+   * Returns what the write cost rather than nothing, because the scan meters it against the day's
+   * row-write allowance. `void` here is what forced that meter to declare `1` at the call site, and
+   * `songs` bills ten. See `MetadataWriteResult`.
    */
-  public async applyMetadata(id: string, metadata: SongMetadataInput): Promise<void> {
+  public async applyMetadata(id: string, metadata: SongMetadataInput): Promise<MetadataWriteResult> {
     // The column list and the `_ci`-twin rule live in `songMetadata.ts`, beside the
     // shape they target. Building them here rather than inline is what keeps
     // `SongDAO` readable and the two in step.
     const { assignments, values } = buildMetadataPatch(metadata);
     // Nothing supplied: no statement. A `SET` with no assignments still costs a round
     // trip, and a caller that supplied nothing has nothing to record.
-    if (assignments.length === 0) return;
+    if (assignments.length === 0) return NO_METADATA_WRITE;
 
     // `enriched_at` and `updated_at` in the same statement as the values, always. A row
     // whose values moved without them is a row nothing will re-read.
     const timestamp = nowSeconds();
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(`UPDATE songs SET ${[...assignments, 'enriched_at = ?', 'updated_at = ?'].join(', ')} WHERE id = ?`)
-          .bind(...values, timestamp, timestamp, id)
-          .run(),
+    // `runWriteStatement` rather than `withRetry`, so the cost is **measured** rather than
+    // declared by the caller — `songs` bills ten rows here, and reporting it as one is how a scan
+    // enriched track by track spent ten times the allowance it believed it respected.
+    return await this.runWriteStatement(
+      this.database
+        .prepare(`UPDATE songs SET ${[...assignments, 'enriched_at = ?', 'updated_at = ?'].join(', ')} WHERE id = ?`)
+        .bind(...values, timestamp, timestamp, id),
       'songs.applyMetadata',
     );
   }
@@ -228,9 +236,9 @@ class SongDAO extends BaseDAO {
   }
 
   /**
-   * Delegates to {@link SongCountDAO}, built from `this` so it inherits the request scope's
-   * meter — a DAO that constructs another DAO must pass the counter down, or the inner one
-   * spends a budget nothing is watching.
+   * Delegates to {@link SongCountDAO}, built from `this` so it inherits the request scope's meter —
+   * a DAO that constructs another DAO must pass the counter down, or the inner one spends a budget
+   * nothing is watching.
    */
   public async countByLibrary(libraryId: string): Promise<number> {
     return await this.counts().countByLibrary(libraryId);
@@ -348,7 +356,7 @@ class SongDAO extends BaseDAO {
     );
     const keep = new Set(keepPaths);
     const doomed = (all.results ?? []).map((row) => row.path).filter((path) => !keep.has(path));
-    if (doomed.length === 0) return { changes: 0, written: 0, truncated: false };
+    if (doomed.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
     const statements = doomed.map((path) => this.database.prepare('DELETE FROM songs WHERE library_id = ? AND path = ?').bind(libraryId, path));
     // Handed to the batch rather than counted here: a folder that lost 200 tracks is another
     // statement group that can exceed the ceiling on its own. A prune that stops halfway is
@@ -371,19 +379,18 @@ class SongDAO extends BaseDAO {
    * everything, and the prefix carries a trailing `/` so `Blur` cannot match
    * `Blurberry`.
    */
-  public async deleteSubtree(libraryId: string, dirPath: string): Promise<number> {
+  public async deleteSubtree(libraryId: string, dirPath: string): Promise<WriteBatchResult> {
     const escaped = `${dirPath.replaceAll(/[%_]/g, (char) => `\\${char}`)}/%`;
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(String.raw`DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\')`)
-          .bind(libraryId, dirPath, escaped)
-          .run(),
+    const result = await this.runWriteStatement(
+      this.database
+        .prepare(String.raw`DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\')`)
+        .bind(libraryId, dirPath, escaped),
       'songs.deleteSubtree',
     );
-    return result.meta?.changes ?? 0;
+    // One statement, so never truncated. `billedRows` is what makes this shape worth the change: a
+    // prune of 200 tracks bills ten rows each, and the caller is the only thing that can charge it.
+    return { changes: result.changes, written: result.changes, truncated: false, billedRows: result.billedRows };
   }
-
 }
 
 

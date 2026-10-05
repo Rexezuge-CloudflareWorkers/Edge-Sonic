@@ -20,6 +20,7 @@ import {
   DERIVED_VERSION,
   GROUPING_SOURCE_DERIVED,
   LibraryDAO,
+  NO_METADATA_WRITE,
   NodeDAO,
   PlaylistDAO,
   ScanStateDAO,
@@ -28,8 +29,13 @@ import {
   SongIndexDAO,
   UserDAO,
   D1_MAX_BIND_PARAMETERS,
+  MAX_BILLED_ROWS_PER_ROW,
+  TABLE_INDEX_COUNTS,
   bindChunkSize,
+  billedRowsFor,
+  billedRowsForTable,
   deriveFromPath,
+  statementTable,
   SongMatchDAO,
   ImportSourceDAO,
   ImportRunDAO,
@@ -244,6 +250,240 @@ describe('the squashed baseline', () => {
 
     expect(statements, 'an ALTER TABLE cannot be guarded — fold the column into its CREATE TABLE').not.toMatch(/ALTER\s+TABLE/i);
     expect(statements, 'a DROP TABLE has nothing to drop — the baseline never creates these').not.toMatch(/DROP\s+TABLE/i);
+  });
+});
+
+/**
+ * D1 bills a write as the row **plus every index entry it rewrote** — pricing page,
+ * definition 6: *"there are two rows written: one to the table itself, and one to the
+ * index."* The daily row-write allowance is denominated in those, so `billedRows.ts`'s
+ * per-table factor is the thing that decides whether the scan paces itself inside the
+ * allowance or overruns it.
+ *
+ * And a per-table factor typed beside a query is right until the first `CREATE INDEX`, after
+ * which it silently under-counts — the same defect as `listIdsIn`'s batch size of 200 under a
+ * comment asserting SQLite's limit was 999. So the declared counts are read out of the real
+ * migrated schema and compared, here, on every run.
+ */
+describe('the billed-row model is the schema, not a number typed beside a query', () => {
+  /**
+   * Indexes per table, from `sqlite_schema`.
+   *
+   * `LIKE 'sqlite_%'` is **deliberately absent**, and this is the whole content of the first
+   * case below: SQLite creates an implicit unique index for every `PRIMARY KEY` that is not an
+   * `INTEGER PRIMARY KEY` rowid alias, and those appear as `sqlite_autoindex_*` with no SQL of
+   * their own. Counting `CREATE INDEX` statements by eye therefore *undercounts every table in
+   * this schema by one*, which would have made `songs` eight and its real cost nine rows per
+   * write — wrong in the direction that looks safe.
+   *
+   * `sqlite_stat1` and friends are also excluded, because they are tables rather than indexes
+   * and never appear in a `type = 'index'` row.
+   */
+  function indexCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const row of handle.raw
+      .prepare("SELECT tbl_name, name FROM sqlite_schema WHERE type = 'index' ORDER BY tbl_name, name")
+      .all() as Array<{ tbl_name: string; name: string }>) {
+      // An index on a table that does not exist is impossible, but a *view*'s index is not,
+      // and this suite's schema has none — so a name that is not one of our tables is a genuine
+      // finding rather than noise, and is reported rather than skipped.
+      counts[row.tbl_name] = (counts[row.tbl_name] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  it('counts every index the schema declares, implicit PRIMARY KEY ones included', () => {
+    const actual = indexCounts();
+
+    // The specific trap, asserted directly rather than only through the comparison below:
+    // `songs` has eight `CREATE INDEX` statements and **nine** indexes, because `id TEXT
+    // PRIMARY KEY` gets an implicit one. The scan's dominant write is a `songs` write, so this
+    // single index is the difference between a budget metered in table rows and one metered in
+    // what D1 bills.
+    expect(migrationSql().match(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS \w+ ON songs\b/gi) ?? []).toHaveLength(8);
+    expect(actual['songs']).toBe(9);
+
+    // `scan_state` is the contrast: it declares **no** index at all, and so has exactly one —
+    // its `library_id TEXT PRIMARY KEY`. It is the one table whose write costs 2 rather than 10,
+    // and `scanStart.ts` names that figure.
+    expect(migrationSql().match(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS \w+ ON scan_state\b/gi) ?? []).toHaveLength(0);
+    expect(actual['scan_state']).toBe(1);
+  });
+
+  it('matches the declared model for every table, so adding an index turns this red', () => {
+    // Both directions, and the second is the load-bearing one: a table in the schema with no
+    // entry in `TABLE_INDEX_COUNTS` would be charged `MAX_BILLED_ROWS_PER_ROW` — pessimistic, so
+    // safe, but silently so, and on a table a future migration adds nobody would know the
+    // factor had stopped being derived.
+    expect(TABLE_INDEX_COUNTS).toEqual(indexCounts());
+  });
+
+  it('has a factor of one-plus, because the table row itself is always billed', () => {
+    // The rule stated as a relationship rather than restated per table: a table with **no**
+    // indexes still costs one row per write, so a factor of 0 anywhere would mean the model had
+    // forgotten the row it started from.
+    for (const [table, indexes] of Object.entries(TABLE_INDEX_COUNTS)) {
+      // `indexes` is a string here: `Object.entries` on a `Record<string, number>` widens the
+      // value, and the arithmetic says as much by needing the parse.
+      expect(billedRowsForTable(table, 1), `${table} bills its own row`).toBe(Number(indexes) + 1);
+    }
+  });
+
+  it('charges the worst case in the schema for a statement whose table cannot be read', () => {
+    // The pessimistic fallback, asserted because it is the direction the whole module is
+    // written in. A default of 1 is the defect this module exists to remove.
+    const unknown = billedRowsFor({ sql: 'PRAGMA optimize' }, 1);
+    expect(unknown).toBe(MAX_BILLED_ROWS_PER_ROW);
+    // `>=` the most expensive real table, not `>`: `songs` *is* the most expensive table in
+    // this schema, so today the fallback and `songs` coincide and asserting a strict inequality
+    // would fail while stating something untrue. The relationship that matters is the
+    // direction — a fallback can only ever over-charge, never under-charge — and `toBeGreaterThanOrEqual`
+    // against the maximum is what states it. It is also asserted as an invariant below, because
+    // a future index on some quieter table would make this strict again and say so here.
+    expect(unknown).toBeGreaterThanOrEqual(billedRowsForTable('songs', 1));
+    expect(unknown).toBeGreaterThan(billedRowsForTable('nodes', 1));
+    expect(unknown).toBeGreaterThan(billedRowsForTable('scan_state', 1));
+
+    // And a read is not a write at all, so it costs nothing — `runWriteStatement` is never
+    // handed one, and a double that reached it must not invent a charge.
+    expect(billedRowsFor({ sql: 'SELECT * FROM songs' }, 0)).toBe(0);
+  });
+
+  it('is what makes a chunk of songs cost ten times what its row count says', () => {
+    // The number this whole change exists to establish, over the real engine: 50 rows changed
+    // is 500 billed rows against the day's allowance. A budget reading `changes` would admit a
+    // tenth of what D1 is about to be asked for.
+    const songs = billedRowsForTable('songs', 50);
+    expect(songs).toBe(500);
+    // And `nodes`, which the same chunk also writes, at its own — different, which is why no
+    // single ratio converts one count into the other.
+    expect(billedRowsForTable('nodes', 50)).toBe(200);
+  });
+
+  it('reads the table off the statement, not off a caller-supplied name', () => {
+    // Every write shape this repository issues, from the DAO source. `billedRowsFor` is only
+    // trustworthy if it recognises the statements that actually run, and the failure mode is
+    // quiet — a misread table is charged the wrong factor, in whichever direction.
+    // Paired with its expected table rather than a set membership: a parser that answered `nodes`
+    // for every one of these would pass a membership assertion, and the whole cost of this
+    // module is that the *wrong table* is a wrong factor.
+    // A full host of legal SQLite, because the failure mode of this parser is silent: a shape it
+    // cannot read is charged the worst case rather than refused, and that is indistinguishable
+    // from correct behaviour on a library with no unquoted identifiers.
+    for (const [sql, table] of [
+      ['INSERT INTO songs (id) VALUES (?)', 'songs'],
+      ['INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, ?)', 'settings'],
+      ['INSERT INTO nodes (library_id, path) VALUES (?, ?)', 'nodes'],
+      ['UPDATE songs SET title = ? WHERE id = ?', 'songs'],
+      ['DELETE FROM songs WHERE id = ?', 'songs'],
+      ['  \n  UPDATE scan_state SET status = ? WHERE library_id = ?', 'scan_state'],
+      ['-- a leading comment, which the statement may carry\nUPDATE nodes SET etag = ? WHERE path = ?', 'nodes'],
+      // Quoted and bracketed identifiers: legal SQLite, and legal in a DAO if an identifier
+      // ever becomes reserved. A parser that cannot read them charges the worst case.
+      ['INSERT INTO "nodes" (library_id, path) VALUES (?, ?)', 'nodes'],
+      ['DELETE FROM `songs` WHERE id = ?', 'songs'],
+      // Case: the verb and the table are upper-cased inconsistently across DAOs.
+      ['update SONGS set title = ? where id = ?', 'songs'],
+    ] as const) {
+      expect(statementTable(sql), sql).toBe(table);
+    }
+
+    // Not a write: a read is not billed, and a verb quoted inside a string literal is not a
+    // statement header. This is why the pattern is anchored at the start rather than searched
+    // for — `name = 'UPDATE users'` is a legal value for a column this schema carries.
+    expect(statementTable('SELECT * FROM songs')).toBeNull();
+    expect(statementTable("UPDATE songs SET name = 'UPDATE users' WHERE id = ?")).toBe('songs');
+    expect(statementTable('WITH x AS (SELECT 1) SELECT * FROM x')).toBeNull();
+  });
+
+  it('measures a real statement as the model says, over the real engine', async () => {
+    // The paired negative. `meta.changes` is what the DAO reads and what the old budget
+    // counted; it reports table rows and knows nothing about indexes. If these two numbers
+    // agreed, the model would be decorative — so this asserts they do not, against the same
+    // SQLite the suite already trusts for query plans.
+    const libraryId = 'LBILLED';
+    await handle.raw.exec(
+      `INSERT INTO libraries (id, slug, slug_ci, base_url, root_path, dav_username, password_ciphertext, password_iv, created_at, updated_at)
+       VALUES ('${libraryId}', 'billed', 'billed', 'https://dav.example.com', '', 'dav', 'c', 'iv', 0, 0);`,
+    );
+
+    const statement = handle.db.prepare(
+      'INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, duration, bitrate, created_at, updated_at) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 0, 0, 0, 0)',
+    );
+    const bound = statement.bind('s1', libraryId, 'A/01.flac', 'A', '01.flac', '01.flac', '.flac');
+    const result = await bound.run();
+
+    expect(result.meta?.changes).toBe(1);
+    expect(billedRowsFor(bound, result.meta?.changes ?? 0)).toBe(billedRowsForTable('songs', 1));
+    expect(billedRowsForTable('songs', 1)).toBeGreaterThan(result.meta?.changes ?? 0);
+  });
+
+  it('is what a real write batch reports, so the budget is not fed a row count', async () => {
+    // The assertion that closes the loop. Everything above tests the model; this tests that the
+    // **scan** receives it, by running the DAO the scan calls over the real engine.
+    //
+    // It exists because the mutation is invisible everywhere else: reverting `runWriteBatch`'s
+    // `batch()` branch to `sum(changes)` — i.e. dropping `billedRowsFor` — leaves every
+    // status-, shape- and budget-level assertion in `scan-budget`, `scan-incremental` and the rest
+    // green, because those suites meter *doubles* that report their own `billedRows` and never
+    // execute `runWriteBatch`. The defect lands as a silent ten-fold under-count in production and
+    // as **no** test failure at all, which is the shape this repository has already paid for twice
+    // on this column.
+    //
+    // Three rows, one statement each, all `songs`: 3 changes and 30 billed rows.
+    const userId = await seedUser('BilledBatch');
+    const libraryId = await seedLibrary(userId, 'LBB');
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
+    const inputs = ['A/01.flac', 'A/02.flac', 'A/03.flac'].map((path) => ({
+      id: songId(libraryId, path),
+      libraryId,
+      path,
+      dirPath: 'A',
+      name: path.split('/').pop() ?? path,
+      size: 1000,
+      mtimeMs: 1000,
+      contentType: 'audio/ogg',
+      suffix: 'ogg',
+    }));
+
+    const written = await songs.upsertFileFacts(inputs);
+
+    expect(written.changes).toBe(3);
+    expect(written.billedRows).toBe(billedRowsForTable('songs', 3));
+    expect(written.billedRows).toBe(30);
+    // And the relationship, which is what makes the number usable by a caller that has no idea
+    // what the table's index count is.
+    expect(written.billedRows).toBe(written.changes * (1 + TABLE_INDEX_COUNTS['songs']!));
+  });
+
+  it('is what a single-statement write reports, since that path bypasses the batch', async () => {
+    // `applyMetadata` is one `UPDATE` through `runWriteStatement`, not `runWriteBatch` — so it is
+    // a *second* implementation of the same arithmetic unless it is asserted too, and
+    // `EnrichmentService` meters this one. This is the path that carried the literal `1`.
+    const userId = await seedUser('BilledSingle');
+    const libraryId = await seedLibrary(userId, 'LBS');
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
+    const id = songId(libraryId, 'A/01.flac');
+    await songs.upsertFileFacts([
+      { id, libraryId, path: 'A/01.flac', dirPath: 'A', name: '01.flac', size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'ogg' },
+    ]);
+
+    const written = await songs.applyMetadata(id, { artist: 'Bonobo', album: 'Black Sands' });
+
+    expect(written.changes).toBe(1);
+    expect(written.billedRows).toBe(billedRowsForTable('songs', 1));
+
+    // A row that matched nothing writes nothing — and the pair must agree, because a budget told
+    // `changes: 0` but a nonzero cost is a scan that believes it spent nothing and is charged for
+    // something.
+    const absent = await songs.applyMetadata(songId(libraryId, 'A/missing.flac'), { artist: 'Nobody' });
+    expect(absent.changes).toBe(0);
+    expect(absent.billedRows).toBe(0);
+
+    // And a call that supplied nothing to write issues no statement at all.
+    expect(await songs.applyMetadata(id, {})).toEqual(NO_METADATA_WRITE);
+    expect(NO_METADATA_WRITE.billedRows).toBe(0);
   });
 });
 
@@ -1061,7 +1301,10 @@ describe('path-derived grouping', () => {
       for (let pass = 0; pass < 20; pass += 1) {
         const rows = await dao.listNeedingDerivation(libraryId, 50, version);
         if (rows.length === 0) return written;
-        written += await dao.applyDerivation(dao.deriveFor(rows), version);
+        // `.changes`, not the whole result: this drain counts *rows stamped*, which is what the
+        // convergence claim below is about. `billedRows` is the platform's cost for the same
+        // write and is asserted separately, against the schema.
+        written += (await dao.applyDerivation(dao.deriveFor(rows), version)).changes;
       }
       throw new Error('backfill did not converge');
     }
@@ -1227,7 +1470,10 @@ describe('path-derived grouping', () => {
       const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       const first = await dao.listNeedingDerivation(libraryId, 2);
       expect(first).toHaveLength(2);
-      expect(await dao.applyDerivation(dao.deriveFor(first))).toBe(2);
+      // `.changes`, not the whole result: this case is about the *selection* draining, and
+      // `applyDerivation` returning the batch is what carries its cost — asserted against the
+      // schema in the billed-row block above.
+      expect((await dao.applyDerivation(dao.deriveFor(first))).changes).toBe(2);
 
       // Three remain, and the two just written are *not* among them — the selection is on
       // the stamp, so a pass can never re-derive its own output and starve the tail.
@@ -1938,7 +2184,16 @@ describe('DAO round-trips', () => {
 
     // A one-level delete would leave the `Disc 2` row indexed, pointing at a folder
     // that no longer exists — which is the entire failure this prune exists to prevent.
-    expect(await songs.deleteSubtree(libraryId, 'Album')).toBe(2);
+    //
+    // `.changes` for the row count and `billedRows` beside it, because the two are different
+    // answers and a prune is one of the four writes a chunk can make on its way to spending the
+    // day's allowance: 2 songs is 20 of it, and asserting only the row count would leave the cost
+    // unmeasured on the path that spends it.
+    const pruned = await songs.deleteSubtree(libraryId, 'Album');
+    expect(pruned.changes).toBe(2);
+    expect(pruned.billedRows).toBe(billedRowsForTable('songs', 2));
+    expect(pruned.billedRows).toBe(20);
+    expect(pruned.truncated, 'a single statement cannot be truncated').toBe(false);
     expect(await songs.countByLibrary(libraryId)).toBe(0);
   });
 
@@ -1966,7 +2221,12 @@ describe('DAO round-trips', () => {
       { libraryId, path: 'Blurberry', parentPath: '', name: 'Blurberry', mtimeMs: 1, etag: null, depth: 1 },
     ]);
 
-    expect(await nodes.deleteSubtree(libraryId, 'Blur')).toBe(2);
+    // `nodes` bills four per row changed, against `songs`' ten — which is precisely why no single
+    // ratio converts a row count into a billed count, and why a folder reconciling both cannot
+    // report one number for the two.
+    const pruned = await nodes.deleteSubtree(libraryId, 'Blur');
+    expect(pruned.changes).toBe(2);
+    expect(pruned.billedRows).toBe(billedRowsForTable('nodes', 2));
     expect(await nodes.find(libraryId, 'Blur')).toBeNull();
     expect(await nodes.find(libraryId, 'Blurberry')).not.toBeNull();
   });

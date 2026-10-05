@@ -62,19 +62,37 @@ import type { ScanDerivationStore } from './scanTypes';
 import type { ScanBudget } from './scanBudget';
 
 /**
- * Stamp one page of rows, and report how many rows it wrote.
+ * What one page of the backfill cost.
  *
- * `0` for a library that is already current, which is the value that makes this free in
- * the steady state: one indexed read that returns no rows, and no statement issued.
+ * Both counts, because they are different numbers and the caller needs both: `rowsWritten`
+ * is progress — the thing `indexChanged` is derived from — and `billedRows` is what the
+ * day's D1 allowance is charged, which for a `songs` write is ten per row.
  */
-async function derivePending(store: ScanDerivationStore, libraryId: string, budget: ScanBudget): Promise<number> {
+interface DerivationCost {
+  readonly rowsWritten: number;
+  readonly billedRows: number;
+}
+
+/**
+ * Nothing owed, so nothing spent. One value rather than a zero literal at each return,
+ * because "no rows" is a *measured* answer here and the object makes it a complete one.
+ */
+const NO_DERIVATION: DerivationCost = { rowsWritten: 0, billedRows: 0 };
+
+/**
+ * Stamp one page of rows, and report what it wrote and what it cost.
+ *
+ * `rowsWritten: 0` for a library that is already current, which is the value that makes this
+ * free in the steady state: one indexed read that returns no rows, and no statement issued.
+ */
+async function derivePending(store: ScanDerivationStore, libraryId: string, budget: ScanBudget): Promise<DerivationCost> {
   // Checked before the read, not after: a chunk whose deadline has already passed should
   // not start a write batch it may not finish. The rows stay behind and the next poll
   // takes them, which is the same "leave, don't overrun" rule the walk follows.
-  if (budget.remainingMs <= 0) return 0;
+  if (budget.remainingMs <= 0) return NO_DERIVATION;
 
   const rows = await store.listNeedingDerivation(libraryId, SCAN_DERIVE_MAX_ROWS_PER_CHUNK);
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) return NO_DERIVATION;
 
   // The read is spent; the write is one statement per row and it refuses rather than
   // truncating, so a page this chunk cannot hold whole is a page this chunk may not take.
@@ -87,14 +105,21 @@ async function derivePending(store: ScanDerivationStore, libraryId: string, budg
   // scan. The selection is on `derived_version`, so the rows are exactly the next poll's,
   // and the walk below — which shares this budget — is not starved by a phase that could not
   // have written them anyway.
-  if (!budget.canAfford(rows.length)) return 0;
+  if (!budget.canAfford(rows.length)) return NO_DERIVATION;
 
   // `deriveFor` rather than a `map` at the call site: reading a page and deciding on that
   // same page is one step, and a caller that did half of it would stamp rows it never
   // derived anything for — which is how a backfill that re-selects its own work for ever
   // is built. It is the store's method rather than a static on the DAO because the marker it
   // appends is configuration, and only the store was built with it.
-  return await store.applyDerivation(await store.deriveFor(rows));
+  //
+  // Both counts come straight off the batch. This phase writes `songs` on **every poll**, ahead
+  // of the status check, so it is the single largest consumer of the day's allowance on a library
+  // that needs repairing — and the one whose cost was least visible, because it used to return a
+  // bare count the caller had no unit for.
+  const written = await store.applyDerivation(await store.deriveFor(rows));
+  return { rowsWritten: written.changes, billedRows: written.billedRows };
 }
 
-export { derivePending };
+export { derivePending, NO_DERIVATION };
+export type { DerivationCost };

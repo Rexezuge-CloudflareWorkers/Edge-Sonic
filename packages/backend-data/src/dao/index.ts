@@ -9,17 +9,27 @@ export { UserDAO, LibraryDAO, nowSeconds } from './identity';
 export { NodeDAO } from './NodeDAO';
 export type { NodeInput } from './NodeDAO';
 export { SongDAO } from './SongDAO';
+// What one metadata write cost against the daily row-write allowance, and the empty answer. They
+// live beside the patch builder rather than beside `SongDAO`, because both are about *that*
+// statement: the builder says which columns move and this says what they cost. `backend-services`
+// ports `applyMetadata`, so the port has to be able to name what it returns.
+export { NO_METADATA_WRITE } from './songMetadata';
+export type { SongUpsertInput } from './SongDAO';
+export type { MetadataWriteResult } from './songMetadata';
 export { chunkArray } from './chunking';
 // The measured ceiling, and the arithmetic every `IN (...)` batch size is derived from.
 // Exported because the number is a *platform* fact that keeps being assumed rather than
 // read, and a fact that is not reachable from a test cannot be defended.
 export { D1_MAX_BIND_PARAMETERS, bindChunkSize } from './sqlLimits';
+// Rows D1 *bills*, as opposed to rows a statement changes. The daily row-write allowance is
+// denominated in the first, and this is where the second is converted into it — a declared
+// per-table index count, asserted against the real schema in `test/schema.int.test.ts`.
+export { TABLE_INDEX_COUNTS, MAX_BILLED_ROWS_PER_ROW, statementTable, billedRowsFor, billedRowsForTable } from './billedRows';
 export type { WriteBatchResult } from './BaseDAO';
 // Many rows by id, in the caller's order. Its own class because it is a different-shaped
 // question from "one row by id", and because it is the query that had to be batched to
 // D1's ceiling — which put `SongDAO` over the god-file limit.
 export { SongIdLookupDAO } from './songIdLookup';
-export type { SongUpsertInput } from './SongDAO';
 export { deriveFromPath, DERIVED_VERSION } from './pathConvention';
 export type { DerivedNames } from './pathConvention';
 // Provenance of the grouping columns, and why it cannot be a suffix on the value. The

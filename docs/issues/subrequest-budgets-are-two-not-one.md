@@ -161,7 +161,8 @@ budget and false of the other.
 If D1 has 1,000 per invocation, the scan's 42-subrequest budget is not what ends a
 chunk. In order:
 
-1. **`D1_DAILY_ROW_WRITE_LIMIT` = 5,000 rows/day.** Still the real wall, and since
+1. **`D1_DAILY_ROW_WRITE_LIMIT` = 100,000 rows/day**, in **billed** rows — the row plus every
+   index entry D1 rewrote, so a `songs` write is ten of them. Still the real wall, and since
    2026-09-01 an account over it has **every** query fail until midnight UTC — so
    it is an outage boundary, not a throughput number.
 2. The wall-clock deadline.
