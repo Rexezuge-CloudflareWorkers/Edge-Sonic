@@ -20,8 +20,13 @@ export type { WriteBatchResult } from './BaseDAO';
 // D1's ceiling — which put `SongDAO` over the god-file limit.
 export { SongIdLookupDAO } from './songIdLookup';
 export type { SongUpsertInput } from './SongDAO';
-export { deriveFromPath, DERIVED_MARKER, DERIVED_VERSION } from './pathConvention';
+export { deriveFromPath, DERIVED_VERSION } from './pathConvention';
 export type { DerivedNames } from './pathConvention';
+// Provenance of the grouping columns, and why it cannot be a suffix on the value. The
+// marker is operator-configurable, and a configured string interpolated into a `LIKE` is
+// either a match-all or a wildcard — so the guard is a column.
+export { GROUPING_SOURCE_DERIVED } from './groupingSource';
+export type { GroupingSource } from './groupingSource';
 // Own module rather than a method on `SongDAO`: the backfill is a bounded pass over
 // *many* rows selected by a version stamp, which is a different question from "one song
 // row, by id" — and folding it in put `SongDAO` over the god-file limit.

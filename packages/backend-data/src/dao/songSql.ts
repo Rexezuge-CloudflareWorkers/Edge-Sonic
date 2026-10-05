@@ -9,6 +9,7 @@
  * with an `enriched_at` that survives a file whose bytes changed.
  */
 import { DERIVED_VERSION } from './pathConvention';
+import { GROUPING_SOURCE_DERIVED } from './groupingSource';
 
 /**
  * Derived metadata and enrichment results, for one row.
@@ -97,11 +98,25 @@ interface SongMetadataInput {
  *
  * The value is interpolated from `DERIVED_VERSION` rather than typed, because a number typed
  * beside a query is wrong by the time somebody bumps the version.
+ *
+ * ### `grouping_source` is stamped on the `INSERT` and **not** in the `SET` list
+ *
+ * On insert it is `'derived'` unconditionally, including when the path said nothing useful.
+ * That is deliberate: a row this statement created cannot hold a value any tag supplied, so
+ * "no tag has written this row's grouping" holds, and stamping it unconditionally is what
+ * keeps the row from being *permanently owed* the backfill — the way an unstamped
+ * `derived_version` once made every row this statement wrote.
+ *
+ * On conflict it is **preserved** — absent from `SET` entirely — because this statement can
+ * only ever *add* a derived value to a gap, and a row already carrying a tag's value must
+ * not become flagged because a later gap was filled. Writing it out as
+ * `grouping_source = songs.grouping_source` would say the same thing while reading, three
+ * lines below, as though the omission were an oversight; this comment is the assertion.
  */
 const UPSERT_FILE_FACTS = `INSERT INTO songs
   (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix, duration, bitrate,
-   artist, artist_ci, album, album_ci, album_artist, album_artist_ci, created_at, updated_at, derived_version)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ${DERIVED_VERSION})
+   artist, artist_ci, album, album_ci, album_artist, album_artist_ci, created_at, updated_at, derived_version, grouping_source)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ${DERIVED_VERSION}, '${GROUPING_SOURCE_DERIVED}')
 ON CONFLICT (library_id, path) DO UPDATE SET
   -- The bytes changed, so everything read *out of* those bytes is stale. Leaving
   -- 'duration' alone here is the silent bug this guards: a client shows a scrubber for a

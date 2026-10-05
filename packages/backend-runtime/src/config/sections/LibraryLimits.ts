@@ -5,6 +5,7 @@ import {
   DEFAULT_ALBUM_GROUP_BY,
   DEFAULT_AUTH_FAILURE_LIMIT,
   DEFAULT_AUTH_FAILURE_WINDOW_SECONDS,
+  DEFAULT_DERIVED_MARKER,
   DEFAULT_MAX_LIBRARIES,
   DEFAULT_MAX_PAGE_SIZE,
   MAX_PAGE_SIZE_CEILING,
@@ -216,6 +217,32 @@ class RequestLimits {
    */
   public getRequestedAlbumGroupBy(): string {
     return EnvParser.string(this.env, 'ALBUM_GROUP_BY', '').trim();
+  }
+
+  /**
+   * Appended to a path-derived artist or album name.
+   *
+   * Empty by default, which is what makes a derived `X` and a tagged `X` one album rather
+   * than two. Read through `raw`, not `trim()`ed, because a marker ends up inside `album_ci`
+   * and inside a base64url album id — and a marker that is silently trimmed is a marker the
+   * operator did not write. `validate()` names a control character or an over-long value.
+   *
+   * It is a plain string and nothing escapes it: it is bound as a parameter wherever it
+   * reaches SQL, so `'%'` and `'_'` are ordinary characters. That was the defect it used to
+   * have — the guard was a `LIKE` against the stored value, so those two characters were
+   * patterns. See `ConfigurationDefaults` and `groupingSource.ts`.
+   */
+  public getDerivedMarker(): string {
+    return EnvParser.string(this.env, 'DERIVED_MARKER', DEFAULT_DERIVED_MARKER);
+  }
+
+  /**
+   * The configured value before validation, so `validate()` can name what it refused rather
+   * than reporting a setting the operator never wrote. The untrimmed raw string, for the same
+   * reason {@link getDerivedMarker} does not trim.
+   */
+  public getRequestedDerivedMarker(): string {
+    return EnvParser.string(this.env, 'DERIVED_MARKER', '');
   }
 
   public getStreamRateLimit(): number {

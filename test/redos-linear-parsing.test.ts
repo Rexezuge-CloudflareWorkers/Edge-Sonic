@@ -55,7 +55,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { DERIVED_MARKER, deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { DERIVED_MARKER } from './helpers/harness';
 import { toLibraryPath } from '@edge-sonic/webdav';
 
 /**
@@ -256,15 +257,20 @@ function flatAlbumOracle(dirName: string): { artist: string | null; album: strin
 /**
  * The same answer as `deriveFromPath`, with the derived marker removed.
  *
- * `deriveFromPath` suffixes `DERIVED_MARKER` onto the artist so a client can tell a derived
- * grouping from a tagged one. Importing the marker rather than typing `' (derived)'` here
- * means this file does not hold a second copy of it: the string is a module's decision, and
- * a copy is free to drift while every assertion still passed. Stripping it means the oracle
- * compares the *naming decision* — which name came out where — instead of also depending on
- * the marker being applied, which is a separate concern with its own tests.
+ * `deriveFromPath` suffixes a configured marker onto the artist, so a client can tell a
+ * derived grouping from a tagged one. Importing the marker rather than typing `' (derived)'`
+ * here means this file does not hold a second copy of it — and the marker is *configuration*
+ * now, so a copy is free to drift from a value no module owns while every assertion still
+ * passed. Stripping it means the oracle compares the *naming decision* — which name came out
+ * where — instead of also depending on the marker being applied, which is a separate concern
+ * with its own tests.
+ *
+ * The marker is non-empty here on purpose: an empty one would make the strip a no-op and this
+ * file could no longer tell a derivation that appended nothing from one that appended
+ * something, which is the failure mode a `replace` on an empty needle would hide.
  */
 function derivedNames(dirPath: string): { artist: string | null; album: string | null } {
-  const derived = deriveFromPath(dirPath);
+  const derived = deriveFromPath(dirPath, DERIVED_MARKER);
   const unmark = (value: string | null): string | null => value?.replace(DERIVED_MARKER, '') ?? null;
   return { artist: unmark(derived.artist), album: unmark(derived.album) };
 }
@@ -510,7 +516,7 @@ describe('the nesting rule is unaffected by the separator scan', () => {
     ['Artist - Album/2011 Remaster', 'a dash in the artist folder does not split anything'],
     ['A/B/C', 'deeper still, and still the last two segments'],
   ])('derives %j as nested (%s)', (dirPath, _reason) => {
-    const derived = deriveFromPath(dirPath);
+    const derived = deriveFromPath(dirPath, DERIVED_MARKER);
     const slash = dirPath.lastIndexOf('/');
     expect(derived.artist).toBe(`${dirPath.slice(0, slash)}${DERIVED_MARKER}`);
     // The marker is on the album too, and `songDerivation.ts` keys its overwrite on it — so a
@@ -525,11 +531,11 @@ describe('the nesting rule is unaffected by the separator scan', () => {
     // depth 1 and goes to `fromFlatAlbumFolder` — which splits it. The `slash <= 0` branch
     // of `fromNestedPath` (artist is the whole path, album is null) is reachable only
     // through a *leading* slash, which `lastIndexOf` reports as 0.
-    expect(deriveFromPath('Artist - Album')).toEqual({
+    expect(deriveFromPath('Artist - Album', DERIVED_MARKER)).toEqual({
       artist: `Artist${DERIVED_MARKER}`,
       album: `Album${DERIVED_MARKER}`,
     });
-    expect(deriveFromPath('/Artist')).toEqual({
+    expect(deriveFromPath('/Artist', DERIVED_MARKER)).toEqual({
       artist: `/Artist${DERIVED_MARKER}`,
       album: null,
     });

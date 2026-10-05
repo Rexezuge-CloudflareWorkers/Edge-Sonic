@@ -45,6 +45,15 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
   every failure mode it checks is silent at request time: a malformed numeric var falls
   back to its default, and a `TEAM_DOMAIN` typo presents as an Access outage. Call it at
   startup, never per request.
+- **The checks are in `config/validate.ts`, not on the class.** `AppConfiguration` is a facade
+  with one getter per setting, and the checks had grown to a hundred and eighty lines on top of
+  it — enough to push the file over the god-file limit, which is how this came to be noticed.
+  `validateConfiguration(library, scan, requests, auth, env)` takes the same section objects the
+  class holds, so **a check reads a setting through the section that owns its parsing**: a check
+  that re-read `env` with its own parser is a second answer to the same question, which is the
+  defect the whole method exists to catch. `DERIVED_MARKER_MAX_LENGTH` lives beside its check and
+  is re-exported on the class, because a limit and the check that enforces it have to move
+  together.
 
 ## Required vars (no defaults)
 
@@ -70,8 +79,40 @@ one is present but inert, because that is the case one config edit from being li
 | App    | `DEBUG_MODE` (`false`), `SITE_URL` (`""`), `ENVIRONMENT` (`development`) |
 | Scan   | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`), `WEBDAV_TIMEOUT_MS` (`10000`), `TAG_READ_BYTES`, `TAG_READ_TAIL_BYTES` |
 | Limits | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`) |
+| Grouping | `ALBUM_GROUP_BY` (`album`), `DERIVED_MARKER` (`""`) |
 | Auth   | `TEAM_DOMAIN`, `POLICY_AUD` (no default — see above)                       |
 | SSRF   | `ALLOW_PRIVATE_WEBDAV_HOSTS` (unset)                                       |
+
+`DERIVED_MARKER` is appended to an artist or album name this server derived from a file's
+**path** rather than from its tags. Empty by default, and empty is a **decision**: it makes a
+derived `X` and a tagged `X` the same album, so a half-enriched library shows one release
+instead of two spellings of it — and it is the only reason `search3` can match a track the scan
+has not tag-read, since the `_ci` twin no longer carries the suffix. `' (derived)'` keeps the
+guess visible and pays for it with a duplicate entry.
+
+Two things it is *not*, and both were defects before it was a variable:
+
+- **It is not trimmed.** It lands in `album_ci` and in a base64url album id, and a marker
+  silently trimmed is a marker the operator did not write.
+- **`%` and `_` are not wildcards, and `validate()` does not refuse them.** The derivation
+  backfill's guard used to be `col LIKE '%' || marker`, so an empty marker matched every row —
+  overwriting every real `ALBUMARTIST` in the library — and `_ (guess)` matched nothing, so the
+  guard stopped recognising its own guesses. Provenance now lives in `songs.grouping_source` and
+  the comparison is a column equality against a **bound** constant, so both characters are
+  ordinary text. Refusing them in validation would preserve the confusion the column removed.
+
+`validate()` does refuse a **control character**, because of the album id rather than the SQL:
+`decodeId` runs `normalizeRelativePath` over a decoded payload, so a marker carrying one mints
+an `alk:` id this server cannot read back — `getAlbum` answers `code=70` and `getCoverArt`
+serves the placeholder with nothing naming a cause. And it refuses a marker over
+`AppConfiguration.DERIVED_MARKER_MAX_LENGTH`, which is a cap rather than a preference because
+the marker is appended to every derived name and therefore reaches every sort order, every
+`WHERE` clause and every id this server mints.
+
+**Changing it is a migration, not a toggle.** It re-derives every wholly-derived row, so
+`album_ci` moves, the album grouping key moves, and `alk:` album ids move with it — stars and
+ratings on those albums are lost. That is stated in `migrations/0006_songs_grouping_source.sql`
+beside the `' (derived)'` literal that is now the only place the old value is written down.
 
 ### Size a subrequest budget against the plan that runs it — and count *everything*
 

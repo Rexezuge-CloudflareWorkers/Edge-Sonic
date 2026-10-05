@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { OPEN_SUBSONIC_EXTENSIONS } from '../apps/api/src/rest/endpoints/system';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
+import { SongDAO, SongDerivationDAO } from '@edge-sonic/backend-data/dao';
 import { createHarness, ALBUM_DIR, LIBRARY_ID, ORIGIN, SALT, USERNAME, subsonicId } from './helpers/harness';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
@@ -1305,5 +1306,187 @@ describe('ALBUM_GROUP_BY', () => {
     // A valid value reports nothing, and so does an unset one.
     expect(AppConfiguration.fromEnv({ ALBUM_GROUP_BY: 'album' }).validate().filter((warning) => warning.includes('ALBUM_GROUP_BY'))).toHaveLength(0);
     expect(AppConfiguration.fromEnv({}).validate().filter((warning) => warning.includes('ALBUM_GROUP_BY'))).toHaveLength(0);
+  });
+});
+
+/**
+ * The other knob, and the one that was not a knob at all.
+ *
+ * `DERIVED_MARKER` is appended to an artist or album name this server derived from a file's
+ * **path** rather than from its tags. It is the only thing that ever distinguished the two, so
+ * its value decides whether a guess and a release are one album:
+ *
+ * - `' (derived)'` — two albums, one of which is obviously a guess. A half-enriched library
+ *   publishes one release twice, once per spelling.
+ * - `''` (the default) — **one** album. The guess is what holds the release together until the
+ *   tag lands, and it stops being a separate entry the moment it does.
+ *
+ * Asserted through `getAlbumList2` rather than through a stored column, because what the marker
+ * decides is a *grouping*, and a column assertion passes identically for a marker that kept the
+ * two apart. The fixtures below are one release whose first track is enriched and whose second
+ * is not, because that mixture is the only state in which the question has an answer.
+ */
+describe('DERIVED_MARKER', () => {
+  const MIXED_DIR = 'Bonobo/Black Sands';
+
+  /**
+   * One release, two rows: track 1 carries tags, track 2 does not.
+   *
+   * Seeded through the real statements in the order production performs them — the index write
+   * derives and stamps, then the enrichment read supplies the tag and clears `grouping_source` —
+   * so the mixture is one production actually produces rather than a state invented here.
+   */
+  async function seedHalfEnriched(marker = ''): Promise<void> {
+    const enriched = subsonicId('s', `${MIXED_DIR}/01 Kerala.opus`);
+    const bare = subsonicId('s', `${MIXED_DIR}/02 Black Sands.opus`);
+    const db = harness.db.db;
+    await db
+      .prepare(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, duration, bitrate, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '01 Kerala.opus', '01 kerala.opus', 1000, 1000, 'opus', 0, 0, 1700000000, 1700000000)`,
+      )
+      .bind(enriched, LIBRARY_ID, `${MIXED_DIR}/01 Kerala.opus`, MIXED_DIR)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, duration, bitrate, created_at, updated_at)
+         VALUES (?, ?, ?, ?, '02 Black Sands.opus', '02 black sands.opus', 1000, 1000, 'opus', 0, 0, 1700000000, 1700000000)`,
+      )
+      .bind(bare, LIBRARY_ID, `${MIXED_DIR}/02 Black Sands.opus`, MIXED_DIR)
+      .run();
+
+    // The backfill derives the grouping for both rows, then the enrichment read supplies the
+    // real tags for track 1 only. So: track 1 is tagged, track 2 is a guess, both in one folder.
+    const songs = new SongDAO(harness.db.db, marker);
+    const derivation = new SongDerivationDAO(harness.db.db, marker);
+    await derivation.applyDerivation(derivation.deriveFor(await derivation.listNeedingDerivation(LIBRARY_ID, 50)));
+    await songs.applyMetadata(enriched, { artist: 'Bonobo', album: 'Black Sands', albumArtist: 'Bonobo', year: 2008, genre: 'Electronic' });
+  }
+
+  const albumNames = async (env: Record<string, unknown>): Promise<string[]> => {
+    await harness.close();
+    harness = await createHarness();
+    // Seeded with the marker the request will run under, because the fixture's *stored* value is
+    // half of the question — a row derived with one marker and grouped under another is not the
+    // state either deployment produces. Narrowed rather than `String(...)`-cast because `env` is
+    // `Record<string, unknown>` and a non-string there is a caller bug worth not hiding.
+    const configured = env['DERIVED_MARKER'];
+    await seedHalfEnriched(typeof configured === 'string' ? configured : '');
+    const response = await harness.fetch(harness.restUrl('getAlbumList2', { type: 'alphabeticalByName', size: '20' }), env);
+    const parsed = (await response.json()) as SubsonicBody;
+    return payload<{ album: Array<{ name: string; songCount: number }> }>(parsed, 'albumList2').album
+      .filter((album) => album.name.startsWith('Black Sands'))
+      .map((album) => `${album.name} (${album.songCount})`);
+  };
+
+  it('merges a guess and a tag into ONE album when the marker is empty, which is the default', async () => {
+    // The change itself. One release, one entry, both tracks in it — instead of two entries
+    // differing only in a suffix.
+    expect(await albumNames({})).toEqual(['Black Sands (2)']);
+    // Stated explicitly rather than left to the default, so a change to the default is a
+    // deliberate diff here rather than a silent behaviour change on every deployment.
+    expect(await albumNames({ DERIVED_MARKER: '' })).toEqual(['Black Sands (2)']);
+  });
+
+  it('publishes them as TWO albums when the marker is not empty, which is what it is for', async () => {
+    // The paired case, and the reason the empty default is a *decision* rather than a
+    // simplification: for a library browsed before it is fully tag-read, seeing which of two
+    // entries is a guess can be worth the duplicate. Asserted with a real `songCount` on each,
+    // because two albums each reporting one track is also what a broken grouping looks like.
+    expect(await albumNames({ DERIVED_MARKER: ' (derived)' })).toEqual(['Black Sands (1)', 'Black Sands (derived) (1)']);
+  });
+
+  it('reports a year from an enriched track even when the first track is not enriched', async () => {
+    // The defect the merge introduces, and the reason `albumModel` no longer reads `songs[0]`.
+    //
+    // `year` and `genre` are the two columns the derivation deliberately never writes, so an
+    // unenriched track holds NULL for both. While a guess and a tag were two albums this was
+    // invisible — the tagged half published a year and the derived half published none, and
+    // nobody compared them. Merged, the group's first track is often the unenriched one, and
+    // `first.year` reports no year for a release whose other track has one.
+    //
+    // Paired on both orderings below, because the answer is a function of the *album* and not of
+    // which row the statement returned first — a `.find` over the wrong direction, or over one
+    // column and not the other, passes one case and fails the other.
+    const withYear = async (enrichFirst: boolean): Promise<{ year?: number; genre?: string }> => {
+      await harness.close();
+      harness = await createHarness();
+      await seedHalfEnriched('');
+      if (!enrichFirst) {
+        // Enrich track 2 and strip track 1 instead, so the enriched row is *not* first in
+        // `compareAlbumTracks` order. Without this the case only ever proves one ordering.
+        const second = subsonicId('s', `${MIXED_DIR}/02 Black Sands.opus`);
+        await new SongDAO(harness.db.db, '').applyMetadata(second, { artist: 'Bonobo', album: 'Black Sands', albumArtist: 'Bonobo', year: 2008, genre: 'Electronic' });
+        await harness.db.db
+          .prepare('UPDATE songs SET year = NULL, genre = NULL, genre_ci = NULL WHERE path = ?')
+          .bind(`${MIXED_DIR}/01 Kerala.opus`)
+          .run();
+      }
+      // The id comes from the list rather than being minted here, so the assertion runs the
+      // round trip a client runs — a hand-built id would pass whether or not the list publishes
+      // the same one.
+      const list = (await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '20' })).body;
+      const albums = payload<{ album: Array<{ id: string; name: string }> }>(list, 'albumList2').album.filter((album) => album.name === 'Black Sands');
+      expect(albums).toHaveLength(1);
+      const detail = (await harness.rest('getAlbum', { id: albums[0].id })).body;
+      return payload<{ year?: number; genre?: string }>(detail, 'album');
+    };
+
+    const firstTrack = await withYear(true);
+    const secondTrack = await withYear(false);
+    // `toMatchObject` rather than `toEqual`: the album carries eleven fields and this is about
+    // two of them, so pinning the whole record would fail on the next field added rather than
+    // on the regression this exists to catch.
+    expect(firstTrack).toMatchObject({ year: 2008, genre: 'Electronic' });
+    expect(secondTrack).toMatchObject({ year: 2008, genre: 'Electronic' });
+  });
+
+  it('refuses a control character and an over-long marker, and accepts every other character', async () => {
+    // Two classes of bad value, and neither throws at request time.
+    //
+    // A control character is refused because of the **album id**, not the SQL: `decodeId` runs
+    // `normalizeRelativePath` over a decoded payload and refuses control characters, so a marker
+    // carrying one mints an `alk:` id this server cannot read back — `getAlbum` answers
+    // `code=70` and `getCoverArt` serves the placeholder, with nothing naming a cause. That is
+    // the `Sgt. Pepper's` defect one level down, and it is why the marker cannot be arbitrary
+    // text however much an operator would like a box-drawing character in it.
+    const control = AppConfiguration.fromEnv({ DERIVED_MARKER: ' (derived\u0007)' }).validate().filter((warning) => warning.includes('DERIVED_MARKER'));
+    expect(control).toHaveLength(1);
+    expect(control[0]).toContain('control character');
+
+    expect(AppConfiguration.fromEnv({ DERIVED_MARKER: ' (guess)' }).validate().filter((warning) => warning.includes('DERIVED_MARKER'))).toHaveLength(0);
+
+    // Length, because the marker is appended to every derived name and therefore lands in a
+    // base64url id and a `WHERE` clause — paid for on every request, not once.
+    const long = 'x'.repeat(AppConfiguration.DERIVED_MARKER_MAX_LENGTH + 1);
+    const overlong = AppConfiguration.fromEnv({ DERIVED_MARKER: long }).validate().filter((warning) => warning.includes('DERIVED_MARKER'));
+    expect(overlong).toHaveLength(1);
+    expect(overlong[0]).toContain(String(AppConfiguration.DERIVED_MARKER_MAX_LENGTH));
+
+    // `%` and `_` are **accepted**, which is the assertion that the guard stopped being a `LIKE`.
+    // Under the old statement either character was a wildcard and either could make the backfill
+    // match everything or nothing; a validation rule here would preserve the confusion the
+    // `grouping_source` column removed.
+    for (const marker of ['%', '_', '%_guess_%', '100%', 'Sgt. Pepper\'s']) {
+      expect(AppConfiguration.fromEnv({ DERIVED_MARKER: marker }).validate().filter((warning) => warning.includes('DERIVED_MARKER')), marker).toHaveLength(0);
+    }
+
+    // Empty reports nothing, because it is the default and warning on a default is noise.
+    expect(AppConfiguration.fromEnv({ DERIVED_MARKER: '' }).validate().filter((warning) => warning.includes('DERIVED_MARKER'))).toHaveLength(0);
+    expect(AppConfiguration.fromEnv({}).validate().filter((warning) => warning.includes('DERIVED_MARKER'))).toHaveLength(0);
+  });
+
+  it('reads the value rather than merely parsing it, and does not trim it', async () => {
+    // The rule every variable in `ConfigurationDefaults` earns the hard way: a variable can be
+    // declared, parsed, validated, templated and read by nothing, and all five states look
+    // identical from outside. `STREAM_RATE_LIMIT` was inert — the limiter used a literal.
+    expect(AppConfiguration.fromEnv({ DERIVED_MARKER: ' (guess)' }).getDerivedMarker()).toBe(' (guess)');
+    expect(AppConfiguration.fromEnv({}).getDerivedMarker()).toBe('');
+
+    // Not trimmed, and stated because the alternative is a marker the operator did not write
+    // appearing in every `_ci` twin and every album id. `ALBUM_GROUP_BY` *is* trimmed, because it
+    // is an enum read through `isAlbumGrouping`; this is a literal suffix, and the difference is
+    // worth one assertion rather than a comment.
+    expect(AppConfiguration.fromEnv({ DERIVED_MARKER: ' (guess) ' }).getDerivedMarker()).toBe(' (guess) ');
   });
 });

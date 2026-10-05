@@ -26,6 +26,7 @@
     "0002_songs_reader_version.sql": "04ed833fad6370c26ca093e0fd7a94167fee86bb8ea24df63a699064622d49ae",
     "0003_drop_router_tables.sql": "c3abf1737ea926cf05cc635b42dffa746e94d6240e2afa82595db6c55cdbbde5",
     "0004_scan_retry_budget.sql": "3f53cc198044068511f3a50c1c30138ddd5b35370e051c6a60c1e652d1d47a14",
-    "0005_songs_derived_version.sql": "300e1c0302aef8a4256e64f84189cc8680b9f5f99d38dbc400cc2f4b52dece7c"
+    "0005_songs_derived_version.sql": "300e1c0302aef8a4256e64f84189cc8680b9f5f99d38dbc400cc2f4b52dece7c",
+    "0006_songs_grouping_source.sql": "16d912e73cbda95ce6120dc1466ea6167f495ed749957af34f6ae6e60da3ae4d"
   }
 }

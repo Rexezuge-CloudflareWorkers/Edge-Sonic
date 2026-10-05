@@ -28,10 +28,10 @@
  *    `ON CONFLICT` clause as the rest of the upsert, so a derived value can only ever
  *    fill a gap. An enrichment pass writes the true value, and nothing this module
  *    produces can take it back — which is what makes it safe to run on every index.
- * 2. **It is a fallback, not a guess dressed as a tag.** `derived` is prefixed onto
- *    the artist name so a client can tell a derived grouping from a tagged one, and
- *    so the string is stable across scans: the same path always derives the same
- *    value, so a rescan rewrites nothing and the incrementality guarantee holds.
+ * 2. **It is a fallback, and the marker is how a client can see that.** Appended to the
+ *    name so the string is stable across scans — the same path always derives the same
+ *    value, so a rescan rewrites nothing and the incrementality guarantee holds — and so
+ *    a guess is not published as though it were a release name.
  *
  * ### Why deriving at index time was not enough on its own
  *
@@ -58,22 +58,6 @@
  */
 
 /**
- * The marker distinguishing a path-derived grouping from a tagged one.
- *
- * Part of the stored value rather than a separate column, so the aggregates need no
- * join and no extra predicate to answer "is this real or derived?".
- *
- * It is on **both** the artist and the album, and that is load-bearing rather than
- * cosmetic. It is the only provenance a derived value carries, so it is the only thing
- * that lets a *corrected* convention tell a guess it wrote from a tag a file supplied —
- * and `songDerivation.ts` keys its overwrite on exactly this suffix. With the artist
- * marked and the album not, a version bump could correct a wrong artist and could never
- * correct a wrong album: a rule true for half the columns and silently false for the
- * other half, which is the shape of bug this repository keeps paying for.
- */
-const DERIVED_MARKER = ' (derived)';
-
-/**
  * Which version of this convention wrote a row's grouping.
  *
  * ### Bump this whenever the derivation changes
@@ -85,9 +69,22 @@ const DERIVED_MARKER = ' (derived)';
  * existing library, and without this a corrected **derivation** would not re-derive one.
  *
  * The backfill selects on this stamp rather than on the value, so bumping it re-derives
- * everything, and the `COALESCE` in the write keeps a real tag winning over both.
+ * everything, and the `grouping_source` guard keeps a real tag winning over both.
+ *
+ * ### Version 2 exists because the marker became configuration
+ *
+ * Version 1 wrote `' (derived)'` and recognised its own guesses by reading that suffix
+ * back out of the stored value. An operator cannot choose that string and still have the
+ * recognition work — an empty marker matches everything and any other marker is a `LIKE`
+ * pattern — so provenance moved to `songs.grouping_source` and the marker became purely
+ * presentational. See `groupingSource.ts` for the measurements.
+ *
+ * The bump is what migrates an existing library: every row is re-selected once, a row the
+ * column calls derived is rewritten with the configured marker, and a row holding a tag is
+ * selected, declined, and stamped. Without it the deployment would run two conventions at
+ * once and the aggregates would answer from whichever one happened to be nearer.
  */
-const DERIVED_VERSION = 1;
+const DERIVED_VERSION = 2;
 
 /**
  * Whitespace, as the engine defines it.
@@ -100,8 +97,8 @@ const DERIVED_VERSION = 1;
 const NON_SPACE = /\S/;
 
 /**
-`-`, `–` (U+2013), `—` (U+2014).
-*/
+ * `-`, `–` (U+2013), `—` (U+2014).
+ */
 const HYPHEN = 0x2d;
 const EN_DASH = 0x20_13;
 const EM_DASH = 0x20_14;
@@ -158,15 +155,15 @@ interface DerivedNames {
 /**
  * `Artist/Album` → both names. The ordinary layout.
  */
-function fromNestedPath(dirPath: string): DerivedNames {
+function fromNestedPath(dirPath: string, marker: string): DerivedNames {
   const slash = dirPath.lastIndexOf('/');
   if (slash <= 0) {
     // A track directly in an artist folder, or at the library root: there is no album.
-    return { artist: dirPath.length > 0 ? mark(dirPath) : null, album: null };
+    return { artist: dirPath.length > 0 ? mark(dirPath, marker) : null, album: null };
   }
   const album = dirPath.slice(slash + 1);
   const artist = dirPath.slice(0, slash);
-  return { artist: artist.length > 0 ? mark(artist) : null, album: album.length > 0 ? mark(album) : null };
+  return { artist: artist.length > 0 ? mark(artist, marker) : null, album: album.length > 0 ? mark(album, marker) : null };
 }
 
 /**
@@ -178,7 +175,7 @@ function fromNestedPath(dirPath: string): DerivedNames {
  * user sees when the album list is browsable and the artist list is not — the exact
  * split this module exists to remove.
  */
-function fromFlatAlbumFolder(dirName: string): DerivedNames {
+function fromFlatAlbumFolder(dirName: string, marker: string): DerivedNames {
   const separator = findAlbumSeparator(dirName);
   if (separator === -1) return { artist: null, album: dirName };
   const artist = dirName.slice(0, separator).trim();
@@ -186,7 +183,7 @@ function fromFlatAlbumFolder(dirName: string): DerivedNames {
   // A separator at either end is a name that happens to contain a dash, not the
   // convention. `- Album` has no artist and `Artist -` has no album.
   if (artist.length === 0 || album.length === 0) return { artist: null, album: dirName };
-  return { artist: mark(artist), album: mark(album) };
+  return { artist: mark(artist, marker), album: mark(album, marker) };
 }
 
 /**
@@ -197,8 +194,19 @@ function fromFlatAlbumFolder(dirName: string): DerivedNames {
  * writing `''` would produce a row that groups under a blank name — which is what
  * `getArtists` renders as an unlabelled entry at the top of the `#` group, the same
  * defect `NodeDAO.listRoots` had with the library root.
+ *
+ * ### `marker` is a parameter, and it is not defaulted
+ *
+ * Because the marker's emptiness is a **decision**: an empty marker is what makes a
+ * derived `X` and a tagged `X` the same album rather than two releases that differ only
+ * in a suffix, and that is `DERIVED_MARKER`'s configured answer rather than a fallback.
+ * A default here would reintroduce the "a module constant that silently wins" hazard in
+ * the one place where two spellings of the same question must never coexist.
+ *
+ * Read from configuration at the composition root and threaded down by constructor —
+ * `backend-data` is layer 0 and cannot import the configuration layer.
  */
-function deriveFromPath(dirPath: string): DerivedNames {
+function deriveFromPath(dirPath: string, marker: string): DerivedNames {
   if (dirPath.length === 0) return { artist: null, album: null };
 
   const slash = dirPath.lastIndexOf('/');
@@ -206,14 +214,14 @@ function deriveFromPath(dirPath: string): DerivedNames {
   // Depth 1: the folder is a top-level `Artist - Album` or a bare album name. Depth 2
   // and deeper: the folder is an album inside an artist folder, and splitting the leaf
   // on a dash would turn `Artist - 2009 Remaster` into an artist called `Artist`.
-  const derived = slash === -1 ? fromFlatAlbumFolder(dirName) : fromNestedPath(dirPath);
+  const derived = slash === -1 ? fromFlatAlbumFolder(dirName, marker) : fromNestedPath(dirPath, marker);
   if (derived.artist === null && derived.album === null) return derived;
   return derived;
 }
 
-function mark(name: string): string {
-  return `${name}${DERIVED_MARKER}`;
+function mark(name: string, marker: string): string {
+  return `${name}${marker}`;
 }
 
-export { DERIVED_MARKER, DERIVED_VERSION, deriveFromPath };
+export { DERIVED_VERSION, deriveFromPath };
 export type { DerivedNames };

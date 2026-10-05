@@ -228,6 +228,16 @@ Artist ids derive from the artist grouping's **name**. Album ids derive from the
 **grouping key** — `ALBUM_GROUP_BY`, owned by `subsonic/albumKey.ts` and carried per request by
 `./albumIdentity` — and never from the album name, which is the part that changes.
 
+**An album's year and genre come from the first track that *has* one, not from track 1.**
+`year` and `genre` are the two columns `pathConvention` deliberately never derives, so a row the
+scan has not range-read holds NULL for both. That was invisible while a derived `X (derived)` and
+a tagged `X` were two albums — the tagged half published a year, the derived half published none,
+and nobody compared them. `DERIVED_MARKER` now defaults to empty, which merges them, so a merged
+album's first track is often the unenriched one and `first.year` reported no year for a release
+every other track had one for. The merge introduced the bug; `firstWith` in `albumRecord.ts` is
+the fix, and it is asserted on **both** track orderings because the answer must be a function of
+the album rather than of which row the statement returned first.
+
 Three things about the album id, each of which is a way to lose a user's library:
 
 - **`alk:` is a new kind rather than a new payload under `al:`.** The payload of a key is

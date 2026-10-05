@@ -17,8 +17,8 @@ import { encryptData, generateAesGcmKey } from '@edge-sonic/backend-data/crypto'
 import {
   AnnotationDAO,
   AuthThrottleDAO,
-  DERIVED_MARKER,
   DERIVED_VERSION,
+  GROUPING_SOURCE_DERIVED,
   LibraryDAO,
   NodeDAO,
   PlaylistDAO,
@@ -31,6 +31,7 @@ import {
   bindChunkSize,
   deriveFromPath,
 } from '@edge-sonic/backend-data/dao';
+import { DERIVED_MARKER, EMPTY_DERIVED_MARKER } from './helpers/harness';
 import { sqliteQueryable, queryPlan } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
 import { albumIdOf } from '@edge-sonic/subsonic';
@@ -135,7 +136,7 @@ async function seedLibrary(userId: string, id: string): Promise<string> {
 }
 
 async function seedSong(libraryId: string, path: string, dirPath: string, metadata: Record<string, unknown> = {}): Promise<string> {
-  const songs = new SongDAO(handle.db);
+  const songs = new SongDAO(handle.db, DERIVED_MARKER);
   const id = songId(libraryId, path);
   const name = path.split('/').pop() ?? path;
   const ci = (value: unknown): string | null => (typeof value === 'string' ? value.toLowerCase() : null);
@@ -476,7 +477,7 @@ describe('cascades', () => {
     const userId = await seedUser('CascadeUser');
     const libraryId = await seedLibrary(userId, 'LCASC');
     const nodes = new NodeDAO(handle.db);
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const scanState = new ScanStateDAO(handle.db);
 
     await nodes.upsertMany([{ libraryId, path: 'Artist', parentPath: '', name: 'Artist', mtimeMs: 1, etag: null, depth: 1 }]);
@@ -615,7 +616,7 @@ describe('every hot lookup uses an index', () => {
  */
 describe('path-derived grouping', () => {
   async function indexSong(libraryId: string, path: string): Promise<void> {
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     await songs.upsertFileFacts([
       {
         id: songId(libraryId, path),
@@ -638,7 +639,7 @@ describe('path-derived grouping', () => {
     const libraryId = await seedLibrary(userId, 'LDN');
     await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
 
-    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
     // **Both** names carry the marker, and that is load-bearing rather than cosmetic: it
     // is the only provenance a derived value has, so it is the only thing that lets a
     // later version of this convention tell a guess it wrote from a tag a file supplied.
@@ -673,7 +674,7 @@ describe('path-derived grouping', () => {
     const libraryId = await seedLibrary(userId, 'LDF');
     await indexSong(libraryId, 'Radiohead - OK Computer/01 Airbag.opus');
 
-    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Radiohead - OK Computer/01 Airbag.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Radiohead - OK Computer/01 Airbag.opus'));
     expect(row?.album).toBe(`OK Computer${DERIVED_MARKER}`);
     expect(row?.artist).toBe(`Radiohead${DERIVED_MARKER}`);
   });
@@ -683,7 +684,7 @@ describe('path-derived grouping', () => {
     const libraryId = await seedLibrary(userId, 'LDD');
     await indexSong(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus');
 
-    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus'));
     expect(row?.album).toBe(`Symphony No. 5 - 1949 Recording${DERIVED_MARKER}`);
     expect(row?.artist).toBe(`Mahler${DERIVED_MARKER}`);
   });
@@ -696,7 +697,7 @@ describe('path-derived grouping', () => {
     const userId = await seedUser('DerivedNoClobber');
     const libraryId = await seedLibrary(userId, 'LDN2');
     const path = 'Bonobo/Black Sands/01 Kerala.opus';
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const id = songId(libraryId, path);
 
     await indexSong(libraryId, path);
@@ -731,7 +732,7 @@ describe('path-derived grouping', () => {
     const libraryId = await seedLibrary(userId, 'LDR');
     await indexSong(libraryId, 'loose-track.opus');
 
-    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'loose-track.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'loose-track.opus'));
     expect(row?.album).toBeNull();
     expect(row?.artist).toBeNull();
     expect(row?.album_ci).toBeNull();
@@ -745,7 +746,7 @@ describe('path-derived grouping', () => {
     const libraryId = await seedLibrary(userId, 'LDG');
     await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
 
-    const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
     expect(row?.genre).toBeNull();
     expect(row?.genre_ci).toBeNull();
     expect(row?.track).toBeNull();
@@ -793,13 +794,21 @@ describe('path-derived grouping', () => {
       return id;
     }
 
-    async function drain(libraryId: string, version = DERIVED_VERSION): Promise<number> {
-      const dao = new SongDerivationDAO(handle.db);
+    /**
+     * Run the backfill to convergence, under an explicit marker.
+     *
+     * The marker is a parameter rather than the suite-wide constant because the guard it used
+     * to be — a `LIKE` against the stored value — behaves differently for every value, and a
+     * drain that cannot say which one it ran is a drain that cannot be the subject of an
+     * assertion about it.
+     */
+    async function drain(libraryId: string, version = DERIVED_VERSION, marker = DERIVED_MARKER): Promise<number> {
+      const dao = new SongDerivationDAO(handle.db, marker);
       let written = 0;
       for (let pass = 0; pass < 20; pass += 1) {
         const rows = await dao.listNeedingDerivation(libraryId, 50, version);
         if (rows.length === 0) return written;
-        written += await dao.applyDerivation(SongDerivationDAO.deriveFor(rows), version);
+        written += await dao.applyDerivation(dao.deriveFor(rows), version);
       }
       throw new Error('backfill did not converge');
     }
@@ -817,7 +826,7 @@ describe('path-derived grouping', () => {
 
       await drain(libraryId);
 
-      const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
       expect(row?.album).toBe(`Black Sands${DERIVED_MARKER}`);
       expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
       expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
@@ -840,7 +849,7 @@ describe('path-derived grouping', () => {
 
       await drain(libraryId);
 
-      const row = await new SongDAO(handle.db).findById(songId(libraryId, 'LEZEL - 未完成ランデヴー/01 夢の Jel.ly.opus'));
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'LEZEL - 未完成ランデヴー/01 夢の Jel.ly.opus'));
       expect(row?.artist).toBe(`LEZEL${DERIVED_MARKER}`);
       expect(row?.album).toBe(`未完成ランデヴー${DERIVED_MARKER}`);
     });
@@ -862,7 +871,7 @@ describe('path-derived grouping', () => {
 
       await drain(libraryId);
 
-      const row = await new SongDAO(handle.db).findById(id);
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
       expect(row?.album).toBe('Black Sands (Remastered)');
       expect(row?.artist).toBe('Bonobo');
       // The `_ci` twins too, and separately: a guard on the display column proves nothing
@@ -879,29 +888,40 @@ describe('path-derived grouping', () => {
       // version to reach rows an earlier reader wrote; a corrected *derivation* needs the
       // same, and a plain `COALESCE` cannot provide it — it re-selects the row and then
       // declines to change it, which is a version column that buys nothing.
+      //
+      // The fixture is stamped at the **current** version, not at a literal `1`. It was
+      // hardcoded, and the bump to 2 turned it into a row owed to the backfill *at the current
+      // version* — so "caught up" stopped being true of it and the assertion below passed by
+      // accident of the numbering until it failed outright. A number typed beside a fixture is
+      // wrong by the time somebody bumps the version it names.
       const userId = await seedUser('BackfillVersion');
       const libraryId = await seedLibrary(userId, 'LDV');
       const id = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      // `grouping_source` is seeded too, because it is now what says "this row is a guess".
+      // The marker on the value alone would no longer be enough — the guard is a column
+      // comparison — so seeding one without the other is a row no correction could reach.
       await handle.raw
         .prepare(
           `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
-                              duration, bitrate, artist, artist_ci, album, album_ci, created_at, updated_at, derived_version)
+                              duration, bitrate, artist, artist_ci, album, album_ci, created_at, updated_at,
+                              derived_version, grouping_source)
            VALUES (?, ?, ?, 'Blur/Holocene', '01 Holocene.opus', '01 holocene.opus', 1000, 1000, 'audio/ogg', 'opus',
-                   0, 0, 'Wrong Artist (derived)', 'wrong artist (derived)', 'Wrong Album (derived)', 'wrong album (derived)', 0, 0, 1)`,
+                   0, 0, 'Wrong Artist (derived)', 'wrong artist (derived)', 'Wrong Album (derived)', 'wrong album (derived)', 0, 0,
+                   ?, ?)`,
         )
-        .run(id, libraryId, 'Blur/Holocene/01 Holocene.opus');
+        .run(id, libraryId, 'Blur/Holocene/01 Holocene.opus', DERIVED_VERSION, GROUPING_SOURCE_DERIVED);
 
       // At the current version the row is caught up, so nothing is selected.
-      const dao = new SongDerivationDAO(handle.db);
+      const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       expect(await dao.listNeedingDerivation(libraryId, 10, DERIVED_VERSION)).toEqual([]);
 
-      // At a later version it is selected again, and the marker is what lets the write
-      // tell its own guess from a tag: a *real* tag does not end in the marker and is
-      // left alone, which is the paired case asserted above.
+      // At a later version it is selected again, and `grouping_source` is what lets the
+      // write tell its own guess from a tag: a *real* tag is not flagged and is left alone,
+      // which is the paired case asserted above.
       expect(await dao.listNeedingDerivation(libraryId, 10, DERIVED_VERSION + 1)).toHaveLength(1);
       await drain(libraryId, DERIVED_VERSION + 1);
 
-      const row = await new SongDAO(handle.db).findById(id);
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
       expect(row?.artist).toBe(`Blur${DERIVED_MARKER}`);
       expect(row?.album).toBe(`Holocene${DERIVED_MARKER}`);
       expect(row?.derived_version).toBe(DERIVED_VERSION + 1);
@@ -917,7 +937,7 @@ describe('path-derived grouping', () => {
       await seedUngrouped(libraryId, 'Blur/Holocene/02 Lotus.opus');
       await seedUngrouped(libraryId, 'Blur/For Emma/03 Beatrix.opus');
 
-      const dao = new SongDerivationDAO(handle.db);
+      const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       expect(await drain(libraryId)).toBe(3);
       expect(await dao.listNeedingDerivation(libraryId, 50)).toEqual([]);
       // Zero rows, not "zero rows that happened to change nothing": the write is not
@@ -951,10 +971,10 @@ describe('path-derived grouping', () => {
         await seedUngrouped(libraryId, `Blur/Holocene/${n} track.opus`);
       }
 
-      const dao = new SongDerivationDAO(handle.db);
+      const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       const first = await dao.listNeedingDerivation(libraryId, 2);
       expect(first).toHaveLength(2);
-      expect(await dao.applyDerivation(SongDerivationDAO.deriveFor(first))).toBe(2);
+      expect(await dao.applyDerivation(dao.deriveFor(first))).toBe(2);
 
       // Three remain, and the two just written are *not* among them — the selection is on
       // the stamp, so a pass can never re-derive its own output and starve the tail.
@@ -994,19 +1014,19 @@ describe('path-derived grouping', () => {
       const userId = await seedUser('BackfillIndexStamps');
       const libraryId = await seedLibrary(userId, 'LDIS');
 
-      const written = await new SongDAO(handle.db).upsertFileFacts([
+      const written = await new SongDAO(handle.db, DERIVED_MARKER).upsertFileFacts([
         { id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
       ]);
       expect(written.written).toBe(1);
 
-      const dao = new SongDerivationDAO(handle.db);
+      const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       // The whole assertion. A row the walk wrote is not owed a derivation, so the
       // backfill's selection returns nothing and the pass costs one empty indexed seek.
       expect(await dao.listNeedingDerivation(libraryId, 50)).toEqual([]);
 
       // The grouping is still there — the stamp is not a way of skipping the derivation,
       // it is a record that the index path already did it.
-      const row = await new SongDAO(handle.db).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
       expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
       expect(row?.derived_version).toBe(DERIVED_VERSION);
     });
@@ -1018,7 +1038,7 @@ describe('path-derived grouping', () => {
       // branch of the same statement and a distinct bug.
       const userId = await seedUser('BackfillConflictStamps');
       const libraryId = await seedLibrary(userId, 'LDCS');
-      const dao = new SongDAO(handle.db);
+      const dao = new SongDAO(handle.db, DERIVED_MARKER);
       const facts = {
         id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'),
         libraryId,
@@ -1037,7 +1057,7 @@ describe('path-derived grouping', () => {
       const after = await dao.findById(facts.id);
       expect(after?.size).toBe(2000);
       expect(after?.enriched_at).toBeNull();
-      expect(await new SongDerivationDAO(handle.db).listNeedingDerivation(libraryId, 50)).toEqual([]);
+      expect(await new SongDerivationDAO(handle.db, DERIVED_MARKER).listNeedingDerivation(libraryId, 50)).toEqual([]);
     });
 
     it('still re-derives a stamped row when the convention changes, so the stamp is not a dead end', async () => {
@@ -1047,12 +1067,12 @@ describe('path-derived grouping', () => {
       // have teeth is a fixture, and this one is the teeth.
       const userId = await seedUser('BackfillStampIsNotFinal');
       const libraryId = await seedLibrary(userId, 'LDSNF');
-      await new SongDAO(handle.db).upsertFileFacts([
+      await new SongDAO(handle.db, DERIVED_MARKER).upsertFileFacts([
         { id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
       ]);
 
       // At the current version: caught up, so nothing is selected and nothing is written.
-      const dao = new SongDerivationDAO(handle.db);
+      const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       expect(await dao.listNeedingDerivation(libraryId, 50, DERIVED_VERSION)).toEqual([]);
       expect(await drain(libraryId, DERIVED_VERSION)).toBe(0);
 
@@ -1060,6 +1080,216 @@ describe('path-derived grouping', () => {
       // convention produced the grouping, not that nobody may ever look again.
       expect(await dao.listNeedingDerivation(libraryId, 50, DERIVED_VERSION + 1)).toHaveLength(1);
       expect(await drain(libraryId, DERIVED_VERSION + 1)).toBe(1);
+    });
+
+    /**
+     * A row holding a **wholly-derived** grouping, written under `marker`.
+     *
+     * Built from the real `upsertFileFacts` rather than a hand-written `INSERT`, because the two
+     * columns under test — `grouping_source` and `derived_version` — are stamped by that
+     * statement and a fixture listing them by hand is a second, silently-drifting copy of it.
+     * That is this file's own recorded rule about doubles, reached from the fixture side.
+     *
+     * Distinct from `seedUngrouped`, which leaves the grouping NULL. Both are needed, and the
+     * difference decides which branch of the guard is under test: a NULL grouping is filled by
+     * `col IS NULL` whatever the marker is, so it cannot detect a guard that fails to recognise
+     * its own earlier output — which is the whole failure a configured marker introduces.
+     */
+    async function seedStaleGuess(id: string, libraryId: string, dirPath: string, marker: string): Promise<void> {
+      await new SongDAO(handle.db, marker).upsertFileFacts([
+        { id, libraryId, path: `${dirPath}/01 track.opus`, dirPath, name: '01 track.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+      ]);
+    }
+
+    /**
+     * A row holding real tags: no marker, and `grouping_source` NULL, which together mean "a tag
+     * owns this grouping and a derivation may not replace it".
+     *
+     * Also built from the real statements, in the order production performs them: the index write
+     * derives and stamps, then an enrichment read supplies the tag and clears the flag. A row
+     * seeded with `grouping_source` NULL and no derivation behind it is a state production never
+     * produces, and it would let a guard pass that cannot distinguish the two.
+     */
+    async function seedTaggedRow(id: string, libraryId: string, dirPath: string, artist: string, album: string, marker = DERIVED_MARKER): Promise<void> {
+      await seedStaleGuess(id, libraryId, dirPath, marker);
+      await new SongDAO(handle.db, marker).applyMetadata(id, { artist, album, albumArtist: artist });
+    }
+
+    /*
+     * Everything below is about `songs.grouping_source`, which is what replaced the marker as
+     * the record of a guess. The guard used to be `col LIKE '%' || marker`, and the marker is
+     * now configuration — so each of these is a value the old guard answered wrongly, measured
+     * over real SQLite against the real statement before the column was added.
+     *
+     * They are grouped together because they are one question asked of several inputs: *what
+     * does the guard say when the marker is not the one this module was written against?*
+     */
+
+    it('leaves a real tag alone under an EMPTY marker, which is the deployed default', async () => {
+      // The defect the column exists for, and the single most important assertion here.
+      //
+      // `'%' || ''` is `'%'`, which matches every non-NULL value, so with an empty marker the
+      // old guard's `ELSE artist` was unreachable and the backfill replaced **every** real
+      // `ALBUMARTIST` in the library — silently, on every poll, on any library with more than
+      // the first page of rows. And empty is the *requested* default, because it is what makes
+      // a derived `X` and a tagged `X` one album.
+      //
+      // Paired with the non-empty case above ('never overwrites a real tag'), because each
+      // passes against the other's failure: a guard that always refuses to write passes this
+      // one and fails every case that asserts a grouping was filled.
+      const userId = await seedUser('BackfillEmptyMarker');
+      const libraryId = await seedLibrary(userId, 'LDEM');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await seedTaggedRow(id, libraryId, 'Bonobo/Black Sands', 'Bonobo', 'Black Sands (Remastered)');
+
+      // A version up, so the row is selected at all: the index write already stamped it at
+      // the current version, and the whole question is what the guard does once a row
+      // holding a real tag comes back round.
+      expect(await drain(libraryId, DERIVED_VERSION + 1, EMPTY_DERIVED_MARKER)).toBe(1);
+
+      const row = await new SongDAO(handle.db, EMPTY_DERIVED_MARKER).findById(id);
+      // The tag, in both spellings. A guard on `album` proves nothing about `album_ci`, and a
+      // clobbered twin is a row that displays correctly and is in no album list.
+      expect(row?.album).toBe('Black Sands (Remastered)');
+      expect(row?.album_ci).toBe('black sands (remastered)');
+      expect(row?.artist).toBe('Bonobo');
+      expect(row?.artist_ci).toBe('bonobo');
+    });
+
+    it('fills a gap under an empty marker, which is what the empty marker is for', async () => {
+      // The paired positive for the case above, and the reason the empty default is the right
+      // default rather than merely the requested one: with no suffix, the derived name and the
+      // tagged name are the same string, so a half-enriched library groups them into one album.
+      //
+      // Asserted through `listAlbums`, not through the stored column: what the marker decides
+      // is whether a guess and a release are one group, and a column assertion would pass
+      // identically for a marker that kept them apart.
+      const userId = await seedUser('BackfillEmptyFills');
+      const libraryId = await seedLibrary(userId, 'LDEF');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+
+      expect(await drain(libraryId, DERIVED_VERSION, EMPTY_DERIVED_MARKER)).toBe(1);
+
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
+      expect(albums.map((song) => song.album)).toEqual(['Black Sands']);
+      expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual(['Bonobo']);
+    });
+
+    it.each([
+      ['_ (guess)', '_ matches any one character, so the guard used to stop recognising its own guesses'],
+      ['%', 'the whole pattern, so the guard used to match everything'],
+      ['%%%', 'several of them, because none of them was an escape'],
+    ])('treats a marker of %j as ordinary text, not a LIKE pattern', async (marker, _why) => {
+      // The second half of the same defect. A configured marker reaching a `LIKE` is a pattern,
+      // so an operator writing `'_ (guess)'` got a backfill that re-selected its own guesses on
+      // every version bump and then declined to change them — the `reader_version` defect, one
+      // layer down, with no error anywhere.
+      //
+      // Asserted on both halves because either alone is satisfiable by a guard that simply never
+      // writes, and the fixture has to hold both kinds of row for the same reason:
+      //
+      //   - a wholly-derived row carrying a **stale** marker, which the guard must rewrite — so
+      //     it has to recognise its own earlier output rather than match a NULL, and
+      //   - a tagged row in the same library, which the guard must leave alone.
+      //
+      // The stale marker is what gives `'_ (guess)'` its teeth. Seeded as a NULL grouping it
+      // would be filled by the `IS NULL` branch whatever the pattern was, and the case would
+      // pass against the defect it exists to catch.
+      const suffix = marker.length * 31 + marker.charCodeAt(0);
+      const userId = await seedUser(`BackfillLike${suffix}`);
+      const libraryId = await seedLibrary(userId, `LDL${suffix}`);
+
+      const guessId = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      await seedStaleGuess(guessId, libraryId, 'Blur/Holocene', DERIVED_MARKER);
+      const tagId = songId(libraryId, 'Radiohead/OK Computer/01 Airbag.opus');
+      await seedTaggedRow(tagId, libraryId, 'Radiohead/OK Computer', 'Radiohead', 'OK Computer', DERIVED_MARKER);
+
+      await drain(libraryId, DERIVED_VERSION + 1, marker);
+
+      const dao = new SongDAO(handle.db, marker);
+      expect((await dao.findById(guessId))?.artist).toBe(`Blur${marker}`);
+      expect((await dao.findById(tagId))?.artist).toBe('Radiohead');
+    });
+
+    it('rewrites a guess written under a DIFFERENT marker, which is what makes it a column', async () => {
+      // A string guard could not do this at all, and the whole reason provenance moved.
+      //
+      // The row below carries ` (derived)` — the marker this suite configures everywhere else
+      // — and the deployment is switched to a different one. A guard reading the stored suffix
+      // would not recognise its own earlier output, so the version bump would re-select the row
+      // and decline to change it: a correction that cannot reach the rows it exists to correct.
+      // The column does not care what the string says, so the guess is rewritten.
+      //
+      // The paired case is the one above: a *real* tag under the same marker change is still
+      // left alone. Without it, "the guard never writes" passes this file.
+      const userId = await seedUser('BackfillMarkerChange');
+      const libraryId = await seedLibrary(userId, 'LDMC');
+      const id = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      await seedStaleGuess(id, libraryId, 'Blur/Holocene', DERIVED_MARKER);
+
+      expect(await drain(libraryId, DERIVED_VERSION + 1, ' (guess)')).toBe(1);
+
+      const row = await new SongDAO(handle.db, ' (guess)').findById(id);
+      expect(row?.artist).toBe('Blur (guess)');
+      expect(row?.artist_ci).toBe('blur (guess)');
+      expect(row?.album).toBe('Holocene (guess)');
+      expect(row?.derived_version).toBe(DERIVED_VERSION + 1);
+    });
+
+    it('a tag write clears the flag, so a later bump cannot overwrite a real tag', async () => {
+      // The third writer, and the one that has to clear the flag.
+      //
+      // `applyMetadata` is what puts a real `ALBUMARTIST` in the column. If it left
+      // `grouping_source` standing, the row would still read as a guess, the next
+      // `derived_version` bump would select it, and the guard would replace a real tag with a
+      // folder name — a data-loss defect that no test bumping a version could see.
+      //
+      // Asserted on the *effect* (the bump leaves the tag alone) rather than on the column,
+      // because the column is an implementation of the guard and the guard is the requirement.
+      const userId = await seedUser('BackfillTagClearsFlag');
+      const libraryId = await seedLibrary(userId, 'LDTC');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+
+      // The index write stamped `'derived'` and filled the grouping. (A direct
+      // `INSERT` does neither, so the backfill runs first — the row has to *hold* a guess
+      // before there is anything for the flag to be wrong about.)
+      await drain(libraryId);
+      expect((await new SongDAO(handle.db, DERIVED_MARKER).findById(id))?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
+      expect((await new SongDAO(handle.db, DERIVED_MARKER).findById(id))?.grouping_source).toBe(GROUPING_SOURCE_DERIVED);
+
+      // An enrichment read supplies the real value, exactly as `EnrichmentService` would.
+      await new SongDAO(handle.db, DERIVED_MARKER).applyMetadata(id, { artist: 'Bonobo', album: 'Black Sands', albumArtist: 'Bonobo' });
+      expect((await new SongDAO(handle.db, DERIVED_MARKER).findById(id))?.grouping_source).toBeNull();
+
+      // So a bump at the new convention leaves it alone.
+      expect(await drain(libraryId, DERIVED_VERSION + 1, EMPTY_DERIVED_MARKER)).toBe(1);
+      const row = await new SongDAO(handle.db, EMPTY_DERIVED_MARKER).findById(id);
+      expect(row?.artist).toBe('Bonobo');
+      expect(row?.album).toBe('Black Sands');
+    });
+
+    it('a partial tag write also clears it, which is the conservative direction', async () => {
+      // `album_artist` supplied and nothing else. Under "flagged if *any* of the three is
+      // derived" this row would stay flagged and a correction would overwrite `artist` and
+      // `album` — columns a real tag supplied. Under "flagged only if none were", it does not.
+      //
+      // The cost, stated rather than hidden: the derivation-owned `album_artist` on such a row
+      // is never corrected again. That is the right way round — it is the artist's own name
+      // from the folder they are filed under, which no correction of a separator rule changes.
+      const userId = await seedUser('BackfillPartialTag');
+      const libraryId = await seedLibrary(userId, 'LDPT');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await drain(libraryId);
+      await new SongDAO(handle.db, DERIVED_MARKER).applyMetadata(id, { artist: 'Bonobo', album: 'Black Sands' });
+
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
+      expect(row?.grouping_source).toBeNull();
+      expect(row?.artist).toBe('Bonobo');
+      // The derived `album_artist` is still there and still correct — clearing the flag is not
+      // clearing the value.
+      expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
     });
   });
 
@@ -1278,7 +1508,7 @@ describe('path-derived grouping', () => {
       const requested = ids.toReversed();
       requested.splice(10, 0, 's:does-not-exist');
 
-      const rows = await new SongDAO(handle.db).listIdsIn(libraryId, requested);
+      const rows = await new SongDAO(handle.db, DERIVED_MARKER).listIdsIn(libraryId, requested);
 
       expect(rows.map((row) => row.id)).toEqual(requested.filter((id) => id !== 's:does-not-exist'));
     });
@@ -1300,8 +1530,8 @@ describe('path-derived grouping', () => {
     // Incrementality depends on this: the same path must always derive the same
     // string, or every scan would rewrite every grouping column and the "unchanged
     // rescan costs zero rows" guarantee would be a comment rather than a fact.
-    const first = deriveFromPath('Bonobo/Black Sands');
-    const second = deriveFromPath('Bonobo/Black Sands');
+    const first = deriveFromPath('Bonobo/Black Sands', DERIVED_MARKER);
+    const second = deriveFromPath('Bonobo/Black Sands', DERIVED_MARKER);
     expect(first).toEqual(second);
     // And the marker is part of the value, so a client can tell derived from tagged.
     expect(first.artist).toContain(DERIVED_MARKER);
@@ -1315,7 +1545,7 @@ describe('DAO round-trips', () => {
     // client showing a 0:00 scrubber is a bug nobody reports, so it has to be tested.
     const userId = await seedUser('RoundTrip');
     const libraryId = await seedLibrary(userId, 'LRT');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const id = songId(libraryId, 'A/01.flac');
     const facts = { id, libraryId, path: 'A/01.flac', dirPath: 'A', name: '01.flac', size: 100, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' };
 
@@ -1342,7 +1572,7 @@ describe('DAO round-trips', () => {
     // "fixed" by simply always clearing — that would re-read every file on every scan.
     const userId = await seedUser('MtimeChange');
     const libraryId = await seedLibrary(userId, 'LMT');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const id = songId(libraryId, 'A/01.flac');
     const facts = (mtimeMs: number, size: number) => ({
       id,
@@ -1448,7 +1678,7 @@ describe('DAO round-trips', () => {
   it('prunes a deleted folder and everything beneath it', async () => {
     const userId = await seedUser('Prune');
     const libraryId = await seedLibrary(userId, 'LPR');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     await seedSong(libraryId, 'Album/01.flac', 'Album');
     await seedSong(libraryId, 'Album/Disc 2/01.flac', 'Album/Disc 2');
     expect(await songs.countByLibrary(libraryId)).toBe(2);
@@ -1464,7 +1694,7 @@ describe('DAO round-trips', () => {
     // every folder whose name merely starts with the same characters.
     const userId = await seedUser('PrefixPrune');
     const libraryId = await seedLibrary(userId, 'LPP');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     await seedSong(libraryId, 'Blur/01.flac', 'Blur');
     await seedSong(libraryId, 'Blurberry/01.flac', 'Blurberry');
 
@@ -1515,7 +1745,7 @@ describe('album identity by grouping', () => {
    * the fixture the original report was measured on.
    */
   async function seedSplitRelease(userId: string, libraryId: string, album = 'Ex-Otogibanashi'): Promise<void> {
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const tracks = [
       { dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi', name: '01 - Ex-Otogibanashi.opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 1 },
       { dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi', name: '02 - Sekaijū wa Mine [Remix].opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 2 },
@@ -1563,7 +1793,7 @@ describe('album identity by grouping', () => {
     // indexed before `upsertFileFacts` derived `album_artist` keeps NULL for ever, because
     // the derivation backfill selects on `derived_version` and that column was never bumped
     // when the album-artist half was added. 113 rows on a live library, all NULL.
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const halves: Array<[string, number]> = [
       ['A - Silent Siren Selection', 2],
       ['B - Silent Siren Selection', 8],
@@ -1606,7 +1836,7 @@ describe('album identity by grouping', () => {
   it('separates two albums that share a name but not an album artist', async () => {
     const userId = await seedUser('SameNameTwoArtists');
     const libraryId = await seedLibrary(userId, 'LSAME');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     for (const [dir, artist] of [
       ['A - Greatest Hits', 'Artist A'],
       ['B - Greatest Hits', 'Artist B'],
@@ -1636,7 +1866,7 @@ describe('album identity by grouping', () => {
     // same representative directory and publishing one id for two albums.
     const userId = await seedUser('TwoAlbumsOneDir');
     const libraryId = await seedLibrary(userId, 'LTWO');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const dir = 'Various - Split Release';
     for (const [file, albumArtist] of [
       ['01 - One.opus', 'Artist A'],
@@ -1690,7 +1920,7 @@ describe('album identity by grouping', () => {
     const libraryId = await seedLibrary(userId, 'LSPLITPAGE');
     // Ten releases of two tracks each, every release in **two** directories, so a page
     // boundary of one album lands between two of its own directories.
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     for (let album = 0; album < 10; album += 1) {
       for (const half of [1, 2]) {
         const dir = `Artist ${half} - Album ${String(album).padStart(2, '0')}`;
@@ -1724,7 +1954,7 @@ describe('album identity by grouping', () => {
     // happened to produce it.
     const userId = await seedUser('AlbumTrackOrder');
     const libraryId = await seedLibrary(userId, 'LORDER');
-    const songs = new SongDAO(handle.db);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const dir = 'Two Discs';
     const rows = [
       { file: 'a-low.opus', title: 'apple', disc: 1, track: 2 },

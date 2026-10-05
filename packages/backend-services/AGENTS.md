@@ -166,6 +166,15 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   It reads `dir_path` off the row, so it spends **no WebDAV subrequests** — one indexed read
   and one bounded write batch. Once a library is current the read returns no rows and the
   write batch is never issued, so a poll on a healthy library stays free.
+- **`deriveFor` is the store's method, not a `map` and not a static.** Reading a page and
+  deciding on that same page is one step, and a caller that did half of it would stamp rows it
+  derived nothing for — which is how a backfill that re-selects its own work for ever is built.
+  It is also on the `ScanDerivationStore` port rather than called as
+  `SongDerivationDAO.deriveFor` because the marker it appends is `DERIVED_MARKER`
+  configuration, and only the store was built with it: `deriveFromPath` takes the marker as a
+  parameter, so a `static` method could only have read a module constant — the value the
+  operator is explicitly no longer forced to take. `backend-services` is above `backend-data`,
+  so the value is read once at the composition root and threaded down by constructor.
 - **The backfill shares the chunk's budget, and its page is sized from it.** It runs
   *first*, so it competes with the walk for the same 42 statements, and its write is **one
   `UPDATE` per row** with `requireComplete` — it refuses rather than truncating, because the

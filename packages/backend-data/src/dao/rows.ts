@@ -8,6 +8,7 @@
  * what stops a D1 column from becoming part of the protocol surface: `song` has
  * no `path` field in Subsonic and none is emitted, even though `SongRow` has one.
  */
+import type { GroupingSource } from './groupingSource';
 
 interface UserRow {
   id: string;
@@ -103,6 +104,16 @@ interface SongRow {
    * once did. See `pathConvention.ts`.
    */
   derived_version: number;
+  /**
+   * Who wrote `artist` / `album` / `album_artist`: the path convention, or a file's tags.
+   *
+   * `'derived'` means **all three** came from `dir_path`; anything else means a tag
+   * supplied at least one, and a derivation may no longer replace the row's grouping. It
+   * was a suffix on the value itself, which cannot be configured: an empty marker is a
+   * match-all and any other marker is a `LIKE` pattern, so the guard either stopped
+   * recognising its own guesses or stopped recognising anything. See `groupingSource.ts`.
+   */
+  grouping_source: GroupingSource;
   created_at: number;
   updated_at: number;
 }

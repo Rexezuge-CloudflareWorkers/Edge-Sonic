@@ -29,12 +29,13 @@ import { MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-servi
 import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { ScanDeps } from '@edge-sonic/backend-services/index';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavEntry } from './helpers/fakeDav';
+import { DERIVED_MARKER } from './helpers/harness';
 
 const LIBRARY_ID = 'L1';
 const ROOT = '/dav/music';
@@ -185,7 +186,7 @@ function createIndex() {
             const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
             const existing = songs.get(input.id);
             if (existing !== undefined && existing.size === input.size && existing.mtime_ms === input.mtimeMs) continue;
-            const derived = deriveFromPath(input.dirPath);
+            const derived = deriveFromPath(input.dirPath, DERIVED_MARKER);
             songs.set(input.id, {
               id: input.id,
               library_id: LIBRARY_ID,
@@ -235,6 +236,12 @@ function createIndex() {
               // very column under repair is therefore not cosmetic: it is the only reason
               // this file stayed green through it.
               derived_version: DERIVED_VERSION,
+              // The real `UPSERT_FILE_FACTS` stamps `'derived'` on the `INSERT`: a row it
+              // created cannot hold a value any tag supplied. The backfill's guard reads this
+              // column, so a double that omits it produces a row nothing may ever correct —
+              // the "a double may disagree with production about the very column under
+              // repair" defect, on the third such column.
+              grouping_source: GROUPING_SOURCE_DERIVED,
               created_at: 0,
               updated_at: 0,
             });
@@ -908,6 +915,9 @@ describe('ScanService', () => {
             meter.charge(1, 'd1');
             return state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '' }));
           },
+          async deriveFor(rows: readonly { id: string; dir_path: string }[]) {
+          return rows.map((row) => ({ id: row.id, ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
+        },
           applyDerivation: async (writes: readonly { id: string }[]) => {
             // `requireComplete`, so this is a refusal and not a truncation. Nothing is
             // written — which is what leaves the rows owed for the next poll.

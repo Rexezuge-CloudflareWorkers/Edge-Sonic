@@ -71,12 +71,17 @@ function titleFromPath(song: SongRow): string {
  * and an endpoint importing its way up to a shared derivation is how a second copy of the
  * path convention starts.
  *
- * `DERIVED_MARKER` is **not** stripped, and that is a decision rather than an oversight. A row
- * the scan has not range-read carries `X (derived)`; a row it has carries `X`. They are
- * deliberately different albums — see `subsonic/albumKey.ts` — because the marker is the only
- * record that a name is a guess, and merging the two would publish a guess as a release name. The
- * cost is that a partially-enriched library lists one release twice, once under each spelling,
- * which is a lesser price than an album named after a filename convention and nothing saying so.
+ * `DERIVED_MARKER` is **not** stripped here, and that is a decision rather than an oversight. A
+ * row the scan has not range-read carries `X (derived)` when the deployment configures that
+ * marker, and a row it has carries `X`; the two are then deliberately different albums — see
+ * `subsonic/albumKey.ts` — because the marker is the only *visible* record that a name is a
+ * guess, and merging the two would publish a guess as a release name. The cost is that a
+ * partially-enriched library lists one release twice, once under each spelling, which is a lesser
+ * price than an album named after a filename convention and nothing saying so.
+ *
+ * The default marker is **empty**, so by default there is no suffix, the two spellings are the
+ * same string, and this is the path where a derived `X` and a tagged `X` are one album. Both
+ * answers are one variable; neither is a special case here.
  */
 function albumNameOf(song: SongRow): string {
   if (song.album) return song.album;

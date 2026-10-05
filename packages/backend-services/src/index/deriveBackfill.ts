@@ -57,7 +57,6 @@
  * guarantee: the derived size bounds a chunk that has spent nothing, and the only thing that
  * decides whether *this* chunk can take it is what it has already spent.
  */
-import { SongDerivationDAO } from '@edge-sonic/backend-data/dao';
 import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK } from '@edge-sonic/backend-runtime/config';
 import type { ScanDerivationStore } from './scanTypes';
 import type { ScanBudget } from './scanBudget';
@@ -93,8 +92,9 @@ async function derivePending(store: ScanDerivationStore, libraryId: string, budg
   // `deriveFor` rather than a `map` at the call site: reading a page and deciding on that
   // same page is one step, and a caller that did half of it would stamp rows it never
   // derived anything for — which is how a backfill that re-selects its own work for ever
-  // is built.
-  return await store.applyDerivation(SongDerivationDAO.deriveFor(rows));
+  // is built. It is the store's method rather than a static on the DAO because the marker it
+  // appends is configuration, and only the store was built with it.
+  return await store.applyDerivation(await store.deriveFor(rows));
 }
 
 export { derivePending };

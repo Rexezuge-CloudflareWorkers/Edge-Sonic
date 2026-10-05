@@ -37,20 +37,24 @@
  *
  * `dir_path` is already on the row, so this could be one `UPDATE` with `substr`/`instr`.
  * It is deliberately not: that would be a second implementation of `pathConvention.ts`,
- * free to disagree with it over the separator rules and the `(derived)` marker, and a
- * disagreement between two implementations of a naming convention is invisible until a
- * client groups a library wrongly. One implementation, called from here.
+ * free to disagree with it over the separator rules and the marker, and a disagreement
+ * between two implementations of a naming convention is invisible until a client groups a
+ * library wrongly. One implementation, called from here.
  */
 import { BaseDAO } from './BaseDAO';
-import { deriveFromPath, DERIVED_MARKER, DERIVED_VERSION } from './pathConvention';
+import type { D1Queryable } from '../utils/D1Types';
+import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@edge-sonic/shared';
+import { deriveFromPath, DERIVED_VERSION } from './pathConvention';
+import { GROUPING_SOURCE_DERIVED } from './groupingSource';
 import { nowSeconds } from './identity';
 
 /**
  * One row's backfill input.
  *
- * Only the two fields the derivation needs. `dir_path` is the input to
- * `deriveFromPath`; the id is the key to write back. Reading `*` would pull the whole
- * row — including the derived columns this is about to decide — across a page of them.
+ * Only the two fields the derivation needs. `dir_path` is the input to `deriveFromPath`;
+ * the id is the key to write back. Reading `*` would pull the whole row — including the
+ * derived columns this is about to decide — across a page of them.
  */
 interface DerivableRow {
   readonly id: string;
@@ -72,13 +76,12 @@ interface DerivationWrite {
 /**
  * Write one row's derived grouping.
  *
- * The assignment is a `CASE` on whether the existing value is itself a *guess*, and that
- * distinction is the entire reason `DERIVED_MARKER` is part of the stored value rather
- * than decoration:
+ * The assignment is a `CASE` on **whether a tag owns this row's grouping**, and that
+ * distinction is what decides everything else:
  *
- * - **NULL** — nothing has ever grouped this row. Fill it. This is the case that
- *   matters, and the one an already-indexed library is entirely made of.
- * - **Ends in `DERIVED_MARKER`** — an earlier version of this convention wrote it, so
+ * - **A gap** — the column is NULL. Fill it. This is the case that matters, and the one
+ *   an already-indexed library is entirely made of.
+ * - **`grouping_source = 'derived'`** — an earlier version of this convention wrote it, so
  *   replace it. This is what makes `derived_version` worth having: a plain `COALESCE`
  *   here would re-select the row on a version bump and then decline to change it, which is
  *   a version column that buys nothing, and a *wrong* guess would sit in the column for
@@ -86,9 +89,26 @@ interface DerivationWrite {
  * - **Anything else** — a real tag from an enrichment read. Leave it, and leave its `_ci`
  *   twin alone with it.
  *
- * Every `_ci` twin moves in the same statement as its counterpart. A guard on `artist`
- * proves nothing about `artist_ci`, and dropping the handling from only the twins passes
- * every other assertion and yields a row that displays correctly and is in no album list.
+ * The predicate is a **column comparison**, which it used not to be. It was
+ * `col LIKE '% (derived)'`, reading the marker back out of the stored value, and that only
+ * works while the marker is one hardcoded literal: an empty marker is `'%'` and matches
+ * every value — so the backfill overwrote every real `ALBUMARTIST` in the library — and
+ * any other marker is a `LIKE` pattern, so `'_ (guess)'` matched nothing and the guard
+ * stopped recognising its own guesses. Both measured in `groupingSource.ts`. An operator's
+ * marker is now data reaching this statement and nothing here treats it as a pattern.
+ *
+ * Every `_ci` twin moves in the same statement as its counterpart, with the same predicate.
+ * A guard on `artist` proves nothing about `artist_ci`, and dropping the handling from only
+ * the twins passes every other assertion and yields a row that displays correctly and is in
+ * no album list.
+ *
+ * `grouping_source` is restated by the same statement, in the same shape as every other
+ * assignment and for the same reason: a row whose grouping moved while its provenance did
+ * not is a row the next bump will decide wrongly. It becomes `'derived'` when the row
+ * already was, or when all three grouping columns were NULL — nothing a tag wrote, which
+ * is the definition. It is cleared when a tag owns the row, and the `ELSE` is written as
+ * `NULL` rather than as `grouping_source` because that is provably what it is: reaching
+ * the `ELSE` means the column was not `'derived'` *and* some column held a value.
  *
  * `derived_version` is stamped in all three cases, including when the values did not
  * change. That is the backfill's only termination condition: a row that keeps
@@ -96,19 +116,39 @@ interface DerivationWrite {
  *
  * `updated_at` moves with the stamp, so a library already at the current version issues no
  * write at all and the "unchanged rescan costs zero rows" guarantee holds.
+ *
+ * Every `?` is positional, so the bind order below and the placeholder order above are one
+ * fact. `GROUPING_SOURCE_DERIVED` is bound eight times rather than interpolated once,
+ * because an interpolated string is a place a value becomes syntax, and this module has a
+ * configured value reaching the same statement.
  */
 const APPLY_DERIVATION = `UPDATE songs SET
-  artist = CASE WHEN artist IS NULL OR artist LIKE ? THEN ? ELSE artist END,
-  artist_ci = CASE WHEN artist_ci IS NULL OR artist_ci LIKE ? THEN ? ELSE artist_ci END,
-  album = CASE WHEN album IS NULL OR album LIKE ? THEN ? ELSE album END,
-  album_ci = CASE WHEN album_ci IS NULL OR album_ci LIKE ? THEN ? ELSE album_ci END,
-  album_artist = CASE WHEN album_artist IS NULL OR album_artist LIKE ? THEN ? ELSE album_artist END,
-  album_artist_ci = CASE WHEN album_artist_ci IS NULL OR album_artist_ci LIKE ? THEN ? ELSE album_artist_ci END,
+  artist = CASE WHEN grouping_source = ? OR artist IS NULL THEN ? ELSE artist END,
+  artist_ci = CASE WHEN grouping_source = ? OR artist_ci IS NULL THEN ? ELSE artist_ci END,
+  album = CASE WHEN grouping_source = ? OR album IS NULL THEN ? ELSE album END,
+  album_ci = CASE WHEN grouping_source = ? OR album_ci IS NULL THEN ? ELSE album_ci END,
+  album_artist = CASE WHEN grouping_source = ? OR album_artist IS NULL THEN ? ELSE album_artist END,
+  album_artist_ci = CASE WHEN grouping_source = ? OR album_artist_ci IS NULL THEN ? ELSE album_artist_ci END,
+  grouping_source = CASE
+    WHEN grouping_source = ? OR (artist IS NULL AND album IS NULL AND album_artist IS NULL) THEN ?
+    ELSE NULL END,
   derived_version = ?,
   updated_at = ?
 WHERE id = ?`;
 
 class SongDerivationDAO extends BaseDAO {
+  /**
+   * The marker this DAO appends to a derived name, from the deployment's configuration.
+   *
+   * Injected rather than imported because `backend-data` is layer 0 and the configuration
+   * layer sits above it, and read once at construction rather than per call because the
+   * value is the same for the whole request and a derivation that used two markers inside
+   * one page would write a grouping split across both spellings.
+   */
+  constructor(database: D1Queryable, private readonly derivedMarker: string, subrequests: SubrequestMeter = UNMETERED_SUBREQUESTS) {
+    super(database, subrequests);
+  }
+
   /**
    * Rows whose grouping is missing, or was written by an older convention.
    *
@@ -140,32 +180,29 @@ class SongDerivationDAO extends BaseDAO {
    */
   public async applyDerivation(writes: readonly DerivationWrite[], version = DERIVED_VERSION): Promise<number> {
     const timestamp = nowSeconds();
-    // The `_ci` twins are matched with the lowercased marker: the comparison is against
-    // the *stored* value, which every writer lowercases, so matching the display-case
-    // marker here would silently stop recognising derived rows and turn a version bump
-    // back into a no-op for exactly the rows it exists to fix.
-    const ciMarker = `%${DERIVED_MARKER.toLowerCase()}`;
     const statements = writes.map((write) => {
       const artistCi = write.artist?.toLowerCase() ?? null;
       const albumCi = write.album?.toLowerCase() ?? null;
       return this.database
         .prepare(APPLY_DERIVATION)
         .bind(
-          `%${DERIVED_MARKER}`,
+          GROUPING_SOURCE_DERIVED,
           write.artist,
-          ciMarker,
+          GROUPING_SOURCE_DERIVED,
           artistCi,
-          `%${DERIVED_MARKER}`,
+          GROUPING_SOURCE_DERIVED,
           write.album,
-          ciMarker,
+          GROUPING_SOURCE_DERIVED,
           albumCi,
           // `album_artist` mirrors the derived artist: `getArtist` groups on it, so an
           // album with a NULL album-artist column does not appear under the artist a
           // client navigated to.
-          `%${DERIVED_MARKER}`,
+          GROUPING_SOURCE_DERIVED,
           write.artist,
-          ciMarker,
+          GROUPING_SOURCE_DERIVED,
           artistCi,
+          GROUPING_SOURCE_DERIVED,
+          GROUPING_SOURCE_DERIVED,
           version,
           timestamp,
           write.id,
@@ -186,10 +223,14 @@ class SongDerivationDAO extends BaseDAO {
    * A method rather than a bare `map` at the call site so the pairing of "read a page"
    * with "derive a page" cannot be half-done: a caller that derived some rows and not
    * others would write a stamp on rows it never decided anything about.
+   *
+   * An **instance** method rather than a static one, because the marker is configured: a
+   * static method reading a module constant would derive every page in a deployment
+   * against the same hardcoded suffix the operator is not using.
    */
-  public static deriveFor(rows: readonly DerivableRow[]): DerivationWrite[] {
+  public deriveFor(rows: readonly DerivableRow[]): DerivationWrite[] {
     return rows.map((row) => {
-      const { artist, album } = deriveFromPath(row.dir_path);
+      const { artist, album } = deriveFromPath(row.dir_path, this.derivedMarker);
       return { id: row.id, artist, album };
     });
   }
