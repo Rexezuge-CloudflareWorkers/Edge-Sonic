@@ -17,11 +17,13 @@
  */
 import { BaseDAO } from './BaseDAO';
 import type { WriteBatchResult } from './BaseDAO';
-import { chunkArray } from './chunking';
-import { bindChunkSize } from './sqlLimits';
-import type { CountRow, SongRow } from './rows';
+import type { D1Queryable } from '../utils/D1Types';
+import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { SongIdLookupDAO } from './songIdLookup';
+import { SongCountDAO } from './songCounts';
 import { UPSERT_FILE_FACTS } from './songSql';
 import type { SongMetadataInput } from './songSql';
 import { deriveFromPath } from './pathConvention';
@@ -33,7 +35,6 @@ import { buildMetadataPatch } from './songMetadata';
  * Derived from the measured ceiling rather than chosen, so a raised `MAX_LIBRARIES` cannot
  * silently push this over D1's 100-parameter limit. See `sqlLimits.ts`.
  */
-const LIBRARIES_PER_STATEMENT = bindChunkSize(1);
 
 interface SongUpsertInput {
   id: string;
@@ -45,17 +46,6 @@ interface SongUpsertInput {
   mtimeMs: number;
   contentType: string | null;
   suffix: string;
-  /**
-   * The path-derived `album` / `artist` for this row, or `null` where the path says
-   * nothing.
-   *
-   * Passed in rather than derived here because the indexer is what knows `dirPath`, and
-   * a DAO that re-derived it would own a second copy of the convention. Nulls are
-   * bound as SQL NULL so `COALESCE` leaves the column alone — see `songSql.ts` for why
-   * filling a gap is safe and overwriting a tag is not.
-   */
-  derivedAlbum?: string | null;
-  derivedArtist?: string | null;
 }
 
 /**
@@ -73,6 +63,32 @@ interface SongUpsertInput {
  */
 
 class SongDAO extends BaseDAO {
+  /**
+   * The marker appended to a path-derived name, from the deployment's configuration.
+   *
+   * Injected because `backend-data` is layer 0 and the configuration layer sits above it,
+   * and held as a field because it is the same for the whole request: deriving a page
+   * against two markers would write a grouping split across both spellings, and half of
+   * each would be invisible to whichever predicate the operator is relying on.
+   *
+   * An empty marker is a supported value and not a fallback — it is what makes a derived
+   * `X` and a tagged `X` the same album. See `pathConvention.ts`.
+   */
+  constructor(database: D1Queryable, private readonly derivedMarker: string, subrequests: SubrequestMeter = UNMETERED_SUBREQUESTS) {
+    super(database, subrequests);
+  }
+
+  /**
+   * The count DAO, built from `this` so it holds the request scope's meter.
+   *
+   * Constructed on each call rather than cached because it is two tiny wrappers over a
+   * statement and a cache would be state this DAO has to keep correct — the shape the
+   * god-file split was meant to avoid.
+   */
+  private counts(): SongCountDAO {
+    return new SongCountDAO(this.database, this.subrequests);
+  }
+
   /**
    * The library's genres, with real counts.
    *
@@ -117,13 +133,16 @@ class SongDAO extends BaseDAO {
   public async upsertFileFacts(inputs: readonly SongUpsertInput[]): Promise<WriteBatchResult> {
     if (inputs.length === 0) return { changes: 0, written: 0, truncated: false };
     const timestamp = nowSeconds();
-    // Derived once per input rather than per bound parameter, and only when the caller
-    // did not supply it — so a caller that already knows the answer (the indexer does)
-    // and a caller that does not (a test, a future writer) cannot disagree about it.
+    // Derived once per input rather than per bound parameter. `upsertFileFacts` used to accept
+    // a caller-supplied `derivedAlbum`/`derivedArtist` and prefer it, on the reasoning that the
+    // indexer knows `dirPath`. **No caller ever supplied either** — the two fields were
+    // declared, documented and read by nothing, which is this repository's recorded shape of a
+    // defect that looks identical from outside. Worse, they were a *second* path to the same
+    // answer: a caller that had passed one would have disagreed with `deriveFromPath` about a
+    // naming convention, silently, on a column the aggregates group by. One implementation,
+    // called from here. See `pathConvention.ts`.
     const statements = inputs.map((input) => {
-      const derived = deriveFromPath(input.dirPath);
-      const album = input.derivedAlbum ?? derived.album;
-      const artist = input.derivedArtist ?? derived.artist;
+      const { artist, album } = deriveFromPath(input.dirPath, this.derivedMarker);
       return this.database
         .prepare(UPSERT_FILE_FACTS)
         .bind(
@@ -208,46 +227,21 @@ class SongDAO extends BaseDAO {
     return await new SongIdLookupDAO(this.database, this.subrequests).listIdsAcrossLibraries(ids);
   }
 
+  /**
+   * Delegates to {@link SongCountDAO}, built from `this` so it inherits the request scope's
+   * meter — a DAO that constructs another DAO must pass the counter down, or the inner one
+   * spends a budget nothing is watching.
+   */
   public async countByLibrary(libraryId: string): Promise<number> {
-    const row = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT COUNT(*) AS cnt FROM songs WHERE library_id = ?')
-          .bind(libraryId)
-          .first<CountRow>(),
-      'songs.countByLibrary',
-    );
-    return row?.cnt ?? 0;
+    return await this.counts().countByLibrary(libraryId);
   }
 
   /**
-   * Track counts for many libraries in one statement, keyed by library id.
-   *
-   * One grouped read rather than one `countByLibrary` per library. The operator list needs a
-   * count for every library it renders, and `MAX_LIBRARIES` defaults to 10 — so the
-   * per-library form is an N+1 on the page an operator loads and then polls, and it spends a
-   * D1 query (a subrequest) each time. `idx_songs_library_path` has `library_id` leading, so
-   * the grouping is an index walk.
-   *
-   * A library with no tracks is **absent from the map**, not present with a zero. The caller
-   * distinguishes "no tracks indexed" from "this library has no scan state" by combining the
-   * two maps, and a defaulted `0` here would erase that difference.
+   * Delegates to {@link SongCountDAO}. A library with no tracks is absent from the map rather
+   * than present with a zero — see that method for why the difference carries meaning.
    */
   public async countByLibraries(libraryIds: readonly string[]): Promise<Map<string, number>> {
-    const counts = new Map<string, number>();
-    for (const chunk of chunkArray(libraryIds, LIBRARIES_PER_STATEMENT)) {
-      const placeholders = chunk.map(() => '?').join(', ');
-      const result = await this.withRetry(
-        async () =>
-          await this.database
-            .prepare(`SELECT library_id, COUNT(*) AS cnt FROM songs WHERE library_id IN (${placeholders}) GROUP BY library_id`)
-            .bind(...chunk)
-            .all<{ library_id: string; cnt: number }>(),
-        'songs.countByLibraries',
-      );
-      for (const row of result.results ?? []) counts.set(row.library_id, row.cnt);
-    }
-    return counts;
+    return await this.counts().countByLibraries(libraryIds);
   }
 
   /**

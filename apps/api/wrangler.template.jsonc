@@ -168,6 +168,22 @@
     // by name at boot rather than silently replaced — see docs/issues/album-identity.md.
     "ALBUM_GROUP_BY": "album",
 
+    // Appended to an artist or album name this server derived from a file's PATH rather
+    // than from its tags. Empty by default, and empty is a decision: it makes a derived
+    // `X` and a tagged `X` the SAME album, so a half-enriched library shows one release
+    // instead of two spellings of it — and stops a search for "derived" returning the
+    // whole library.
+    //
+    // Set it to " (derived)" to keep the guess visible at the cost of publishing one
+    // release twice until every track has been tag-read. "%" and "_" are ordinary
+    // characters here, not wildcards.
+    //
+    // Changing this re-derives every wholly-derived row, which changes the album grouping
+    // key and therefore every album id — so stars and ratings on those albums are lost.
+    // "Wholly derived" is recorded per row in songs.grouping_source, not inferred from
+    // this string; see migrations/0006_songs_grouping_source.sql.
+    "DERIVED_MARKER": "",
+
     // Tag enrichment reads at most this many bytes from the front of a file. A prefix
     // read, never a whole file: a 4 GiB track must not be pulled through the Worker to
     // learn its length.

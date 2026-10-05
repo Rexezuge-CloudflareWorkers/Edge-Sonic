@@ -113,13 +113,41 @@ function albumModel(songs: readonly SongRow[], library: LibraryRow, identity: Al
     ...(artist.drillable && { artistId: encodeId(IdKind.Artist, library.id, artist.name) }),
     songCount: songs.length,
     duration: songs.reduce((total, song) => total + song.duration, 0),
-    year: first.year ?? undefined,
-    genre: first.genre ?? undefined,
+    // **The first row that has one, not `songs[0]`.** `year` and `genre` are the two columns
+    // `pathConvention` deliberately never derives, so a row the scan has not range-read holds
+    // NULL for both. That was invisible while a derived `X (derived)` and a tagged `X` were
+    // two albums — the tagged half published a year and the derived half published none, and
+    // nobody compared them. With `DERIVED_MARKER` empty they are one album, the group's first
+    // track is often the unenriched one, and `first.year` reports no year for a release every
+    // other track has one for. So the merge introduced the bug and this is its fix.
+    //
+    // Deterministic rather than merely better: `songs` arrives in `compareAlbumTracks` order, so
+    // the answer is a function of the album rather than of which row the statement returned
+    // first. A disagreement between `getAlbum` and `getAlbumList2` about `year` is the
+    // "the same album, built once" invariant arriving through the sort rather than the literal.
+    year: firstWith(songs, (song) => song.year) ?? undefined,
+    genre: firstWith(songs, (song) => song.genre) ?? undefined,
     coverArt: id,
     created: toIso(first.created_at),
     ...(starredAt !== undefined && { starred: toIso(first.mtime_ms) }),
     ...(rating !== undefined && { userRating: rating }),
   };
+}
+
+/**
+ * The first track carrying a value a derivation never supplies.
+ *
+ * `null` and `undefined` both count as absent, because the columns are nullable and a DAO
+ * projecting them over a partial row can hand back either. The predicate runs on the value and
+ * not on a column name, so adding a third such column is one argument here rather than a fourth
+ * `find` — and the album-level fields it feeds are read together on purpose.
+ */
+function firstWith<T>(songs: readonly SongRow[], read: (song: SongRow) => T | null): T | undefined {
+  for (const song of songs) {
+    const value = read(song);
+    if (value !== null && value !== undefined) return value;
+  }
+  return undefined;
 }
 
 /**

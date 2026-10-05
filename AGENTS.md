@@ -703,15 +703,50 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     `idle`, and `idle` returns from `step` without touching the walk — so a backfill
     placed after the status check never runs for precisely the libraries that need it.
   - **The selection is on `derived_version`, not on NULL**, and the write is a `CASE` on
-    `DERIVED_MARKER`: replace a value that is itself a guess, fill a NULL, leave a real
-    tag. `NULL` alone cannot express a *corrected* convention — this is the
-    `reader_version` invariant one layer down, and a plain `COALESCE` would re-select the
-    row and then decline to change it, which is a version column that buys nothing. It is
-    also why the marker sits on the **album** as well as the artist: artist-marked and
-    album-bare means a version bump can correct a wrong artist and never a wrong album.
-  - **It never stamps `enriched_at`.** `EnrichmentService` short-circuits on that, so
-    claiming a row was read means a track with `duration: 0` is never range-read on first
-    play — a backfill that repairs the grouping by breaking enrichment.
+    `songs.grouping_source`: replace a value a derivation is recorded as owning, fill a
+    NULL, leave a real tag. `NULL` alone cannot express a *corrected* convention — this
+    is the `reader_version` invariant one layer down, and a plain `COALESCE` would
+    re-select the row and then decline to change it, which is a version column that buys
+    nothing. **It never stamps `enriched_at`**, so `EnrichmentService` does not read the
+    claim as "these bytes were read": a backfill that repairs the grouping by breaking
+    enrichment is the opposite of a repair.
+- **Provenance is a column, because the marker became configuration and a `LIKE` is not a
+  string.** The guard above used to be `col LIKE '%' || DERIVED_MARKER` — reading the
+  suffix back out of the stored value — and `DERIVED_MARKER` is now an env var, because an
+  operator asked for one. Empty is its **default**, and that is the point rather than an
+  absence: an empty marker is what makes a derived `X` and a tagged `X` **one** album
+  instead of two spellings of one release, which is also the only reason a search for the
+  album's real name could find a track the scan has not tag-read. Two failures follow from
+  the string guard, both measured over real SQLite against the real statement before the
+  column was added:
+  | `DERIVED_MARKER` | `Bonobo (derived)` | `Bonobo` | `Black Sands (Remastered)` |
+  | --- | --- | --- | --- |
+  | `' (derived)'`   | replaced | kept | **kept** |
+  | `''`             | replaced | replaced | **→ replaced** |
+  | `'_ (guess)'`    | **kept** | kept | kept |
+  - **An empty marker is a match-all**, so the shipped default would have replaced every
+    real `ALBUMARTIST` in the library — silently, on every poll, and past the first page.
+  - **Any other marker is a `LIKE` pattern, not a literal.** `'_ (guess)'` is `'%_ (guess)'`,
+    where `_` matches one character, so the guard stopped recognising its **own** guesses: a
+    version bump re-selected those rows and declined to change them. The `reader_version`
+    defect verbatim, one layer down, with no error anywhere. `%` as a marker is the empty
+    case again.
+  - So `songs.grouping_source` holds `'derived'`, meaning **all three** of
+    `artist`/`album`/`album_artist` came from `dir_path`. "All three" is the conservative
+    direction: the permissive one lets a convention correction overwrite a real tag, and the
+    price is only that a partially-tagged row's derived `album_artist` is never corrected
+    again — which no change of separator rule would affect. `applyMetadata` **clears** it
+    whenever it writes any of the three, and that is the writer whose absence is a data-loss
+    defect rather than a stale one. Three assertions, one per input, in
+    `test/schema.int.test.ts`; all three go red against the `LIKE` guard, and the `%`/`_` case
+    carries a *stale* marked value rather than a NULL for the reason above — seeded as a NULL
+    it is filled by `col IS NULL` whatever the pattern is, so it passes against the defect it
+    exists to catch.
+  - **Changing the marker is a migration, and it costs stars.** It re-derives every wholly
+    derived row, so `_ci` moves, the album grouping key moves, and `alk:` album ids move with
+    it. Accepted rather than papered over with a fallback lookup, and stated in
+    `migrations/0006_songs_grouping_source.sql` beside the `' (derived)'` literal that is now
+    the only place it is written down.
 - **An Ogg page is not a packet, and a granule is only a duration on the last page.**
   Packets are delimited by the **segment table** — a packet ends where a lacing entry is
   below 255, and one page may carry several. `libavformat` writes an Opus identification

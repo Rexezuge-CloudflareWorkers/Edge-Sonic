@@ -54,6 +54,23 @@ export const TEST_KEY = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=';
 export const ORIGIN = 'https://edge-sonic.test';
 export const LIBRARY_ID = 'L1';
 export const ALBUM_DIR = 'Bon Iver/For Emma';
+
+/**
+ * The marker the DAO-level suites configure.
+ *
+ * **Deliberately not the deployment default.** The product default is `''` — see
+ * `ConfigurationDefaults` — and a fixture that adopted it would stop asserting
+ * `Black Sands (derived)` and with it the whole "a guess and a tag are two releases"
+ * branch that a non-default deployment runs. The empty marker has its own paired tests in
+ * `test/schema.int.test.ts`, and they are the ones that would fail against a guard built on
+ * the string.
+ */
+export const DERIVED_MARKER = ' (derived)';
+
+/**
+ * The configured default, as a named constant so a test asserting it says so.
+ */
+export const EMPTY_DERIVED_MARKER = '';
 export const PASSWORD = 'sesame';
 export const SALT = 'c19b2d';
 export const USERNAME = 'ann';
@@ -194,7 +211,7 @@ export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeK
     { libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/cover.jpg`, parentPath: ALBUM_DIR, name: 'cover.jpg', mtimeMs: 1000, etag: '"e"', depth: 3, isScanned: true },
   ]);
 
-  const songs = new SongDAO(db.db);
+  const songs = new SongDAO(db.db, DERIVED_MARKER);
   await songs.upsertFileFacts([
     { id: ids.skinnyLove, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/01.flac`, dirPath: ALBUM_DIR, name: '01.flac', size: 4096, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
     { id: ids.holocene, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/02.flac`, dirPath: ALBUM_DIR, name: '02.flac', size: 8192, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },

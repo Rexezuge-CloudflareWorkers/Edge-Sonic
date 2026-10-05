@@ -42,14 +42,28 @@
  *   named after the performer. So this mode fixes a properly tagged compilation and nothing else.
  *   `test/schema.int.test.ts` holds one fixture for each.
  *
- * ### `X` and `X (derived)` are deliberately different albums
+ * ### `X` and `X (derived)`, and whether they are one album
  *
- * A row the scan has not range-read carries the path-derived name with `DERIVED_MARKER` appended,
- * and a row that has carries the real tag. Those are **not** merged: an unmerged pair shows one
+ * A row the scan has not range-read carries the path-derived name with `DERIVED_MARKER`
+ * appended, and a row that has carries the real tag. Whether those are **one** release or two
+ * is `DERIVED_MARKER`'s configured answer, and the default is empty — so they are one, and a
+ * half-enriched library shows a release once rather than twice. It is a setting for the same
+ * reason `ALBUM_GROUP_BY` is: the two facts can be told apart by the operator and not by the
+ * protocol.
+ *
+ * With a non-empty marker they are deliberately **not** merged. An unmerged pair shows one
  * release twice on a partially-enriched library, while merging them means the marker — the only
- * record that a name is a guess — decides nothing, and a guess published as a release name is the
- * failure `pathConvention` exists to keep visible. `ALBUM_GROUP_BY` does not change this, and no
- * stripping helper is exported, so the next reader does not "fix" it into a second grouping.
+ * visible record that a name is a guess — decides nothing, and a guess published as a release
+ * name is the failure `pathConvention` exists to keep visible. So the two are not "merged by
+ * default" either: the default merges them because an empty marker means the operator declined to
+ * mark them, and a marked deployment gets the honest duplicate. `ALBUM_GROUP_BY` does not change
+ * this, and no stripping helper is exported, so the next reader does not "fix" it into a second
+ * grouping.
+ *
+ * The provenance that decided the marker no longer travels in the name — a configured string read
+ * back with `LIKE` is either a match-all or a wildcard, so it lives in `songs.grouping_source`
+ * instead. Nothing here reads that column, and nothing needs to: the grouping key is the stored
+ * value either way.
  *
  * ### Why the key is a function and not a column
  *

@@ -60,6 +60,7 @@ import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { sqliteQueryable, execScript } from './helpers/sqlite';
 import { SongDerivationDAO } from '@edge-sonic/backend-data/dao';
+import { DERIVED_MARKER } from './helpers/harness';
 import type { DerivationWrite } from '@edge-sonic/backend-data/dao';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -311,7 +312,7 @@ describe('a D1 statement is a subrequest', () => {
     // different error.
     const handle = seeded();
     const meter = new SubrequestCounter(4);
-    const dao = new SongDerivationDAO(handle.db, meter);
+    const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER, meter);
     const writes: DerivationWrite[] = Array.from({ length: 10 }, (_, index) => ({ id: `s${index}`, album: `Album ${index}`, artist: null }));
 
     await expect(dao.applyDerivation(writes)).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
@@ -326,7 +327,7 @@ describe('a D1 statement is a subrequest', () => {
     // would leave a future change to either indistinguishable from a fix.
     const handle = seeded();
     const meter = new SubrequestCounter(4);
-    const songs = new SongDAO(handle.db, meter);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER, meter);
     const inputs = Array.from({ length: 10 }, (_, index) => ({
       id: `s${index}`,
       libraryId: 'L1',
@@ -446,7 +447,7 @@ describe('a read whose size the caller chose is clamped, and one it did not is r
     // deliberately shortened, which has shipped here before from a different cause.
     const handle = libraryWithArtists(1);
     const meter = new SubrequestCounter(2);
-    const songs = new SongDAO(handle.db, meter);
+    const songs = new SongDAO(handle.db, DERIVED_MARKER, meter);
 
     // Asserted on the **type**, not the message: a message match would keep passing if the
     // error were reworded, and the thing that matters is that this is the budget error and not

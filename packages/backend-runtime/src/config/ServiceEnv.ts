@@ -45,6 +45,13 @@ interface ServiceEnv {
    * and no answer is right for both layouts. `@edge-sonic/subsonic` owns the vocabulary.
    */
   ALBUM_GROUP_BY?: string;
+  /**
+   * Appended to a path-derived artist or album name. Empty by default, which is what makes a
+   * derived `X` and a tagged `X` the same album rather than two. It reaches `songs.artist`,
+   * `songs.album` and their `_ci` twins, so it is not presentational in the sense of being
+   * free: changing it re-derives every wholly-derived row. See `ConfigurationDefaults`.
+   */
+  DERIVED_MARKER?: string;
   STREAM_RATE_LIMIT?: string;
   STREAM_TIMEOUT_MS?: string;
   AUTH_FAILURE_LIMIT?: string;

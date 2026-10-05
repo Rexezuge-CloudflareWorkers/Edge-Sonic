@@ -109,6 +109,16 @@ interface ScanStateStore {
  */
 interface ScanDerivationStore {
   listNeedingDerivation(libraryId: string, limit: number): Promise<readonly DerivableRow[]>;
+  /**
+   * Derive the names for a page, using the deployment's configured marker.
+   *
+   * Part of the store rather than a `map` at the call site, because the marker is
+   * configuration and a call site that derived the page itself would have to know it — and a
+   * static `deriveFor` on the DAO could only have read a module constant, which is the value
+   * the operator is no longer forced to take. Reading a page and deciding on that same page
+   * is one step; a caller that did half of it would stamp rows it derived nothing for.
+   */
+  deriveFor(rows: readonly DerivableRow[]): Promise<readonly DerivationWrite[]>;
   applyDerivation(writes: readonly DerivationWrite[]): Promise<number>;
 }
 

@@ -102,11 +102,16 @@ function createRequestScope(env: RequestScopeEnv): Container {
   // in `test/subrequest-budget.test.ts` rather than trusted: an unmetered DAO is a path that
   // spends nothing because nothing was watching it, and it fails by being invisible.
   const db = env.DB as D1Queryable;
+  // The derived-name marker is read once here and passed to both DAOs that write a grouping.
+  // It cannot be a module constant in either: `backend-data` is a lower layer and cannot
+  // import the configuration, and a DAO reading it per call would let one page be derived
+  // against two markers if a test drove two configurations in one isolate.
+  const derivedMarker = config.getDerivedMarker();
   scope.bindValue(Tokens.UserDAO, async () => new UserDAO(db, subrequests));
   scope.bindValue(Tokens.LibraryDAO, async () => new LibraryDAO(db, subrequests));
   scope.bindValue(Tokens.NodeDAO, async () => new NodeDAO(db, subrequests));
-  scope.bindValue(Tokens.SongDAO, async () => new SongDAO(db, subrequests));
-  scope.bindValue(Tokens.SongDerivationDAO, async () => new SongDerivationDAO(db, subrequests));
+  scope.bindValue(Tokens.SongDAO, async () => new SongDAO(db, derivedMarker, subrequests));
+  scope.bindValue(Tokens.SongDerivationDAO, async () => new SongDerivationDAO(db, derivedMarker, subrequests));
   scope.bindValue(Tokens.SongIndexDAO, async () => new SongIndexDAO(db, subrequests));
   scope.bindValue(Tokens.PlaylistDAO, async () => new PlaylistDAO(db, subrequests));
   scope.bindValue(Tokens.AnnotationDAO, async () => new AnnotationDAO(db, subrequests));
@@ -208,6 +213,10 @@ function createRequestScope(env: RequestScopeEnv): Container {
       // fires before `listFrontier` and stops the walk running at all. See `deriveBackfill`.
       derivation: {
         listNeedingDerivation: async (libraryId, limit) => (await scope.get(Tokens.SongDerivationDAO)()).listNeedingDerivation(libraryId, limit),
+        // An instance method rather than a static one, so the configured marker is used. A
+        // static `deriveFor` could only have read a module constant, which is the value the
+        // operator is explicitly no longer forced to take.
+        deriveFor: async (rows) => (await scope.get(Tokens.SongDerivationDAO)()).deriveFor(rows),
         applyDerivation: async (writes) => (await scope.get(Tokens.SongDerivationDAO)()).applyDerivation(writes),
       },
       subrequests,

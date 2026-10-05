@@ -39,6 +39,35 @@ export const DEFAULT_MAX_LIBRARIES = '10';
 export const DEFAULT_ALBUM_GROUP_BY = 'album';
 
 /**
+ * Appended to a path-derived artist or album name.
+ *
+ * ### Empty, and that is a decision rather than an absence
+ *
+ * An empty marker is what makes a derived `X` and a tagged `X` **the same album**. The
+ * suffix made them two releases differing only in a suffix, so a partially-enriched library
+ * published one release twice — and the `_ci` twin carried it too, which meant `search3`
+ * matched the whole library on `derived` while *not* matching the unenriched row on its real
+ * name. Merging them is the better answer for the client and the worse one for provenance:
+ * a guess and a release become indistinguishable in the name, which is why the record of
+ * *which* one a row holds moved to `songs.grouping_source` rather than staying in the string.
+ *
+ * `' (derived)'` remains available and remains the honest choice for a library whose
+ * unenriched rows are browsed directly, where seeing that a name is a guess is worth a
+ * duplicated entry.
+ *
+ * It was the constant `' (derived)'`, unconditionally, and the reason it could not simply
+ * become a variable is measured in `pathConvention.ts`: the backfill's guard read the marker
+ * back out of the stored value with `LIKE`, so an empty marker matched every row — including
+ * every real `ALBUMARTIST` in the library — and an operator-chosen marker containing `_` or
+ * `%` matched nothing, or everything.
+ *
+ * Not trimmed. A marker is a literal string that ends up in `_ci` and in an album id, and
+ * trimming it would be a second, invisible answer to "what did the operator write"; the
+ * control-character and length rules live in `AppConfiguration.validate()`.
+ */
+export const DEFAULT_DERIVED_MARKER = '';
+
+/**
 Per-WebDAV-request timeout.
 */
 export const DEFAULT_WEBDAV_TIMEOUT_MS = '10000';

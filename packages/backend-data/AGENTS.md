@@ -20,6 +20,9 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 | `dao/UserStateDAO.ts` | per-user state: playlists, stars, ratings, bookmarks, play queue, now playing, throttle |
 | `dao/identity.ts` | `UserDAO` and `LibraryDAO` — the two rows with a credential                   |
 | `dao/songSql.ts` | the `songs` upsert statement                                                  |
+| `dao/pathConvention.ts` | the `Artist/Album` and `Artist - Album` naming rules, and `DERIVED_VERSION` |
+| `dao/groupingSource.ts` | whether a row's grouping came from the path or from a tag, and the marker measurements |
+| `dao/songCounts.ts` | how many tracks a library holds — a count is not a row                       |
 | `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
 | `dao/songIdLookup.ts` | `IN (...)` id lookups, scoped to one library and across all of them    |
 | `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
@@ -29,6 +32,15 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 `SongDAO` owns one row; `SongIndexDAO` pages over a **group**, which means it runs two
 statements — see the aggregation rule below. Keeping them apart is what makes the
 page-then-fetch pattern readable in one place instead of duplicated five times.
+
+**Layer 0, so the marker is a parameter and not an import.** `backend-data` depends only on
+`shared`, `backend-errors` and `subsonic`, and the configuration layer sits *above* it. So
+`deriveFromPath(dirPath, marker)` takes the marker, `SongDAO` and `SongDerivationDAO` take it
+by constructor, and `requestScope.ts` reads `config.getDerivedMarker()` once and passes it to
+both — the same reason `ALBUM_GROUP_BY` is carried per request. `SongDerivationDAO.deriveFor`
+is an **instance** method for the same reason it cannot be `static`: a static one could only
+have read a module constant, which is precisely the value the operator is no longer forced to
+take.
 
 ### Two readings of "the songs with these ids"
 
@@ -182,11 +194,34 @@ a silent data loss rather than a filter.
   - **The selection is on a version because `NULL` cannot express a corrected
     convention.** With the stamp, bumping `DERIVED_VERSION` re-derives everything, which
     is the `reader_version` invariant one layer down. The write is a `CASE` keyed on
-    `DERIVED_MARKER` — replace a value that is itself a guess, fill a NULL, leave a real
-    tag — because a plain `COALESCE` there would re-select the row and then decline to
-    change it, which is a version column that buys nothing. That is also why the marker is
-    on the **album** as well as the artist: with the artist marked and the album bare, a
-    version bump could correct a wrong artist and never a wrong album.
+    **`songs.grouping_source`** — replace a value a derivation is recorded as owning,
+    fill a NULL, leave a real tag — because a plain `COALESCE` there would re-select the
+    row and then decline to change it, which is a version column that buys nothing.
+  - **The guard is a column, not the marker on the value, and that is load-bearing.**
+    The guard used to be `col LIKE '%' || DERIVED_MARKER`, reading the suffix back out of
+    the stored string. The marker is now `DERIVED_MARKER` configuration — and empty is its
+    default, because an empty marker is what makes a derived `X` and a tagged `X` one
+    album rather than two. Two failures follow from the old guard, both measured over real
+    SQLite against the real statement: `'%' || ''` is `'%'`, which matches **every**
+    non-NULL value, so the default overwrote every real `ALBUMARTIST` in the library
+    silently on every poll; and any other marker is a `LIKE` **pattern**, so `_ (guess)`
+    matches nothing and the backfill stopped recognising its own guesses — a version bump
+    re-selecting rows and declining to change them, with no error anywhere. So
+    `songs.grouping_source` holds `'derived'` and provenance moved off the string, which
+    also makes an operator-chosen `%` or `_` an ordinary character.
+    `'derived'` means **all three** of `artist`/`album`/`album_artist` came from the path;
+    anything else means a tag supplied at least one. "All three" is the conservative
+    direction — the permissive one lets a convention correction overwrite a real tag, and
+    the cost is only that a partially-tagged row's derived `album_artist` is never
+    corrected, which no change of separator rule would affect anyway. Asserted in both
+    directions in `test/schema.int.test.ts`.
+  - **Three writers maintain that column and all three are required.** `UPSERT_FILE_FACTS`
+    stamps `'derived'` on the `INSERT` and **preserves** it on conflict (absent from the
+    `SET` list); `APPLY_DERIVATION` restates it in the same statement as the values;
+    `applyMetadata` **clears** it whenever it writes any of the three. The last is the one
+    that is easy to miss and the one whose absence is a data-loss defect: a tag write that
+    left the flag standing would leave the row looking like a guess, and the next bump
+    would replace a real `ALBUMARTIST` with a folder name.
   - **It never stamps `enriched_at`.** `EnrichmentService` short-circuits on it, so
     claiming a row was read would mean a track with `duration: 0` is never range-read on
     first play — a backfill that repairs the grouping by breaking enrichment.

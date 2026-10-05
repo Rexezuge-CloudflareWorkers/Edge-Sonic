@@ -61,6 +61,7 @@ import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { DERIVED_VERSION, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
+import { DERIVED_MARKER } from './helpers/harness';
 import type { DavEntry, FakeDav } from './helpers/fakeDav';
 
 const LIBRARY_ID = 'L1';
@@ -327,7 +328,7 @@ function createIndex(options: IndexOptions = {}) {
           const result = await charge(() => {
           for (const input of inputs.slice(0, written)) {
             const dirPath = input.path.split('/').slice(0, -1).join('/');
-            const derived = deriveFromPath(dirPath);
+            const derived = deriveFromPath(dirPath, DERIVED_MARKER);
             songs.set(input.id, {
               id: input.id,
               library_id: LIBRARY_ID,
@@ -942,6 +943,9 @@ describe('the backfill and the walk share one chunk budget', () => {
         listNeedingDerivation: async (_libraryId: string, limit: number) => {
           meter.charge(1, 'd1');
           return Array.from({ length: Math.min(limit, state.remaining) }, (_, index) => ({ id: `s${index}`, dir_path: 'Blur/Holocene' }));
+        },
+        async deriveFor(rows: readonly { id: string; dir_path: string }[]) {
+          return rows.map((row) => ({ id: row.id, ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
         },
         applyDerivation: async (writes: readonly { id: string }[]) => {
           if (!meter.canAfford(writes.length)) {
