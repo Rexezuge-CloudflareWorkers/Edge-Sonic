@@ -6,7 +6,7 @@ permissions:
 on:
   repository_dispatch:
     types:
-      - Upstream Sync
+      - Upstream Sync Integration
   pull_request:
   push:
     branches:
@@ -18,8 +18,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
-    name: Checks
+  # Typecheck and lint are separate jobs rather than one job running both, so a
+  # failure names the tool that broke and a retry re-runs only that half. They
+  # share nothing: `noEmit` everywhere, no project references, and ESLint builds
+  # its own TS program via `projectService`, so neither consumes the other's
+  # output.
+  typecheck:
+    name: Typecheck
     runs-on: ubuntu-latest
 
     steps:
@@ -29,43 +34,112 @@ jobs:
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
-      - name: Run Type Check and Lint
-        run: pnpm -r typecheck && pnpm run lint
+      # `pnpm -r typecheck` reaches every workspace package, `test/` among them, and
+      # the two `typecheck:*` scripts reach the two directories that are not workspace
+      # packages: `scripts/` and `functions/`. The second of those is a Cloudflare
+      # Pages entrypoint whose `service` binding is the one place the two wrangler
+      # templates are coupled, so a rename that missed the other was a deploy-time
+      # failure with no local signal at all.
+      - name: Run Typecheck
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run typecheck
+          max_attempts: '2'
 
-      - name: Check God-Files
-        run: node scripts/check-god-files.mjs
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
 
-      # The last two steps of `pnpm run checks`, run here because each is a check that
-      # fails on a merge rather than on a developer's machine.
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Run Lint
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run lint
+          max_attempts: '2'
+
+  migrations:
+    name: Migration Lock
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      # Its own job rather than a step in `typecheck` or `lint`, so a failure
+      # names migrations instead of arriving inside a typecheck or lint log.
+      # Editing an already-applied migration is invisible to every other check:
+      # the deploy succeeds, fresh databases pick up the edited statements, and
+      # production keeps the schema it had.
       #
-      # **`validate:locales` compares every `t()` call site against the bundle**, which is
-      # the check that catches a key added to a component and forgotten everywhere else. It
-      # is not a no-op: with one shipped language the bundle-to-bundle comparison is skipped
-      # entirely, so before it read the call sites it reported `ALL OK` while
-      # `libraries.scanPausedRequests` was used and absent.
-      - name: Validate Locales
-        run: pnpm run validate:locales
+      # Read-only by design. The thing that records a new migration is
+      # `pnpm run migrations:lock`, which is add-only for anything after the
+      # squashed baseline and will not adopt a new digest for a file that has
+      # already been applied — there is deliberately no `--force`, because a
+      # write that could bless a drift would be the operator blessing their own
+      # edit, and they are by definition the one making it.
+      - name: Verify Migration Lock
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run validate:migrations
+          max_attempts: '2'
 
-      # `verify-spa-shell` rejects a missing, stubbed or mismatched SPA shell, and the
-      # Worker serves the shell from the **last local build** — so a stale artifact is a
-      # deploy that serves yesterday's UI.
-      #
-      # The build is a **precondition**, not a convenience. Both `apps/web/dist/` and
-      # `apps/api/src/generated/` are gitignored, so a fresh checkout has neither, and
-      # `postinstall` runs `ensure-spa-shell-stub.mjs`, which writes a deliberately **empty**
-      # stub so `tsc` can resolve `SPA_HTML` before anyone has built. Verifying without
-      # building therefore cannot pass — it failed on the first run of this step, with
-      # precisely the message the check is designed to give.
-      #
-      # That ordering is the thing worth stating: a check whose subject is a generated
-      # artifact has to be preceded by the generation, or CI fails on a correct commit for
-      # the wrong reason. A developer running `pnpm run checks` locally has usually built
-      # already, which is why the mistake survived being written and reviewed.
-      - name: Build Web App
-        run: pnpm --filter @edge-sonic/web build
+  god-files:
+    name: God Files
+    runs-on: ubuntu-latest
 
-      - name: Verify The SPA Shell
-        run: node scripts/verify-spa-shell.mjs
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      # Its own job, like `migrations` and `locales`: a file growing past the
+      # limit is invisible to typecheck, lint, and the tests — they all pass
+      # perfectly well on a 500-line component. A separate job so the failure says
+      # "god-file" rather than arriving inside a lint log.
+      - name: Check God Files
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run check:god-files
+          max_attempts: '2'
+
+  locales:
+    name: Locales
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      # A locale defect is invisible to the unit tests: the catalogs are data, and
+      # a key that is missing from every bundle still typechecks and still builds.
+      # Its own job so a failure says "locales" rather than arriving inside a
+      # typecheck log.
+      #
+      # It also compares each inline `t('key', 'default')` against the bundle's value,
+      # which is the check that catches a key added to a component and forgotten
+      # everywhere else. It is not a no-op: with one shipped language the
+      # bundle-to-bundle comparison is skipped entirely, so before it read the call
+      # sites it reported `ALL OK` while `libraries.scanPausedRequests` was used and
+      # absent.
+      - name: Validate Locale Bundles
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run validate:locales
+          max_attempts: '2'
 
   unit-tests:
     name: Unit Tests
@@ -79,7 +153,18 @@ jobs:
         uses: ./.github/actions/setup-env
 
       - name: Run Tests with Coverage
-        run: pnpm run test:coverage
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run test:coverage
+          max_attempts: '2'
+
+      - name: Upload Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
   integration-tests:
     name: Integration Tests
@@ -93,10 +178,16 @@ jobs:
         uses: ./.github/actions/setup-env
 
       - name: Run Integration Tests
-        run: pnpm run test:integration
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run test:integration
+          max_attempts: '2'
 
-  build:
-    name: Build
+  # Only the SPA build. The API worker is typechecked by the `typecheck` job
+  # (`pnpm run typecheck` reaches `apps/api`), so repeating it here ran the same
+  # `tsc --noEmit` against the same tsconfig a second time.
+  build-web:
+    name: Build Web App
     runs-on: ubuntu-latest
 
     steps:
@@ -109,14 +200,54 @@ jobs:
       - name: Build Web App
         run: pnpm --filter @edge-sonic/web build
 
+  # Verifies the shell the API worker *serves*, which is a different artifact from
+  # `apps/web/dist/` — it is embedded into `apps/api/src/generated/spa-shell.ts` by
+  # the Vite plugin, and both are gitignored. A stale-but-present shell is a deploy
+  # that serves yesterday's operator UI.
+  #
+  # Its own job, and it builds first rather than depending on `build-web`, so the
+  # failure says "the served shell is wrong" instead of arriving inside a build log.
+  # That costs a second Vite build per run; the alternative — verifying inside
+  # `build-web` — is free and is the trade being made here.
+  #
+  # The build is a **precondition**, not a convenience: a fresh checkout has neither
+  # `apps/web/dist/` nor `apps/api/src/generated/`, and `postinstall` writes a
+  # deliberately empty stub so `tsc` can resolve `SPA_HTML` before anyone has built.
+  # Verifying without building cannot pass, and fails with precisely the message the
+  # check exists to give.
+  spa-shell:
+    name: Verify SPA Shell
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build Web App
+        run: pnpm --filter @edge-sonic/web build
+
+      - name: Verify The SPA Shell
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run verify:spa-shell
+          max_attempts: '2'
+
   dependabot-auto-merge:
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' && github.event.pull_request.state == 'open' && !github.event.repository.fork }}
     name: Auto-Merge Dependabot PR
     needs:
-      - checks
+      - typecheck
+      - lint
+      - migrations
+      - god-files
+      - locales
       - unit-tests
       - integration-tests
-      - build
+      - build-web
+      - spa-shell
     permissions:
       contents: write
       pull-requests: write
@@ -139,10 +270,15 @@ jobs:
     if: ${{ github.event_name == 'repository_dispatch' && github.event.action == 'Upstream Sync' }}
     name: Dispatch Upstream Sync Deployment
     needs:
-      - checks
+      - typecheck
+      - lint
+      - migrations
+      - god-files
+      - locales
       - unit-tests
       - integration-tests
-      - build
+      - build-web
+      - spa-shell
     permissions:
       contents: write
     runs-on: ubuntu-latest

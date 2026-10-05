@@ -39,7 +39,9 @@
  */
 import { XML_NAMESPACE } from '../packages/subsonic/src/constants';
 
-/** The attributes every response carries, so they are never reported as a difference. */
+/**
+The attributes every response carries, so they are never reported as a difference.
+*/
 const ENVELOPE_KEYS = new Set(['status', 'version', 'type', 'serverVersion', 'openSubsonic']);
 
 interface Config {
@@ -86,14 +88,25 @@ function readConfig(): Config {
     return value;
   };
   return {
-    reference: { url: required('REFERENCE_URL').replace(/\/$/, ''), user: required('REFERENCE_USER'), password: required('REFERENCE_PASSWORD') },
+    reference: {
+      url: required('REFERENCE_URL').replace(/\/$/, ''),
+      user: required('REFERENCE_USER'),
+      password: required('REFERENCE_PASSWORD'),
+    },
     edge: { url: required('EDGE_URL').replace(/\/$/, ''), user: required('EDGE_USER'), password: required('EDGE_PASSWORD') },
     json: process.env.COMPARE_JSON !== '0',
   };
 }
 
 async function call(server: Config['reference'], endpoint: string, params: Record<string, string>, json: boolean): Promise<unknown> {
-  const query = new URLSearchParams({ u: server.user, p: server.password, v: '1.16.1', c: 'compare', ...(json ? { f: 'json' } : {}), ...params });
+  const query = new URLSearchParams({
+    u: server.user,
+    p: server.password,
+    v: '1.16.1',
+    c: 'compare',
+    ...(json && { f: 'json' }),
+    ...params,
+  });
   const response = await fetch(`${server.url}/rest/${endpoint}.view?${query}`);
   const text = await response.text();
   try {
@@ -138,13 +151,28 @@ function keyUnion(node: unknown, key: string, out = new Map<string, Set<string>>
   return out;
 }
 
+/**
+ * A string list in a stable order.
+ *
+ * Every comparison in this file is between two sets of identifiers, so the order only
+ * has to be *the same* on both sides — but it has to be the same on every machine,
+ * which the default `sort()` does not guarantee (it orders by UTF-16 code unit, and
+ * `localeCompare` orders by locale). One helper, so the comparator cannot be spelled
+ * two ways and one of the comparisons quietly uses a different order than the other.
+ */
+function sorted(values: Iterable<string>): string[] {
+  return [...values].toSorted((left, right) => left.localeCompare(right));
+}
+
 function describe(node: unknown): string {
   if (Array.isArray(node)) return `ARRAY(${node.length})`;
-  if (node && typeof node === 'object') return Object.keys(node).sort().join(',');
+  if (node && typeof node === 'object') return sorted(Object.keys(node)).join(',');
   return typeof node;
 }
 
-/** Every element name present, so a wrapper missing from one side is itself reported. */
+/**
+Every element name present, so a wrapper missing from one side is itself reported.
+*/
 function elementNames(node: unknown, out = new Set<string>()): Set<string> {
   if (Array.isArray(node)) {
     for (const item of node) elementNames(item, out);
@@ -152,10 +180,12 @@ function elementNames(node: unknown, out = new Set<string>()): Set<string> {
   }
   if (node && typeof node === 'object') {
     for (const [name, value] of Object.entries(node)) {
-      if (value && typeof value === 'object') {
-        out.add(name);
-        elementNames(value, out);
+      if (!(value && typeof value === 'object')) {
+        continue;
       }
+
+      out.add(name);
+      elementNames(value, out);
     }
   }
   return out;
@@ -190,8 +220,12 @@ async function compare(config: Config): Promise<Difference[]> {
     // this is the only place that difference is visible.
     const referenceKeys = new Set(Object.keys(referenceBody).filter((key) => !ENVELOPE_KEYS.has(key)));
     const edgeKeys = new Set(Object.keys(edgeBody).filter((key) => !ENVELOPE_KEYS.has(key)));
-    if (describe([...referenceKeys].sort()) !== describe([...edgeKeys].sort())) {
-      differences.push({ endpoint: label, what: 'wrapper keys', detail: `reference=[${[...referenceKeys]}] edge=[${[...edgeKeys]}]` });
+    if (describe(sorted(referenceKeys)) !== describe(sorted(edgeKeys))) {
+      differences.push({
+        endpoint: label,
+        what: 'wrapper keys',
+        detail: `reference=[${sorted(referenceKeys).join(',')}] edge=[${sorted(edgeKeys).join(',')}]`,
+      });
     }
 
     // Per-element attribute unions, which is where an undeclared field shows up.
@@ -199,20 +233,20 @@ async function compare(config: Config): Promise<Difference[]> {
       const a = keyUnion(referenceBody, element).get(element) ?? new Set<string>();
       const b = keyUnion(edgeBody, element).get(element) ?? new Set<string>();
       if (a.size === 0 && b.size === 0) continue;
-      const missing = [...a].filter((field) => !b.has(field)).sort();
-      const extra = [...b].filter((field) => !a.has(field)).sort();
+      const missing = sorted([...a].filter((field) => !b.has(field)));
+      const extra = sorted([...b].filter((field) => !a.has(field)));
       if (missing.length > 0) differences.push({ endpoint: label, what: `${element} MISSING`, detail: missing.join(',') });
       if (extra.length > 0) differences.push({ endpoint: label, what: `${element} EXTRA`, detail: extra.join(',') });
     }
 
-    const referenceNames = [...elementNames(referenceBody)].sort();
-    const edgeNames = [...elementNames(edgeBody)].sort();
-    if (describe(referenceNames) !== describe(edgeNames)) {
-      const onlyReference = referenceNames.filter((name) => !edgeNames.includes(name));
-      const onlyEdge = edgeNames.filter((name) => !referenceNames.includes(name));
-      if (onlyReference.length > 0) differences.push({ endpoint: label, what: 'elements MISSING', detail: onlyReference.join(',') });
-      if (onlyEdge.length > 0) differences.push({ endpoint: label, what: 'elements EXTRA', detail: onlyEdge.join(',') });
-    }
+    const referenceNames = sorted(elementNames(referenceBody));
+    const edgeNames = sorted(elementNames(edgeBody));
+    if (describe(referenceNames) === describe(edgeNames)) continue;
+
+    const onlyReference = referenceNames.filter((name) => !edgeNames.includes(name));
+    const onlyEdge = edgeNames.filter((name) => !referenceNames.includes(name));
+    if (onlyReference.length > 0) differences.push({ endpoint: label, what: 'elements MISSING', detail: onlyReference.join(',') });
+    if (onlyEdge.length > 0) differences.push({ endpoint: label, what: 'elements EXTRA', detail: onlyEdge.join(',') });
   }
 
   return differences;

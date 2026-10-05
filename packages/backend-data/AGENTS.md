@@ -252,12 +252,15 @@ a silent data loss rather than a filter.
   existed in the live database: `applyMetadata` and `UPSERT_FILE_FACTS` both named it,
   both failed, and a library of 80 albums served empty aggregates with `getSong` answering
   a masked 500 — through 489 green tests. A schema change is a **new numbered file**, and
-  `migrations/applied.lock.json` records the sha256 of everything applied so
+  `migrations/migrations.lock.json` records the sha256 of everything applied so
   `test/schema.int.test.ts` fails on an edit. The suite was blind because it applied one
   hardcoded file, which cannot distinguish a new migration from an edit to an old one; it
   now reads the directory sorted, which is also how it found `0001_router_init.sql`'s
   foreign key to `users(email)` — unresolvable against a nullable, non-unique column, so
-  `PRAGMA foreign_key_check` failed on the real schema. Dropped in `0003`.
+  `PRAGMA foreign_key_check` failed on the real schema. That file is now **absorbed**:
+  `migrations/0008_squash.sql` is the baseline, and it never creates `namespaces` or
+  `router_backends`, so the broken key is retired rather than carried by a `DROP`. The
+  squash is the schema below — 17 tables, plus every column the earlier `ALTER`s added.
 - **A row's enrichment is a function of the bytes *and* the reader, and both go in the
   key.** `mtime_ms` alone is correct for the bytes and blind to the reader, so a corrected
   reader reaches no row an earlier one wrote: the file genuinely has not moved, so the
@@ -331,11 +334,13 @@ a silent data loss rather than a filter.
 
 ## Schema
 
-One migration, `migrations/0001_edge_sonic_init.sql`, with 17 tables. `libraries` and
-`users` carry a `key_version` for credential rotation; `users` carries `token_epoch`,
-bumped on a password change, because a Subsonic token is valid forever and that is the
-only lever for revoking one. The header of the file records the free-tier arithmetic that
-sets the scan's chunk size.
+One migration, `migrations/0008_squash.sql`, with 17 tables — the squashed baseline every
+database is built from and every future migration stacks on. `libraries` and `users` carry
+a `key_version` for credential rotation; `users` carries `token_epoch`, bumped on a
+password change, because a Subsonic token is valid forever and that is the only lever for
+revoking one. The header of the file records what it absorbs and why it is idempotent —
+which is the property to read before editing it, because it also runs against databases
+that already have the full schema.
 
 ## Layer 2 (layer 0 only)
 

@@ -113,7 +113,7 @@ scan keeps pausing needs to know *which* resource ran out; the three have differ
 | every D1 write batch                  | `BaseDAO.runWriteBatch`                  | 1 per statement    |
 | every KV operation                    | `backend-runtime/kv/KvCache.guard`       | 1 per issued call  |
 | every WebDAV request                  | `WebDavClient` via the scope's `onRequest` | 1               |
-| a Durable Object stub                 | `apps/api/workers/scanStubs.ts`          | 1 per stub         |
+| a Durable Object stub                 | `apps/api/src/workers/scanStubs.ts`          | 1 per stub         |
 | a Secrets Store read                  | `backend-services/composition/serviceFactory.ts` | 1         |
 
 Pessimistic about a D1 `batch()`: **one subrequest per statement**, because the platform does not

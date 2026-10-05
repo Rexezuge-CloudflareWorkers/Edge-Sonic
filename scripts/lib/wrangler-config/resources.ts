@@ -1,10 +1,12 @@
-import { writeFileSync } from 'fs';
+import { writeFileSync } from 'node:fs';
 import { parse } from 'jsonc-parser';
+import { parseWranglerTableRows } from '../wrangler-table';
 import {
   CONFIG_PATH,
   DEFAULT_HEX_ID,
   DEFAULT_KV_NAMESPACE_NAMES,
   DEFAULT_SECRET_STORE_NAME,
+  DEFAULT_WORKER_NAME,
   DEFAULT_UUID,
   VECTORIZE_DIMENSIONS,
   type D1Database,
@@ -23,19 +25,36 @@ export function listD1Databases(): D1Database[] {
   return parseJsonArray<D1Database>(runWrangler(['d1', 'list', '--json']), 'wrangler d1 list --json');
 }
 
-export function ensureD1Database(databaseName: string): string {
+/**
+ * What `ensure*` did, so a caller can act on the difference.
+ *
+ * The backup workflow needs to know whether the D1 database **existed** or was created
+ * moments ago: a database that was just provisioned holds no user data, and uploading
+ * that empty dump is a false sense of safety. That used to be inferred by re-reading the
+ * placeholder id out of `wrangler.jsonc` — which is unreachable, because this very
+ * function patches the placeholder away before the reader ever runs. So the fact is
+ * returned here instead of re-derived from an artefact this call has already changed.
+ */
+export interface Provisioned {
+  id: string;
+  created: boolean;
+}
+
+export function ensureD1Database(databaseName: string): Provisioned {
   let database = listD1Databases().find((candidate) => candidate.name === databaseName);
+  let created = false;
   if (!database) {
     console.log(`Creating D1 database: ${databaseName}`);
     runWrangler(['d1', 'create', databaseName]);
     database = listD1Databases().find((candidate) => candidate.name === databaseName);
+    created = true;
   }
 
   const databaseId = database ? getD1Id(database) : undefined;
   if (!databaseId) {
     throw new Error(`Unable to discover D1 database ID for ${databaseName}.`);
   }
-  return databaseId;
+  return { id: databaseId, created };
 }
 
 export function listKVNamespaces(): KVNamespace[] {
@@ -43,26 +62,28 @@ export function listKVNamespaces(): KVNamespace[] {
 }
 
 export function getKVNamespaceName(config: WranglerConfig, binding: string): string {
-  return DEFAULT_KV_NAMESPACE_NAMES[binding] ?? `${config.name ?? 'edge-sonic'}-${binding.toLowerCase()}`;
+  return DEFAULT_KV_NAMESPACE_NAMES[binding] ?? `${config.name ?? DEFAULT_WORKER_NAME}-${binding.toLowerCase()}`;
 }
 
-export function ensureKVNamespace(config: WranglerConfig, binding: string): string {
+export function ensureKVNamespace(config: WranglerConfig, binding: string): Provisioned {
   const namespaceName = getKVNamespaceName(config, binding);
-  const candidateNames = new Set([namespaceName, `${config.name ?? 'edge-sonic'}-${binding}`, binding]);
+  const candidateNames = new Set([namespaceName, `${config.name ?? DEFAULT_WORKER_NAME}-${binding}`, binding]);
   let namespace = listKVNamespaces().find((candidate) => {
     const candidateName = candidate.title ?? candidate.name;
     return candidate.id && candidateName && candidateNames.has(candidateName);
   });
+  let created = false;
   if (!namespace) {
     console.log(`Creating KV namespace: ${namespaceName}`);
     runWrangler(['kv', 'namespace', 'create', namespaceName]);
     namespace = listKVNamespaces().find((candidate) => candidate.id && (candidate.title ?? candidate.name) === namespaceName);
+    created = true;
   }
 
   if (!namespace?.id) {
     throw new Error(`Unable to discover KV namespace ID for ${namespaceName}.`);
   }
-  return namespace.id;
+  return { id: namespace.id, created };
 }
 
 export function getRequiredKvBindings(): string[] {
@@ -86,21 +107,18 @@ export function ensureRequiredKvBindings(content: string, config: WranglerConfig
 
 export function parseSecretStoresTable(output: string): SecretStore[] {
   const stores: SecretStore[] = [];
-  for (const line of output.split('\n')) {
-    if (!line.includes('│')) {
-      continue;
-    }
-
-    const cells = line
-      .split('│')
-      .map((cell) => cell.trim())
-      .filter(Boolean);
-    if (cells.length < 2 || cells[0] === 'Name' || cells[0].includes('─')) {
-      continue;
-    }
-
-    const [name, id] = cells;
-    if (/^[a-f0-9]{32}$/i.test(id)) {
+  // Through the shared table parser rather than a second inline split: `wrangler`
+  // renders through `cli-table3`, whose cells are separated by U+2502 and are *not*
+  // space-aligned, so a parser written for aligned output silently matches nothing —
+  // which reads as "the store does not exist" and makes provisioning create a
+  // duplicate. `init-secrets.ts` needs the same parse, and two parsers would be free
+  // to disagree about it.
+  for (const row of parseWranglerTableRows(output)) {
+    const name = row[0];
+    const id = row[1];
+    // Store ids are 32 hex characters; a row without one is a header, a border, or an
+    // unrelated column, and is skipped rather than stored with an undefined id.
+    if (name && id && /^[a-f0-9]{32}$/i.test(id)) {
       stores.push({ name, id });
     }
   }
@@ -112,26 +130,28 @@ export function listSecretStores(): SecretStore[] {
   try {
     return parseJsonArray<SecretStore>(output, 'wrangler secrets-store store list --remote');
   } catch {
+    // The subcommand prints a table rather than JSON on some versions.
     return parseSecretStoresTable(output);
   }
 }
 
 export function ensureSecretStore(): string {
-  let stores = listSecretStores();
-  if (stores.length > 0) {
-    const store = stores.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? stores[0];
-    return store.id;
+  const stores = listSecretStores();
+  const existing = stores.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? stores[0];
+  if (existing) {
+    return existing.id;
   }
 
   console.log(`Creating Secrets Store: ${DEFAULT_SECRET_STORE_NAME}`);
   const output = runWrangler(['secrets-store', 'store', 'create', DEFAULT_SECRET_STORE_NAME, '--remote']);
-  const createdStoreId = output.match(/ID:\s*([a-f0-9]{32})/i)?.[1];
+  const createdStoreId = /ID:\s*([a-f0-9]{32})/i.exec(output)?.[1];
   if (createdStoreId) {
     return createdStoreId;
   }
 
-  stores = listSecretStores();
-  const store = stores.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? stores[0];
+  // The create output did not name the id, so read it back rather than guessing.
+  const refreshed = listSecretStores();
+  const store = refreshed.find((candidate) => candidate.name === DEFAULT_SECRET_STORE_NAME) ?? refreshed[0];
   if (!store?.id) {
     throw new Error(`Unable to discover Secrets Store ID for ${DEFAULT_SECRET_STORE_NAME}.`);
   }
@@ -158,7 +178,12 @@ export function ensureVectorizeIndex(indexName: string, dimensions: number): voi
   }
 }
 
-export function provisionWranglerResources(): void {
+export function provisionWranglerResources(): string[] {
+  // Every resource this call had to create, as `<kind>:<name>`. Returned rather than
+  // logged, because a caller acts on it: the backup workflow refuses to export a D1
+  // database that appears here, since one created moments ago holds no user data and an
+  // empty dump uploaded on schedule is a false sense of safety.
+  const created: string[] = [];
   let { content, config } = readConfig();
 
   // KV namespaces — inject required bindings missing from custom configs
@@ -175,9 +200,12 @@ export function provisionWranglerResources(): void {
       throw new Error(`D1 database binding ${database.binding ?? index} has a placeholder database_id but no database_name.`);
     }
 
-    const databaseId = ensureD1Database(database.database_name);
-    console.log(`Using D1 database ${database.database_name}: ${databaseId}`);
-    content = writeConfigValue(content, ['d1_databases', index, 'database_id'], databaseId);
+    const resolved = ensureD1Database(database.database_name);
+    if (resolved.created) {
+      created.push(`d1:${database.database_name}`);
+    }
+    console.log(`Using D1 database ${database.database_name}: ${resolved.id}`);
+    content = writeConfigValue(content, ['d1_databases', index, 'database_id'], resolved.id);
   }
 
   // KV namespaces — patch placeholder hex IDs with real IDs
@@ -190,9 +218,13 @@ export function provisionWranglerResources(): void {
       throw new Error(`KV namespace at index ${index} has a placeholder id but no binding.`);
     }
 
-    const namespaceId = ensureKVNamespace(config, namespace.binding);
-    console.log(`Using KV namespace ${getKVNamespaceName(config, namespace.binding)}: ${namespaceId}`);
-    content = writeConfigValue(content, ['kv_namespaces', index, 'id'], namespaceId);
+    const resolvedNamespace = ensureKVNamespace(config, namespace.binding);
+    const namespaceName = getKVNamespaceName(config, namespace.binding);
+    if (resolvedNamespace.created) {
+      created.push(`kv:${namespaceName}`);
+    }
+    console.log(`Using KV namespace ${namespaceName}: ${resolvedNamespace.id}`);
+    content = writeConfigValue(content, ['kv_namespaces', index, 'id'], resolvedNamespace.id);
   }
 
   // Secrets Store — patch placeholder hex IDs with real store ID
@@ -201,7 +233,11 @@ export function provisionWranglerResources(): void {
     .map((secret, index) => ({ secret, index }))
     .filter(({ secret }) => secret.store_id === DEFAULT_HEX_ID);
   if (secretStoreIndexes.length > 0) {
+    const existed = listSecretStores().some((store) => store.name === DEFAULT_SECRET_STORE_NAME);
     const storeId = ensureSecretStore();
+    if (!existed) {
+      created.push(`secrets-store:${DEFAULT_SECRET_STORE_NAME}`);
+    }
     console.log(`Using Secrets Store: ${storeId}`);
     for (const { index } of secretStoreIndexes) {
       content = writeConfigValue(content, ['secrets_store_secrets', index, 'store_id'], storeId);
@@ -227,4 +263,6 @@ export function provisionWranglerResources(): void {
   for (const binding of config.vectorize ?? []) {
     ensureVectorizeIndex(binding.index_name, VECTORIZE_DIMENSIONS);
   }
+
+  return created;
 }

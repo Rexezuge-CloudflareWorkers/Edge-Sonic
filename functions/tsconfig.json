@@ -1,0 +1,23 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    // No `types: ["node"]`: this is a Cloudflare Pages Function, so it needs the
+    // generated Workers types (`PagesFunction`, `Fetcher`, `Headers`), which
+    // `worker-configuration.d.ts` supplies at the repo root. That file is a global
+    // declaration file with no top-level import or export, so including it is all
+    // it takes.
+    "types": [],
+    // The Pages runtime is ES2022-compatible; the repo default already matches.
+    "lib": ["ES2022", "DOM"]
+  },
+  // `worker-configuration.d.ts` is the generated binding source of truth and is
+  // where `PagesFunction` and `Fetcher` come from — the same file `apps/api`
+  // includes.
+  //
+  // This directory was previously outside every tsconfig, so it was neither
+  // typechecked nor held to the lint rules. It is a deployed entrypoint: `apps/web`
+  // publishes it to Cloudflare Pages, and its `service` binding is the one place
+  // the two wrangler templates are coupled, so a rename in one that missed the
+  // other is a deploy-time failure with no local signal at all.
+  "include": ["**/*.ts", "../worker-configuration.d.ts"]
+}
