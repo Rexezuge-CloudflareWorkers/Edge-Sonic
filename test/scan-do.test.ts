@@ -441,8 +441,11 @@ describe('a spent D1 daily allowance', () => {
     await worker.startScan('L1');
 
     const before = harness.dav.propfinds.length;
-    // A budget already spent: the chunk must issue no request at all.
-    const paused = await worker.stepOnce('L1', () => ({ rowsWrittenToday: 5000, limit: 4000, now: Date.now }));
+    // A budget already spent: the chunk must issue no request at all. The figures are in
+    // **billed** rows, which is the unit the platform's allowance is in — `billedRowsWrittenToday`,
+    // not a row count. Deliberately not the shipped constants: this case is about the guard
+    // refusing, and reusing the real numbers would make it depend on a platform value.
+    const paused = await worker.stepOnce('L1', () => ({ billedRowsWrittenToday: 5000, limit: 4000, now: Date.now }));
 
     expect(paused.status).toBe('paused');
     expect(paused.lastError).toContain('4000-row share');

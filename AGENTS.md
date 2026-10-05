@@ -696,15 +696,47 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     operator reads as working. The stated exception to "D1 stays authoritative"; the frontier,
     every indexed row, the retry counter and the index version are all still D1's.
   - **The limit is reached by design, so the scan paces itself before the platform refuses.**
-    A correct chunk writes ~42 rows at ~1/second, so 5,000 rows/day is **two minutes of
-    scanning** — the runaway above was not the only way there, and a fix that only made the
-    outage survivable would leave it frequent. `SCAN_DAILY_ROW_WRITE_BUDGET` is the platform's
-    5,000 less a named reserve for non-scan writes, **divided by the number of registered
-    libraries** (the allowance is per *account*, so a per-library cap is unsound the moment a
-    second library exists, and `MAX_LIBRARIES` would give a one-library deployment a tenth of
-    what it could have had). Counted from the chunk's measured `rowsWritten`, held in DO storage
-    because **metering D1 writes must not itself spend D1 writes**, and persisted at most once
-    per 500 rows — which makes it a lower bound, absorbed by the reserve.
+    A correct chunk bills a few hundred rows at ~1/second, so the Free plan's 100,000-row day is
+    **a couple of hours** of scanning on a 5,000-track library — the runaway above was not the
+    only way there, and a fix that only made the outage survivable would leave it frequent.
+    `SCAN_DAILY_ROW_WRITE_BUDGET` is the platform's allowance less a **10%** reserve for
+    non-scan writes, **divided by the number of registered libraries** (the allowance is per
+    *account*, so a per-library cap is unsound the moment a second library exists, and
+    `MAX_LIBRARIES` would give a one-library deployment a tenth of what it could have had).
+    Counted in **billed** rows, held in DO storage because **metering D1 writes must not itself
+    spend D1 writes**, and persisted at most once per 500 rows — which makes it a lower bound,
+    absorbed by the reserve.
+  - **The metered unit is a billed row, and the multiplier is the schema.** D1 bills a write as
+    the row *plus every index entry it rewrote* (pricing page, definition 6), so `songs` is **ten**
+    per row — nine indexes, one of them the implicit `sqlite_autoindex` for `id TEXT PRIMARY KEY`,
+    which is why counting `CREATE INDEX` statements by eye undercounts every table in this schema by
+    one. The guard was counting table rows: `runWriteBatch` summed `meta.changes`, and
+    `EnrichmentService` declared `1` because `applyMetadata` returned `void`. So the budget believed
+    it had ten times its headroom on the dominant write path. Three rules:
+    - **Two fields, not one corrected one.** `rowsWritten` is progress and is what
+      `scan-convergence` measures; `billedRows` is cost and is what the daily budget is charged.
+      `ScanDailyBudget.rowsWrittenToday` became `billedRowsWrittenToday` — a field that does not
+      say which unit it is in cannot be compared against a limit without someone checking.
+    - **Derived from `sqlite_schema`, not typed beside a query.** `billedRows.ts` declares the
+      per-table counts and `test/schema.int.test.ts` asserts them against the real schema in both
+      directions, so a migration adding an index turns the suite red: the `migrations.lock.json`
+      mechanism applied to a different fact.
+    - **Both writers are one implementation.** `runWriteStatement` (single) and `runWriteBatch`
+      (batched) both go through `billedRowsFor`, so `applyMetadata` cannot disagree with
+      `upsertFileFacts`. Each is asserted over real SQLite, because reverting either leaves the
+      whole scan suite green — those meter *doubles* that report their own `billedRows` and never
+      execute the DAO, so a mutation to the arithmetic is invisible there by construction.
+    - The constant was also wrong — `5,000`, under a comment claiming to be *"the platform number,
+      not a choice"*, which is this file's own recorded shape of defect and the only reason a wrong
+      number sits in a file for ever. Correcting it **alone** would have multiplied the ten-fold
+      under-count by twenty; the two are one change.
+  - **A flat reserve is not a reserve, and a Paid account is throttled by a number it cannot
+    detect.** The reserve became a **share** because the flat `1,000` was 20% of the old `5,000`
+    and 1% of the real one — covering neither a few hundred stars nor the counter's own 500-row
+    overshoot. And D1 Paid is monthly (50M rows included) with no daily cliff, while the plan is
+    invisible from inside a Worker, so `dailyRowWriteShare` takes the limit as a parameter and `0`
+    disables the pacing, which `dailyWriteAllowanceSpent` already treated as "no limit". The
+    default stays the Free plan because that is the one that fails loudly.
   - **A classifier that matches a paraphrase has never met the platform.** `isD1DailyLimitError`
     matches Cloudflare's exact wording, because `executeD1WithRetry` throws
     `Failed to ${context}: ${errorMessage}` — a classifier wanting the bare sentence would
@@ -1007,11 +1039,11 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   is the terminal status, so `isAdvancing` is false for it and the chain is deleted — the
   same wedge reached by handling "cannot record" the obvious way.
 - **An import refuses to start rather than sharing the daily row allowance, because the
-  allowance is an outage.** `SCAN_DAILY_ROW_WRITE_BUDGET` exists because 5,000 rows/day is per
-  **account**, so N libraries each capped at the whole allowance would write N times it. The
-  argument is *stronger* for an import, because since 2026-09-01 an account over its allowance
-  has **every query fail** until midnight UTC — reads included. Two writers racing for the last
-  rows do not each get slower: the second takes the whole product down, `/rest` authentication
+  allowance is an outage.** `SCAN_DAILY_ROW_WRITE_BUDGET` exists because the daily row-write
+  allowance is per **account**, so N libraries each capped at the whole allowance would write N
+  times it. The argument is *stronger* for an import, because since 2026-09-01 an account over its
+  allowance has **every query fail** until midnight UTC — reads included. Two writers racing for the
+  last rows do not each get slower: the second takes the whole product down, `/rest` authentication
   with it, and the remedy is a clock rather than a change. So there is **one writer at a time**,
   and the two refusals are about *not writing rows* rather than a conflict in the usual sense.
   Both are asserted through the HTTP surface in `test/import-routes.test.ts`, each with the case
@@ -1169,7 +1201,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     questions**, and one `changed` flag was answering both. Pairing matters: the same cases
     assert that a folder the *scan* reconciled with an unchanged mtime is still closed, so
     the guard cannot be satisfied by disabling incrementality — which would cost one
-    PROPFIND per folder per rescan against a 5,000-rows/day allowance.
+    PROPFIND per folder per rescan against the day's row-write allowance.
   - **A completed scan that indexed nothing is not evidence the library is current.**
     `start`'s cheap path compared the root mtime and reported `idle`, which is only sound if
     the previous scan read something — and `scanned_count` counts folders *visited*, so a

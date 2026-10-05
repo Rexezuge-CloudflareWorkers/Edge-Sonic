@@ -15,7 +15,8 @@
  * `scanRetry.ts`; what was missing was the part between "decide whether to run" and "walk a
  * folder", which is a third thing and had no name.
  */
-import { derivePending } from './deriveBackfill';
+import { derivePending, NO_DERIVATION } from './deriveBackfill';
+import type { DerivationCost } from './deriveBackfill';
 import { decideStep, idleResult, stalledResult, unableToAdvance } from './scanRetry';
 import type { ScanBudget } from './scanBudget';
 import type { ChunkResult, ScanDeps } from './scanTypes';
@@ -52,8 +53,8 @@ import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
  * track with `duration: 0` never re-read on first play — a backfill that repairs the grouping
  * by breaking enrichment.
  */
-async function backfill(deps: ScanDeps, libraryId: string, budget: ScanBudget): Promise<number> {
-  return deps.derivation ? await derivePending(deps.derivation, libraryId, budget) : 0;
+async function backfill(deps: ScanDeps, libraryId: string, budget: ScanBudget): Promise<DerivationCost> {
+  return deps.derivation ? await derivePending(deps.derivation, libraryId, budget) : NO_DERIVATION;
 }
 
 /**
@@ -63,7 +64,7 @@ async function backfill(deps: ScanDeps, libraryId: string, budget: ScanBudget): 
  * a whole generation of cached answers at once — which is why it is reached only from an
  * empty frontier, and never speculatively.
  */
-async function finished(deps: ScanDeps, library: LibraryRow, state: ScanStateRow, derivedRows: number): Promise<ChunkResult> {
+async function finished(deps: ScanDeps, library: LibraryRow, state: ScanStateRow, derived: DerivationCost): Promise<ChunkResult> {
   const indexVersion = await deps.scanState.complete(library.id, state.scanned_count);
   return {
     status: 'idle',
@@ -75,7 +76,11 @@ async function finished(deps: ScanDeps, library: LibraryRow, state: ScanStateRow
     // The backfill's rows, not zero. This path is reached by a library that is already
     // fully walked, which is the *usual* case for a library being repaired, so reporting
     // `0` here would report the repair as no work at all.
-    rowsWritten: derivedRows,
+    rowsWritten: derived.rowsWritten,
+    // And its *cost*, for the same reason and one level on: this is the ordinary return for a
+    // repaired library, so a billed count of zero here would tell the Durable Object the day
+    // was free after the phase that spends it ran.
+    billedRows: derived.billedRows,
     stoppedBy: null,
     resumeAt: null,
   };
@@ -93,12 +98,12 @@ async function settle(
   deps: ScanDeps,
   library: LibraryRow,
   state: ScanStateRow,
-  derivedRows: number,
+  derived: DerivationCost,
   frontier: readonly { path: string }[],
 ): Promise<ChunkResult | null> {
   const decision = decideStep(state);
-  if (decision === 'stalled') return stalledResult(state, derivedRows);
-  if (decision === 'idle') return idleResult(state, 'idle', derivedRows);
+  if (decision === 'stalled') return stalledResult(state, derived);
+  if (decision === 'idle') return idleResult(state, 'idle', derived);
   if (frontier.length > 0) return null;
 
   // An empty frontier normally means the scan is done, and `complete` is right.
@@ -108,9 +113,10 @@ async function settle(
   // `start` seeds the frontier with the library root, so a scan that failed in its own
   // root probe is the case that lands here.
   if (state.status === 'failed') {
-    return await unableToAdvance(state, async (error) => await deps.scanState.fail(library.id, error), derivedRows);
+    return await unableToAdvance(state, async (error) => await deps.scanState.fail(library.id, error), derived);
   }
-  return await finished(deps, library, state, derivedRows);
+  return await finished(deps, library, state, derived);
 }
 
-export { backfill, finished, settle };
+export { backfill, finished, settle,  };
+export {NO_DERIVATION} from './deriveBackfill';

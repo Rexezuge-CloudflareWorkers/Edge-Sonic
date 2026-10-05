@@ -51,15 +51,18 @@ const SCAN_ALARM_DELAY_MS = 1000;
  * Rows between writes of the day's row-write count to Durable Object storage.
  *
  * The count is a **lower bound** within this interval, and the interval is the price of the
- * placement: Durable Object storage has its own daily write allowance, and persisting on every chunk
- * would spend ~86,000 of it a day to track ~5,000 rows — trading one allowance for another at
- * seventeen times the rate.
+ * placement: Durable Object storage has its own daily write allowance, and persisting on every
+ * chunk would spend ~86,000 of it a day to track a day's worth of D1 rows — trading one
+ * allowance for another at a far worse rate.
  *
  * The bound is what makes the placement sound rather than merely cheap. A crash or an eviction can
  * lose at most this many rows of the count, so the scan overshoots its share by at most this many
  * rows, and `D1_DAILY_ROW_WRITE_RESERVE` exists to absorb exactly that. Asserted as a relationship —
  * the interval is inside the reserve — because an interval above the reserve is a metering scheme
  * that can overshoot the thing it meters, and nothing else would say so.
+ *
+ * Also asserted in **billed** rows, which is the unit this counts: the interval is a number of
+ * rows, and a chunk that writes `songs` covers it in roughly a tenth of the rows it bills.
  */
 const SCAN_ROW_COUNT_PERSIST_INTERVAL = 500;
 
@@ -73,6 +76,14 @@ const SCAN_ROW_COUNT_PERSIST_INTERVAL = 500;
  */
 interface ScanWorkerMemory {
   readonly day: string;
+  /**
+   * **Billed** rows written today, per the platform's unit.
+   *
+   * Named `rows` rather than `billedRows` because it is what DO storage has always held and the
+   * key is `memory` either way — a stored counter whose meaning changed is a migration question,
+   * and this one is deliberately not one. The unit was *always* meant to be D1's; it was
+   * populated with table rows by mistake. See `record`.
+   */
   readonly rows: number;
   readonly pause: { readonly resumeAt: number; readonly reason: string } | null;
 }
@@ -107,7 +118,7 @@ function utcDay(nowMs: number): string {
  */
 class ScanPauseStore {
   /**
-   * Rows accumulated since the last storage write.
+   * **Billed** rows accumulated since the last storage write.
    *
    * An instance field, and that is the one approximation here: an eviction discards it, so the
    * persisted `rows` can under-count by up to one chunk's worth beyond the interval. `D1_DAILY_ROW_WRITE_RESERVE`
@@ -135,7 +146,12 @@ class ScanPauseStore {
     const memory = await this.read();
     const today = utcDay(Date.now());
     const rolledOver = memory.day !== today;
-    const rows = (rolledOver ? 0 : memory.rows) + result.rowsWritten;
+    // `billedRows`, **not** `rowsWritten`. This is the whole of the correction: D1's daily
+    // allowance is denominated in billed rows — the table row plus every index entry the write
+    // rewrote — and `songs` carries nine indexes, so a count of table rows told this budget it
+    // had ten times the headroom it actually had before the platform refused every query on the
+    // account until midnight UTC.
+    const rows = (rolledOver ? 0 : memory.rows) + result.billedRows;
     this.pendingRows = rows - (rolledOver ? 0 : memory.rows);
 
     const pause = result.status === 'paused' && result.resumeAt !== null ? { resumeAt: result.resumeAt, reason: result.lastError ?? 'Paused.' } : null;
@@ -175,7 +191,9 @@ class ScanPauseStore {
   public async budget(libraryCount: number): Promise<() => ScanDailyBudget> {
     const memory = await this.read();
     return () => ({
-      rowsWrittenToday: memory.rows + this.pendingRows,
+      // Billed rows on both sides of the comparison, because that is the platform's unit. See
+      // the note on `record`.
+      billedRowsWrittenToday: memory.rows + this.pendingRows,
       limit: dailyRowWriteShare(libraryCount),
       now: Date.now,
     });

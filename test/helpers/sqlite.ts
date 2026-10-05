@@ -157,6 +157,11 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
       };
 
       return {
+        // Carried so `billedRowsFor` can read which table a write bills against. Required rather
+        // than optional because a statement that cannot name its own target is charged the
+        // schema's worst case on every write: the right *direction*, and a large silent loss of
+        // measured accuracy in the one place this repository decided to measure.
+        sql,
         bind(...next: unknown[]): D1PreparedStatement {
           values = next;
           return this;

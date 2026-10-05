@@ -65,10 +65,9 @@ const GROUPING_FIELDS = ['artist', 'album', 'albumArtist'] as const;
 /**
  * Build the patch for a partial metadata update.
  *
- * Returns empty assignments for a metadata object with no defined fields, which the
- * caller must treat as "nothing to write" rather than issuing an empty `UPDATE` — a
- * statement that writes no columns still costs a row from a 5,000/day allowance on some
- * paths, and on D1 it is a round trip for no change.
+ * Returns empty assignments for a metadata object with no defined fields, which the caller must
+ * treat as "nothing to write" rather than issuing an empty `UPDATE` — on D1 that is a round trip
+ * for no change, and a round trip against the daily allowance.
  *
  * ### Clearing `grouping_source` is part of writing a grouping column
  *
@@ -148,5 +147,28 @@ function buildMetadataPatch(metadata: SongMetadataInput): MetadataPatch {
   return { assignments, values };
 }
 
-export { buildMetadataPatch, GROUPING_FIELDS, SCALAR_COLUMNS };
-export type { MetadataPatch };
+/**
+ * What one metadata write changed, and what it cost against the daily row-write allowance.
+ *
+ * `changes` is 0 or 1 — one `WHERE id = ?` — and distinguishes "the statement ran and matched
+ * nothing" from "it ran and wrote a row": what the caller needs to know whether the row it meant to
+ * enrich actually moved.
+ *
+ * `billedRows` is ten per changed row, and is the number D1's daily allowance is denominated in —
+ * the row plus every index entry the write rewrote. It lives beside the patch builder because both
+ * are about *this* statement: the builder says which columns move, and this says what they cost.
+ */
+interface MetadataWriteResult {
+  readonly changes: number;
+  readonly billedRows: number;
+}
+
+/**
+ * A call that supplied nothing to write, so "wrote nothing" is one value rather than a branch at
+ * every call site. Same reasoning as the empty patch above: the absence is the same absence however
+ * it is spelled.
+ */
+const NO_METADATA_WRITE: MetadataWriteResult = { changes: 0, billedRows: 0 };
+
+export { buildMetadataPatch, GROUPING_FIELDS, SCALAR_COLUMNS, NO_METADATA_WRITE };
+export type { MetadataPatch, MetadataWriteResult };

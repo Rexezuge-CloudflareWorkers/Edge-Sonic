@@ -25,7 +25,7 @@
  * later call re-reads the row. It shipped — four tracks of a live library were stamped empty
  * during a flapping origin and reported duration `0` for ever.
  */
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, MetadataWriteResult, SongRow } from '@edge-sonic/backend-data/dao';
 import { readAudioTags, readOggTailDuration, READER_VERSION } from '@edge-sonic/media-tags';
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
@@ -34,6 +34,12 @@ import { isTransientEnrichmentFailure, shouldEnrich } from './enrichmentRetry';
 
 interface SongStore {
   findById(id: string): Promise<SongRow | null>;
+  /**
+   * Writes the patch and reports what it cost against the daily row-write allowance.
+   *
+   * A measurement rather than `void`: it was `void`, so this module hardcoded `rowsWritten = 1`,
+   * and a `songs` write bills ten rows.
+   */
   applyMetadata(
     id: string,
     metadata: {
@@ -56,16 +62,15 @@ interface SongStore {
        */
       readerVersion?: number | null;
     },
-  ): Promise<void>;
+  ): Promise<MetadataWriteResult>;
 }
 
 interface EnrichmentDeps {
   songs: SongStore;
   /**
-   * The optional second argument is a caller's request meter, forwarded to the
-   * client so a range read is charged to the caller's budget. The scan passes one
-   * because its range reads happen inside the folder walk, and they are the reads
-   * that took a chunk from 40 subrequests to 1,640.
+   * The optional second argument is a caller's request meter, forwarded to the client so a range read
+   * is charged to the caller's budget. The scan passes one because its range reads happen inside the
+   * folder walk — the reads that took a chunk from 40 subrequests to 1,640.
    */
   clientFor: (row: LibraryRow, onRequest?: () => void) => Promise<WebDavClient>;
   kv: KvCache;
@@ -75,11 +80,8 @@ interface EnrichmentDeps {
   */
   readBytes: number;
   /**
-  Bytes read from the end of a file, for the duration of a container whose length is
-  only recorded there.
-
-  Optional, and defaulted: a deployment that leaves it unset gets no duration for Ogg
-  rather than a wrong one, which is the same trade `readOggTailDuration` makes.
+  Bytes read from the end of a file, for a container whose length is only recorded there.
+  Optional: unset means no duration for Ogg rather than a wrong one.
   */
   readTailBytes?: number;
   timeoutMs: number;
@@ -104,11 +106,9 @@ Cached enrichment, keyed by song id and validated by the file's mtime.
 interface CachedEnrichment {
   readonly mtimeMs: number;
   /**
-   * Which reader produced this entry.
-   *
-   * Part of the entry rather than implied by it: an entry written by a reader that could
-   * not read something a later reader can is not a value this reader may skip a read
-   * for, and the mtime cannot say so — the file really did not move.
+   * Which reader produced this entry. Part of the entry rather than implied by it: an entry written
+   * by a reader that could not read something a later reader can is not a value this reader may skip
+   * a read for, and the mtime cannot say so — the file really did not move.
    */
   readonly readerVersion: number;
   readonly durationSeconds: number | null;
@@ -121,32 +121,31 @@ interface CachedEnrichment {
 /**
  * What an enrichment actually did, as distinct from what it found.
  *
- * `rowsWritten` is rows **written to `songs`**, not tracks asked about, and the two are
- * genuinely different numbers: a `songMeta` cache hit returns without touching D1, a transient
- * failure returns without touching D1 — deliberately, so a flapping origin does not stamp the
- * row — and an unknown container writes one row recording the attempt. Counting "enriched"
- * instead would report all three as the same thing, and would pace the scan off writes that
- * never happened.
+ * `rowsWritten` is rows **written to `songs`**, not tracks asked about, and the two differ: a
+ * `songMeta` cache hit returns without touching D1, a transient failure does too — deliberately, so
+ * a flapping origin does not stamp the row — and an unknown container writes one row recording the
+ * attempt. Counting "enriched" would report all three alike, and pace the scan off writes that never
+ * happened.
  *
- * It is here because `rowsWritten` is the **only** input to `ScanDailyBudget.rowsWrittenToday`,
- * the guard that stops a scan spending the day's D1 row-write allowance, and `enrichChanged`
- * returned `void` for the whole life of that guard. On a library of 113 tracks these are 113 of
- * roughly 420 rows in a cold scan. The subrequest meter saw every one of them, because
- * `BaseDAO.withRetry` charges each statement — one counter blind to a quarter of the writes and
- * one counting them all. See `scanAccounting` for why that number is not also the
- * cache-invalidation signal.
+ * `billedRows` is what those rows cost against D1's daily allowance, and it exists because
+ * `applyMetadata` returned `void`: the only figure available was then the literal `1`, and the guard
+ * this feeds was short by a factor of ten on this path. `scanAccounting` owns the two-count
+ * arrangement and why the platform's unit is not a row.
  */
 interface EnrichmentOutcome {
   /**
-   * The tags read out of the file, or `null` for a container this reader does not read, a
-   * transient failure and a cache hit alike — indistinguishable to a caller that only wants
-   * tags, which is why `rowsWritten` is beside it.
+   * The tags read out of the file, or `null` for an unreadable container, a transient failure and a
+   * cache hit alike — indistinguishable to a caller wanting only tags, hence the counts beside it.
    */
   readonly tags: AudioTags | null;
   /**
-  `1` for every path that reached `applyMetadata`, including an attempt carrying no duration.
+  Rows changed: `1` per path that reached `applyMetadata` and matched; `0` for the two above.
   */
   readonly rowsWritten: number;
+  /**
+  What they cost the platform. `0` exactly when `rowsWritten` is `0`, else a multiple of it.
+  */
+  readonly billedRows: number;
 }
 
 /**
@@ -154,7 +153,7 @@ interface EnrichmentOutcome {
  * short-circuit before any read — a cache hit, and a row already current — are the same answer
  * to the only question the counter asks.
  */
-const NO_ENRICHMENT_WRITTEN: EnrichmentOutcome = { tags: null, rowsWritten: 0 };
+const NO_ENRICHMENT_WRITTEN: EnrichmentOutcome = { tags: null, rowsWritten: 0, billedRows: 0 };
 
 class EnrichmentService {
   constructor(private readonly deps: EnrichmentDeps) {}
@@ -189,8 +188,10 @@ class EnrichmentService {
       // part of the entry for the same reason it is a column: a cached value is only
       // usable by the reader that produced it.
       if (song.enriched_at === null || song.reader_version !== READER_VERSION) {
-        await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, null);
-        return { tags: null, rowsWritten: 1 };
+        // Measured, not declared: a cached replay is still a `songs` write, and a scan that
+        // restored a library from a backup replays one of these per track.
+        const written = await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, null);
+        return { tags: null, rowsWritten: written.changes, billedRows: written.billedRows };
       }
       return NO_ENRICHMENT_WRITTEN;
     }
@@ -225,13 +226,15 @@ class EnrichmentService {
    * writes by id, which is all a freshly upserted row needs.
    */
   private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts, onRequest?: () => void): Promise<EnrichmentOutcome> {
-    // Counted by the closure rather than by its callers, because `write` is the only
-    // place in the service that issues an `UPDATE`, and every answer about rows written
-    // has to be the same answer. `1` unconditionally once inside: `buildMetadataPatch`
-    // cannot return empty for this input — `duration`, `bitrate` and `readerVersion` are
-    // always present — so reaching here is reaching a statement, and a statement against
-    // one `WHERE id = ?` is one row.
+    // Counted by the closure rather than by its callers, because `write` is the only place in
+    // the service that issues an `UPDATE`, and every answer about rows written has to be the same
+    // answer.
+    //
+    // A **measurement**, taken from the statement's own result rather than declared as `1` once
+    // entered — this `UPDATE` bills ten rows, and the budget the scan paces itself against is
+    // denominated in exactly those.
     let rowsWritten = 0;
+    let billedRows = 0;
     const write = async (
       duration: number | null,
       bitrate: number | null,
@@ -239,12 +242,11 @@ class EnrichmentService {
       channels: number | null,
       tags: AudioTags | null,
     ): Promise<void> => {
-      rowsWritten = 1;
       if (row !== null) {
-        await this.persist(row, duration, bitrate, sampleRate, channels, tags);
+        ({ changes: rowsWritten, billedRows } = await this.persist(row, duration, bitrate, sampleRate, channels, tags));
         return;
       }
-      await this.deps.songs.applyMetadata(facts.id, {
+      const written = await this.deps.songs.applyMetadata(facts.id, {
         duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
         bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
         readerVersion: READER_VERSION,
@@ -261,6 +263,8 @@ class EnrichmentService {
           ...(tags.year !== null && { year: tags.year }),
         }),
       });
+      rowsWritten = written.changes;
+      billedRows = written.billedRows;
     };
 
     let tags: AudioTags | null = null;
@@ -274,12 +278,12 @@ class EnrichmentService {
       // it; the module header carries what stamping `enriched_at` over a `503` cost.
       if (isTransientEnrichmentFailure(error)) return NO_ENRICHMENT_WRITTEN;
       await write(null, null, null, null, null);
-      return { tags: null, rowsWritten };
+      return { tags: null, rowsWritten, billedRows };
     }
 
     if (tags === null || tags.container === 'unknown') {
       await write(null, null, null, null, null);
-      return { tags: null, rowsWritten };
+      return { tags: null, rowsWritten, billedRows };
     }
 
     // The prefix read cannot see an Ogg stream's final page, so `durationSeconds` is null there
@@ -308,7 +312,7 @@ class EnrichmentService {
     // the result, which is what the outage requirement depends on.
     await this.deps.kv.putJson('songMeta', [facts.id], entry);
     await write(entry.durationSeconds, entry.bitrateKbps, entry.sampleRate, entry.channels, tags);
-    return { tags, rowsWritten };
+    return { tags, rowsWritten, billedRows };
   }
 
   /**
@@ -363,8 +367,8 @@ class EnrichmentService {
     sampleRate: number | null,
     channels: number | null,
     tags: AudioTags | null,
-  ): Promise<void> {
-    await this.deps.songs.applyMetadata(song.id, {
+  ): Promise<MetadataWriteResult> {
+    return await this.deps.songs.applyMetadata(song.id, {
       // `duration` and `bitrate` are NOT NULL columns, so an unreadable value is
       // 0 rather than null.
       duration: duration === null ? 0 : Math.max(0, Math.round(duration)),

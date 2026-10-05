@@ -274,9 +274,13 @@ function createRequestScope(env: RequestScopeEnv): Container {
       // `onRequest` is the chunk's meter. Forwarding it is what keeps a range read
       // counted against the same budget as the `PROPFIND` that found the file.
       enrichSong: async (library, facts, onRequest) => {
-        // The row count, not the tags: this is the seam the day's row-write budget is
-        // metered through, and it was returning nothing at all. See `EnrichmentOutcome`.
-        return (await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts, onRequest)).rowsWritten;
+        // Both counts, not the tags and not one number: this is the seam the day's row-write
+        // budget is metered through, and it was returning nothing at all. The second is the
+        // one that matters — the budget is denominated in *billed* rows and `songs` bills ten
+        // per row written, so a seam carrying only `rowsWritten` could describe this write as
+        // `1` and be wrong by an order of magnitude. See `EnrichmentOutcome`.
+        const outcome = await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts, onRequest);
+        return { rowsWritten: outcome.rowsWritten, billedRows: outcome.billedRows };
       },
       enrichMaxPerFolder: config.getScanEnrichMaxPerFolder(),
     }),

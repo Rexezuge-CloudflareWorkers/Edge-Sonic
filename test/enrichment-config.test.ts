@@ -21,6 +21,8 @@ import { resetBreakerForTests, KvCache, KV_DOMAINS } from '@edge-sonic/backend-r
 import { createLogger, setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
 import { EnrichmentService } from '@edge-sonic/backend-services/index';
+import { billedRowsForTable } from '@edge-sonic/backend-data/dao';
+import type { MetadataWriteResult } from '@edge-sonic/backend-data/dao';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { BadRequestError, DatabaseError, NotFoundError, RateLimitedError } from '@edge-sonic/backend-errors';
 import { SubsonicError, ErrorCode } from '@edge-sonic/subsonic';
@@ -297,6 +299,16 @@ function makeSong(seed: Partial<Record<string, unknown>> = {}): Record<string, u
   };
 }
 
+/**
+ * What one metadata write to `songs` costs, as the DAO reports it.
+ *
+ * Derived rather than typed so this suite cannot drift from the schema: `applyMetadata` returns
+ * a measurement, and a double that answered `changes: 1, billedRows: 1` would be asserting a
+ * table with **no indexes**, which is not one this repository has. The daily budget is
+ * denominated in these billed rows — see `test/d1-daily-limit.test.ts`.
+ */
+const ONE_SONG_ROW_WRITE: MetadataWriteResult = { changes: 1, billedRows: billedRowsForTable('songs', 1) };
+
 function makeEnrichment(seed: Partial<Record<string, unknown>> = {}): {
   service: EnrichmentService;
   applied: Array<{ id: string; metadata: Record<string, unknown> }>;
@@ -334,6 +346,7 @@ function makeEnrichment(seed: Partial<Record<string, unknown>> = {}): {
       findById: async () => song as never,
       applyMetadata: async (id, metadata) => {
         applied.push({ id, metadata: metadata as Record<string, unknown> });
+        return ONE_SONG_ROW_WRITE;
       },
     },
     clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
@@ -459,6 +472,7 @@ describe('EnrichmentService', () => {
         findById: async () => null,
         applyMetadata: async (id, metadata) => {
           applied.push({ id, metadata: metadata as Record<string, unknown> });
+          return ONE_SONG_ROW_WRITE;
         },
       },
       clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, failing.fetch),
@@ -519,6 +533,7 @@ describe('EnrichmentService', () => {
         findById: async () => null,
         applyMetadata: async (id, metadata) => {
           applied.push({ id, metadata: metadata as Record<string, unknown> });
+          return ONE_SONG_ROW_WRITE;
         },
       },
       clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, gone.fetch),
@@ -545,6 +560,7 @@ describe('EnrichmentService', () => {
         findById: async () => null,
         applyMetadata: async (id, metadata) => {
           applied.push({ id, metadata: metadata as Record<string, unknown> });
+          return ONE_SONG_ROW_WRITE;
         },
       },
       clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
@@ -671,6 +687,7 @@ function makeOggEnrichment(
       findById: async () => null,
       applyMetadata: async (id, metadata) => {
         applied.push({ id, metadata: metadata as Record<string, unknown> });
+        return ONE_SONG_ROW_WRITE;
       },
     },
     clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),

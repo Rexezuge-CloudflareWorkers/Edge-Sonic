@@ -29,7 +29,7 @@ import { MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-servi
 import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, billedRowsForTable, deriveFromPath } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { ScanDeps } from '@edge-sonic/backend-services/index';
@@ -155,7 +155,13 @@ function createIndex() {
             changed += 1;
           }
           writes.nodes += changed;
-          return { changes: changed, written: inputs.length, truncated: false };
+          // `billedRows` is the *measurement*, not a copy of `changes`: D1 charges the table row
+          // plus every index entry it rewrote, and `nodes` carries three, so one row is four
+          // rows of allowance. The daily budget is denominated in these. Deriving it here from
+          // the same constant the DAO uses (`billedRowsForTable`) is what keeps this double from
+          // being a *second* implementation of the schema — the class of defect this file has
+          // already recorded twice on this column.
+          return { changes: changed, written: inputs.length, truncated: false, billedRows: billedRowsForTable('nodes', changed) };
         }, inputs.length),
         patch: async (_libraryId: string, path: string, patch: Record<string, unknown>) => {
           const node = nodes.get(nodeKey(path));
@@ -179,7 +185,7 @@ function createIndex() {
           const doomed = [...nodes.values()].filter((node) => node.path === path || node.path.startsWith(`${path}/`));
           for (const node of doomed) nodes.delete(nodeKey(node.path));
           writes.nodes += doomed.length;
-          return doomed.length;
+          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('nodes', doomed.length) };
         },
         countByLibrary: async () => db(() => nodes.size),
       },
@@ -253,7 +259,7 @@ function createIndex() {
             changed += 1;
           }
           writes.songs += changed;
-          return { changes: changed, written: inputs.length, truncated: false };
+          return { changes: changed, written: inputs.length, truncated: false, billedRows: billedRowsForTable('songs', changed) };
         }, inputs.length),
         deleteInDirectoryNotIn: async (_libraryId: string, dirPath: string, keep: readonly string[]) => {
           const keepSet = new Set(keep);
@@ -262,7 +268,7 @@ function createIndex() {
           for (const song of doomed) songs.delete(song.id);
           writes.songs += doomed.length;
           subrequests.charge(doomed.length, 'd1');
-          return { changes: doomed.length, written: doomed.length, truncated: false };
+          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
         },
         // Recursive, like the real one: a vanished folder takes its songs with it,
         // and their `dir_path` is deeper than the folder itself.
@@ -270,7 +276,7 @@ function createIndex() {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath || song.dir_path.startsWith(`${dirPath}/`));
           for (const song of doomed) songs.delete(song.id);
           writes.songs += doomed.length;
-          return doomed.length;
+          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
         },
         countByLibrary: async () => db(() => songs.size),
       },
@@ -452,10 +458,17 @@ describe('the scan enriches the tracks it changed', () => {
         // the under-reporting the count assertions below exist to catch.
         onRequest?.();
         onRequest?.();
-        // Rows written, which is what `rowsWritten` and therefore the day's row-write budget
-        // are metered from. `void`/`undefined` from an `onEnrich` means "asked but did not
-        // write", so a caller can model a cache hit without a second mechanism.
-        return (await onEnrich?.(facts)) ?? 1;
+        // Rows written, which is what `rowsWritten` and the day's row-write budget are metered
+        // from. `void`/`undefined` from an `onEnrich` means "asked but did not write", so a
+        // caller can model a cache hit without a second mechanism.
+        //
+        // `billedRows` is **not** a copy of the row count, and this is the whole point of the
+        // pair: the real write is an `UPDATE songs` and D1 bills ten rows for it — the row plus
+        // the nine indexes it rewrote — while the daily budget is denominated in those. A double
+        // returning the row count here would make this suite assert a budget ten times larger
+        // than production's, which is the `fakeDav` defect one row-count away.
+        const rows = (await onEnrich?.(facts)) ?? 1;
+        return { rowsWritten: rows, billedRows: billedRowsForTable('songs', rows) };
       },
       enrichMaxPerFolder,
     });
@@ -514,11 +527,10 @@ describe('the scan enriches the tracks it changed', () => {
     expect(enriched).toEqual([]);
   });
 
-  it("counts an enrichment's row in rowsWritten, because the day's budget cannot see it", async () => {
-    // `rowsWritten` is the **only** input to `ScanDailyBudget.rowsWrittenToday` — the guard
-    // that stops a scan spending the account's D1 row-write allowance — and it is metered
-    // from `ScanWorker.pause.record`. `enrichChanged` returned `void` for the whole life of
-    // that guard, so every row `applyMetadata` wrote was invisible to it while
+  it("counts an enrichment's row in both row counts, because the day's budget cannot see it", async () => {
+    // `rowsWritten` is metered into `ScanWorker.pause.record` — the guard that stops a scan
+    // spending the account's D1 row-write allowance — and `enrichChanged` returned `void` for the
+    // whole life of that guard, so every row `applyMetadata` wrote was invisible to it while
     // `BaseDAO.withRetry` charged every one of them to the subrequest meter. On a library of
     // 113 tracks those are 113 of roughly 420 rows in a cold scan.
     //
@@ -536,8 +548,11 @@ describe('the scan enriches the tracks it changed', () => {
     index.writes.songs = 0;
 
     let total = 0;
+    let billed = 0;
     for (let poll = 0; poll < 50; poll += 1) {
-      total += (await service.step(row)).rowsWritten;
+      const result = await service.step(row);
+      total += result.rowsWritten;
+      billed += result.billedRows;
       if (index.state().status !== 'scanning') break;
     }
     // Read **after** the walk, not during it: the index's own rows are the baseline the
@@ -555,6 +570,14 @@ describe('the scan enriches the tracks it changed', () => {
     // nothing to do with either. The two subjects are asserted apart: `rowsWritten` here, and
     // the version bump in the cases that own it.
     expect(total - indexRows).toBeGreaterThanOrEqual(enriched.length);
+
+    // The same margin in the unit the **budget** is denominated in, and this is the assertion
+    // that would have caught the real defect. `billedRows` is what D1 charges — the row plus
+    // every index entry it rewrote — and the day's allowance is spent in those. A scan reporting
+    // `rowsWritten` here would believe it had ten times its headroom before the platform refused
+    // every query on the account until midnight UTC.
+    expect(billed).toBeGreaterThan(total);
+    expect(billed).toBeGreaterThanOrEqual(billedRowsForTable('songs', enriched.length));
   });
 
   it('does not count an enrichment that wrote nothing, and says why', async () => {
@@ -572,8 +595,11 @@ describe('the scan enriches the tracks it changed', () => {
     index.writes.songs = 0;
 
     let reported = 0;
+    let reportedBilled = 0;
     for (let poll = 0; poll < 50; poll += 1) {
-      reported += (await service.step(row)).rowsWritten;
+      const result = await service.step(row);
+      reported += result.rowsWritten;
+      reportedBilled += result.billedRows;
       if (index.state().status !== 'scanning') break;
     }
     const indexRows = index.writes.nodes + index.writes.songs;
@@ -584,6 +610,13 @@ describe('the scan enriches the tracks it changed', () => {
     // margin is `0`. This is what proves the two cases differ because of the *reported* rows
     // rather than because of the callback having been invoked.
     expect(reported - indexRows).toBe(0);
+
+    // And **both** counts fall to zero, not one. A zero in `rowsWritten` beside a non-zero in
+    // `billedRows` would be a scan that believes it wrote nothing and a budget that believes it
+    // spent something — two surfaces disagreeing about the same write, which is the defect this
+    // pairing exists to make visible. The index's own writes are still there, so this is not a
+    // claim that the chunk did nothing.
+    expect(reportedBilled).toBe(billedRowsForTable('nodes', index.writes.nodes) + billedRowsForTable('songs', index.writes.songs));
   });
 
   it('enriches only the file that changed, not the album around it', async () => {
@@ -1140,7 +1173,11 @@ describe('ScanService', () => {
             meter.charge(writes.length, 'd1');
             state.remaining = state.remaining.filter((id) => writes.every((write) => write.id !== id));
             state.written += writes.length;
-            return writes.length;
+            // `billedRows` from the same derivation the DAO uses. This double writes `songs`,
+            // and a scan that repaired a large library spends this phase's whole output against
+            // the day's allowance — so a double reporting `writes.length` billed would make this
+            // suite unable to see a ten-fold overrun on the very path that spends the most.
+            return { changes: writes.length, written: writes.length, truncated: false, billedRows: billedRowsForTable('songs', writes.length) };
           },
         },
       };

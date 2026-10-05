@@ -39,20 +39,50 @@
  *
  * Neither is a refinement of the other. They are two questions, and `scan_folder` is the only
  * place that can answer both.
+ *
+ * ### The third count, and why it is in the platform's unit
+ *
+ * `billedRows` is what the day's allowance is spent in, and it is a **third** question rather than
+ * a refinement of either: what did the work cost the platform, as opposed to how much of it there
+ * was or whether a cache went stale.
+ *
+ * D1 charges a write as the row *plus every index entry it rewrote* — pricing page, definition 6:
+ * *"there are two rows written: one to the table itself, and one to the index."* So the unit is
+ * not a row, and the multiplier is a property of the **table**: four for `nodes`, ten for `songs`,
+ * two for `scan_state`, which carries no declared index at all. `backend-data`'s `billedRows.ts`
+ * owns the per-table arithmetic and asserts it against the real schema.
+ *
+ * The import shares this allowance rather than having one of its own, which is why the multiplier
+ * is a table lookup and not a constant in the scan: `import_runs` bills four, so a write the scan
+ * would charge two for costs twice as much when the import makes it.
+ *
+ * This correction is why the two counts above were not enough. Every writer that reported only
+ * `rowsWritten` forced its caller to guess, and the one place that guessed was the daily budget:
+ * `applyMetadata` returned `void`, so `EnrichmentService` declared `1` for every enrichment,
+ * while the statement billed ten. The guard was short by a factor of ten on the enrichment path —
+ * a quarter of a cold scan's writes — for as long as it existed. Three questions, and the module
+ * that can answer all three is the one the arithmetic is accumulated in.
  */
 
 /**
  * What reconciling one folder cost.
  *
- * Returned rather than accumulated by the caller, because the caller is `step` and its two
- * consumers are the two guards above: `rowsWritten` goes to `ScanPauseStore`, and
- * `indexChanged` goes to `scan_state.changed` for `complete` to read.
+ * Returned rather than accumulated by the caller, because the caller is `step` and its three
+ * consumers are the three guards above: `billedRows` goes to `ScanPauseStore`'s day budget,
+ * `rowsWritten` is what the chunk reports, and `indexChanged` goes to `scan_state.changed` for
+ * `complete` to read.
  */
 interface FolderWrites {
   /**
-  Rows written, of every kind. The day's row-write allowance counts all of them.
+  Table rows written, of every kind. Progress — and the input to `indexChanged`.
   */
   readonly rowsWritten: number;
+  /**
+  What those writes cost the platform. Not derivable from `rowsWritten` — see the header — and
+  accumulated from each writer's own measurement rather than multiplied here: this module knows how
+  to add two folders together, and `billedRows.ts` knows what a write costs.
+  */
+  readonly billedRows: number;
   /**
   Whether anything a cached aggregate reads moved. Frontier bookkeeping does not count.
   */
@@ -69,6 +99,7 @@ interface FolderWrites {
 function mergeFolderWrites(into: FolderWrites, folder: FolderWrites): FolderWrites {
   return {
     rowsWritten: into.rowsWritten + folder.rowsWritten,
+    billedRows: into.billedRows + folder.billedRows,
     indexChanged: into.indexChanged || folder.indexChanged,
   };
 }
@@ -76,11 +107,12 @@ function mergeFolderWrites(into: FolderWrites, folder: FolderWrites): FolderWrit
 /**
  * A chunk that has written nothing yet.
  *
- * Named rather than inlined as `{ rowsWritten: 0, indexChanged: false }` at three sites, so
- * "nothing happened" is one value: an accumulator that starts as an object literal is a place
- * where a fourth field would be added to the type and not to the initialiser.
+ * Named rather than inlined as a literal at three sites, so "nothing happened" is one value: an
+ * accumulator that starts as an object literal is a place where a fourth field would be added to
+ * the type and not to the initialiser — which is exactly how `billedRows` reached `FolderWrites`
+ * with nothing summing it.
  */
-const NO_FOLDER_WRITES: FolderWrites = { rowsWritten: 0, indexChanged: false };
+const NO_FOLDER_WRITES: FolderWrites = { rowsWritten: 0, billedRows: 0, indexChanged: false };
 
 export { mergeFolderWrites, NO_FOLDER_WRITES };
 export type { FolderWrites };
