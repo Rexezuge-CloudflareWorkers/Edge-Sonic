@@ -16,7 +16,7 @@
  * and the bypass's *refusals* are covered in `test/user-auth.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHarness, ORIGIN, TEST_KEY } from './helpers/harness';
+import { createHarness, ORIGIN, USER_TEST_KEY, WEBDAV_TEST_KEY } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { decryptData } from '@edge-sonic/backend-data/crypto';
 
@@ -202,12 +202,19 @@ describe('libraries', () => {
     // The row holds ciphertext, and it decrypts back to what was typed. A plain value in
     // this column is the difference between "an operator can rotate the key" and
     // "the whole DAV credential set is in a database backup".
+    //
+    // Decrypted with the **DAV** key, named as such. This read as `TEST_KEY` for the whole
+    // time the harness gave every feature the same value, which made it indistinguishable
+    // from the user key — so the assertion "rotating one key does not rotate the other" was in
+    // the comment and untestable. Three distinct keys is what makes it a test.
     const row = await harness.db.db
       .prepare('SELECT password_ciphertext, password_iv FROM libraries WHERE slug = ?')
       .bind('work')
       .first<{ password_ciphertext: string; password_iv: string }>();
     expect(row?.password_ciphertext).not.toContain('hunter2');
-    expect(await decryptData(row!.password_ciphertext, row!.password_iv, TEST_KEY)).toBe('hunter2');
+    expect(await decryptData(row!.password_ciphertext, row!.password_iv, WEBDAV_TEST_KEY)).toBe('hunter2');
+    // And it is **not** the user's key, which is the half that says "one per feature".
+    await expect(decryptData(row!.password_ciphertext, row!.password_iv, USER_TEST_KEY)).rejects.toThrow();
   });
 
   it('refuses a library URL pointing at a private or loopback address', async () => {
@@ -616,7 +623,10 @@ describe('users', () => {
       .prepare('SELECT password_ciphertext, password_iv FROM users WHERE username = ?')
       .bind('bob')
       .first<{ password_ciphertext: string; password_iv: string }>();
-    expect(await decryptData(row!.password_ciphertext, row!.password_iv, TEST_KEY)).toBe('opensesame');
+    expect(await decryptData(row!.password_ciphertext, row!.password_iv, USER_TEST_KEY)).toBe('opensesame');
+    // And not the DAV key, for the same reason: the harness once set both to one value, so
+    // "the stored value must be the user key's output" was a claim with no instrument behind it.
+    await expect(decryptData(row!.password_ciphertext, row!.password_iv, WEBDAV_TEST_KEY)).rejects.toThrow();
   });
 
   it('refuses a username that differs only in case', async () => {

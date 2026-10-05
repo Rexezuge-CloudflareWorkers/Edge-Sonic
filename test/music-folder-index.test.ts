@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { NodeDAO } from '@edge-sonic/backend-data/dao';
-import { createHarness, TEST_KEY, nowSeconds } from './helpers/harness';
+import { createHarness, WEBDAV_TEST_KEY, nowSeconds } from './helpers/harness';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
 /**
@@ -33,7 +33,9 @@ library a position names.
 const ARCHIVE = 'L2';
 
 async function addLibrary(harness: Harness, id: string, slug: string, name: string): Promise<void> {
-  const secret = await encryptData('dav-password', TEST_KEY);
+  // The **DAV** key, because this row is a library's credential. The harness used to set all
+  // three feature keys to one value, so a test could not name which key a row was written under.
+  const secret = await encryptData('dav-password', WEBDAV_TEST_KEY);
   const timestamp = nowSeconds();
   await harness.db.db
     .prepare(

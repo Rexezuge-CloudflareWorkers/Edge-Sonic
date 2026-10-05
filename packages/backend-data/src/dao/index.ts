@@ -34,10 +34,28 @@ export { SongDerivationDAO } from './songDerivation';
 export type { DerivableRow, DerivationWrite } from './songDerivation';
 export { SongIndexDAO } from './songIndex';
 export type { GenreCountRow } from './songIndex';
+// Looking a song up by **path** or by `(album_ci, title_ci)` — the two ways an import can
+// resolve a foreign id. Its own module because `SongDAO` is one row and already over the
+// soft god-file limit, and because the pair-keyed predicate is the only place in the layer
+// that has to derive a batch size for two variables per key.
+export { SongMatchDAO, keyForPair } from './songMatch';
 export { AnnotationDAO, AuthThrottleDAO } from './UserStateDAO';
+// Per-user play counts. Its own module because one table carries **two** semantics — a scrobble
+// increments, an import overwrites — and the difference is silent, so the two writers stay where each
+// can name the other.
+export { PlayCountDAO } from './playCounts';
 export { ScanStateDAO } from './ScanStateDAO';
 export { PlaylistDAO } from './playlists';
 export type { StarItemType } from './UserStateDAO';
+// Registered remote Subsonic instances and the runs that import from them. A separate DAO
+// from `LibraryDAO` because a remote server is not a library: it holds no music, and its
+// credential is guarded by a different key.
+export { ImportSourceDAO, ImportRunDAO, IMPORT_PHASES } from './imports';
+// The play-count walk's cursor: its own lifecycle (a Durable Object resume point) and its own
+// reader, so it is not beside the runs an operator creates.
+export { ImportPlayCountProgressDAO } from './importProgress';
+export type { ImportPlayCountProgressRow } from './importProgress';
+export type { ImportPhase } from './imports';
 export type {
   UserRow,
   LibraryRow,
@@ -48,4 +66,6 @@ export type {
   PlaylistEntryRow,
   CountRow,
   IndexVersionRow,
+  ImportSourceRow,
+  ImportRunRow,
 } from './rows';

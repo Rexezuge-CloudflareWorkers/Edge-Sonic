@@ -155,6 +155,50 @@ class PlaylistDAO extends BaseDAO {
     return created;
   }
 
+  /**
+   * Create a playlist under an id the caller chose.
+   *
+   * `INSERT OR REPLACE` rather than `INSERT`, and the reason is idempotency rather than
+   * convenience. A Cloudflare Workflow step is cached by name and may be retried, so an import
+   * that asks for the *same* playlist twice must not find it already there and fail — and a
+   * plain `INSERT` would refuse, which the step's retry policy would re-attempt until it gave
+   * up. So the second attempt replaces the row and the caller goes on to rewrite the entries.
+   *
+   * The replacement **cascades to the entries** (`playlist_entries.playlist_id` has
+   * `ON DELETE CASCADE`), which is what makes this a retry rather than a second playlist
+   * sharing the first's tracks. `replaceEntries` writes them again immediately afterwards, so
+   * the gap is inside one statement's worth of work and never observable to a client.
+   *
+   * `createdAt` is carried rather than taken from the clock so a retry does not move the
+   * playlist's creation time forward — a client's "added on" would drift by however many
+   * times the step ran, which is exactly the sort of thing a user notices and cannot explain.
+   */
+  public async createWithId(input: {
+    id: string;
+    ownerUserId: string;
+    name: string;
+    comment?: string | null;
+    isPublic?: boolean;
+    createdAt?: number;
+  }): Promise<PlaylistRow> {
+    const timestamp = nowSeconds();
+    const created = input.createdAt ?? timestamp;
+    await this.withRetry(
+      async () =>
+        await this.database
+          .prepare(
+            `INSERT OR REPLACE INTO playlists (id, owner_user_id, name, comment, is_public, song_count, duration, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+          )
+          .bind(input.id, input.ownerUserId, input.name, input.comment ?? null, input.isPublic ? 1 : 0, created, timestamp)
+          .run(),
+      'playlists.createWithId',
+    );
+    const row = await this.findById(input.id);
+    if (!row) throw new Error('playlists.createWithId did not produce a readable row.');
+    return row;
+  }
+
   public async updateMeta(id: string, patch: { name?: string; comment?: string | null; isPublic?: boolean }): Promise<void> {
     const assignments: string[] = [];
     const values: unknown[] = [];

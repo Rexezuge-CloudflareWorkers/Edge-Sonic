@@ -80,6 +80,19 @@ function AppHeader({ userEmail, signedIn }: { userEmail?: string | null; signedI
             >
               {t('nav.users', 'Users')}
             </NavLink>
+            <NavLink
+              to="/import"
+              className={({ isActive }) =>
+                cn(
+                  'rounded-md px-3 py-1.5 transition-colors',
+                  isActive
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text-primary)]',
+                )
+              }
+            >
+              {t('nav.import', 'Import')}
+            </NavLink>
           </nav>
         )}
         {/*

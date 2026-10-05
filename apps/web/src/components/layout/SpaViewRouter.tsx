@@ -7,6 +7,7 @@ import Unauthorized from './Unauthorized';
 import { LandingView } from '../../views/LandingView';
 import { LibrariesView } from '../../views/LibrariesView';
 import { UsersView } from '../../views/UsersView';
+import ImportView from '../../views/ImportView';
 
 interface SpaViewRouterProps {
   /**
@@ -94,6 +95,13 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         path="/users"
         element={signedOut ? page(<Unauthorized message={t('errors.signInToViewUsers', 'Sign in to view users.')} />) : page(<UsersView showNotice={showNotice} />)}
       />
+      {/*
+        Registered **after** `/users` and before the catch-all. `/import` holds no query state, so
+        the ordering here is about the catch-all rather than about overlap — a route registered
+        below `path="*"` is a route nothing can reach, and a route table with a dead entry is one
+        nothing notices.
+      */}
+      <Route path="/import" element={signedOut ? page(<Unauthorized message={t('errors.signInToViewImport', 'Sign in to import.')} />) : page(<ImportView showNotice={showNotice} />)} />
       <Route
         path="*"
         element={

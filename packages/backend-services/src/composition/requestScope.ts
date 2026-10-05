@@ -10,12 +10,14 @@ import { AppConfiguration, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backen
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
-import { AnnotationDAO, AuthThrottleDAO, LibraryDAO, NodeDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { AnnotationDAO, AuthThrottleDAO, ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, NodeDAO, PlayCountDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, SongMatchDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
+import { matchRemoteAlbums, matchRemoteArtists, resolveGrouping } from '../import/albumIdentity';
+import { ImportSourceService } from '../import/sourceService';
 import { ScanService } from '../index/ScanService';
 import { TreeService } from '../index/TreeService';
 import { EnrichmentService } from '../index/EnrichmentService';
@@ -117,6 +119,37 @@ function createRequestScope(env: RequestScopeEnv): Container {
   scope.bindValue(Tokens.AnnotationDAO, async () => new AnnotationDAO(db, subrequests));
   scope.bindValue(Tokens.AuthThrottleDAO, async () => new AuthThrottleDAO(db, subrequests));
   scope.bindValue(Tokens.ScanStateDAO, async () => new ScanStateDAO(db, subrequests));
+  scope.bindValue(Tokens.SongMatchDAO, async () => new SongMatchDAO(db, subrequests));
+  scope.bindValue(Tokens.PlayCountDAO, async () => new PlayCountDAO(db, subrequests));
+  scope.bindValue(Tokens.ImportSourceDAO, async () => new ImportSourceDAO(db, subrequests));
+  scope.bindValue(Tokens.ImportRunDAO, async () => new ImportRunDAO(db, subrequests));
+  scope.bindValue(Tokens.ImportPlayCountProgressDAO, async () => new ImportPlayCountProgressDAO(db, subrequests));
+
+  /**
+   * The third key, and why this is not a merge.
+   *
+   * Two keys already exist because they guard different things with different exposure: the
+   * user key can *mint a valid Subsonic token for any account*, and the WebDAV key is read on
+   * every scan and every stream so it has the largest read surface in the product. Merging
+   * them destroys both properties invisibly.
+   *
+   * A remote Subsonic credential is a third thing again: it is operator-supplied, re-entered
+   * per source, and it grants read access to a whole other library. Under the user key,
+   * rotating it would require re-entering every Subsonic user's password, and a compromise of
+   * the most frequently read key in the product would yield it. So it gets its own, and the
+   * name shape `*-encryption-key` means `init-secrets.ts` generates the value with no edit to
+   * its known-names list.
+   */
+  scope.bindValue(
+    Tokens.RemoteKey,
+    resolveKey(
+      (env as { SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> } }).SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET,
+      (env as { SUBSONIC_REMOTE_ENCRYPTION_KEY?: string }).SUBSONIC_REMOTE_ENCRYPTION_KEY,
+      'SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET',
+      'SUBSONIC_REMOTE_ENCRYPTION_KEY',
+      subrequests,
+    ),
+  );
 
   const userKey = scope.get(Tokens.UserKey);
   const webdavKey = scope.get(Tokens.WebdavKey);
@@ -269,6 +302,50 @@ function createRequestScope(env: RequestScopeEnv): Container {
   // re-deriving one per request, and reads the platform-provisioned `ACCESS`
   // binding off `env` — the one place that binding is visible at Layer 3.
   scope.bindValue(Tokens.AccessAuthService, new AccessAuthService(env, config));
+
+  /**
+   * The two album/artist matchers, bound once and shared by every caller.
+   *
+   * They live here rather than in the import feature because they are a function of the
+   * **grouping configuration** — `ALBUM_GROUP_BY` decides which key an album has — and the
+   * configuration is read once per scope. A matcher built per call site would be free to read
+   * a different grouping from the id that `getAlbum` mints, and a star on an album id nothing
+   * resolves is invisible to every client.
+   *
+   * `libraryId` is threaded through rather than read from a scope-level field because an import
+   * resolves against **one** library: the song phase runs once per library so a song id can
+   * never be matched against the wrong grant, and the album and artist phases follow it.
+   */
+  /**
+   * The remote-instance service, and the one place a stored Subsonic password becomes a client.
+   *
+   * `onRequest` charges the **same** meter the DAOs write to, passed as a function rather than
+   * the counter itself — so this module holds no counter of its own. Two counters would be two
+   * numbers that disagree, which is the defect the whole budget mechanism was rebuilt to remove.
+   *
+   * `allowPrivateHosts` is the *same expression* `LibraryService` is built with, deliberately
+   * rather than by extraction: a WebDAV library and a remote Subsonic server are different
+   * things that happen to share one operator-supplied-host policy, and two copies of the policy
+   * would be two answers to whether a private origin may be used.
+   */
+  const importAllowPrivateHosts = (): boolean => config.getAllowPrivateWebdavHosts() ?? config.isBypassAllowed();
+  scope.bindValue(
+    Tokens.ImportSourceService,
+    new ImportSourceService({
+      sources: () => scope.get(Tokens.ImportSourceDAO)().then(async (dao) => await dao),
+      resolveKey: scope.get(Tokens.RemoteKey),
+      allowPrivateHosts: importAllowPrivateHosts,
+      onRequest: () => subrequests.charge(1, 'fetch'),
+    }),
+  );
+
+  const albumGrouping = resolveGrouping(config.getAlbumGroupBy());
+  scope.bindValue(Tokens.MatchRemoteAlbums, async (libraryId: string, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
+    await matchRemoteAlbums(await scope.get(Tokens.SongMatchDAO)(), libraryId, albumGrouping, albums),
+  );
+  scope.bindValue(Tokens.MatchRemoteArtists, async (libraryId: string, artists: ReadonlyArray<{ id: string; name: string | null }>) =>
+    await matchRemoteArtists(await scope.get(Tokens.SongMatchDAO)(), libraryId, artists),
+  );
 
   scope.bindValue(
     Tokens.SubsonicAuthService,

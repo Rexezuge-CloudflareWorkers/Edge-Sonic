@@ -120,7 +120,10 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
     // `collectTargets` for why that is invisible rather than merely wrong.
     await context.libraries.requireForUser(context.user.id, decoded.libraryId);
     if (submission) {
-      await context.annotations.recordPlay(context.user.id, id);
+      // `PlayCountDAO.recordPlay` rather than an annotation method — see
+      // `packages/backend-data/src/dao/playCounts.ts`: incrementing and overwriting the same
+      // table is the distinction that file exists to keep legible.
+      await context.playCounts.recordPlay(context.user.id, id);
     }
   }
 

@@ -393,6 +393,48 @@ mutation: restoring `"-Sonic"` fails both the validator and the render assertion
 and was resolved to `"Reachable."`, the default. `nav.operator` and `libraries.scan` were
 **deleted** rather than left unreferenced — no caller is a second vocabulary to keep in sync.
 
+## The import page is the second "what happened" surface, and it repeats the libraries page's decisions
+
+`views/ImportView.tsx` (+ `components/import/RunReport.tsx`, `services/importService.ts`) move a
+user's player data in from another Subsonic server. Three of its decisions are copies of
+`LibrariesView`'s, and they are copies **on purpose** — `apps/web` ships zero `@edge-sonic/*`
+runtime dependencies, so the package is not reachable from a browser bundle and a delegation would
+mean adding a dependency for one function:
+
+- **`load` fetches and returns; the effect owns the cancellation and is the only place that sets
+  state.** A `load` that also called `setState` had to close over the state it sets in order to
+  build its own stale fallback, which made every poll re-create the effect that depends on it — so
+  a timer's lifetime was decided by the data it fetched.
+- **A failed poll keeps the list and marks it stale.** It does *not* reuse `load`'s documented
+  "empty list plus a notice", because this is a poll: folding the failure in would turn "No
+  imports yet" — the one sentence on this page meaning something is genuinely absent — into a
+  sentence appearing every four seconds.
+- **The poll only runs while something is going**, and only for the run that is open.
+
+### The unresolved list is rendered, never summarised
+
+`RunReport.tsx` holds `reasonText` and the two components that render it, because a **decision**
+inside a component is a decision with no test, and this one maps a machine reason
+(`ambiguous` ≠ `not-found`) onto the words an operator acts on. Collapsing them would send somebody
+to index a library that already holds the album. It is re-exported from the view so the root suite
+can reach it without a DOM.
+
+### The phase list is checkboxes, and the play queue is **off**
+
+The categories cost wildly different amounts — playlists are most of a Free account's daily
+row-write allowance, the queue is one call, play counts are a walk that runs for days — so an
+operator who cannot see that cannot choose. The queue is the one that is off by default: a saved
+queue is transient state, and a default-on imports yesterday's half-finished queue without anybody
+deciding to.
+
+### `/import` had to be added to `SPA_ROUTES`, and nothing held them together
+
+`SpaViewRouter`'s `<Route>` list and the worker's `SPA_ROUTES` are one decision written twice. The
+failure is **asymmetric**: a route in the router but missing from `SPA_ROUTES` works perfectly for
+an operator who clicked a nav link in an already-loaded tab and answers **404** for anyone who
+bookmarked it or followed a link. `test/worker.int.test.ts` reads the two files as source text and
+compares the path sets — rendering the router would only establish that the router renders.
+
 ## Style
 
 Locale **values are sentence case** — "Display name", "No users registered yet." — which

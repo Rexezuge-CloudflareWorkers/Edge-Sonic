@@ -21,7 +21,13 @@ built to work without.
   without it (tests, local dev).
 - **User**: `apps/api/src/user` + `apps/web`. Guarded by Cloudflare Access, never by a
   Subsonic credential.
-- **Keys**: two Secrets Store secrets, one per feature. Never merged.
+- **Keys**: **three** Secrets Store secrets, one per feature. Never merged — see
+  `docs/agents/runtime/AGENTS.md` for what each merge would cost, which are three *different*
+  failures rather than one.
+- **Import**: `packages/backend-services/src/import` + `apps/background`'s
+  `LibraryImportWorkflow` (a Workflow) and `PlayCountImportWorker` (a Durable Object), reading
+  another Subsonic server to move playlists, stars, ratings, bookmarks, a play queue and play
+  counts into one chosen local user. Operator-triggered from `/user/import/*`.
 
 ## Hardening invariants
 
@@ -1000,6 +1006,67 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   permanent wedge, and `stalled` is the wrong answer for a failure it could not record: it
   is the terminal status, so `isAdvancing` is false for it and the chain is deleted — the
   same wedge reached by handling "cannot record" the obvious way.
+- **An import refuses to start rather than sharing the daily row allowance, because the
+  allowance is an outage.** `SCAN_DAILY_ROW_WRITE_BUDGET` exists because 5,000 rows/day is per
+  **account**, so N libraries each capped at the whole allowance would write N times it. The
+  argument is *stronger* for an import, because since 2026-09-01 an account over its allowance
+  has **every query fail** until midnight UTC — reads included. Two writers racing for the last
+  rows do not each get slower: the second takes the whole product down, `/rest` authentication
+  with it, and the remedy is a clock rather than a change. So there is **one writer at a time**,
+  and the two refusals are about *not writing rows* rather than a conflict in the usual sense.
+  Both are asserted through the HTTP surface in `test/import-routes.test.ts`, each with the case
+  that proves the gate has teeth, and `assertScansIdle` is asserted **both ways** — because a
+  precondition that passes when it should fail looks exactly like a guard.
+  Three answers rather than two, and each asks the operator for something different: `paused`
+  resumes without a poll, `failed` needs a look, and `stalled` is neither.
+- **A unit of work bounded by a budget must hold the budget's own meter.** `PlayCountImportWorker`
+  needs a narrower ceiling than the invocation's 50, so it took `ScanBudget`'s approach — and then
+  built a **local** `SubrequestCounter` for the batch loop's `canAfford` while every DAO charged
+  the **scope's** own counter. Two counters are two numbers that disagree, and the disagreement
+  was silent and total: the loop saw 44 remaining on a meter nothing else had spent, `requireSubrequests`
+  threw on album seven, and `alarm`'s catch swallowed it into "could not read the import source"
+  and re-armed. **The walk reported progress and made none, for ever.** So the rule is
+  `scope.get(Tokens.SubrequestMeter)` with `setCeiling(...)` — one meter, narrowed, so the loop
+  and every charge point below it read the same number. `test/import-execution.test.ts` walks
+  twenty albums across several alarms to completion, which is the only assertion that would have
+  seen it: a fixture of one page settles after one album and never reaches the branch.
+- **Two refusals that mean different things must not be one answer, and a caller must not be
+  left to guess.** `ImportSourceService.clientFor` returns `{ok:true, client}` or
+  `{ok:false, reason}` because there are **two** refusals — the row is gone, or the host is no
+  longer permitted because an operator tightened `ALLOW_PRIVATE_WEBDAV_HOSTS` after the run
+  started — and a method answering `null` for one and *throwing* for the other left the Durable
+  Object writing `=== null` and so believing it covered both, while a tightening arrived as a
+  thrown `NotFoundError` that its `alarm` catch swallowed into a generic message. It then re-armed
+  and retried a host the policy had just refused, for ever, with the real reason discarded.
+  Over HTTP the two **do** collapse to one 404, deliberately — the distinction is not actionable
+  there and saying which it is would leak that a row exists whose URL the caller may no longer
+  use, the same reasoning `assertRemoteReachable` applies. What each caller does with each is
+  stated at each caller.
+- **An error class is not a status, and a route must not re-decide one.** `createSource` mapped
+  every `BadRequestError` to a 409, which made "that URL is not allowed by the SSRF gate" and
+  "that remote account is already registered" arrive under one number — and an operator reading a
+  rejected URL as a conflict would go looking for a duplicate to rename. The class carries the
+  status (`ConflictError` → 409, `BadRequestError` → 400) and `BaseRoute.toErrorResponse` is the
+  single path, so a route has nothing to map.
+- **A derived id needs an *injective* encoding, because a separator proves nothing.**
+  An imported playlist's id must be stable across a retried Workflow step, so it is a hash of
+  `(namespace, run, remotePlaylistId)`. The first version joined the parts with NUL and its
+  docstring claimed the delimiter "cannot appear in a part" — which is false: joining
+  `['ns','a','b']` and joining `['ns', 'a' + NUL + 'b']` produce the same string, so **any** delimiter is
+  forgeable and two different playlists hash to one id, one overwriting the other. Length-prefixing
+  each part (`3:ns1:a1:b`) is injective because the length is recoverable from the bytes. The
+  comment was the false part and the test that caught it was written *because* the comment made a
+  claim; asserted in `test/import-phases.test.ts`.
+- **A column that is real to the code and absent from the database is invisible to every DAO
+  test.** `import_runs.report_json` was in `ImportRunRow`, written by `writeReport` and read by
+  `parseReport`, and **absent from `CREATE TABLE`** — every DAO test passed, because the phase
+  tests drive a port, the route tests use a run with no report, and the migration lock records
+  **bytes, not columns**. The write failed with "no such column" and the retry layer turned that
+  into a `DatabaseError`. This is the second and third time in this repository
+  (`songs.reader_version`, `scan_state.consecutive_failures`), and both times the instrument that
+  found it was `test/schema.int.test.ts` reading `PRAGMA table_info`. So the import's tables now
+  have an assertion naming **every** column a DAO writes — written out rather than derived from
+  the DAOs, because a list derived from the code cannot detect a disagreement the code is part of.
 - **A variable can be declared, parsed, validated, templated and read by nothing.**
   Five were, and they fail in three distinguishable ways, which is why one rule does not
   cover them. `STREAM_RATE_LIMIT` was inert: the limiter used a literal, so `600` lived in
@@ -1239,6 +1306,7 @@ Enforced by ESLint `no-restricted-imports` in `eslint.config.mjs`.
 | DAOs, schema, D1 rules        | `packages/backend-data/AGENTS.md`             |
 | Services, auth, composition   | `packages/backend-services/AGENTS.md`         |
 | Bindings, wrangler, secrets   | `docs/agents/runtime/AGENTS.md`               |
+| Background Workers            | `apps/background/AGENTS.md`                   |
 | Tests, thresholds, doubles    | `docs/agents/testing/AGENTS.md`               |
 | Repo tooling (`scripts/`)     | `scripts/README.md`                           |
 | Backup, restore, Time Travel  | `docs/db-backup-recovery.md`                  |

@@ -1,0 +1,655 @@
+/**
+ * The two Workers that run an import, driven directly.
+ *
+ * ### Why these are testable without workerd
+ *
+ * Because `test/mocks/cloudflare-workers.ts` stores the `ctx` and `env` a `DurableObject` or
+ * `WorkflowEntrypoint` is constructed with — so a test can construct the real class over a fake
+ * context and call `alarm()` / `run()` itself. That is the whole reason the mock stores them
+ * rather than exposing nothing: a `DurableObject` base that only knew about types would make
+ * every DO class in `apps/background` untestable outside Miniflare, and the integration pool is
+ * the wrong place for a unit of a batch loop.
+ *
+ * **And they had to be tested.** Between them these two files are the only place an import's
+ * *scheduling* lives, and every defect the class is shaped around is a **silent wedge** rather
+ * than an error: a walk that reports progress and makes none, an alarm that is consumed with
+ * nothing left to advance it, a run marked complete while half its play counts are still walking.
+ *
+ * ### The fakes model the platform's two load-bearing facts
+ *
+ * - **`storage.setAlarm` is a *schedule*, not a call.** A fake that fired immediately would make
+ *   every batch loop run to exhaustion, which is precisely the unbounded behaviour the batch is
+ *   bounded to prevent. So the fake **records** the alarm and the test fires it — which is what
+ *   lets a three-round chain be asserted as three rounds.
+ * - **A Workflow `step.do` is cached by name.** A fake that always re-ran would model a Workflow
+ *   that does not exist, and every idempotency assertion would pass for the wrong reason. So the
+ *   fake caches, and the test drives a *second* pass to prove a cached step is not re-run.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PlayCountImportWorker } from '../apps/background/src/PlayCountImportWorker';
+import { LibraryImportWorkflow } from '../apps/background/src/LibraryImportWorkflow';
+import { NonRetryableError } from 'cloudflare:workflows';
+import { ImportRunDAO, ImportSourceDAO, LibraryDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { encryptData } from '@edge-sonic/backend-data/crypto';
+import { REMOTE_TEST_KEY } from './helpers/harness';
+import { sqliteQueryable, execScript } from './helpers/sqlite';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { IMPORT_PHASES } from '@edge-sonic/backend-services/import';
+import { parseReport, serializeReport, buildReport, phase } from '@edge-sonic/backend-services/import';
+import type { ImportPhase } from '@edge-sonic/backend-data/dao';
+
+const MIGRATIONS = fileURLToPath(new URL('../migrations', import.meta.url));
+
+/**
+A `DurableObjectState`, in memory, with `setAlarm` as a **recorded schedule**.
+*/
+function fakeCtx() {
+  const store = new Map<string, unknown>();
+  const alarms: Array<number | null> = [];
+  return {
+    storage: {
+      get: async (key: string) => store.get(key),
+      put: async (key: string, value: unknown) => void store.set(key, value),
+      delete: async (key: string) => void store.delete(key),
+      setAlarm: async (at: number) => void alarms.push(at),
+      deleteAlarm: async () => void alarms.push(null),
+    },
+    alarms,
+    store,
+    executionContext: { waitUntil: () => undefined, passThroughOnException: () => undefined, props: {} },
+  };
+}
+
+/**
+An env with a live SQLite handle and the three per-feature keys.
+*/
+function envFor(handle: ReturnType<typeof sqliteQueryable>, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    DB: handle.db,
+    ENVIRONMENT: 'development',
+    DEV_AUTH_EMAIL: 'operator@example.com',
+    TEAM_DOMAIN: 'example.cloudflareaccess.com',
+    POLICY_AUD: 'aud',
+    SUBSONIC_USER_ENCRYPTION_KEY: Buffer.alloc(32, 1).toString('base64'),
+    WEBDAV_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString('base64'),
+    SUBSONIC_REMOTE_ENCRYPTION_KEY: REMOTE_TEST_KEY,
+    ...overrides,
+  };
+}
+
+let handle: ReturnType<typeof sqliteQueryable>;
+
+function migrated(): ReturnType<typeof sqliteQueryable> {
+  const opened = sqliteQueryable();
+  for (const file of readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort()) {
+    execScript(opened, readFileSync(`${MIGRATIONS}/${file}`, 'utf8'));
+  }
+  return opened;
+}
+
+beforeEach(() => {
+  handle = migrated();
+});
+
+/**
+A run with a real source, a real user and a real library.
+*/
+async function seedRun(options: { sourceId?: string; userId?: string } = {}): Promise<{ runId: string; sourceId: string; userId: string }> {
+  const users = new UserDAO(handle.db);
+  const userId = options.userId ?? (await users.create({ username: `u${users.list.length}`, passwordCiphertext: 'c', passwordIv: 'iv' })).id;
+  const libraryId = (
+    await new LibraryDAO(handle.db).create({
+      slug: `lib${options.sourceId ?? 'x'}`,
+      baseUrl: 'https://dav.example.com',
+      rootPath: '/dav',
+      davUsername: 'ann',
+      passwordCiphertext: 'c',
+      passwordIv: 'iv',
+    })
+  ).id;
+  await users.setLibraryGrants(userId, [libraryId]);
+
+  const encrypted = await encryptData('hunter2', REMOTE_TEST_KEY);
+  const sourceId =
+    options.sourceId ??
+    (
+      await new ImportSourceDAO(handle.db).create({
+        name: 'Old server',
+        baseUrl: 'https://music.example.com/sonic',
+        username: 'alice',
+        passwordCiphertext: encrypted.ciphertext,
+        passwordIv: encrypted.iv,
+        musicFolderId: null,
+      })
+    ).id;
+
+  const run = await new ImportRunDAO(handle.db).create({ sourceId, targetUserId: userId, phases: [...IMPORT_PHASES] });
+  return { runId: run.id, sourceId, userId };
+}
+
+/**
+ * A remote Subsonic server, as the client sees it.
+ *
+ * ### It serves a **page**, not one album per call
+ *
+ * The first version returned a single album per `getAlbumList2`, which quietly made the whole
+ * batch bound untestable: `ALBUMS_PER_BATCH` is seven, a page of one is always short, so the walk
+ * settled after one album and the re-arm branch never ran. The stub is a **double**, and a double
+ * that models a shape the platform does not have hides the code that guards that shape — which
+ * is this repository's rule about `fakeKv` and `fakeDav` arriving at a third fixture.
+ *
+ * `pageSize` is therefore the protocol's own 500 by default, and a test that wants a short page
+ * says so explicitly.
+ */
+interface FakeAlbum {
+  readonly id: string;
+  /**
+  The remote's own name for the album, which may differ from the first track's artist.
+  */
+  readonly name?: string;
+  /**
+  The remote's **album** artist, which is what an album id is matched on.
+  */
+  readonly artist?: string;
+  readonly songs: ReadonlyArray<{ readonly id: string; readonly title: string; readonly album: string; readonly artist: string }>;
+}
+
+function remoteAlbums(albums: readonly FakeAlbum[]) {
+  return {
+    /**
+    Every album, so the assertions can say what the walk should have reached.
+    */
+    all: albums,
+    /**
+    A page at `offset`, like `getAlbumList2?offset=&size=`.
+    */
+    page: (offset: number, size: number) => albums.slice(offset, offset + size).map((album) => ({ id: album.id, name: album.name ?? album.id, artist: album.artist ?? album.songs[0]?.artist ?? 'Unknown', artistId: null, songCount: album.songs.length })),
+    songsOf: (albumId: string) =>
+      (albums.find((album) => album.id === albumId)?.songs ?? []).map((song) => ({
+        id: song.id,
+        path: null,
+        title: song.title,
+        album: song.album,
+        artist: song.artist,
+        track: 1,
+        discNumber: 1,
+        duration: 100,
+        // A count worth importing — `> 0`, which is what `runPlayCountAlbumPhase` filters on, so an
+        // album of zero-count tracks is the *unplayed* case and is asserted separately.
+        playCount: 3,
+        userRating: null,
+        starred: null,
+      })),
+  };
+}
+
+/**
+ * Stub the whole `fetch`, answering from `remote`.
+ *
+ * Both endpoints, and the `offset` parameter honoured — because a stub that ignored `offset` would
+ * return the same first page for ever and the walk would never finish, or would finish after one
+ * album while appearing to have walked the library.
+ */
+function stubFetch(remote: ReturnType<typeof remoteAlbums>, pageSize = 500) {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const json = (body: unknown): Response => Response.json(body, { status: 200, headers: { 'content-type': 'application/json' } });
+
+      if (/getAlbumList2/.test(url)) {
+        const offset = Number.parseInt(new URL(url).searchParams.get('offset') ?? '0', 10);
+        return json({ 'subsonic-response': { status: 'ok', albumList2: { album: remote.page(offset, pageSize) } } });
+      }
+      if (/getAlbum\b/.test(url)) {
+        const id = new URL(url).searchParams.get('id') ?? '';
+        return json({ 'subsonic-response': { status: 'ok', album: { song: remote.songsOf(id) } } });
+      }
+      return json({ 'subsonic-response': { status: 'ok' } });
+    }),
+  );
+}
+
+describe('PlayCountImportWorker', () => {
+  it('records its run and arms an alarm, so the walk is scheduled rather than run inline', async () => {
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+
+    // A schedule, not an execution. A fake that fired immediately would make the batch bound
+    // untestable by construction — which is exactly the thing the bound exists for.
+    expect(ctx.alarms).toHaveLength(1);
+    expect(ctx.store.get('runId')).toBe(runId);
+    expect(await worker.status()).toMatchObject({ runId, albums: 0, finished: false });
+  });
+
+  it('reports progress from storage and never from D1, because D1 may be refusing writes', async () => {
+    // The pause model `scanPause.ts` follows, and the reason is the same: an exhausted daily
+    // allowance fails *every* query, so the answer to "what is happening" has to be readable
+    // while D1 is refusing answers. A `status` that read the run row would answer during exactly
+    // the outage it exists to explain.
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+
+    const status = await worker.status();
+    expect(status).toMatchObject({ runId, albums: 0, songs: 0, finished: false, lastError: null });
+  });
+
+  it('settles the run as failed, with a reason, when the source is no longer permitted', async () => {
+    // ### The reachable refusal is the **policy**, not the row
+    //
+    // Deleting the source does not leave a run behind: `import_runs.source_id` is
+    // `ON DELETE CASCADE`, so the run cascades with it. That is right — a report about rows that no
+    // longer exist is a lie — and it means "the source is gone" reaches this branch as "the run is
+    // gone too", which is the *next* test.
+    //
+    // What is genuinely reachable with a run still present is an operator **tightening**
+    // `ALLOW_PRIVATE_WEBDAV_HOSTS` after the run started. The row is fine and the URL is fine; the
+    // host is simply no longer allowed, so `clientFor` answers `null` and the walk must stop and
+    // say why rather than carry on against a host the policy has refused.
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    // A private origin, registered while the policy permitted it.
+    await handle.db.prepare('UPDATE import_sources SET base_url = ?').bind('http://10.1.2.3:4533').run();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle, { ALLOW_PRIVATE_WEBDAV_HOSTS: 'false' }) as never);
+    await worker.start({ runId });
+
+    await worker.alarm();
+
+    const run = await new ImportRunDAO(handle.db).findById(runId);
+    expect(run?.status).toBe('failed');
+    // **Named**, not merely stopped: a run sitting `running` with nothing scheduled to advance it is
+    // a wedge, and an operator cannot tell that from a walk in progress.
+    expect(run?.last_error).toMatch(/source/i);
+    // And the alarm is **disarmed** — nothing is scheduled to resume a finished walk, and leaving it
+    // armed would wake the object once per period for ever to discover the same thing.
+    expect(ctx.alarms.at(-1)).toBeNull();
+  });
+
+  it('cascades a run with its source, so a report never outlives the rows it describes', async () => {
+    const { runId, sourceId } = await seedRun();
+    await handle.db.prepare('DELETE FROM import_sources WHERE id = ?').bind(sourceId).run();
+
+    expect(await new ImportRunDAO(handle.db).findById(runId)).toBeNull();
+  });
+
+  it('settles the run as failed, with a reason, when the run itself has gone', async () => {
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    await handle.db.prepare('DELETE FROM import_runs WHERE id = ?').bind(runId).run();
+
+    await worker.alarm();
+
+    expect((await worker.status()).lastError).toMatch(/run/i);
+  });
+
+  it('walks a batch, advances the cursor by a delta, and re-arms while albums remain', async () => {
+    // Twenty albums — **more** than one batch of seven — so the re-arm branch runs and the cursor is
+    // what carries the walk across alarms. A fixture of one page would settle after one album and
+    // never reach the branch this is about.
+    const remote = remoteAlbums(Array.from({ length: 20 }, (_, index) => ({ id: `a${index}`, songs: [{ id: `s${index}`, title: `Track ${index}`, album: 'X', artist: 'Y' }] })));
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    stubFetch(remote);
+
+    await worker.alarm();
+    const afterOne = await worker.status();
+    // One alarm walked a **bounded** number of albums and stopped, rather than the whole library.
+    expect(afterOne.albums).toBeGreaterThan(0);
+    expect(afterOne.albums).toBeLessThan(remote.all.length);
+    expect(afterOne.finished).toBe(false);
+    // Re-armed, because work remains.
+    expect(ctx.alarms.at(-1)).not.toBeNull();
+
+    // The cursor moved, so the next alarm continues rather than restarting — and a restart would
+    // *add* to counts already set, which for play counts means inflating every one of them.
+    await worker.alarm();
+    const afterTwo = await worker.status();
+    expect(afterTwo.albums).toBeGreaterThanOrEqual(afterOne.albums);
+
+    // Walk the rest to completion. Bounded to a number of rounds so a cursor that fails to advance
+    // fails here rather than hanging.
+    for (let round = 0; round < 10 && !(await worker.status()).finished; round += 1) {
+      await worker.alarm();
+    }
+    const done = await worker.status();
+    expect(done.finished).toBe(true);
+    // Every album, exactly once — the assertion that makes the cursor's correctness observable.
+    expect(done.albums).toBe(remote.all.length);
+    expect((await new ImportRunDAO(handle.db).findById(runId))?.status).toBe('completed');
+    vi.unstubAllGlobals();
+  });
+
+  it('skips an album nobody has played, without spending a match lookup on it', async () => {
+    // Most albums in any library have never been played. A remote reporting `playCount: 0`
+    // everywhere is saying the truth about a library nobody listens to, and a walk that treated it
+    // as a fault would report every album as unresolvable.
+    const remote = remoteAlbums([{ id: 'a0', songs: [{ id: 's0', title: 'Unheard', album: 'X', artist: 'Y' }] }]);
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    stubFetch(remote);
+    // The remote says zero for every track.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const json = (body: unknown): Response => Response.json(body, { status: 200, headers: { 'content-type': 'application/json' } });
+        if (/getAlbumList2/.test(url)) return json({ 'subsonic-response': { status: 'ok', albumList2: { album: remote.page(0, 500) } } });
+        return json({ 'subsonic-response': { status: 'ok', album: { song: [{ id: 's0', title: 'Unheard', album: 'X', artist: 'Y', playCount: 0 }] } } });
+      }),
+    );
+
+    await worker.alarm();
+
+    const done = await worker.status();
+    expect(done.finished).toBe(true);
+    // The album was still **walked** — it is not skipped — and nothing was imported from it.
+    expect(done.albums).toBe(1);
+    expect(done.songs).toBe(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('records the fault and re-arms when the remote refuses, rather than letting the alarm die', async () => {
+    // A throwing alarm is retried a bounded number of times by the platform and then **dropped**,
+    // so a fault that escapes leaves the run saying `running` with nothing scheduled to advance
+    // it. The catch here is what turns a fault into a bounded retry instead of a wedge.
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network error');
+      }),
+    );
+
+    await worker.alarm();
+
+    // Armed **again** — the whole point — and the run still `running`, because it has not settled.
+    expect(ctx.alarms).toHaveLength(2);
+    expect(ctx.alarms.at(-1)).not.toBeNull();
+    expect((await worker.status()).finished).toBe(false);
+    expect((await new ImportRunDAO(handle.db).findById(runId))?.status).toBe('running');
+    vi.unstubAllGlobals();
+  });
+
+  it('does nothing at all without a run, rather than inventing one', async () => {
+    // An alarm with nothing to walk is a *programming* error, and inventing a run would turn it
+    // into a silent import from an unknown source.
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId: 'nonexistent' });
+
+    await worker.alarm();
+
+    // Disarmed rather than left armed: there is nothing to walk, so an armed alarm would wake the
+    // object once per period for ever to discover the same thing. And no row was written — an
+    // update against a run that does not exist is a no-op, which is why the assertion is about the
+    // alarm rather than about a status.
+    expect(ctx.alarms.at(-1)).toBeNull();
+  });
+});
+
+/**
+ * A Workflow `step`, with the one behaviour that matters: **cached by name**.
+ *
+ * Re-running a cached step is what the Workflow engine does not do, and modelling it wrongly makes
+ * every idempotency assertion pass for the wrong reason — so the fake caches, and the tests drive
+ * a second pass to prove a step is not repeated.
+ */
+function fakeStep() {
+  const cache = new Map<string, unknown>();
+  const calls: string[] = [];
+  return {
+    calls,
+    cache,
+    do: async (name: string, _config: unknown, body: () => Promise<unknown>): Promise<unknown> => {
+      if (cache.has(name)) return cache.get(name);
+      calls.push(name);
+      const value = await body();
+      cache.set(name, value);
+      return value;
+    },
+  };
+}
+
+describe('LibraryImportWorkflow', () => {
+  it('records each phase from the step’s own return value, not a placeholder', async () => {
+    // The defect this guards: recording a hardcoded `imported` inside the step's caller means
+    // the report says \"imported\" whatever the step decided, and the **named list of unresolved
+    // items** — the one thing the feature exists for — never reaches the operator.
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    const step = fakeStep();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({ 'subsonic-response': { status: 'ok', starred2: { song: [{ id: 'r1', title: 'Gone', album: 'Nowhere', artist: 'Nobody' }] } } }, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+    await workflow.run(
+      { payload: { runId, sourceId, userId, libraryId, phases: ['stars'], playlistIds: [] } } as never,
+      step as never,
+    );
+
+    const stored = parseReport(await new ImportRunDAO(handle.db).readReport(runId));
+    const stars = stored?.phases.find((entry) => entry.phase === 'stars');
+    // The phase ran and reported **partial**, because its one track matched nothing locally.
+    expect(stars?.status).toBe('partial');
+    // And the item is **named** — the label, not a count.
+    expect(stars?.unresolved.map((item) => item.label)).toContain('Gone — Nobody — Nowhere');
+    vi.unstubAllGlobals();
+  });
+
+  it('names one step per playlist, so a retry re-does one playlist rather than all of them', async () => {
+    // A 30-playlist phase as a single step would re-fetch and re-write **all thirty** when the
+    // twenty-ninth failed, spending the daily row allowance twice over for the first twenty-eight.
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    const step = fakeStep();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (/getPlaylists/.test(url)) {
+          return Response.json({ 'subsonic-response': { status: 'ok', playlists: { playlist: [{ id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' }] } } }, {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return Response.json({ 'subsonic-response': { status: 'ok', playlist: { entry: [] } } }, { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+    await workflow.run(
+      {
+        payload: {
+          runId,
+          sourceId,
+          userId,
+          libraryId,
+          phases: ['playlists'],
+          // The ids are in the **payload**, read before the workflow started: a step name is a
+          // cache key and has to be nameable before the first step runs.
+          playlistIds: ['p1', 'p2'],
+        },
+      } as never,
+      step as never,
+    );
+
+    expect(step.calls.filter((name) => name.startsWith('playlist '))).toEqual(['playlist p1', 'playlist p2']);
+    vi.unstubAllGlobals();
+  });
+
+  it('does not re-run a cached step, so a retried instance cannot write the same playlist twice', async () => {
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    const step = fakeStep();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok', playlist: { entry: [] } } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+    const payload = { runId, sourceId, userId, libraryId, phases: ['playlists' as ImportPhase], playlistIds: ['p1'] } as never;
+    await workflow.run({ payload } as never, step as never);
+    await workflow.run({ payload } as never, step as never);
+
+    // One execution of the step across **two** passes of the instance. The derived playlist id is
+    // the second half of the same guard; this is the half the platform provides.
+    expect(step.calls.filter((name) => name.startsWith('playlist '))).toEqual(['playlist p1']);
+    vi.unstubAllGlobals();
+  });
+
+  it('refuses to retry a step whose source has been deleted, rather than reading a gone row three more times', async () => {
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    await handle.db.prepare('DELETE FROM import_sources WHERE id = ?').bind(sourceId).run();
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+
+    // `NonRetryableError`, so the engine records a **failed** instance rather than burning three
+    // attempts on a row that will not come back — and rather than reporting success.
+    await expect(
+      workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never),
+    ).rejects.toBeInstanceOf(NonRetryableError);
+  });
+
+  it('leaves the run running while the play-count walk is outstanding, and does not claim success', async () => {
+    // The failure this guards: `finish` marking the run `completed` because the workflow's own
+    // steps ended, while the Durable Object is still walking albums. An operator told
+    // \"imported\" with half the play counts missing has no way to know, and nothing would correct
+    // them later.
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    const started: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, {
+      ...envFor(handle),
+      // A DO namespace stub that records the `start`, which is the whole point of the step: it
+      // must happen **once**, outside `step.do`, because a step that "completed" but whose object
+      // was never started would be cached and never re-run.
+      IMPORT_DO: {
+        getByName: (name: string) => {
+          started.push(name);
+          return { start: async () => ({ runId: name }) };
+        },
+      },
+    } as never);
+
+    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['playCounts'], playlistIds: [] } } as never, fakeStep() as never);
+
+    const runs = new ImportRunDAO(handle.db);
+    const run = await runs.findById(runId);
+    expect(run?.status).toBe('running');
+    expect(run?.finished_at).toBeNull();
+    // The walk named, so the operator can see what is outstanding.
+    const stored = parseReport(await runs.readReport(runId));
+    expect(stored?.phases.find((entry) => entry.phase === 'playCounts')?.status).toBe('partial');
+    expect(stored?.finishedAt).toBeNull();
+    // And the object's name **is** the run, so a retried call reaches the same object rather than
+    // starting a second walk over the same albums.
+    expect(started).toEqual([runId]);
+    expect(run?.play_count_worker).toBe(runId);
+    vi.unstubAllGlobals();
+  });
+
+  it('reports a completed run when no walk is outstanding', async () => {
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never);
+
+    const runs = new ImportRunDAO(handle.db);
+    expect((await runs.findById(runId))?.status).toBe('completed');
+    expect(parseReport(await runs.readReport(runId))?.finishedAt).toBeTypeOf('number');
+    vi.unstubAllGlobals();
+  });
+
+  it('skips a phase the operator did not ask for, entirely', async () => {
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    const step = fakeStep();
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })));
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: [], playlistIds: [] } } as never, step as never);
+
+    // **No steps at all**. A phase the operator left out is skipped, not run-and-found-empty —
+    // so the report cannot show a category they did not ask for as imported.
+    expect(step.calls).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it('replaces a phase line by name rather than appending, so a retried phase cannot double it', async () => {
+    // Recording happens **outside** `step.do` and is keyed by phase name. That is what makes it
+    // idempotent; appending would list every unresolved item once per attempt, and a duplicate reads
+    // as a second, different problem.
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok', starred2: {} } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+    );
+
+    const runs = new ImportRunDAO(handle.db);
+    // Seed a report that already carries a `stars` line, as a previous attempt would have.
+    await runs.writeReport(
+      runId,
+      serializeReport(
+        buildReport({
+          runId,
+          sourceName: 'Old server',
+          targetUsername: 'ann',
+          finished: false,
+          phases: [phase({ phase: 'stars', status: 'partial', unresolvedCount: 1, unresolved: [{ category: 'star', context: 'starred', remoteId: 'r1', label: 'Gone', reason: 'not-found' }] })],
+        }),
+      ),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['stars'], playlistIds: [] } } as never, fakeStep() as never);
+
+    const stored = parseReport(await runs.readReport(runId));
+    // **One** line named `stars`, not two.
+    expect(stored?.phases.filter((entry) => entry.phase === 'stars')).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('the phase vocabulary is one list, and both callers read it', () => {
+  it('is exported once, from the feature, not restated per consumer', () => {
+    // The route validates an operator's `phases` against this exact list and the workflow switches
+    // on the same names. Two lists would be two vocabularies, and a phase the route accepts but the
+    // workflow ignores is a category that reports success having imported nothing.
+    expect(IMPORT_PHASES).toEqual(['playlists', 'stars', 'bookmarks', 'playQueue', 'playCounts']);
+    expect(new Set(IMPORT_PHASES).size).toBe(IMPORT_PHASES.length);
+  });
+});

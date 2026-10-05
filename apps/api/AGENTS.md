@@ -121,6 +121,32 @@ The status stays `207` on the failure, because the origin *did* answer: this is 
 configuration fault, and reporting it as unreachable would send an operator off to debug their
 own server — the exact failure `classifyBeforeRequest` exists to prevent.
 
+## `/user/import/*` holds no credential, and that is a layer rule
+
+The import routes live in `user/importRoutes.ts` and reach storage through
+`Tokens.ImportSourceService`, **not** `backend-data` — `no-restricted-imports` forbids
+`apps/api` from importing that package's values, and `LibraryService` has always owned the DAV
+credential's encrypt/decrypt for exactly that reason.
+
+The reason is not tidiness. The credential is read from **two** places — here, to list the remote's
+playlists before the Workflow starts, and inside the Workflow, per step, because a Workflow payload
+is persisted by the platform and a password can never be part of one. Two readers of one stored
+secret is two implementations of "decrypt it", free to disagree about which key, and the
+disagreement is a credential that decrypts in one place and not the other.
+
+`createSource` therefore **throws** rather than catching: `BaseRoute.toErrorResponse` is the
+documented single path, and the **error class** carries the status. An earlier version mapped
+every `BadRequestError` to a 409, which made "that URL is not allowed by the SSRF gate" and "that
+remote account is already registered" arrive under one number.
+
+Registration order inside `registerImportRoutes` matters within the module:
+`GET /user/import/sources` is registered before `GET /user/import/:id`, and a route table where one
+entry silently captures another's is one nothing tests.
+
+The status route is a **read**: the operator's page polls it while an import runs, and a status
+read that wrote would spend the allowance it is reporting on — the defect `ScanStateDAO.ensure`
+caused on the libraries page, one surface over.
+
 ## The user rate limits come after auth
 
 `registerUserRateLimits(app)` is registered **after** `app.use('/user/*', userAuthentication())`,

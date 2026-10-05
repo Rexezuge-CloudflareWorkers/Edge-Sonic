@@ -42,7 +42,11 @@ async function annotationsFor(context: RestContext, renderingAnything: boolean):
     context.annotations.listRatings(context.user.id, 'song'),
     context.annotations.listRatings(context.user.id, 'album'),
     context.annotations.listRatings(context.user.id, 'artist'),
-    context.annotations.listPlayCounts(context.user.id),
+    // `PlayCountDAO`, not `annotations`: play counts are a per-user table with **two** semantics
+    // (a scrobble increments, an import overwrites), so they have their own DAO whose docstrings
+    // name each other. Reading them off `annotations` would be reaching past the boundary that
+    // keeps the two writers near each other.
+    context.playCounts.listPlayCounts(context.user.id),
   ]);
   return {
     stars: new Map([...songStars, ...albumStars, ...artistStars]),

@@ -54,10 +54,25 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
   against a D1 dump"* — an unencrypted backup inverts that assumption — and because the dump is
   a listening history (`play_counts`, `now_playing`, `stars`, `ratings`) plus the whole library
   topology. Playbook: `docs/db-backup-recovery.md`.
-- Bindings: D1 `DB`, KV `CACHE`, and two Secrets Store secrets. **No Queues, no R2, no
-  Vectorize in the templates.** The scan runs on a Durable Object when the `SCAN` binding is
-  configured and is otherwise advanced by `getScanStatus`; nothing runs on a *cron*, though
-  `backup-d1.yml` is one — it is a GitHub Actions schedule, not a Worker trigger.
+- Bindings: D1 `DB`, KV `CACHE`, three Secrets Store secrets, one Durable Object namespace
+  (`SCAN`) and — for the import — a second (`IMPORT_DO`) plus a Workflow (`IMPORT_WORKFLOW`).
+  **No Queues, no R2, no Vectorize in the templates.** The scan runs on a Durable Object when
+  the `SCAN` binding is configured and is otherwise advanced by `getScanStatus`; nothing runs on
+  a *cron*, though `backup-d1.yml` is one — it is a GitHub Actions schedule, not a Worker
+  trigger.
+- **The import's Durable Object is a second namespace, not a second name on `SCAN`.** A Durable
+  Object's lifecycle *is* its alarm's, so one namespace would put an import's play-count walk
+  and a library scan in the same object, where the walk's terminal `deleteAlarm` silently
+  disarms the scan. The import *pauses* the scan rather than sharing its row budget, so the two
+  must not be able to reach each other's alarms.
+- **The Workflow and the Durable Object are one feature split by the step ceiling, not by
+  convenience.** A Workflow step is *cached by name*, so `playlist <remoteId>` cannot write the
+  same playlist twice — which is the whole reason an imported playlist's id is derived
+  (`UUIDUtil.deterministicId`) as well. The play-count walk gets no such guarantee and needs
+  ~1 step per album against a **1,024-step** ceiling on Free, so it runs in the Durable Object
+  and each alarm gets a **fresh** 50-subrequest external budget. See
+  `docs/issues/subrequest-budgets-are-two-not-one.md` for the measurement that makes an
+  unbounded walk possible at all.
 - `AppConfiguration.validate()` runs **once per isolate** on the first request and logs
   to `console.error`. It is the only place unsafe configuration is reported, because
   every failure mode it checks is silent at request time: a malformed numeric var falls
@@ -214,11 +229,36 @@ without a type error and silently never reach the config layer.
 | -------------------------------------- | -------------------------------------- | ----------------------------- |
 | `SUBSONIC_USER_ENCRYPTION_KEY_SECRET`  | `edge-sonic-subsonic-user-encryption-key` | `users.password_ciphertext` |
 | `WEBDAV_ENCRYPTION_KEY_SECRET`         | `edge-sonic-webdav-encryption-key`     | `libraries.password_ciphertext` |
+| `SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET` | `edge-sonic-subsonic-remote-encryption-key` | `import_sources.password_ciphertext` |
 
-Two keys, never one. Merging them would make rotating the WebDAV credential require
-re-entering every user's password, and a compromise of one store would yield both. Both
-live in one store, and `ensureSecretStore()` writes a single resolved id into every entry,
-so rotating one key never has to move the other.
+Three keys, never fewer. Merging any two would make one of these true, and each is a
+**different** merge:
+
+- user + WebDAV: rotating the WebDAV credential would require re-entering every user's
+  password, and a compromise of one store would yield both.
+- remote + WebDAV: the WebDAV key is read on **every scan and every stream**, so it has the
+  largest read surface in the product, while a remote credential is operator-supplied and
+  re-entered per source.
+- remote + user: a remote credential grants read access to a whole **other** library, and
+  rotating the user key would require re-entering it.
+
+All three live in one store, and `ensureSecretStore()` writes a single resolved id into every
+entry, so rotating one key never has to move another.
+
+**The third one needed no edit to `init-secrets.ts`**, and that is what the name shape buys:
+a `*-encryption-key` name gets a generated 32-byte AES-GCM key. Adding an entry to
+`secrets_store_secrets[]` used to require *also* editing a hardcoded list of known names, and
+getting that wrong broke deployment — `init-secrets.ts` threw `Unknown secret`, the rejection
+was swallowed, and the CD step reported success with the failure surfacing two steps later as
+a 10182. **A provisioning script must exit non-zero on failure**: a guard that logs and
+returns 0 is indistinguishable from a guard that passed.
+
+**The test harness gives the three features three distinct values**, which it did not used
+to. With one value for all three, no test in this repository could detect a merge — and
+`test/user-api.test.ts` has asserted in those words, for both a user password and a library
+password, that "the stored value must be the *user* key's output, so rotating the DAV key
+does not log everyone out". That claim was in the comment and untestable. The rule is
+`fakeKv`'s: **a double must model the platform's distinctions, not only its shapes.**
 
 **Who creates what.** `scripts/deploy/prepare-wrangler-config.ts` (`provisionWranglerResources`)
 creates the **store** and patches its id into the config. `scripts/deploy/init-secrets.ts` then
@@ -276,6 +316,18 @@ the origin's.
   statements). That took the "no binding for token" throw with it — the only diagnostic
   for a correctly-spelled-but-unbound token. The throw is back and is asserted for every
   entry in `Tokens` against **both** composition roots, in `test/rate-limit.test.ts`.
+- **A binding that wraps another binding must not take a second meter.** `PlayCountImportWorker`
+  needs a *narrower* budget than the invocation's 50, so it took the scan's approach — but it
+  built a **local** `SubrequestCounter` for the batch loop's `canAfford` while its DAOs charged
+  the **scope's** own counter. Two counters are two numbers that disagree, and the
+  disagreement was silent and total: the loop saw 44 remaining on a meter nothing else had
+  spent, the DAOs' `requireSubrequests` threw on album seven, and `alarm`'s catch swallowed it
+  into "could not read the import source" and re-armed. **The walk reported progress and made
+  none, for ever** — 1,024 steps of nothing, and every run of it a green suite.
+  So it is `scope.get(Tokens.SubrequestMeter)` with `setCeiling(SCAN_CHUNK_SUBSREQUEST_BUDGET)`,
+  exactly as `ScanBudget` does: one meter, narrowed, so the loop and every charge point below it
+  read the same number. Asserted in `test/import-execution.test.ts` by walking twenty albums
+  across several alarms to completion.
 - `EnvParser` is defensive about the env shape on purpose: it is reached from fail-soft
   paths where `env` may be null or partial, and a `TypeError` there turns a default into
   a 500.

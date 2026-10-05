@@ -95,15 +95,25 @@ const PACKAGE_ROOTS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Mock for the `cloudflare:workers` module specifier.
+ * Mocks for the platform module specifiers.
  *
  * Listed here rather than in one config because the *other* config is the one that runs
- * `apps/background`. Both need it; a list only one of them has is the drift above.
+ * `apps/background`. Both need them; a list only one of them has is the drift above.
+ *
+ * **Two entries, because `cloudflare:workflows` is a separate specifier.** It was added for
+ * `NonRetryableError`, and adding it is the second occurrence of the exact failure this file
+ * documents: a platform module with no mock is an unresolvable-specifier **startup** error,
+ * and it surfaces in whichever suite happens to import something that reaches it — three of
+ * them, over a file none of them imports for the workflow.
+ *
+ * So the entries are a **list** rather than one constant, and `test/alias-table.int.test.ts`
+ * resolves through every one of them, so a third platform module added without a mock fails
+ * in the job that runs `apps/background` rather than in whatever test reaches it next.
  */
-const CLOUDFLARE_WORKERS_MOCK: { readonly find: string; readonly file: string } = {
-  find: 'cloudflare:workers',
-  file: 'test/mocks/cloudflare-workers.ts',
-};
+const PLATFORM_MODULE_MOCKS: ReadonlyArray<{ readonly find: string; readonly file: string }> = [
+  { find: 'cloudflare:workers', file: 'test/mocks/cloudflare-workers.ts' },
+  { find: 'cloudflare:workflows', file: 'test/mocks/cloudflare-workflows.ts' },
+];
 
 /**
  * The alias list, resolved against the repository root.
@@ -113,13 +123,17 @@ const CLOUDFLARE_WORKERS_MOCK: { readonly find: string; readonly file: string } 
  * `.../src/di` — which happens to be right, but only by accident, and only while
  * `resolve.extensions` still resolves a directory to its `index.ts`.
  */
+export { PLATFORM_MODULE_MOCKS };
+
 export function aliasTable(): ReadonlyArray<{ find: string | RegExp; replacement: string }> {
   const table: Array<{ find: string | RegExp; replacement: string }> = [];
 
   for (const [name, root] of Object.entries(PACKAGE_ROOTS)) {
     table.push({ find: new RegExp(`^@edge-sonic/${name}$`), replacement: `${repoPath(`${root}/`)}index.ts` });
   }
-  table.push({ find: CLOUDFLARE_WORKERS_MOCK.find, replacement: repoPath(CLOUDFLARE_WORKERS_MOCK.file) });
+  for (const mock of PLATFORM_MODULE_MOCKS) {
+    table.push({ find: mock.find, replacement: repoPath(mock.file) });
+  }
   for (const [name, root] of Object.entries(PACKAGE_ROOTS)) {
     table.push({ find: `@edge-sonic/${name}`, replacement: `${repoPath(`${root}/`)}/` });
   }

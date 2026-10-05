@@ -63,12 +63,12 @@ class AnnotationDAO extends BaseDAO {
     return (result.results ?? []).map((row) => row.item_id);
   }
 
-  public async star(userId: string, itemId: string, itemType: StarItemType): Promise<void> {
+  public async star(userId: string, itemId: string, itemType: StarItemType, starredAt?: number): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database
           .prepare('INSERT OR REPLACE INTO stars (user_id, item_id, item_type, starred_at) VALUES (?, ?, ?, ?)')
-          .bind(userId, itemId, itemType, nowSeconds())
+          .bind(userId, itemId, itemType, starredAt ?? nowSeconds())
           .run(),
       'annotations.star',
     );
@@ -142,32 +142,6 @@ class AnnotationDAO extends BaseDAO {
       'annotations.deleteBookmark',
     );
     return result.meta?.changes ?? 0;
-  }
-
-  public async recordPlay(userId: string, songId: string): Promise<void> {
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(
-            `INSERT INTO play_counts (user_id, song_id, play_count, last_played_at) VALUES (?, ?, 1, ?)
-             ON CONFLICT (user_id, song_id) DO UPDATE SET play_count = play_count + 1, last_played_at = excluded.last_played_at`,
-          )
-          .bind(userId, songId, nowSeconds())
-          .run(),
-      'annotations.recordPlay',
-    );
-  }
-
-  public async listPlayCounts(userId: string): Promise<Map<string, number>> {
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT song_id, play_count FROM play_counts WHERE user_id = ?')
-          .bind(userId)
-          .all<{ song_id: string; play_count: number }>(),
-      'annotations.listPlayCounts',
-    );
-    return new Map((result.results ?? []).map((row) => [row.song_id, row.play_count]));
   }
 
   /**

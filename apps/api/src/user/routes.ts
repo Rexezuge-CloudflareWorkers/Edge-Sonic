@@ -4,6 +4,7 @@ import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backe
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { listLibrarySummaries } from './librarySummary';
+import { registerImportRoutes } from './importRoutes';
 import type { Context } from 'hono';
 import type { SubrequestCounter } from '@edge-sonic/shared';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
@@ -316,6 +317,11 @@ function registerUserRoutes(app: {
   app.patch('/user/users/:id/enabled', setUserEnabled);
   app.patch('/user/users/:id/libraries', setUserLibraries);
   app.delete('/user/users/:id', deleteUser);
+
+  // Registered **after** the library and user routes, and the order matters: `/user/import/:id`
+  // would otherwise shadow `/user/import/sources` if it were registered first, and a route table
+  // where one entry silently captures another's is one nothing tests.
+  registerImportRoutes(app);
 }
 
 export { registerUserRoutes };

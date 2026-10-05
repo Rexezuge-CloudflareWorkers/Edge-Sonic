@@ -6,7 +6,8 @@
   "nav": {
     "label": "Primary",
     "libraries": "Libraries",
-    "users": "Users"
+    "users": "Users",
+    "import": "Import"
   },
   "errors": {
     "pageNotFound": "Page not found",
@@ -14,10 +15,15 @@
     "languageLoadFailed": "Unable to load language.",
     "languageSaveFailed": "Unable to save language.",
     "signInToViewLibraries": "Sign in to view libraries.",
-    "signInToViewUsers": "Sign in to view users."
+    "signInToViewUsers": "Sign in to view users.",
+    "signInToViewImport": "Sign in to import."
   },
   "common": {
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "refresh": "Refresh",
+    "save": "Save",
+    "delete": "Delete",
+    "close": "Close"
   },
   "landing": {
     "title": "The Subsonic API, Served From A WebDAV Library",
@@ -107,5 +113,41 @@
       "email": "Email (optional)",
       "password": "Password"
     }
+  },
+  "import": {
+    "title": "Import from another server",
+    "intro": "Bring playlists, favourites, ratings, bookmarks and play counts across from another Subsonic server.",
+    "pauseNotice": "An import pauses the library scan while it runs, so the two do not compete for the daily write allowance.",
+    "matchNotice": "Songs are matched by their path first, then by album and title. Anything that cannot be matched is listed below rather than dropped.",
+    "sources": "Where from",
+    "addSource": "Add a server",
+    "noSources": "No import sources yet",
+    "noSourcesDescription": "Add the server you are moving from to begin.",
+    "sourceName": "Name",
+    "sourceUrl": "Server URL",
+    "sourceUrlHint": "Include the path if the server is behind a reverse proxy, e.g. /sonic.",
+    "sourceUsername": "Username on that server",
+    "sourcePassword": "Password",
+    "sourcePasswordHint": "Stored encrypted and never shown again.",
+    "sourceAdded": "Import source added.",
+    "use": "Use",
+    "start": "Start an import",
+    "targetUser": "Import into which account",
+    "chooseUser": "Choose an account",
+    "phases": "What to bring across",
+    "playQueueHint": "— off by default; it restores a half-finished queue.",
+    "startButton": "Start import",
+    "started": "Import started.",
+    "runs": "Recent imports",
+    "unknownSource": "Unknown source",
+    "noRuns": "No imports yet",
+    "noRunsDescription": "Imports you run will be listed here with anything they could not match.",
+    "stale": "Could not reach the server — these figures may be out of date.",
+    "detail": "What happened",
+    "noDetail": "Nothing has been recorded yet.",
+    "reason": "not matched",
+    "importedCount": "{{count}} imported",
+    "rowsWritten": "{{count}} rows written",
+    "unresolvedCount": "{{count}} not matched"
   }
 }

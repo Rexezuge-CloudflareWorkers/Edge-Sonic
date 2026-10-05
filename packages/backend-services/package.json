@@ -12,6 +12,8 @@
     "./composition/*": "./src/composition/*.ts",
     "./errors": "./src/errors/index.ts",
     "./errors/*": "./src/errors/*.ts",
+    "./import": "./src/import/index.ts",
+    "./import/*": "./src/import/*.ts",
     "./index": "./src/index/index.ts",
     "./index/*": "./src/index/*.ts",
     "./library": "./src/library/index.ts",
