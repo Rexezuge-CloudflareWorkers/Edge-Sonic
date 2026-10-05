@@ -43,9 +43,27 @@ function requireParam(c: UserContext, name: string): string {
  * three stores — `libraries`, `scan_state`, `songs` — and two decisions in particular
  * belong to it: `songCount` was a literal `0` no client read, and `scan` is nullable because
  * a library that has **never been scanned** is a different state from one that is `idle`.
+ *
+ * ### Why it asks each library's Durable Object
+ *
+ * Because a pause is stored there and nowhere else. D1 enforces its daily row allowance by
+ * refusing **every** query until midnight UTC, so the two D1 reads this projection needs both
+ * fail at once — and the failure that needs reporting is the one thing D1 cannot then be asked
+ * about. One RPC per library, issued with the same meter as everything else on the page, is what
+ * makes "paused until 00:00 UTC" renderable instead of a `500`.
+ *
+ * It is a *read*, so a poll of this page still spends no D1 rows — which matters, because the
+ * page is polled every few seconds by an operator watching a scan, and the whole point of the
+ * pause is that writes are what ran out.
  */
 async function listLibraries(c: UserContext): Promise<Response> {
-  return c.json({ libraries: await listLibrarySummaries(BaseRoute.getScope(c)) });
+  const meter = meterOf(c);
+  const bound = hasScanBinding(c.env);
+  return c.json({
+    libraries: await listLibrarySummaries(BaseRoute.getScope(c), async (libraryId) =>
+      bound ? await getScanStub(c.env, libraryId, meter).getStatus(libraryId) : null,
+    ),
+  });
 }
 
 async function createLibrary(c: UserContext): Promise<Response> {

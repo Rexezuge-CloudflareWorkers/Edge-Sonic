@@ -10,7 +10,7 @@ All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one 
 
 | File             | Holds                                                                        |
 | ---------------- | ---------------------------------------------------------------------------- |
-| `dao/BaseDAO.ts` | `withRetry`, and nothing else                                                 |
+| `dao/BaseDAO.ts` | `withRetry`, `runWriteBatch`, and the ceiling both enforce                     |
 | `dao/rows.ts`    | every row type and the aggregate row shapes                                   |
 | `dao/SongDAO.ts` | one song row: its facts, its derived metadata, its lifecycle, its single-row reads |
 | `dao/songIndex.ts`| the aggregate reads: a page of albums, a page of artists, the genres         |

@@ -18,6 +18,40 @@ import type { WriteBatchResult } from './BaseDAO';
 import type { NodeRow } from './rows';
 import { nowSeconds } from './identity';
 
+/**
+ * The one statement a node row is written by.
+ *
+ * ### Why the `DO UPDATE` carries a `WHERE`
+ *
+ * Without it, this statement is **not idempotent** in the only sense that costs anything: it
+ * rewrites the row and reports one change even when every value it writes is the value already
+ * there. That is invisible in a result set and charged on every call, because `updated_at` is
+ * `nowSeconds()` and therefore always differs.
+ *
+ * It shipped that way, and the cost was a scan that could not finish. `reconcileFolder` builds
+ * one input per child of a folder and, having no compare of its own, hands back the same rows
+ * it wrote last time. `runWriteBatch` truncates that list against the invocation's subrequest
+ * ceiling, so on a folder with more entries than fit, the rows that *were* written are the
+ * rows it re-issues first, the batch truncates at the same offset, `truncated` is true, and the
+ * one write the scan must not skip — the folder's own `is_scanned: true` — never happens. The
+ * folder stays on the frontier for ever and every chunk rewrites the same ~45 rows. Measured:
+ * 231,620 rows against one 80-album library, `is_scanned` never reaching 1.
+ *
+ * The `WHERE` is the guard the statement owed, and it is what makes the statement's cost a
+ * function of what changed rather than of how often it was called.
+ *
+ * ### Why `updated_at` is excluded from the comparison
+ *
+ * Because it is the one column that *always* differs, so including it would make every
+ * comparison true and the guard a comment. It is consequently the one column a no-op upsert
+ * does not move — which is the point: an unchanged folder costs nothing, and a row nobody
+ * touched keeps the `updated_at` that says when it was last actually touched.
+ *
+ * `IS NOT` rather than `!=` because `mtime_ms` and `etag` are nullable and `NULL != NULL` is
+ * `NULL`, which in a `WHERE` is false: two listings that both report no modification date
+ * would otherwise look *equal* by accident of the operator, and that is the one comparison in
+ * this statement that must not be wrong in the permissive direction.
+ */
 const UPSERT = `INSERT INTO nodes (library_id, path, parent_path, name, name_ci, mtime_ms, etag, depth, is_scanned, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (library_id, path) DO UPDATE SET
@@ -28,7 +62,14 @@ ON CONFLICT (library_id, path) DO UPDATE SET
   etag = excluded.etag,
   depth = excluded.depth,
   is_scanned = excluded.is_scanned,
-  updated_at = excluded.updated_at`;
+  updated_at = excluded.updated_at
+WHERE nodes.parent_path IS NOT excluded.parent_path
+   OR nodes.name IS NOT excluded.name
+   OR nodes.name_ci IS NOT excluded.name_ci
+   OR nodes.mtime_ms IS NOT excluded.mtime_ms
+   OR nodes.etag IS NOT excluded.etag
+   OR nodes.depth IS NOT excluded.depth
+   OR nodes.is_scanned IS NOT excluded.is_scanned`;
 
 interface NodeInput {
   libraryId: string;

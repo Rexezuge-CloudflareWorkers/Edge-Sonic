@@ -256,6 +256,31 @@ Refusals are deliberately uniform. An id for a library the caller cannot see ans
 the endpoint into an oracle for which paths exist. A position needs no such check — it is
 resolved inside the caller's own grant list, so there is no id to forge.
 
+## `paused` is a status the library list can see and `getScanStatus` cannot explain
+
+`/user/libraries` reads each library's scan state from **both** `scan_state` and the per-library
+Durable Object, and the DO's answer wins. A pause is held in DO storage because it is usually
+*caused by* D1 refusing writes, so `scan_state` is **guaranteed stale** about it: it says
+`scanning`, which an operator reads as working. This is the one case where the DO is the
+authoritative source for the *status* and D1 is not — the frontier and every count still come from
+D1.
+
+Two events are kept apart here, and conflating them is how this page would end up lying twice:
+
+- **D1 is refusing every query** (a spent daily allowance, until midnight UTC). Then this
+  projection cannot be built at all — `libraries` is itself a read, so there is nothing to enumerate —
+  and the answer is a `503` from `ErrorMapper` naming the limit and the hour it resumes. **Not** a
+  partial list and **not** an empty one: "No libraries yet" is the one sentence on this page that
+  means something is genuinely absent. The two D1 reads are batched as they always were; nothing
+  about the refusal is detected here, because `ErrorMapper` classifies it once for every surface.
+- **A scan is paused while D1 is healthy** (the library spent its share of today's allowance). Here
+  the DO overlay is what makes the pause visible.
+
+`songCount` is deliberately **not** nullable, which follows from the first bullet: there is no
+"count unavailable" row state, because a refused D1 never produces a list at all. Adding one would be
+a field with no path that generates it — the same defect as a `stoppedBy` that only one surface can
+produce.
+
 ## `getScanStatus` is read-only on the DO path, and a poll that returns is a success
 
 With the `SCAN` binding the scan is alarm-driven: `ScanWorker` (one Durable Object
@@ -303,6 +328,13 @@ and the reason `stalled` is a status rather than a flavour of `failed`.
 
 `isAdvancing` lives in `backend-services` beside the state machine it describes, because
 the two are one decision: `step` used to answer both inline, and the tangle is what shipped.
+
+**`paused` is `false` here and `true` for the alarm, and that is not an inconsistency.**
+`isAdvancing` answers *the client's* question — "will my poll buy anything?" — and polling cannot
+move a wall clock, so a paused scan answers `false` and the client stops. `willResumeWithoutAPoll`
+answers *the alarm's* question and is `true`, or deleting the alarm would leave an allowance spent
+until an operator noticed. Two questions, two functions; one predicate for both is the same shape of
+defect as the one above it.
 
 The *reason* a scan failed is not on this surface at all. A reason here would be a
 non-standard attribute some strict clients reject, and `scanStatus` has nowhere to put one.

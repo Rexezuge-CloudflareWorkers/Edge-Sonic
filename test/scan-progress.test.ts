@@ -32,8 +32,8 @@
  * only way a test about a decision distinguishes a working guard from a passing assertion.
  */
 import { describe, expect, it } from 'vitest';
-import { describeScanState, isAdvancingStatus, SCAN_LABELS } from '../apps/web/src/lib/scanStatus';
-import { storedStatus } from '@edge-sonic/backend-services/index';
+import { describeScanState, formatResumeAt, isAdvancingStatus, SCAN_LABELS } from '../apps/web/src/lib/scanStatus';
+import { isAdvancing, storedStatus, willResumeWithoutAPoll } from '@edge-sonic/backend-services/index';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import type { LibraryScanSummary } from '../apps/web/src/types';
 import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
@@ -46,7 +46,10 @@ import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
  * `node:sqlite` / D1 distinction in the parent index.
  */
 function state(overrides: Partial<LibraryScanSummary> = {}): LibraryScanSummary {
-  return { status: 'idle', scanned: 0, lastError: null, ...overrides };
+  // `resumeAt: null` explicitly rather than left to a default. The field is nullable and always
+  // sent, so a fake that omitted it would model a server that does not send it — which is the
+  // defect `stalled` records, and the one `paused` arrived through.
+  return { status: 'idle', scanned: 0, lastError: null, resumeAt: null, ...overrides };
 }
 
 describe('isAdvancingStatus', () => {
@@ -73,6 +76,15 @@ describe('isAdvancingStatus', () => {
     expect(isAdvancingStatus(undefined)).toBe(false);
   });
 
+  it('treats a paused scan as terminal, because polling cannot move a wall clock', () => {
+    // A paused scan is *not* terminal — it resolves by itself at midnight UTC — and it is not
+    // advancing either. A page that polled it would re-read an identical answer every few seconds
+    // until the reset, against a 60-request-per-minute bucket this surface shares with probe and
+    // rescan. This is the client's half of the split; the server's half is asserted below, because
+    // the two answers differ and writing this guard against the other one is the defect.
+    expect(isAdvancingStatus('paused')).toBe(false);
+  });
+
   /**
    * The client cannot import the server's `isAdvancing` — `apps/web` ships zero
    * `@edge-sonic/*` runtime dependencies — so this is a twin rather than a delegation, and a
@@ -80,10 +92,55 @@ describe('isAdvancingStatus', () => {
    * which is what makes the duplication safe rather than two answers free to disagree.
    */
   it('agrees with the server function on every status, for the same reason', () => {
-    const serverIsAdvancing = (status: 'idle' | 'scanning' | 'failed' | 'stalled'): boolean => status === 'scanning' || status === 'failed';
-    for (const status of ['idle', 'scanning', 'failed', 'stalled'] as const) {
-      expect(isAdvancingStatus(status), status).toBe(serverIsAdvancing(status));
+    // Pinned against the **server's** function rather than a restatement of it, so the twin cannot
+    // drift: a fourth status appearing on the server and not here would fail this case.
+    for (const status of ['idle', 'scanning', 'failed', 'stalled', 'paused'] as const) {
+      expect(isAdvancingStatus(status), status).toBe(isAdvancing(status));
     }
+  });
+});
+
+describe('the server answers two questions, and this client mirrors only one of them', () => {
+  it('keeps the alarm\'s answer out of the polling guard', () => {
+    // `paused` is the one status where the two differ, and both answers are needed: the Durable
+    // Object's alarm must stay armed (nothing else advances a scan in production) while the page
+    // must stop polling (nothing a client does changes the answer). Asserted from the client side
+    // against the server's two functions, because a guard written against the wrong one is the
+    // defect — and `ScanWorker` is the only caller that wants the other half.
+    expect(willResumeWithoutAPoll('paused')).toBe(true);
+    expect(isAdvancing('paused')).toBe(false);
+    expect(isAdvancingStatus('paused')).toBe(false);
+  });
+
+  it('agrees with the server on every other status, for both functions', () => {
+    // Without this, `willResumeWithoutAPoll` could be "every status but stalled" and every case
+    // above would still pass — the split would be untested in the direction that matters.
+    for (const status of ['idle', 'scanning', 'failed', 'stalled'] as const) {
+      expect(willResumeWithoutAPoll(status), status).toBe(isAdvancing(status));
+    }
+  });
+});
+
+describe('formatResumeAt', () => {
+  it('renders the moment in UTC to the minute, because D1 resets at UTC midnight', () => {
+    // UTC and not local: a local rendering is wrong twice a day — once by the offset, and once
+    // because the two midnights disagree — and an operator reading the wrong hour waits for the
+    // wrong morning.
+    expect(formatResumeAt(Date.UTC(2026, 9, 6, 0, 0, 0))).toBe('00:00');
+    expect(formatResumeAt(Date.UTC(2026, 9, 6, 14, 5, 0))).toBe('14:05');
+  });
+
+  it('pads the hour, so a 9am reset does not read as 9am-in-the-past beside 14:05', () => {
+    expect(formatResumeAt(Date.UTC(2026, 9, 6, 9, 5, 0))).toBe('09:05');
+  });
+
+  it('answers null for an unusable timestamp, so the label falls back rather than rendering NaN', () => {
+    // A client has to be able to render a status it does not fully understand, and "Invalid Date"
+    // on an operator's screen is worse than a label without a time.
+    expect(formatResumeAt(null)).toBeNull();
+    expect(formatResumeAt(undefined)).toBeNull();
+    expect(formatResumeAt(NaN)).toBeNull();
+    expect(formatResumeAt(Infinity)).toBeNull();
   });
 });
 
@@ -120,6 +177,59 @@ describe('storedStatus — the mapping the list projection shares with ScanServi
   it('passes scanning through and folds anything else to idle', () => {
     expect(storedStatus(row({ status: 'scanning' }))).toBe('scanning');
     expect(storedStatus(row({ status: 'idle' }))).toBe('idle');
+  });
+});
+
+describe('a paused scan, which is a status the vocabulary did not have', () => {
+  const MIDNIGHT = Date.UTC(2026, 9, 6, 0, 0, 0);
+
+  it('names the hour it resumes and says the scan will resume itself', () => {
+    // The content of the status. "Paused" alone tells an operator nothing about whether to wait or
+    // to act, and this one needs neither: the work resumes at a stated moment. That is the
+    // difference from `stalled`, whose label names the operator's action precisely *because* there
+    // is no scheduled recovery.
+    const shown = describeScanState(state({ status: 'paused', resumeAt: MIDNIGHT }), 42);
+
+    expect(shown.tone).toBe('warning');
+    // The hour is formatted in UTC by `formatResumeAt`, so this is the reset itself rather
+    // than whatever the machine's timezone would render.
+    expect(shown.label).toContain('00:00');
+    expect(shown.label).toContain('resumes itself');
+    expect(shown.detail).toBe('42 tracks indexed');
+  });
+
+  it('does not raise a notice on every poll', () => {
+    // A pause is a limit already being handled, so a notice would interrupt the operator every few
+    // seconds for something nobody has to do — the same reasoning as `failed`, and the reason the
+    // reason and the time are rendered under the row instead, where they outlive the notice.
+    expect(describeScanState(state({ status: 'paused', resumeAt: MIDNIGHT }), 42).notice).toBeUndefined();
+  });
+
+  it('falls back to a whole-hour label when the server sent no usable time', () => {
+    // A client has to render a status it cannot fully understand. Rendering the literal `null` or
+    // `Invalid Date` on an operator's screen is worse than a label without a specific hour, and
+    // the fallback is deliberately 00:00 — the real reset — rather than a plausible-looking guess.
+    for (const resumeAt of [null, undefined, NaN]) {
+      const shown = describeScanState(state({ status: 'paused', resumeAt }), 0);
+      expect(shown.label, String(resumeAt)).toContain('00:00');
+      expect(shown.label, String(resumeAt)).not.toContain('null');
+      expect(shown.label, String(resumeAt)).not.toContain('NaN');
+    }
+  });
+
+  it('still renders the track count, because the count is a measurement', () => {
+    // `detail: null` is right for a never-scanned library and for one that finished with nothing,
+    // where `0` would contradict the badge. It is wrong here: a paused scan with tracks indexed is
+    // exactly the state where the count is the thing worth watching while the scan waits.
+    expect(describeScanState(state({ status: 'paused', resumeAt: MIDNIGHT }), 7).detail).toBe('7 tracks indexed');
+  });
+
+  it('is not the terminal error tone, because nothing is broken', () => {
+    // The distinction from `stalled` and from the `empty` case, both of which are `error`. An
+    // operator who has learned to ignore a red badge has to be able to trust it, and colouring a
+    // self-clearing limit as a fault spends that trust.
+    expect(describeScanState(state({ status: 'paused', resumeAt: MIDNIGHT }), 7).tone).not.toBe('error');
+    expect(describeScanState(state({ status: 'stalled' }), 0).tone).toBe('error');
   });
 });
 

@@ -585,6 +585,100 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   is offered to the user as fact, and `getGenres` would publish it with a song count. An
   uninformative path yields NULL, never `''`, because `''` groups under a blank name — the
   same defect `NodeDAO.listRoots` had with the root.
+- **A folder too large for one invocation must be *closable*, or the scan writes the same
+  rows for ever.** `runWriteBatch` truncates a folder's children against the
+  invocation's subrequest ceiling — 45 statements on the Free plan — and `reconcileFolder`
+  writes the folder's own `is_scanned: true` **only if nothing was truncated**. That is the
+  resumability mechanism, and it only resumes if the next pass offers strictly fewer rows.
+  It did not: `reconcileFolder` had no comparison, so the rows it had already written were
+  the rows it re-offered *first*, the truncation landed on the same offset every time, and
+  progress on the next pass was zero. So **any folder with ≥45 entries could never be
+  closed**, and every chunk rewrote the same ~45 rows. It shipped: **231,620 rows written on
+  `nodes`** for one 80-album, 110-track library, `is_scanned` never reaching 1, the frontier
+  never draining, and `getScanStatus` reporting `scanning` throughout — 231,620 ÷ 45 ≈ 5,147
+  chunks, and the two numbers are the same measurement. Nothing reported it: `stoppedBy`
+  answered `'frontier'` because the chunk did consume its whole (one-folder) frontier, and
+  `rowsWritten` is only readable through `POST /user/libraries/:id/scan/step`. Full account:
+  `docs/issues/nodes-upsert-livelock.md`. Four rules, and the second is why the first alone
+  was not enough:
+  - **The compare exists, it is one function, and it was already written — elsewhere.**
+    `TreeService.persistChildren` had it; `reconcileFolder` described it in its own docstring
+    and had no such branch. Two writers and two answers, and the second answer was *no
+    comparison at all*. `nodeWrite.ts` owns it now, and its caller-side and statement-side
+    halves are **both** required: `runWriteBatch.truncated` counts statements **issued**, not
+    rows changed, so `NodeDAO.UPSERT`'s new `WHERE` makes redundant writes free but does not
+    make a caller that offers 80 rows for a 45-statement budget converge. The `WHERE` is
+    defence in depth; the compare is the fix.
+  - **`updated_at` is excluded from the statement's `WHERE`, and that is why.**
+    It is `nowSeconds()`, so it is the one column that *always* differs — including it would
+    make every comparison true and the guard a comment. It is consequently the one column a
+    no-op upsert does not move, which is what keeps "when was this row last actually touched"
+    answerable. The other half: `IS NOT`, not `!=`, because `NULL != NULL` is `NULL` and in a
+    `WHERE` that is false — so a row whose etag went from a value to none looked unchanged and
+    its subtree froze. That permissive direction is the dangerous one.
+  - **A browse does not get to say a folder was descended into.** `persistChildren` wrote
+    `is_scanned = 0` for every child, so a client merely *looking at* the root put all 80
+    album folders back on the frontier and the scan re-walked them — once per browse, on a
+    `GET`, spending the same allowance. The flag means "someone descended into this" and that
+    path demonstrably has not. It now **preserves** the stored value and writes `0` only for
+    rows it creates — which is what keeps `needsDescent`'s invariant intact for a folder
+    discovered by browsing alone.
+  - **A ceiling the write batch cannot see is a ceiling it spends.** `BaseDAO.fitCount` read
+    `meter.remaining`, the **platform's** 50, rather than the chunk's own 42 — so a batch spent
+    the invocation's 8-statement reserve and the post-walk `saveProgress` then crossed 50 and
+    the runtime terminated the invocation. Measured at 52 against a ceiling of 50. The fix is
+    `SubrequestCounter.setCeiling` and `ScanBudget` calling it, because `ScanBudget` is layer 3
+    while every charge point that matters is below it holding only the meter — so the meter is
+    the one place the two can meet.
+  - **A guard is convergence, and convergence is a measurement no status assertion makes.**
+    `test/scan-convergence.test.ts` drives the real DAO over `node:sqlite` with a real
+    `SubrequestCounter` and asserts each pass writes **strictly less** than the one before.
+    Removing either the compare or the `WHERE` turns seven of its cases red while every
+    status- and shape-level assertion in the suite stays green — which is the finding, because
+    the two doubles that hid this (`scan-budget`'s `upsertMany`, which *skipped* unchanged
+    rows, and `scan-incremental`'s `chunkMaxRequests: 10_000` with a double that never
+    truncates) each modelled the fixed implementation or a bound that never fires.
+- **A spent D1 daily allowance is a *pause*, and it is not `failed`.** Since 2026-09-01 a
+  Free account over its daily row allowance has **every query fail** — reads included — until
+  **midnight UTC**, so the whole product is down (Subsonic auth reads `users`) and the remedy
+  is a clock. It shipped as a loop: `step` caught the refusal, tried to record it with a D1
+  write that *could not succeed* (the fault **is** a refusal to write), returned `failed`,
+  `isAdvancing('failed')` is true, and the alarm re-armed one second later — ~86,400 times
+  before the reset, each attempt two failed statements, with `getScanStatus` reporting
+  `scanning: true` and the cause masked into `code=0`. `paused` is the third answer: retried
+  **by itself, at a known time, needing no operator**. Neither existing status could carry it —
+  `failed` retries (a loop) and `stalled` never does (a wedge until an operator acts). Four
+  rules:
+  - **Two questions, so two predicates.** The alarm asks *will this resume by itself?*
+    (`true`); `getScanStatus`'s `scanning` asks *will my poll buy anything?* (`false` — polling
+    cannot move a clock). One predicate for both is the shape of defect that once made
+    `scanning` mean "did this call do work" and stopped every scan; its mirror deletes the
+    alarm and leaves an allowance spent. `willResumeWithoutAPoll` and `isAdvancing` are
+    separate, agree on every other status, and are asserted to.
+  - **The pause lives in Durable Object storage, and that is the mechanism rather than a
+    convenience.** It is the only store still accepting writes when D1 is refusing them, so a
+    pause in `scan_state` would be unwritable exactly when needed — and `/user/libraries`, which
+    reads D1, could not see it either. `getStatus` reads it back and lets it **override** the
+    stored row, because D1's row is *guaranteed* stale about it: it says `scanning`, which an
+    operator reads as working. The stated exception to "D1 stays authoritative"; the frontier,
+    every indexed row, the retry counter and the index version are all still D1's.
+  - **The limit is reached by design, so the scan paces itself before the platform refuses.**
+    A correct chunk writes ~42 rows at ~1/second, so 5,000 rows/day is **two minutes of
+    scanning** — the runaway above was not the only way there, and a fix that only made the
+    outage survivable would leave it frequent. `SCAN_DAILY_ROW_WRITE_BUDGET` is the platform's
+    5,000 less a named reserve for non-scan writes, **divided by the number of registered
+    libraries** (the allowance is per *account*, so a per-library cap is unsound the moment a
+    second library exists, and `MAX_LIBRARIES` would give a one-library deployment a tenth of
+    what it could have had). Counted from the chunk's measured `rowsWritten`, held in DO storage
+    because **metering D1 writes must not itself spend D1 writes**, and persisted at most once
+    per 500 rows — which makes it a lower bound, absorbed by the reserve.
+  - **A classifier that matches a paraphrase has never met the platform.** `isD1DailyLimitError`
+    matches Cloudflare's exact wording, because `executeD1WithRetry` throws
+    `Failed to ${context}: ${errorMessage}` — a classifier wanting the bare sentence would
+    answer "not a quota" for a quota, and the branch would be reachable only from a test. And
+    `isD1ErrorRetryable` answers `false` for it **by accident of vocabulary** (`too many` is
+    retryable, `exceeded` is not), which is asserted rather than left to the next person who
+    adds `/exceeded/`. Full account: `docs/issues/d1-daily-write-limit.md`.
 - **Indexing only happens on change, so deriving there is not enough — and the symptom
   hides in the one endpoint that does not group.** Every writer of the grouping columns is
   gated on the file having *moved*: the `Depth: 0` root probe, `isScanned: !changed`,
@@ -908,6 +1002,16 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `userEmail ?? 'Operator'`, so every signed-out visitor saw the word "Operator" in the top
   right of the landing page — the page asserting an identity it did not have, for somebody who
   had not signed in. A default is not an absence.
+- **A comparison written twice is two answers, and the one that was *absent* is the one that
+  shipped.** `nodes` has two writers: the scan's `reconcileFolder` and `TreeService`'s
+  read-through `persistChildren`. Only the browse had a "does this row need writing" check;
+  `reconcileFolder` **described** one in its own docstring and had no such branch. So the scan
+  re-offered every row it had already written, `runWriteBatch` truncated that against the
+  invocation's ceiling, and a folder with ≥45 entries could never be closed — 231,620 rows on
+  one 80-album library, and a scan reporting `scanning` for ever. Meanwhile `persistChildren`'s
+  header claimed *"both go through `persistChildren`, which is the only place a node row is
+  written"* — **false**, and the false sentence is what made the invariant look enforced.
+  `nodeWrite.ts` owns the comparison now. See `docs/issues/nodes-upsert-livelock.md`.
 - **A shared builder is the point; a copy is a decision deferred until it disagrees.**
   Nine endpoint modules each carried `respond(context, payload)` and
   `type EnvelopeResponse = ReturnType<typeof successResponse>`. Eight were identical and

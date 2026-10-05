@@ -28,6 +28,14 @@ interface LibraryScanSummary {
   readonly status: ScanStatus;
   readonly scanned: number;
   readonly lastError: string | null;
+  /**
+   * When a paused scan resumes itself, epoch milliseconds; `null` otherwise.
+   *
+   * Present and nullable rather than absent, for the reason the rest of this file is: the server
+   * sends it on every status, and this client has to be able to tell "it resumes at midnight"
+   * from "there is no such moment for this status".
+   */
+  readonly resumeAt: number | null;
 }
 
 /**
@@ -38,8 +46,14 @@ interface LibraryScanSummary {
  * and the client's union named three statuses, so a terminal scan rendered as a bare word
  * with no indication that it will never retry without an explicit rescan. It also meant the
  * page had no way to stop polling: `stalled` is exactly the state where polling buys nothing.
+ *
+ * `paused` is the fourth of the same kind, and it arrives through the **same** hole: a status the
+ * server sends that the client's union did not name. A pause is not terminal and it is not
+ * advancing — it is waiting for a moment — and neither of the two answers the old union could give
+ * is right for it. Rendering it as a bare word would leave an operator reading "paused" with no
+ * idea that it resolves itself, which is the whole content of the status.
  */
-type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled';
+type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled' | 'paused';
 
 interface LibrarySummary {
   readonly id: string;
@@ -55,6 +69,11 @@ interface LibrarySummary {
   /**
   Tracks indexed for this library — the number an operator watches to know a scan is
   working. It used to arrive as a literal `0` that no client read.
+
+  Not nullable, and that is a decision rather than an oversight. The server enumerates libraries
+  from `libraries`, which is a D1 read, so when D1 is refusing there is no list at all to put a
+  null on: the request answers `503` carrying the reason and the hour it resumes. A "count
+  unavailable" state on the row would therefore be a state nothing produces.
   */
   readonly songCount: number;
   /**
@@ -102,6 +121,14 @@ interface ScanStateSummary {
    * from "the field is not here".
    */
   readonly stoppedBy: ChunkStopReason;
+  /**
+   * When the chunk will next be attempted on its own, epoch milliseconds; `null` otherwise.
+   *
+   * Nullable rather than optional because the server sends it on every chunk result, and a
+   * client has to tell "at midnight" from "the field is not here" — the same convention as
+   * `stoppedBy` above, and for the same reason: both were optional once and both went unread.
+   */
+  readonly resumeAt: number | null;
 }
 
 export type { LibrarySummary, LibraryScanSummary, ProbeResult, ScanStateSummary, ScanStatus, ChunkStopReason };

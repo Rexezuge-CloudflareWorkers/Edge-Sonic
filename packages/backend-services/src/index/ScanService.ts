@@ -75,13 +75,32 @@ import { start } from './scanStart';
 import { ScanBudget, stopReason } from './scanBudget';
 import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
 import { SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
-import { describeFailure, MAX_CONSECUTIVE_FAILURES, storedStatus, unrecordedFailure } from './scanRetry';
-import type { ChunkResult, ScanDeps } from './scanTypes';
+import {
+  dailyAllowancePause,
+  d1AllowancePause,
+  describeFailure,
+  MAX_CONSECUTIVE_FAILURES,
+  storedStatus,
+  unrecordedFailure,
+} from './scanRetry';
+import type { ChunkResult, ScanDailyBudget, ScanDeps } from './scanTypes';
 
 
 
 class ScanService {
   constructor(private readonly deps: ScanDeps) {}
+
+  /**
+   * Clock, injectable so the midnight boundary is testable at all.
+   *
+   * `nextMidnightUtc` is arithmetic on this value, and the interesting case is exactly
+   * midnight: computed naively it yields a moment that has already passed, so a pause of zero
+   * length is returned and the caller re-arms immediately — which is the one-second loop this
+   * whole branch exists to stop, wearing the costume of its own fix.
+   */
+  private now(): number {
+    return this.deps.now?.() ?? Date.now();
+  }
 
   /**
    * The budget one chunk runs under.
@@ -105,15 +124,34 @@ class ScanService {
    * `startScan`: probe the root, seed the frontier, and decide whether there is anything to
    * walk. The decision and the cheap path are `scanStart.ts`; this is the seam.
    */
-  public async start(library: LibraryRow): Promise<ChunkResult> {
-    return await start(this.deps, library, this.budget(), async (row, state, error, budget) => await this.failChunk(row, state, error, budget));
+  /**
+   * `startScan`: probe the root, seed the frontier, and decide whether there is anything to
+   * walk. The decision and the cheap path are `scanStart.ts`; this is the seam.
+   *
+   * `dailyBudget` is a parameter rather than part of `ScanDeps` because the count behind it lives
+   * in the caller's Durable Object storage, which the composition root cannot read. `ScanWorker`
+   * supplies it; the legacy client-driven path passes nothing and is then unpaced, which is the
+   * right degradation — the reactive pause still catches a breach it failed to avoid.
+   */
+  public async start(library: LibraryRow, dailyBudget?: () => ScanDailyBudget): Promise<ChunkResult> {
+    return await start(
+      this.deps,
+      library,
+      this.budget(),
+      dailyBudget,
+      async (row, state, error, budget) => await this.failChunk(row, state, error, budget),
+    );
   }
 
   /**
    * Advance one chunk. Called from `ScanWorker.stepOnce` (alarm-driven) or, without
    * the `SCAN` binding, directly from `getScanStatus` (client-driven).
+   *
+   * `dailyBudget` for the same reason `start`'s is, and with the same asymmetry: the DO path
+   * paces and the no-binding fallback does not, because there is no Durable Object to keep the
+   * count and inventing one would be a second place that decides how many rows a day allows.
    */
-  public async step(library: LibraryRow): Promise<ChunkResult> {
+  public async step(library: LibraryRow, dailyBudget?: () => ScanDailyBudget): Promise<ChunkResult> {
     // ### The `try` opens here, not below
     //
     // It used to open after the frontier read, which left five awaited calls — `ensure`,
@@ -143,6 +181,23 @@ class ScanService {
 
     try {
       state = await this.deps.scanState.ensure(library.id);
+
+      // ### The day's row-write allowance, checked before the first write of the chunk
+      //
+      // Placed here — after `ensure`, before the backfill — because it is a substitute for
+      // entering the chunk rather than a bound on it. A library that has already spent its share
+      // writes **nothing** until midnight UTC, which is the whole difference between a scan that
+      // pauses and one that spends the remainder of the allowance discovering that it should stop:
+      // the walk would otherwise put ~42 rows a second against a ceiling the platform enforces by
+      // refusing to answer anything at all.
+      //
+      // Before `ensure` would be tidier and is wrong: `ensure` is a read for a library that has
+      // been scanned, and this is the one write a library that has never been scanned needs, so
+      // the check costs nothing on the path it is protecting and buys real counts to report. After
+      // the backfill would be worthless: the backfill is a write batch.
+      const dailyPause = dailyAllowancePause(dailyBudget?.());
+      if (dailyPause) return { ...dailyPause, scanned: state.scanned_count, total: state.total_count };
+
       budget = this.budget();
       derivedRows = await backfill(this.deps, library.id, budget);
 
@@ -205,8 +260,24 @@ class ScanService {
         // cut it short otherwise — which is the fact an operator watching a scan
         // that is not finishing needs, and the two have different remedies.
         stoppedBy: stopReason(budget, foldersVisited < frontier.length),
+        resumeAt: null,
       };
     } catch (error) {
+      // ### A spent daily allowance is not a fault to record
+      //
+      // First branch in the `catch`, and before `state === null` as well as before `failChunk`,
+      // because the fault **is** a refusal to write: recording it would cost a statement that
+      // cannot succeed, and the counter it would increment bounds retries of a *fault*, which this
+      // is not. It resolves at midnight UTC and needs no attempt.
+      //
+      // What the old path did with it is the whole of this fix. `ensure` threw, so `state` was
+      // `null`; `scanState.fail` threw for the same reason; the result was `unrecordedFailure`,
+      // whose status is `failed`; `isAdvancing('failed')` is true, so the alarm was re-armed a
+      // second later and the whole sequence ran again — roughly 86,000 times before the reset,
+      // each one a failed statement and a failed write, and none of them recorded anywhere an
+      // operator could read. The scan reported `scanning` for the entire time.
+      const allowancePause = d1AllowancePause(error, this.now());
+      if (allowancePause) return allowancePause;
       // `budget` and `state` are only meaningful once `ensure` succeeded. A failure in
       // `ensure` itself — the one call that would have to work for `failChunk` to record
       // anything — is reported as a fresh budget over an unknown row rather than
@@ -263,6 +334,7 @@ class ScanService {
       // stopped it. The value is on the chunk itself, which the operator surface
       // reaches through `POST /user/libraries/:id/scan/step`.
       stoppedBy: null,
+      resumeAt: null,
     };
   }
 
@@ -294,6 +366,7 @@ class ScanService {
       subrequests: budget.spend(),
       rowsWritten: partial?.rowsWritten ?? 0,
       stoppedBy: null,
+      resumeAt: null,
     };
     // The last permitted failure reports as `stalled`, because it will not be retried
     // and `failed` elsewhere means exactly that it will be. Both carry the reason; only

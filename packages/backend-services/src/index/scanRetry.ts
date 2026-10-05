@@ -37,9 +37,10 @@
  * survives the isolate, and is cleared by `startScan`, which is the operator's escape
  * hatch and needs no surface of its own.
  */
+import { isD1DailyLimitError, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
 import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
 import { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES } from './scanTypes';
-import type { ChunkResult, ScanStatus } from './scanTypes';
+import type { ChunkResult, ScanDailyBudget, ScanStatus } from './scanTypes';
 import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
 
 /**
@@ -49,6 +50,12 @@ import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
  * from `'stalled'` because they are opposites in what they tell a client: one means
  * "nothing is happening and nothing is wrong", the other means "something is wrong and
  * retrying has stopped helping".
+ *
+ * `'paused'` is a fourth, and it is not derived from the row at all — a pause is never
+ * persisted, because the fault that causes it is a refusal to write. It is decided by
+ * `dailyWriteAllowanceSpent` and by the error itself, and it comes *before* this
+ * decision, because a scan that may not write must not first read its own state to find
+ * that out: on a D1 that is refusing every query, that read is the failure.
  */
 type StepDecision = 'run' | 'idle' | 'stalled';
 
@@ -64,6 +71,95 @@ function decideStep(state: ScanStateRow): StepDecision {
     return state.consecutive_failures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'run';
   }
   return state.status === 'scanning' ? 'run' : 'idle';
+}
+
+/**
+ * Whether the day's row-write allowance is spent, and so this chunk must not issue a write.
+ *
+ * Checked **before** the walk rather than after it, and that placement is the mechanism rather
+ * than a detail: a check after the walk bounds nothing, because by then the rows are written and
+ * the allowance is spent. Checked before, a scan over its allowance costs one chunk's *reading*
+ * and no rows at all, and then nothing at all until the day rolls over.
+ *
+ * `>=` and not `>` because the allowance is a ceiling: a chunk that would take the count to
+ * exactly `limit` has spent it, and the chunk after it is the one that must not start.
+ */
+function dailyWriteAllowanceSpent(budget: ScanDailyBudget | undefined): boolean {
+  return budget !== undefined && budget.limit > 0 && budget.rowsWrittenToday >= budget.limit;
+}
+
+/**
+ * The pause a **spent daily share** implies, or `null` when this chunk may write.
+ *
+ * Separate from `d1AllowancePause` because the two are different events with the same remedy: this
+ * one is decided *before* the walk from a count the caller keeps, and it is the reason a scan never
+ * reaches the state the other one recovers from. A correct chunk writes ~42 rows at ~1/second, so
+ * 5,000 rows/day is roughly two minutes of scanning — the platform's limit is reached by design, and
+ * a fix that only made the outage survivable would leave it frequent.
+ *
+ * `null` rather than a boolean so a caller cannot forget the reset time, and `now` is read from the
+ * budget rather than from `Date.now()` so the boundary is testable.
+ */
+function dailyAllowancePause(budget: ScanDailyBudget | undefined): ChunkResult | null {
+  if (!dailyWriteAllowanceSpent(budget) || budget === undefined) return null;
+  return pausedResult(
+    nextMidnightUtc(budget.now()),
+    `This library has written its ${budget.limit}-row share of today's D1 row-write allowance. The scan resumes itself at 00:00 UTC.`,
+  );
+}
+
+/**
+ * A chunk that will not run until `resumeAt`, reported without touching the network.
+ *
+ * `scanned` and `total` come from whatever the caller had, which on the D1-refusal path is a
+ * **zero-valued placeholder**: `scan_state` cannot be read either, so there is nothing to report
+ * and a fabricated count would be a claim about a library this call never looked at. The reason
+ * is the whole content of the answer, which is why it is a constructor rather than a status code
+ * a client has to be told the meaning of.
+ *
+ * Every counter is zero because nothing was measured. `lastError` is the sentence an operator
+ * needs, and it names the time the work resumes rather than asking them to work it out.
+ */
+function pausedResult(resumeAt: number, lastError: string, scanned = 0, total = 0): ChunkResult {
+  return {
+    status: 'paused',
+    scanned,
+    total,
+    indexVersion: 0,
+    lastError,
+    foldersVisited: 0,
+    subrequests: NO_SUBREQUESTS_SPENT,
+    rowsWritten: 0,
+    stoppedBy: null,
+    resumeAt,
+  };
+}
+
+/**
+ * The pause a spent **D1 allowance** implies, or `null` for any other fault.
+ *
+ * `null` rather than a boolean because the caller needs the reset time, and a boolean would
+ * send every call site to recompute it — the second answer to one question that this repository
+ * keeps paying for. The reset is `nextMidnightUtc`, because that is when D1 restores service, and
+ * it is read from the same clock the caller injects rather than from `Date.now()` so that the
+ * boundary is testable at all.
+ *
+ * ### Why this is checked before anything is written
+ *
+ * Because the fault *is* a refusal to write. Recording it costs a statement that cannot succeed,
+ * so the old path — catch, `scanState.fail`, `failed`, re-arm in a second — spent a failed
+ * statement per alarm to reach a conclusion that changed nothing, and spent the retry counter on
+ * a condition the counter was never meant to bound.
+ */
+function d1AllowancePause(error: unknown, nowMs: number): ChunkResult | null {
+  const limit = isD1DailyLimitError(error, nowMs);
+  if (!limit) return null;
+  return pausedResult(
+    limit.resetsAt,
+    limit.kind === 'write'
+      ? 'The daily D1 row-write allowance is used up. D1 refuses every query until 00:00 UTC, so the scan resumes itself then.'
+      : 'The daily D1 row-read allowance is used up. D1 refuses every query until 00:00 UTC, so the scan resumes itself then.',
+  );
 }
 
 /**
@@ -90,6 +186,7 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', 
     subrequests: NO_SUBREQUESTS_SPENT,
     rowsWritten,
     stoppedBy: null,
+    resumeAt: null,
   };
 }
 
@@ -139,6 +236,28 @@ function isAdvancing(status: ScanStatus): boolean {
 }
 
 /**
+ * Whether the scan will make progress **without a client doing anything**.
+ *
+ * The second question, and the one `ScanWorker` needs — because its alarm is the only thing that
+ * advances a scan in production, and an alarm deleted here is a scan that never resumes.
+ *
+ * It exists because `isAdvancing` could not answer both questions at once. A `paused` scan is
+ * `true` here — the alarm must stay armed, or nothing re-arms it when the allowance resets —
+ * and `false` there, because a Subsonic client reading `scanning: true` polls, and for a paused
+ * scan polling buys *nothing*: the next chunk cannot run before a wall-clock moment arrives, and
+ * no amount of asking moves that moment. One predicate for both is the same shape of defect as
+ * `scanning` answering "did this call do work", which is what stopped every scan in the product
+ * from ever finishing.
+ *
+ * So `paused` is not `isAdvancing` either way, and both halves are asserted: `getScanStatus`
+ * answering `scanning: true` for a scan that cannot run would send a client round the loop for
+ * hours, and the alarm being deleted would leave an allowance spent until an operator noticed.
+ */
+function willResumeWithoutAPoll(status: ScanStatus): boolean {
+  return status === 'scanning' || status === 'failed' || status === 'paused';
+}
+
+/**
  * The reported status of a stored row, without touching the network.
  *
  * ### Why this is a function and not an expression at the call site
@@ -161,7 +280,21 @@ function storedStatus(state: ScanStateRow): ScanStatus {
   return 'idle';
 }
 
-export { decideStep, idleResult, stalledResult, unableToAdvance, isAdvancing, storedStatus, describeFailure, unrecordedFailure };
+export {
+  decideStep,
+  dailyAllowancePause,
+  dailyWriteAllowanceSpent,
+  d1AllowancePause,
+  pausedResult,
+  idleResult,
+  stalledResult,
+  unableToAdvance,
+  isAdvancing,
+  willResumeWithoutAPoll,
+  storedStatus,
+  describeFailure,
+  unrecordedFailure,
+};
 export { MAX_CONSECUTIVE_FAILURES } from './scanTypes';
 export type { StepDecision };
 
@@ -201,5 +334,6 @@ function unrecordedFailure(lastError: string): ChunkResult {
     subrequests: NO_SUBREQUESTS_SPENT,
     rowsWritten: 0,
     stoppedBy: null,
+    resumeAt: null,
   };
 }

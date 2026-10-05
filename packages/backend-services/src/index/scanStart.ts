@@ -21,8 +21,10 @@
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
+import { nextMidnightUtc } from '@edge-sonic/backend-data/utils';
+import { dailyWriteAllowanceSpent, d1AllowancePause, pausedResult } from './scanRetry';
 import type { ScanBudget } from './scanBudget';
-import type { ChunkResult, ScanDeps } from './scanTypes';
+import type { ChunkResult, ScanDailyBudget, ScanDeps } from './scanTypes';
 
 /**
  * `startScan`: probe the root and decide whether there is anything to do.
@@ -33,20 +35,60 @@ import type { ChunkResult, ScanDeps } from './scanTypes';
  * A free function over `ScanDeps` and a budget, like `scanPrelude`'s — this file was over the
  * god-file limit once the budget's own accounting was added to it, and `start` is the one
  * method that is not part of the chunk loop, so it is the one that reads as a separate concern.
+ *
+ * ### Two refusals it has to survive, and neither is a scan fault
+ *
+ * `start` writes. It seeds the frontier's root row and resets the progress counters, and it is
+ * the operator's Rescan button as much as a client's `startScan`. So while D1 is refusing
+ * queries for a spent daily allowance, it fails — on the `ensure` above, on the `find`, on the
+ * seeding write, each of which is outside the `try` that classifies the `PROPFIND`.
+ *
+ * Both are answered with `paused` rather than propagated as a fault, and neither spends the
+ * retry budget. An operator pressing Rescan during a pause gets the pause and the time it ends,
+ * which is the truth; the alternative was a masked 500 on the one surface whose job is to explain
+ * what is wrong.
  */
 async function start(
   deps: ScanDeps,
   library: LibraryRow,
   budget: ScanBudget,
+  dailyBudget: (() => ScanDailyBudget) | undefined,
   fail: (library: LibraryRow, state: ScanStateRow, error: unknown, budget: ScanBudget) => Promise<ChunkResult>,
 ): Promise<ChunkResult> {
-  const state = await deps.scanState.ensure(library.id);
+  let state: ScanStateRow;
+  try {
+    state = await deps.scanState.ensure(library.id);
+  } catch (error) {
+    // The one place D1 is refusing everything, including the read that would have produced the
+    // row. Answering `failed` here would spend a statement on a write that cannot succeed and
+    // arm the alarm a second later, which is the loop `paused` exists to stop.
+    const pause = d1AllowancePause(error, deps.now?.() ?? Date.now());
+    if (pause) return pause;
+    throw error;
+  }
+
+  // A scan that has spent its share does not re-seed the frontier: seeding writes a row, and the
+  // whole point of having spent the share is to stop writing.
+  const daily = dailyBudget?.();
+  if (daily && dailyWriteAllowanceSpent(daily)) {
+    return pausedResult(
+      nextMidnightUtc(daily.now()),
+      `This library has written its ${daily.limit}-row share of today's D1 row-write allowance. The scan resumes itself at 00:00 UTC.`,
+      state.scanned_count,
+      state.total_count,
+    );
+  }
 
   let root: DavResource | undefined;
   try {
     const listed = await (await deps.clientFor(library, () => budget.charge())).propfind('', { depth: 0, timeoutMs: deps.timeoutMs });
     root = listed.find((resource) => toLibraryPath(resource.path, library.root_path) === '') ?? listed[0];
   } catch (error) {
+    // Ahead of the `404` branch on purpose, and for the same reason: a refusal to answer is not
+    // a root that has gone away, and reading it as one would `deleteSubtree` the entire index on
+    // a fault that has nothing to do with the library's contents.
+    const pause = d1AllowancePause(error, deps.now?.() ?? Date.now());
+    if (pause) return pause;
     const status = (error as { status?: number }).status;
     if (status === 404 || status === 410) {
       // The library root is gone. Clear the index rather than leaving rows that
@@ -63,11 +105,35 @@ async function start(
         subrequests: budget.spend(),
         rowsWritten: 0,
         stoppedBy: null,
+        resumeAt: null,
       };
     }
     return await fail(library, state, error, budget);
   }
 
+  // Everything from here writes, so it is inside the same classification as the probe. Split out
+  // as a helper rather than a `try` around eighty lines of comments, because a `try` this wide
+  // would also swallow a genuine bug in the arithmetic below and answer `paused` for it — and
+  // `d1AllowancePause` returns `null` for anything that is not D1's refusal, so the outer `catch`
+  // rethrows. That is the property that makes the wide `try` safe, and it is why the classifier
+  // returns `null` rather than a boolean.
+  try {
+    return await seed(deps, library, budget, state, root);
+  } catch (error) {
+    const pause = d1AllowancePause(error, deps.now?.() ?? Date.now());
+    if (pause) return pause;
+    throw error;
+  }
+}
+
+/**
+ * The rest of `start`: compare the root against what is stored, and seed the frontier.
+ *
+ * Split from `start` purely so the classification above wraps a named function instead of a
+ * hundred lines — the decision "is this the platform refusing us or is this a bug" must not be
+ * made by the width of a `try` block.
+ */
+async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, state: ScanStateRow, root: DavResource | undefined): Promise<ChunkResult> {
   const rootMtime = root?.lastModifiedMs ?? null;
   const stored = await deps.nodes.find(library.id, '');
 
@@ -107,6 +173,7 @@ async function start(
       subrequests: budget.spend(),
       rowsWritten: 0,
       stoppedBy: null,
+      resumeAt: null,
     };
   }
 
@@ -136,6 +203,7 @@ async function start(
     subrequests: budget.spend(),
     rowsWritten: 0,
     stoppedBy: null,
+    resumeAt: null,
   };
 }
 

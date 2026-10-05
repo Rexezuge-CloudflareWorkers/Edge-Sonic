@@ -237,6 +237,27 @@ function createIndex(options: IndexOptions = {}) {
               .sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path))
               .slice(0, limit),
           ),
+        /**
+         * Models the statement, including the `WHERE` it now carries.
+         *
+         * The skip below used to be the whole model of "an unchanged row costs nothing" — and it
+         * was **more generous than the statement was**. The real `UPSERT` had no `WHERE`, so it
+         * rewrote every row it was offered and reported a change for each, because `updated_at` is
+         * `nowSeconds()` and therefore always differed. So this double reported the row writes that
+         * *would* happen after the fix while the chunk-cost arithmetic around it measured a world
+         * where they already did not — which is how a scan that wrote 231,620 rows to one
+         * 80-album library measured as though it were writing nothing.
+         *
+         * The comparison is written out rather than imported from `nodeRowNeedsWrite`, and that is a
+         * deliberate exception worth naming. An earlier version of this comment claimed it imported
+         * the shared predicate "so the double and the caller agree by construction" — which would
+         * have been the right instinct and the wrong implementation: the double is checking what
+         * the *statement* does to a row, while `nodeRowNeedsWrite` decides what the *caller* offers
+         * it. Using the caller's predicate here would let a caller bug and a statement bug cancel
+         * out into a passing test. So the columns are listed against the statement's own `WHERE`,
+         * and `test/scan-convergence.test.ts` asserts that list against real SQLite — which is what
+         * keeps the two copies from drifting.
+         */
         upsertMany: async (inputs: readonly { libraryId: string; path: string; parentPath: string; name: string; mtimeMs: number | null; etag: string | null; depth: number; isScanned?: boolean }[]) => {
           const { written } = writeBatch(inputs.length);
           const result = await charge(() => {
@@ -244,7 +265,20 @@ function createIndex(options: IndexOptions = {}) {
           for (const input of inputs.slice(0, written)) {
             const key = nodeKey(input.path);
             const existing = nodes.get(key);
-            if (existing !== undefined && existing.mtime_ms === input.mtimeMs && existing.etag === input.etag && existing.is_scanned === (input.isScanned ? 1 : 0)) continue;
+            // Every column the statement's `WHERE` compares, and `updated_at` deliberately not —
+            // so an unchanged row is *not* touched, which is what makes `updated_at` answerable.
+            if (
+              existing !== undefined &&
+              existing.parent_path === input.parentPath &&
+              existing.name === input.name &&
+              existing.name_ci === input.name.toLowerCase() &&
+              existing.mtime_ms === input.mtimeMs &&
+              existing.etag === input.etag &&
+              existing.depth === input.depth &&
+              existing.is_scanned === (input.isScanned ? 1 : 0)
+            ) {
+              continue;
+            }
             nodes.set(key, {
               library_id: LIBRARY_ID,
               path: input.path,

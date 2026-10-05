@@ -270,6 +270,187 @@ describe('ScanWorker', () => {
   });
 });
 
+describe('a spent D1 daily allowance', () => {
+  /**
+   * Cloudflare's refusal, verbatim, wrapped the way `executeD1WithRetry` wraps it.
+   *
+   * D1 enforces the Free plan's daily row allowance by failing **every** query — reads included —
+   * until midnight UTC, so the whole product is down and Subsonic authentication goes with it.
+   * That is what the two answers below are about.
+   */
+  const LIMIT_ERROR = "Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
+
+  /**
+   * Make every D1 statement fail with the platform's message.
+   *
+   * `prepare` is the choke point every statement in this repository passes through — the same
+   * reason the subrequest meter is charged there — so one replacement is enough, and replacing
+   * anything narrower would leave a path where a write quietly succeeds inside a "write-refused"
+   * deployment, which is the state this file must not be able to construct.
+   */
+  function refuseEveryD1Statement(): void {
+    vi.spyOn(harness.db.db, 'prepare').mockImplementation((sql: string) => {
+      const real = (harness.db.db as unknown as { prepare: (s: string) => unknown }).prepare.bind(harness.db.db);
+      void real;
+      const stub = {
+        bind: () => stub,
+        run: async () => {
+          throw new Error(`Failed to statement: ${LIMIT_ERROR}`);
+        },
+        first: async () => {
+          throw new Error(`Failed to statement: ${LIMIT_ERROR}`);
+        },
+        all: async () => {
+          throw new Error(`Failed to statement: ${LIMIT_ERROR}`);
+        },
+      };
+      void sql;
+      return stub as never;
+    });
+  }
+
+  it('pauses, and arms the alarm for the reset rather than a second later', async () => {
+    // The defect this is about, in one assertion. D1 refused every query, so the chunk could not
+    // even read its own state; the old path caught that, tried to record it with a write that
+    // could not succeed, returned `failed`, and `isAdvancing('failed')` re-armed the alarm one
+    // second later — roughly 86,400 times before the reset, each attempt a failed statement and a
+    // failed write, with the reason in an exception `toSubsonicError` masked.
+    //
+    // So the assertions are: `paused`, a resume time at midnight UTC rather than now, and an alarm
+    // set to that time rather than to `now + 1000`.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx, storage } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    refuseEveryD1Statement();
+    const before = Date.now();
+    const paused = await worker.stepOnce('L1');
+
+    expect(paused.status).toBe('paused');
+    expect(paused.resumeAt).not.toBeNull();
+    // Strictly in the future, and at a UTC midnight — a reset an hour out, or already past, is
+    // the boundary where a "pause" becomes the one-second loop again.
+    expect(paused.resumeAt as number).toBeGreaterThan(before);
+    expect(new Date(paused.resumeAt as number).getUTCHours()).toBe(0);
+    expect(new Date(paused.resumeAt as number).getUTCMinutes()).toBe(0);
+
+    // The alarm sleeps through the window. A re-arm one second out is the loop.
+    expect(storage.alarmAt).toBe(paused.resumeAt);
+    expect(storage.alarmDeletes).toBe(0);
+  });
+
+  it('holds the pause in storage, where D1 cannot reach it', async () => {
+    // The placement is the mechanism, not a convenience. A pause is usually *caused by* D1 refusing
+    // writes, so a pause held in `scan_state` would be unwritable exactly when it is needed, and
+    // the operator's page — which reads D1 — could not see it either.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx, storage } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    refuseEveryD1Statement();
+    const paused = await worker.stepOnce('L1');
+
+    const memory = storage.store.get('memory') as { pause: { resumeAt: number; reason: string } | null } | undefined;
+    expect(memory?.pause?.resumeAt).toBe(paused.resumeAt);
+    expect(memory?.pause?.reason).toContain('00:00 UTC');
+  });
+
+  it('reports the pause from a status read, and keeps its counters measured', async () => {
+    // `getStatus` is what `getScanStatus` and the operator page both call, so a pause it cannot
+    // report is a pause no surface can see. The counters come from D1 when D1 answers — here it
+    // cannot, so they are zero, which is honest rather than a fabricated count about a library the
+    // call never looked at.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    refuseEveryD1Statement();
+    await worker.stepOnce('L1');
+    const status = await worker.getStatus('L1');
+
+    expect(status.status).toBe('paused');
+    expect(status.scanned).toBe(0);
+    expect(status.lastError).toContain('00:00 UTC');
+  });
+
+  it('drops the pause as soon as D1 answers again', async () => {
+    // The other half, and without it the pause is permanent: a stale `paused` in storage would keep
+    // reporting over a healthy scan, and the alarm would sleep to midnight for a library that had
+    // finished hours ago.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx, storage } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    refuseEveryD1Statement();
+    await worker.stepOnce('L1');
+    expect((storage.store.get('memory') as { pause: unknown }).pause).not.toBeNull();
+
+    vi.restoreAllMocks();
+    for (let i = 0; i < 10; i++) {
+      const status = await worker.getStatus('L1');
+      if (status.status === 'idle') break;
+      await worker.alarm();
+    }
+
+    expect((await worker.getStatus('L1')).status).toBe('idle');
+    expect((storage.store.get('memory') as { pause: unknown }).pause).toBeNull();
+    expect(storage.alarmAt).toBeNull();
+  });
+
+  it('does not spend the retry budget on a pause', async () => {
+    // `consecutive_failures` bounds retries of a *fault*. A spent allowance is not a fault — it
+    // resolves at midnight and needs no attempt — so charging it there is how one condition would
+    // eventually be declared `stalled`, which deletes the alarm and leaves the scan unrecovered
+    // until an operator noticed.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    refuseEveryD1Statement();
+    await worker.stepOnce('L1');
+    await worker.stepOnce('L1');
+    await worker.stepOnce('L1');
+
+    // Restore D1 **before** reading the row back: the refusal replacement is on `prepare`, so the
+    // assertion's own query would fail and say nothing about the counter. Asserting the *absence*
+    // of a write needs the store to be answering.
+    vi.restoreAllMocks();
+    const row = await harness.db.db
+      .prepare('SELECT consecutive_failures, status FROM scan_state WHERE library_id = ?')
+      .bind('L1')
+      .first<{ consecutive_failures: number; status: string }>();
+    // The seeded row says `scanning`: a pause left it alone, where the old path would have written
+    // `failed` and counted three times over — which is what would eventually have deleted the alarm.
+    expect(row?.status).toBe('scanning');
+    expect(row?.consecutive_failures ?? 0).toBe(0);
+  });
+
+  it('lets a scan pace itself before the platform refuses, rather than after', async () => {
+    // The preventive half. Even a *correct* chunk writes ~42 rows, so a 5,000-rows/day allowance
+    // is about two minutes of scanning — the limit is reached by design, not only by the runaway.
+    // The pair for the cases above: they are the backstop for a breach the pacing missed, and this
+    // is what makes the backstop rare.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx, storage } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    const before = harness.dav.propfinds.length;
+    // A budget already spent: the chunk must issue no request at all.
+    const paused = await worker.stepOnce('L1', () => ({ rowsWrittenToday: 5000, limit: 4000, now: Date.now }));
+
+    expect(paused.status).toBe('paused');
+    expect(paused.lastError).toContain('4000-row share');
+    expect(harness.dav.propfinds, 'a paced scan must not open the origin').toHaveLength(before);
+    expect(storage.alarmAt).toBe(paused.resumeAt);
+  });
+});
+
 describe('scan stubs', () => {
   it('reports no binding in the harness env, and throws when a stub is demanded', () => {
     expect(hasScanBinding(harness.env())).toBe(false);

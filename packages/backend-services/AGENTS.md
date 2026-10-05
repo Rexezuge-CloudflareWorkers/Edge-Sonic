@@ -262,6 +262,36 @@ than wrong, because a client seeks by it.
   `start`'s incrementality short-circuit got the matching floor, because a completed scan
   that indexed nothing is not evidence the library is current — `scanned_count` counts
   folders *visited*, so that walk leaves it at `1`. See the parent index.
+  - **The flag has two writers, so the flag's *values* are a decision and not a default.**
+    `persistChildren` wrote `0` for every child, which meant a client merely looking at the
+    root put all eighty album folders back on the frontier and the scan re-walked them — once
+    per browse, on a `GET`. It now **preserves** the stored value and writes `0` only for a row
+    it creates, which is what keeps `needsDescent`'s invariant intact for a folder discovered by
+    browsing alone. Its *own*-row write is the opposite case and stays `0`: that folder's mtime
+    moved, so its contents moved, so it genuinely has not been reconciled.
+  - **The compare is one function, and the two writers are the reason.** `nodeWrite.ts` owns
+    it because `reconcileFolder` described one in a comment without having it, which made a
+    folder of ≥45 entries un-closable — 231,620 rows and a permanent `scanning`. Asserted as
+    **convergence** in `test/scan-convergence.test.ts`, over real SQLite and a real counter,
+    because every status- and shape-level assertion passes on both the broken and fixed code.
+- **A spent D1 allowance is a `pause`, and `failed` and `stalled` are both the wrong answer.**
+  `failed` retries within a bound; `stalled` never retries and needs an operator. A spent daily
+  allowance does neither: it resolves at **midnight UTC**, by itself. It shipped as a loop —
+  `step` caught the refusal, tried to record it with a write that could not succeed, returned
+  `failed`, and the alarm re-armed a second later, ~86,400 times before the reset.
+  - **`willResumeWithoutAPoll` and `isAdvancing` are two questions, and `paused` splits them.**
+    The alarm asks *will this resume by itself?* (`true`); `getScanStatus`'s `scanning` asks
+    *will my poll buy anything?* (`false` — polling cannot move a clock). One predicate for both
+    is the mirror of the defect that made `scanning` mean "did this call do work".
+  - **`step`, `start` and `status` all branch on it before touching `scan_state`**, because the
+    fault *is* a refusal to write. Recording it costs a statement that cannot succeed and spends
+    a retry budget meant for faults.
+  - **It is paced *before* the platform refuses, not only survived after.** A correct chunk
+    writes ~42 rows at ~1/second, so 5,000 rows/day is two minutes of scanning — the limit is
+    reached by design. `SCAN_DAILY_ROW_WRITE_BUDGET` is the platform allowance less a reserve,
+    divided by the number of *registered* libraries because D1's is per account.
+  - Full account: `docs/issues/d1-daily-write-limit.md`. Asserted in `test/d1-daily-limit.test.ts`
+    and `test/scan-do.test.ts`.
 - **A listing that placed nothing is not a listing that found nothing.** `toLibraryPath`
   refusals are silent `continue`s, so a listing whose hrefs all fail containment empties
   `childPaths` and `songPaths` and the prune deletes the library as a mass deletion before

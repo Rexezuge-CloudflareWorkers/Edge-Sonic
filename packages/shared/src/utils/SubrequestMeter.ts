@@ -87,6 +87,31 @@ interface SubrequestMeter {
   Whether `count` more would still fit.
   */
   canAfford(count?: number): boolean;
+  /**
+  Lower this meter's effective ceiling for the current unit of work.
+
+  ### Why the ceiling is mutable at all
+
+  Because a chunk's budget is **tighter** than the platform's and is spent by code that
+  cannot see `ScanBudget`. `ScanBudget` lives in layer 3; every charge point that matters
+  — `BaseDAO.runWriteBatch`, `BaseDAO.withRetry`, `KvCache`, `WebDavClient` — lives below
+  it and holds only this meter, so the meter is the one place the two can meet and the
+  ceiling is how a tighter bound reaches them.
+
+  It was not done this way, and the write batch is where it showed: `fitCount` read
+  `meter.remaining`, so a chunk could issue statements up to the *platform's* 50 while its
+  own budget said 42. That is not a chunk overspending its own budget by two — it is a
+  chunk spending the invocation's 8-statement reserve, after which the post-walk
+  `saveProgress` crosses 50 and the runtime terminates the invocation with an error no
+  `catch` in this repository can see. Measured against a 60-entry root: 52 subrequests on a
+  ceiling of 50, `is_scanned: true` never written, the frontier never draining.
+
+  Never raises it. `ScanBudget` may only *narrow* the platform's ceiling, so a caller
+  asking for more than the platform allows is clamped rather than trusted — the same
+  asymmetry as everywhere else in this file: an over-count costs throughput, an under-count
+  costs an invocation.
+  */
+  setCeiling(limit: number): void;
 }
 
 /**
@@ -107,8 +132,16 @@ class SubrequestCounter implements SubrequestMeter {
    * "paused" and the three possible causes have three different fixes.
    */
   private readonly byKindSpent: Record<SubrequestKind, number> = { d1: 0, kv: 0, fetch: 0, rpc: 0, secret: 0 };
+  /**
+   * The platform's ceiling, or a narrower one `setCeiling` imposed for the current unit of
+   * work. Restored to `limit` by `reset()`, so a narrowed ceiling cannot leak past the chunk
+   * that asked for it — two chunks in one invocation would otherwise leave the second one
+   * bounded by the first one's budget.
+   */
+  private effective: number;
 
   constructor(private readonly limit: number = Infinity) {
+    this.effective = limit;
   }
 
   public charge(count = 1, kind: SubrequestKind = 'd1'): void {
@@ -121,32 +154,48 @@ class SubrequestCounter implements SubrequestMeter {
     return this.counts;
   }
 
+  /**
+   * The **effective** ceiling: the platform's, or a narrower one a caller imposed.
+   */
   public get ceiling(): number {
-    return this.limit;
+    return this.effective;
   }
 
   public get remaining(): number {
-    if (this.limit === Infinity) return Infinity;
-    return Math.max(0, this.limit - this.counts);
+    if (this.effective === Infinity) return Infinity;
+    return Math.max(0, this.effective - this.counts);
   }
 
   public get exhausted(): boolean {
-    return this.counts >= this.limit;
+    return this.counts >= this.effective;
   }
 
   public canAfford(count = 1): boolean {
-    return this.counts + count <= this.limit;
+    return this.counts + count <= this.effective;
+  }
+
+  public setCeiling(limit: number): void {
+    // An unmetered counter stays unmetered: a ceiling of `Infinity` cannot be lowered to a
+    // finite one, because the callers that would impose one are the *production* ones and a
+    // test double asking for a bound must not start refusing statements.
+    if (!Number.isFinite(this.effective) || !Number.isFinite(limit)) return;
+    this.effective = Math.max(0, Math.min(this.effective, Math.floor(limit)));
   }
 
   /**
-   * Zero the count, keeping the ceiling.
+   * Zero the count and restore the platform's ceiling.
    *
    * One method rather than a public `counts` field so "start measuring again" is a named
    * operation, and so the per-kind breakdown cannot drift out of step with the total — which
    * is exactly the kind of second-answer defect this file exists to prevent.
+   *
+   * The ceiling is **restored**, not kept, and that is the whole of why it is here rather than
+   * on a separate method: a narrowed ceiling belongs to the unit of work that asked for it, and
+   * `POST /user/libraries/:id/scan/step` runs two of those in one invocation.
    */
   public reset(): void {
     this.counts = 0;
+    this.effective = this.limit;
     for (const kind of SUBREQUEST_KINDS) this.byKindSpent[kind] = 0;
   }
 

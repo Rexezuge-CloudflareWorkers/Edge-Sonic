@@ -78,6 +78,7 @@ async function finished(deps: ScanDeps, library: LibraryRow, state: ScanStateRow
     // `0` here would report the repair as no work at all.
     rowsWritten: derivedRows,
     stoppedBy: null,
+    resumeAt: null,
   };
 }
 
