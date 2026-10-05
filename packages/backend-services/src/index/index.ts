@@ -9,6 +9,7 @@ export { REQUESTS_PER_ENRICHED_TRACK } from './scanEnrichment';
 export { reconcileFolder } from './scanFolder';
 export { nodeRowNeedsWrite } from './nodeWrite';
 export type { DesiredNodeRow } from './nodeWrite';
+export type { FolderWrites } from './scanAccounting';
 export type { ScanDeps, ScanNodeInput, ScanSongInput, ScanDerivationStore, ScanDailyBudget } from './scanTypes';
 export {
   MAX_CONSECUTIVE_FAILURES,

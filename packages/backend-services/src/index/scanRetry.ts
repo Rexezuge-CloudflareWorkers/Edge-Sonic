@@ -111,7 +111,7 @@ function dailyAllowancePause(budget: ScanDailyBudget | undefined): ChunkResult |
 /**
  * A chunk that will not run until `resumeAt`, reported without touching the network.
  *
- * `scanned` and `total` come from whatever the caller had, which on the D1-refusal path is a
+ * `scanned` comes from whatever the caller had, which on the D1-refusal path is a
  * **zero-valued placeholder**: `scan_state` cannot be read either, so there is nothing to report
  * and a fabricated count would be a claim about a library this call never looked at. The reason
  * is the whole content of the answer, which is why it is a constructor rather than a status code
@@ -120,11 +120,10 @@ function dailyAllowancePause(budget: ScanDailyBudget | undefined): ChunkResult |
  * Every counter is zero because nothing was measured. `lastError` is the sentence an operator
  * needs, and it names the time the work resumes rather than asking them to work it out.
  */
-function pausedResult(resumeAt: number, lastError: string, scanned = 0, total = 0): ChunkResult {
+function pausedResult(resumeAt: number, lastError: string, scanned = 0): ChunkResult {
   return {
     status: 'paused',
     scanned,
-    total,
     indexVersion: 0,
     lastError,
     foldersVisited: 0,
@@ -177,7 +176,6 @@ function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', 
   return {
     status,
     scanned: state.scanned_count,
-    total: state.total_count,
     indexVersion: state.index_version,
     // `null` only for a genuinely idle scan: an `idle` row's `last_error` is already
     // NULL, and a scan nobody is asking about is not the place to explain itself.
@@ -314,8 +312,8 @@ function describeFailure(error: unknown): string {
  *
  * Counts are zero because nothing was measured, not because nothing happened. The
  * `lastError` is what an operator reads, and reporting fabricated counters beside a real
- * reason is worse than reporting none — `total: 0` with `status: 'failed'` says "the walk
- * could not start", which is exactly what happened, where `total: 412` would be a claim
+ * reason is worse than reporting none — a `scanned: 0` with `status: 'failed'` says "the walk
+ * could not start", which is exactly what happened, where `scanned: 412` would be a claim
  * about a library this call never looked at.
  *
  * `status` is `failed`, never `stalled`, and the caller must not promote it: `isAdvancing`
@@ -327,7 +325,6 @@ function unrecordedFailure(lastError: string): ChunkResult {
   return {
     status: 'failed',
     scanned: 0,
-    total: 0,
     indexVersion: 0,
     lastError,
     foldersVisited: 0,

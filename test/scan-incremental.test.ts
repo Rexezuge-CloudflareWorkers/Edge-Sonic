@@ -56,6 +56,11 @@ function createIndex() {
     last_error: null,
     started_at: null,
     consecutive_failures: 0,
+    // The per-scan "did this change anything" flag. Modelled because `complete` reads it
+    // in its decision about `index_version`, so a double that omitted it would answer every
+    // `complete` from a default of "nothing changed" and no test here could see a scan that
+    // genuinely changed the index.
+    changed: 0,
     updated_at: 0,
   };
   const writes = { nodes: 0, songs: 0, state: 0 };
@@ -277,17 +282,46 @@ function createIndex() {
         // demonstrated they are not stuck — and a double that kept the count would make
         // the retry bound unobservable here.
         markScanning: async (_libraryId: string, total: number) => {
-          state = { ...state, status: 'scanning', total_count: total, scanned_count: 0, cursor_path: null, last_error: null, consecutive_failures: 0 };
+          // `changed: 0`, because the flag is per-scan and a new scan is a new question.
+          // Carrying the previous scan's answer forward would bump on the first no-op
+          // rescan and never again — the DAO zeroes it here for that reason.
+          state = { ...state, status: 'scanning', total_count: total, scanned_count: 0, cursor_path: null, last_error: null, consecutive_failures: 0, changed: 0 };
           writes.state += 1;
         },
-        saveProgress: async (_libraryId: string, scanned: number, cursor: string | null) => {
-          state = { ...state, status: 'scanning', scanned_count: scanned, cursor_path: cursor, consecutive_failures: 0 };
+        // A **delta**, like the DAO. This double assigned it, which is the DAO's own
+        // documented pre-fix shape: `fail` incremented in its statement while this
+        // overwrote, so an overlapped chunk published the smaller of the two and the
+        // counter went backwards. A double that disagrees with production about the
+        // argument's meaning cannot observe the lost update.
+        saveProgress: async (_libraryId: string, scannedDelta: number, cursor: string | null, indexChanged: boolean) => {
+          state = {
+            ...state,
+            status: 'scanning',
+            scanned_count: state.scanned_count + scannedDelta,
+            cursor_path: cursor,
+            consecutive_failures: 0,
+            // OR-ed, not assigned: a chunk that changed nothing must not clear a sibling's
+            // answer, which is the same reason `scanned_count` takes a delta.
+            changed: indexChanged ? 1 : (state.changed ?? 0),
+          };
           writes.state += 1;
         },
-        complete: async (_libraryId: string, scanned: number) => {
+        complete: async (_libraryId: string, scanned: number, changed = false) => {
           // The bump is what invalidates every cached aggregate for this library, by
-          // making the old keys unreachable rather than by deleting them.
-          state = { ...state, status: 'idle', scanned_count: scanned, index_version: state.index_version + 1, consecutive_failures: 0 };
+          // making the old keys unreachable rather than by deleting them — so it is
+          // conditional on the scan having changed something. Unconditional, it fired on
+          // every no-op rescan, and on an origin whose root mtime moves per observation
+          // `startScan` cannot short-circuit, so every client login invalidated the whole
+          // cache for a scan that wrote nothing.
+          const bumped = (state.changed ?? 0) === 1 || changed;
+          state = {
+            ...state,
+            status: 'idle',
+            scanned_count: scanned,
+            index_version: state.index_version + (bumped ? 1 : 0),
+            consecutive_failures: 0,
+            changed: 0,
+          };
           writes.state += 1;
           return state.index_version;
         },
@@ -403,7 +437,7 @@ describe('the scan enriches the tracks it changed', () => {
   /**
   A scan over the shared `dav`, recording what it was asked to enrich.
   */
-  function scanWith(enrichMaxPerFolder: number, onEnrich?: (facts: { id: string; path: string; size: number; mtimeMs: number }) => Promise<void>): ScanService {
+  function scanWith(enrichMaxPerFolder: number, onEnrich?: (facts: { id: string; path: string; size: number; mtimeMs: number }) => Promise<number | void>): ScanService {
     return new ScanService({
       ...index.deps,
       clientFor: async (_library, onRequest) =>
@@ -418,7 +452,10 @@ describe('the scan enriches the tracks it changed', () => {
         // the under-reporting the count assertions below exist to catch.
         onRequest?.();
         onRequest?.();
-        if (onEnrich !== undefined) await onEnrich(facts);
+        // Rows written, which is what `rowsWritten` and therefore the day's row-write budget
+        // are metered from. `void`/`undefined` from an `onEnrich` means "asked but did not
+        // write", so a caller can model a cache hit without a second mechanism.
+        return (await onEnrich?.(facts)) ?? 1;
       },
       enrichMaxPerFolder,
     });
@@ -475,6 +512,78 @@ describe('the scan enriches the tracks it changed', () => {
     await service.step(row);
 
     expect(enriched).toEqual([]);
+  });
+
+  it("counts an enrichment's row in rowsWritten, because the day's budget cannot see it", async () => {
+    // `rowsWritten` is the **only** input to `ScanDailyBudget.rowsWrittenToday` — the guard
+    // that stops a scan spending the account's D1 row-write allowance — and it is metered
+    // from `ScanWorker.pause.record`. `enrichChanged` returned `void` for the whole life of
+    // that guard, so every row `applyMetadata` wrote was invisible to it while
+    // `BaseDAO.withRetry` charged every one of them to the subrequest meter. On a library of
+    // 113 tracks those are 113 of roughly 420 rows in a cold scan.
+    //
+    // Asserted as a count rather than as "the callback was called": the two differ the moment
+    // the answer is *wrong*, which is the only way this class of bug shows up.
+    const service = scanWith(20);
+    // A **cold** library, so there is something to index: an unchanged rescan enriches nothing
+    // (the case above), and a scan that indexed nothing is not a scan with an invisible term.
+    await service.start(row);
+    // Zeroed after `start`, so both cases measure the same window — the walk — and neither
+    // inherits the root row the seed writes. `start`'s own write is a real row and is counted
+    // in `start`'s result; counting it in a baseline read afterwards would make the two cases
+    // differ by one for a reason that has nothing to do with enrichment.
+    index.writes.nodes = 0;
+    index.writes.songs = 0;
+
+    let total = 0;
+    for (let poll = 0; poll < 50; poll += 1) {
+      total += (await service.step(row)).rowsWritten;
+      if (index.state().status !== 'scanning') break;
+    }
+    // Read **after** the walk, not during it: the index's own rows are the baseline the
+    // enrichment term is measured against, and a snapshot taken mid-scan is the first chunk's
+    // worth rather than the library's.
+    const indexRows = index.writes.nodes + index.writes.songs;
+
+    expect(enriched.length).toBeGreaterThan(0);
+    // This case asserts only the **margin** the enrichment term adds: `rowsWritten` exceeds the
+    // index's own rows by at least the number enriched.
+    //
+    // Deliberately not an exact total, and deliberately not paired here with an assertion that
+    // `complete` does not bump `index_version` — an exact figure would couple these two cases
+    // to each other's arithmetic, so a change to one would fail the other for a reason that has
+    // nothing to do with either. The two subjects are asserted apart: `rowsWritten` here, and
+    // the version bump in the cases that own it.
+    expect(total - indexRows).toBeGreaterThanOrEqual(enriched.length);
+  });
+
+  it('does not count an enrichment that wrote nothing, and says why', async () => {
+    // The pair, and without it the guard could be satisfied by counting *tracks attempted*:
+    // a `songMeta` cache hit returns without touching D1, and so does a transient failure —
+    // the second deliberately, since stamping `enriched_at` over a `503` is what made four
+    // tracks of a live library report `duration: 0` for ever. Counting either would pace the
+    // scan off writes that never happened, and would stop it *early* rather than late.
+    const service = scanWith(20, async () => 0);
+
+    await service.start(row);
+    // The same window as the case above, so the only difference between them is what
+    // `enrichSong` reported.
+    index.writes.nodes = 0;
+    index.writes.songs = 0;
+
+    let reported = 0;
+    for (let poll = 0; poll < 50; poll += 1) {
+      reported += (await service.step(row)).rowsWritten;
+      if (index.state().status !== 'scanning') break;
+    }
+    const indexRows = index.writes.nodes + index.writes.songs;
+
+    expect(enriched.length).toBeGreaterThan(0);
+    // The same tracks were enriched as the case above, and the index wrote the same rows — but
+    // this `enrichSong` reported zero, so the enrichment term contributes **nothing** and the
+    // margin is `0`. This is what proves the two cases differ because of the *reported* rows
+    // rather than because of the callback having been invoked.
+    expect(reported - indexRows).toBe(0);
   });
 
   it('enriches only the file that changed, not the album around it', async () => {
@@ -600,6 +709,108 @@ describe('ScanService', () => {
     const version = index.state().index_version;
     await service.start(row);
     expect(index.state().index_version).toBe(version);
+  });
+
+  /**
+   * The two cases below use one fixture: an origin whose **root** reports a fresh
+   * `getlastmodified` on every observation.
+   *
+   * Measured on a live origin rather than invented: a `Depth: 1` response answered the
+   * library root with `Mon, 05 Oct 2026 04:23:47 GMT` while its 83 children in the *same*
+   * response carried `Sat, 26 Sep 2026`, and three bursts of probes returned 04:23:47, then
+   * 04:24:39, then 04:28:13 — a value tracking the request rather than the directory.
+   *
+   * This is what makes `start`'s cheap path unreachable, and it is why the test above passes
+   * for a reason that does not generalise: with a stable root mtime the short circuit fires,
+   * `complete()` is never reached, and the question never arises. A guard that only holds
+   * where the case cannot occur is a guard.
+   */
+  it('does not bump index_version when nothing changed, on an origin whose root mtime advances per read', async () => {
+    // The invariant `start`'s cheap path was supposed to provide, asserted where the cheap
+    // path cannot fire. Unconditional, `complete()` bumped here on every `startScan` — and
+    // `startScan` runs on every Subsonic client login and on the operator's Rescan — so each
+    // one made every cached aggregate in the deployment unreachable, against a free plan's
+    // 1,000 KV writes a day, for a rescan that changed nothing.
+    const tree = sampleTree();
+    await service.start(row);
+    for (let poll = 0; poll < 50; poll += 1) {
+      if ((await service.step(row)).status !== 'scanning') break;
+    }
+    expect(index.songs.size).toBe(6);
+
+    // Every subsequent probe reports a newer root than the last, and nothing below it moves.
+    //
+    // The root's **self entry** is found by path, not by index. `sampleTree` puts the folder's
+    // own entry first in a listing and its children after — but index 0 is a positional
+    // assumption about a fixture that also contains an album literally named `Blur` nested
+    // under the artist folder `Blur`, so `Blur/Blur` exists as a real node here. Rewriting
+    // `tree[ROOT][0]` by index was, in an earlier draft of this test, advancing the root on the
+    // first pass and a *child* on the second, which desynchronised the tree and reindexed the
+    // whole library — a fixture bug that read exactly like a product bug.
+    let observed = 7_000_000;
+    const advance = (): void => {
+      observed += 60_000;
+      tree[ROOT] = tree[ROOT]!.map((entry) => (entry.path === ROOT ? { ...entry, mtime: observed } : entry));
+      dav.setTree(tree);
+    };
+
+    const version = index.state().index_version;
+    const pfBefore = dav.propfinds.length;
+    // Zeroed **here**, not at the top: `writes` is cumulative since the index was created, so
+    // it carries the cold scan that just finished. Reading it without resetting measures the
+    // cold scan and calls it the rescan — which is the same mistake as the earlier mid-scan
+    // snapshot, and it is the reason `18` appeared where `2` was expected.
+    index.writes.nodes = 0;
+    index.writes.songs = 0;
+    advance();
+    const started = await service.start(row);
+    expect(started.status).toBe('scanning');
+    for (let poll = 0; poll < 50; poll += 1) {
+      if ((await service.step(row)).status !== 'scanning') break;
+    }
+
+    // The short circuit **did not** fire: the root moved, so `start` seeded the frontier (one
+    // node row) and the walk listed the root (one `PROPFIND`).
+    //
+    // Stated before the version assertion on purpose. This case exists because the old guard
+    // was only ever exercised where the cheap path fires — a fixture in which the walk did not
+    // run would pass `index_version` unchanged while measuring nothing at all, which is how the
+    // whole invariant stayed green. If the fixture ever stops producing a real walk, this is
+    // the line that says so, and the version assertion below becomes meaningless without it.
+    expect(started.status).toBe('scanning');
+    expect(dav.propfinds.length).toBeGreaterThan(pfBefore);
+    // Exactly the root's own row, twice: the seed's `is_scanned = 0`, then the walk's `1`.
+    // No child was rewritten and no song row moved — the whole claim is a real walk whose only
+    // output is frontier bookkeeping, and `2` is what makes "no child moved" a measurement
+    // rather than an absence.
+    expect(index.writes.nodes).toBe(2);
+    expect(index.writes.songs).toBe(0);
+    expect(index.songs.size).toBe(6);
+    expect(index.state().index_version).toBe(version);
+  });
+
+  it('still bumps index_version on that same origin once something really changed', async () => {
+    // The pair, and the reason the case above is a measurement rather than a disablement: a
+    // conditional bump that never fires is a cache that serves a stale library for ever, which
+    // is the opposite defect. Without this the guard could be satisfied by `complete()`
+    // never bumping at all.
+    const tree = sampleTree();
+    await service.start(row);
+    for (let poll = 0; poll < 50; poll += 1) {
+      if ((await service.step(row)).status !== 'scanning') break;
+    }
+
+    const version = index.state().index_version;
+    // An album's own mtime moves, which is a change the scan is supposed to notice. The root
+    // is advanced as well, because a real server propagates a child's change up the chain.
+    touch(tree, 'Blur/Holocene');
+    dav.setTree(tree);
+
+    await service.start(row);
+    for (let poll = 0; poll < 50; poll += 1) {
+      if ((await service.step(row)).status !== 'scanning') break;
+    }
+    expect(index.state().index_version).toBeGreaterThan(version);
   });
 
   it('costs requests proportional to the change, not the library size', async () => {
@@ -1333,7 +1544,10 @@ describe('ScanService', () => {
         { libraryId: LIBRARY_ID, path: '', parentPath: '', name: '', mtimeMs: mtime, etag: null, depth: 0, isScanned: true },
       ]);
       await index.deps.scanState.markScanning(LIBRARY_ID, 0);
-      await index.deps.scanState.saveProgress(LIBRARY_ID, 1, null);
+      // `false`: a folder was *visited*, which is what `scanned_delta` counts, and the
+      // library's content did not change — which is what the flag counts. Passing `true`
+      // would be indistinguishable from a scan that indexed something.
+      await index.deps.scanState.saveProgress(LIBRARY_ID, 1, null, false);
       await index.deps.scanState.complete(LIBRARY_ID, 1);
     }
 

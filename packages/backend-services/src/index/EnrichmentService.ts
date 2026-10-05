@@ -1,48 +1,29 @@
 /**
  * Lazy tag enrichment: fill in `duration`, `bitrate`, and text tags for a song.
  *
- * ### Why it is lazy
+ * WebDAV cannot report a track's length — `PROPFIND` gives `getcontentlength`,
+ * `getlastmodified` and `getcontenttype`, and a client that knows a track's duration draws a
+ * scrubber. Reading it from every file during a scan is not affordable: one ranged read per
+ * track, and 5,000 tracks is 5,000 subrequests against a ceiling of 50. So it is read from two
+ * bounded places — the scan, for the tracks it changed (`scanEnrichment.ts`), and `getSong` for
+ * the rest.
  *
- * WebDAV cannot report a track's length. `PROPFIND` gives `getcontentlength`,
- * `getlastmodified` and `getcontenttype`, and a Subsonic client that knows a
- * track's duration draws a scrubber — so `duration` is effectively a required
- * field, and it is not in the filesystem's vocabulary.
- *
- * Reading it from every file during the scan is not affordable: one ranged read
- * per track, and a 5,000-track library is 5,000 subrequests against a per-invocation
- * ceiling that is 50 external on the Free plan. So it is read from two places, and
- * both are bounded — the scan, for the tracks it changed (see `scanEnrichment.ts`),
- * and `getSong`, for the rest, at the cost of one subrequest per song the client
- * actually opens.
- *
- * ### The second read
- *
- * A container whose length is recorded at the *end* of the file cannot be read from a
- * prefix. Ogg is the case: its granule position is in the final page's header. So a
- * prefix read reports no duration, and one tail-anchored read resolves it — reusing the
- * sample rate, channels and pre-skip the prefix read already established, so it is a
- * second range over the same file rather than a second parse of it.
- *
- * A deployment that does not configure `readTailBytes` gets no Ogg duration. That is the
- * intended trade: `null` is a value, and a wrong one is worse, because a client seeks by
- * it.
+ * A container whose length lives at the **end** of the file cannot be read from a prefix; Ogg is
+ * the case, its granule position being in the final page's header. One tail-anchored read
+ * resolves it — see `readTailBytes` and `resolveTailDuration`.
  *
  * ### What it writes, and what it does not
  *
- * The result is written to D1 (`songs.duration`), not just cached, so it survives a
- * cold isolate and a KV outage. KV holds a copy keyed by the file's `mtime_ms` so a
- * repeat `getSong` skips the read.
+ * D1, not just the cache, so the result survives a cold isolate and a KV outage. KV holds a copy
+ * keyed by the file's `mtime_ms` **and the reader version**, because an entry written by a reader
+ * that could not read something a later reader can is not a value this reader may skip a read for.
  *
- * A format this module cannot read yields `null`, which is written as `0` and
- * **left alone on the next call** — see `shouldEnrich`.
- *
- * A failure that says nothing about the file is never written at all. A `503`, a
- * timeout, or a reset connection is an answer about the network, and stamping
- * `enriched_at` over one makes a transient fault permanent: the row reports duration
- * `0` for ever, because `shouldEnrich` treats the stamp as "already read" and no
- * later call re-reads it. It shipped — four tracks of a live library were stamped
- * empty during a flapping origin and stayed at duration `0` through every `getSong`
- * after it. See `isTransientEnrichmentFailure`.
+ * A format this module cannot read yields `null`, written as `0` and **left alone on the next
+ * call** (`shouldEnrich`). A failure that says nothing about the file is never written at all: a
+ * `503`, a timeout or a reset is an answer about the network, and stamping `enriched_at` over
+ * one makes the fault permanent, because `shouldEnrich` reads the stamp as "already read" and no
+ * later call re-reads the row. It shipped — four tracks of a live library were stamped empty
+ * during a flapping origin and reported duration `0` for ever.
  */
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { readAudioTags, readOggTailDuration, READER_VERSION } from '@edge-sonic/media-tags';
@@ -107,9 +88,8 @@ interface EnrichmentDeps {
 /**
  * What a range read needs, and nothing else.
  *
- * Deliberately not a `SongRow`: a caller without a row in hand — the scan, holding the
- * facts it just upserted — passes these four fields instead of fabricating a row to
- * satisfy a signature.
+ * Deliberately not a `SongRow`: a caller without a row in hand — the scan, holding the facts it
+ * just upserted — passes these four fields rather than fabricating a row to satisfy a signature.
  */
 interface EnrichFacts {
   readonly id: string;
@@ -138,6 +118,43 @@ interface CachedEnrichment {
   readonly container: string;
 }
 
+/**
+ * What an enrichment actually did, as distinct from what it found.
+ *
+ * `rowsWritten` is rows **written to `songs`**, not tracks asked about, and the two are
+ * genuinely different numbers: a `songMeta` cache hit returns without touching D1, a transient
+ * failure returns without touching D1 — deliberately, so a flapping origin does not stamp the
+ * row — and an unknown container writes one row recording the attempt. Counting "enriched"
+ * instead would report all three as the same thing, and would pace the scan off writes that
+ * never happened.
+ *
+ * It is here because `rowsWritten` is the **only** input to `ScanDailyBudget.rowsWrittenToday`,
+ * the guard that stops a scan spending the day's D1 row-write allowance, and `enrichChanged`
+ * returned `void` for the whole life of that guard. On a library of 113 tracks these are 113 of
+ * roughly 420 rows in a cold scan. The subrequest meter saw every one of them, because
+ * `BaseDAO.withRetry` charges each statement — one counter blind to a quarter of the writes and
+ * one counting them all. See `scanAccounting` for why that number is not also the
+ * cache-invalidation signal.
+ */
+interface EnrichmentOutcome {
+  /**
+   * The tags read out of the file, or `null` for a container this reader does not read, a
+   * transient failure and a cache hit alike — indistinguishable to a caller that only wants
+   * tags, which is why `rowsWritten` is beside it.
+   */
+  readonly tags: AudioTags | null;
+  /**
+  `1` for every path that reached `applyMetadata`, including an attempt carrying no duration.
+  */
+  readonly rowsWritten: number;
+}
+
+/**
+ * An outcome for a call that wrote nothing, so "wrote nothing" is one value: the paths that
+ * short-circuit before any read — a cache hit, and a row already current — are the same answer
+ * to the only question the counter asks.
+ */
+const NO_ENRICHMENT_WRITTEN: EnrichmentOutcome = { tags: null, rowsWritten: 0 };
 
 class EnrichmentService {
   constructor(private readonly deps: EnrichmentDeps) {}
@@ -150,7 +167,20 @@ class EnrichmentService {
    * because it could not read a duration is worse than one that reports `0`.
    */
   public async enrich(library: LibraryRow, song: SongRow): Promise<AudioTags | null> {
-    if (song.enriched_at !== null && song.duration > 0 && song.reader_version === READER_VERSION) return null;
+    return (await this.enrichReporting(library, song)).tags;
+  }
+
+  /**
+   * `enrich`, reporting the row it wrote.
+   *
+   * The outcome-carrying twin rather than a widened `enrich`, and the split is by
+   * **caller**: `getSong` wants tags and reads nothing else, while the scan's budget
+   * wants the row count and infers nothing. One implementation, two projections — `enrich`
+   * is a delegation rather than a second copy of the decision tree above it, because a
+   * second copy is free to disagree about when a row is replayed from cache.
+   */
+  public async enrichReporting(library: LibraryRow, song: SongRow): Promise<EnrichmentOutcome> {
+    if (song.enriched_at !== null && song.duration > 0 && song.reader_version === READER_VERSION) return NO_ENRICHMENT_WRITTEN;
 
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [song.id]);
     if (cached && cached.mtimeMs === song.mtime_ms && cached.readerVersion === READER_VERSION) {
@@ -160,11 +190,12 @@ class EnrichmentService {
       // usable by the reader that produced it.
       if (song.enriched_at === null || song.reader_version !== READER_VERSION) {
         await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, null);
+        return { tags: null, rowsWritten: 1 };
       }
-      return null;
+      return NO_ENRICHMENT_WRITTEN;
     }
 
-    if (!shouldEnrich(song)) return null;
+    if (!shouldEnrich(song)) return NO_ENRICHMENT_WRITTEN;
 
     return await this.readAndPersist(library, song, { id: song.id, path: song.path, size: song.size, mtimeMs: song.mtime_ms });
   }
@@ -178,9 +209,12 @@ class EnrichmentService {
    * Both entry points share `readAndPersist`, so a track enriched by a scan and a track
    * enriched on first play are enriched identically.
    */
-  public async enrichFacts(library: LibraryRow, facts: EnrichFacts, onRequest?: () => void): Promise<AudioTags | null> {
+  public async enrichFacts(library: LibraryRow, facts: EnrichFacts, onRequest?: () => void): Promise<EnrichmentOutcome> {
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [facts.id]);
-    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION) return null;
+    // A cache hit is `0` rows, not `1`, and that is why this reports rather than returning
+    // tags: on a library already enriched by `getSong` this branch is the common one, and
+    // reporting `1` would pace the scan off a write that never happened.
+    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION) return NO_ENRICHMENT_WRITTEN;
     return await this.readAndPersist(library, null, facts, onRequest);
   }
 
@@ -190,7 +224,14 @@ class EnrichmentService {
    * `row` is `null` when the caller has no row to write metadata through — the scan
    * writes by id, which is all a freshly upserted row needs.
    */
-  private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts, onRequest?: () => void): Promise<AudioTags | null> {
+  private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts, onRequest?: () => void): Promise<EnrichmentOutcome> {
+    // Counted by the closure rather than by its callers, because `write` is the only
+    // place in the service that issues an `UPDATE`, and every answer about rows written
+    // has to be the same answer. `1` unconditionally once inside: `buildMetadataPatch`
+    // cannot return empty for this input — `duration`, `bitrate` and `readerVersion` are
+    // always present — so reaching here is reaching a statement, and a statement against
+    // one `WHERE id = ?` is one row.
+    let rowsWritten = 0;
     const write = async (
       duration: number | null,
       bitrate: number | null,
@@ -198,6 +239,7 @@ class EnrichmentService {
       channels: number | null,
       tags: AudioTags | null,
     ): Promise<void> => {
+      rowsWritten = 1;
       if (row !== null) {
         await this.persist(row, duration, bitrate, sampleRate, channels, tags);
         return;
@@ -227,33 +269,27 @@ class EnrichmentService {
       const bytes = await client.readPrefix(facts.path, this.deps.readBytes, this.deps.timeoutMs);
       tags = readAudioTags(bytes, facts.size);
     } catch (error) {
-      // Recorded as an attempt so the next call does not retry a file this
-      // server cannot read — but only when the failure *is* about the file.
-      // A transient one leaves the row exactly as it found it, because stamping
-      // `enriched_at` over a `503` is what made four tracks of a live library
-      // report duration `0` for ever: the stamp said "already read", and nothing
-      // ever re-read them.
-      if (isTransientEnrichmentFailure(error)) return null;
+      // Recorded as an attempt so the next call does not retry a file this server cannot read —
+      // but only when the failure *is* about the file. A transient one leaves the row as it found
+      // it; the module header carries what stamping `enriched_at` over a `503` cost.
+      if (isTransientEnrichmentFailure(error)) return NO_ENRICHMENT_WRITTEN;
       await write(null, null, null, null, null);
-      return null;
+      return { tags: null, rowsWritten };
     }
 
     if (tags === null || tags.container === 'unknown') {
       await write(null, null, null, null, null);
-      return null;
+      return { tags: null, rowsWritten };
     }
 
-    // The prefix read cannot see the final page of an Ogg stream, so `durationSeconds`
-    // is null there by design rather than by failure. One tail-anchored read resolves
-    // it, reusing the sample rate and pre-skip the prefix read already established.
+    // The prefix read cannot see an Ogg stream's final page, so `durationSeconds` is null there
+    // by design rather than by failure.
     const tail = tags.durationSeconds === null || tags.durationSeconds === undefined
       ? await this.resolveTailDuration(library, facts, tags, onRequest)
       : { duration: tags.durationSeconds, transient: false };
-    // A tail read that failed transiently leaves no trace either — not even the good
-    // prefix tags. Writing them would stamp the row and strand the duration at `0`
-    // with the same permanence as the prefix case above; the next call simply does
-    // both reads again, which is one extra prefix read against a retry that works.
-    if (tail.transient) return null;
+    // A transient tail failure leaves no trace either — not even the good prefix tags, for the
+    // same permanence as the prefix case above. The next call does both reads again.
+    if (tail.transient) return NO_ENRICHMENT_WRITTEN;
     const duration = tail.duration;
 
     const entry: CachedEnrichment = {
@@ -272,7 +308,7 @@ class EnrichmentService {
     // the result, which is what the outage requirement depends on.
     await this.deps.kv.putJson('songMeta', [facts.id], entry);
     await write(entry.durationSeconds, entry.bitrateKbps, entry.sampleRate, entry.channels, tags);
-    return tags;
+    return { tags, rowsWritten };
   }
 
   /**
@@ -284,11 +320,9 @@ class EnrichmentService {
    * A 240.61 s track was served as 3 s and 15329 kbps instead of 191 because the prefix
    * read's truncated page was taken for the file's last.
    *
-   * `transient: true` is the third answer, and it means "do not write": the tail read
-   * failed in a way that says nothing about the file, so even the good prefix tags stay
-   * out of D1 — writing them would stamp the row and strand the duration at `0`. A
-   * result object rather than a `null`-or-sentinel union, because `null` is the *other*
-   * answer and the two must not merge.
+   * `transient: true` is the third answer and means "do not write": the tail read failed in a way
+   * that says nothing about the file, so even the good prefix tags stay out of D1. A result object
+   * rather than a `null`-or-sentinel union, because `null` is the *other* answer.
    */
   private async resolveTailDuration(
     library: LibraryRow,
@@ -358,4 +392,4 @@ class EnrichmentService {
 
 export { EnrichmentService };
 export { shouldEnrich } from './enrichmentRetry';
-export type { EnrichmentDeps, CachedEnrichment, EnrichFacts };
+export type { EnrichmentDeps, CachedEnrichment, EnrichFacts, EnrichmentOutcome };

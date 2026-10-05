@@ -172,7 +172,11 @@ function harness(maxRequests: number = SCAN_CHUNK_SUBSREQUEST_BUDGET): Harness {
       const budget = new ScanBudget({ meter, maxRequests, deadlineMs: 20_000 });
       const folder = await nodes.find(LIBRARY_ID, '');
       if (folder === null) throw new Error('the root row is missing; the frontier was never seeded');
-      return await reconcileFolder({ nodes, songs, enrichMaxPerFolder: 0 } as never, library(), folder, listing, budget);
+      const reconciled = await reconcileFolder({ nodes, songs, enrichMaxPerFolder: 0 } as never, library(), folder, listing, budget);
+      // `rowsWritten`, the number this suite measures: statements issued that changed a row.
+      // Its sibling `indexChanged` answers a different question — whether a cached aggregate
+      // is stale — and the folder's own frontier row is the case where the two part company.
+      return reconciled.rowsWritten;
     },
     browse: async (path, listing) => {
       // The real browse path against a real `Depth: 1` answer, so `persistChildren` actually runs

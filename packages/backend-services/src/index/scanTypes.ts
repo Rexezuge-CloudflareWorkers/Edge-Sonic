@@ -86,8 +86,21 @@ interface ScanStateStore {
   find(libraryId: string): Promise<ScanStateRow | null>;
   ensure(libraryId: string): Promise<ScanStateRow>;
   markScanning(libraryId: string, totalCount: number): Promise<void>;
-  saveProgress(libraryId: string, scannedCount: number, cursorPath: string | null): Promise<void>;
-  complete(libraryId: string, scannedCount: number): Promise<number>;
+  /**
+   * The per-scan "did this change the index" flag.
+   *
+   * @param indexChanged Whether anything a cached aggregate reads moved. A **boolean**, and
+   *   not `rowsWritten > 0`: the two part company on the folder's own frontier row, which is a
+   *   real D1 row and no change to the index, so deciding `> 0` here would make
+   *   `index_version` a function of how often a library was rescanned. See `scanAccounting`.
+   */
+  saveProgress(libraryId: string, scannedDelta: number, cursorPath: string | null, indexChanged: boolean): Promise<void>;
+  /**
+   * @param changed Force the `index_version` bump for a caller that changed the index
+   *   outside a scan. The library-root-gone branch deletes every row and has no scan to
+   *   have written them.
+   */
+  complete(libraryId: string, scannedCount: number, changed?: boolean): Promise<number>;
   /**
    * Record a failure and report how many consecutive failures there have now.
    *
@@ -186,8 +199,16 @@ interface ScanDeps {
   *
   * `onRequest` is the chunk's meter, forwarded so a range read is charged to the same
   * budget as the `PROPFIND` that found the file.
+  *
+  * Resolves to the **rows written**, not to a track count and not to `void`. It is what
+  * `rowsWrittenToday` is metered from, and it used to be `void` — so every row
+  * `applyMetadata` wrote was invisible to the guard that exists to stop the scan spending
+  * the day's D1 row allowance, while the subrequest meter counted every one of them. On a
+  * library of 113 tracks those are about a quarter of a cold scan's writes. `0` for a
+  * cache hit and `0` for a transient failure, which are the two cases where reporting a
+  * track would pace the scan off writes that never happened.
   */
-  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<void>;
+  enrichSong?: (library: LibraryRow, facts: ScanEnrichFacts, onRequest?: () => void) => Promise<number>;
   /**
   Tracks enriched per folder, per chunk.
 
@@ -219,40 +240,24 @@ interface ScanDeps {
 /**
  * A scan's state, as the service reports it.
  *
- * `stalled` is separated from `failed` because the two mean opposite things about
- * what happens next: `failed` is retried by the following poll, `stalled` has spent
- * its retry budget and will not be. Collapsing them is what let a wedged scan report
- * as finished — `getScanStatus` derives `scanning` from this value, and both `failed`
- * and a completed scan serialize as `scanning: false`.
+ * `stalled` is separated from `failed` because they mean opposite things about what happens next:
+ * `failed` is retried within its bound, `stalled` has spent it and will not be. Collapsing them is
+ * what let a wedged scan report as finished — `getScanStatus` derives `scanning` from this value,
+ * and both serialize as `scanning: false`.
  *
- * `paused` is a third thing again, and it is the reason the two above are not enough. It
- * means **retried by itself, at a known time, needing no operator**: the chunk will not run
- * until a wall-clock moment arrives, so retrying is not merely useless (as it is for
- * `stalled`) but *actively harmful*, and the retry counter has nothing to say about it.
- *
- * It exists because D1's Free-plan daily row allowance is **enforced**: since 2026-09-01 an
- * account over it has every query fail — reads included — until midnight UTC, so the whole
- * product is down and the old path through this machine treated it as a scan failure. `step`
- * caught the refusal, tried to record it with a D1 write that could not succeed, and returned
- * `failed`; `isAdvancing('failed')` is true, so `ScanWorker` re-armed one second later and did
- * it again, roughly 86,000 times before the reset. Nothing was retried in any useful sense, no
- * reason reached an operator, and the allowance was spent long before that.
- *
- * It is not persisted as a `scan_state.status`, and that is deliberate rather than convenient:
- * a pause entered *because D1 is refusing writes* has nowhere to be written. It lives in the
- * Durable Object's storage, which is the one store still accepting them. See `ScanWorker`.
+ * `paused` is a third thing, and it is not persisted: it is entered *because D1 is refusing
+ * writes*, so there is nowhere in D1 to write it, and it resolves at midnight UTC by itself —
+ * which is why it is neither `failed` (retried, within a bound) nor `stalled` (never retried), and
+ * why polling for it buys nothing. `scanRetry.ts` carries the whole account.
  */
 type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled' | 'paused';
 
 /**
  * How many consecutive failed chunks a scan may spend before it is declared stalled.
  *
- * A bound, not a policy of one. An origin that 500s once must not end a scan, so a
- * single failure is not terminal; a library whose credential is revoked must not be
- * re-attempted on every poll for ever, spending the operator's WebDAV requests to
- * reach the same conclusion each time. Three is the smallest number that separates
- * "flaked" from "broken" without a flag day, and `startScan` resets it — the
- * operator's escape hatch, needing no surface of its own.
+ * A bound, not a policy of one: an origin that 500s once must not end a scan, and a revoked
+ * credential must not be re-attempted for ever. Three separates "flaked" from "broken", and
+ * `startScan` resets it — the operator's escape hatch, needing no surface of its own.
  */
 const MAX_CONSECUTIVE_FAILURES = 3;
 
@@ -261,11 +266,9 @@ const MAX_CONSECUTIVE_FAILURES = 3;
  *
  * Supplied by `ScanWorker`, which owns the Durable Object's storage and therefore the count,
  * because **metering D1 writes must not itself spend D1 writes**: a counter in `scan_state`
- * would cost a row per chunk against the very allowance it enforces, and one extra statement out
- * of a 42-statement chunk is 2.4% of a budget that is already the binding constraint.
- *
- * The limit is a *share*, not the whole allowance — D1's is per account, so a per-library cap
- * is unsound as soon as a second library exists. See `dailyRowWriteShare`.
+ * would cost a row per chunk against the very allowance it enforces. The limit is a *share* —
+ * D1's is per account, so a per-library cap is unsound as soon as a second library exists.
+ * See `dailyRowWriteShare`.
  */
 interface ScanDailyBudget {
   /**
@@ -291,8 +294,17 @@ interface ScanDailyBudget {
 
 interface ChunkResult {
   readonly status: ScanStatus;
+  /**
+   * Folders this scan has visited, accumulated across its chunks.
+   *
+   * **Not a denominator**, and there is deliberately nothing on this result that could be read
+   * as one. It used to carry a `total` beside it, from `scan_state.total_count` — which
+   * `markScanning` writes as `0` and which nothing updates, so the field was a hardcoded zero in
+   * five of the six places a `ChunkResult` is built and `scanned_count` in the sixth: the same
+   * number in a different unit. Progress a client can use is `songs.countByLibrary`, which is
+   * what `getScanStatus` publishes as `count`.
+   */
   readonly scanned: number;
-  readonly total: number;
   readonly indexVersion: number;
   /**
   Why the last chunk failed, or `null`.

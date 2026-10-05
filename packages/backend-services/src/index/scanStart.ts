@@ -75,7 +75,6 @@ async function start(
       nextMidnightUtc(daily.now()),
       `This library has written its ${daily.limit}-row share of today's D1 row-write allowance. The scan resumes itself at 00:00 UTC.`,
       state.scanned_count,
-      state.total_count,
     );
   }
 
@@ -94,11 +93,13 @@ async function start(
       // The library root is gone. Clear the index rather than leaving rows that
       // point at paths which no longer exist.
       await deps.nodes.deleteSubtree(library.id, '');
-      const indexVersion = await deps.scanState.complete(library.id, 0);
+      // `true`, and this is the one caller that has to insist: it just deleted the whole
+      // index outside a scan, so nothing carried `changed = 1` and the version bump that
+      // makes the deleted rows unreachable would be skipped.
+      const indexVersion = await deps.scanState.complete(library.id, 0, true);
       return {
         status: 'idle',
         scanned: 0,
-        total: 0,
         indexVersion,
         lastError: null,
         foldersVisited: 0,
@@ -166,7 +167,6 @@ async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, sta
     return {
       status: 'idle',
       scanned: state.scanned_count,
-      total: state.scanned_count,
       indexVersion: state.index_version,
       lastError: null,
       foldersVisited: 0,
@@ -196,7 +196,6 @@ async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, sta
   return {
     status: 'scanning',
     scanned: 0,
-    total: 0,
     indexVersion: state.index_version,
     lastError: null,
     foldersVisited: 0,

@@ -202,7 +202,6 @@ describe('the pause, and the ordinary fault beside it', () => {
     const pause = d1AllowancePause(new Error(WRITE_LIMIT_MESSAGE), MIDDAY);
 
     expect(pause?.scanned).toBe(0);
-    expect(pause?.total).toBe(0);
     expect(pause?.indexVersion).toBe(0);
     expect(pause?.foldersVisited).toBe(0);
     expect(pause?.rowsWritten).toBe(0);

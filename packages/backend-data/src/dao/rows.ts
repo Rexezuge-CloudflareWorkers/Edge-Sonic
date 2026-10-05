@@ -124,6 +124,14 @@ interface ScanStateRow {
   cursor_path: string | null;
   scanned_count: number;
   total_count: number;
+  /**
+   * Whether this scan wrote anything, accumulated by `saveProgress` and consumed by
+   * `complete`.
+   *
+   * Read-only, and never set by a caller: it is the answer to "did the last scan change
+   * the index", which only the statements that did the writing can give.
+   */
+  readonly changed?: number;
   index_version: number;
   last_error: string | null;
   started_at: number | null;

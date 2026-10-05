@@ -1,0 +1,62 @@
+-- `index_version` must answer "did this scan change the index", and `scanned_count` cannot.
+--
+-- ### Why this column exists
+--
+-- `scan_state.index_version` is the cache-invalidation primitive. `KvCache` keys carry it,
+-- so a superseded entry becomes *structurally unreachable* rather than deleted — which is
+-- what makes invalidation cost zero writes against a free plan's 1,000 KV writes a day.
+-- `complete()` bumped it unconditionally, once per finished scan.
+--
+-- So the question "did this scan change anything?" had no answer anywhere, and the bump
+-- stood in for it. On an origin whose root collection reports a fresh `getlastmodified` on
+-- every observation, `start`'s cheap path can never match — so every `startScan` seeds the
+-- frontier, the root is walked, the frontier drains, and `complete()` bumps. Having changed
+-- nothing. Measured on a live origin: one `Depth: 1` response answers the root with
+-- `Mon, 05 Oct 2026 04:23:47 GMT` while its 83 children in the *same* response carry
+-- `Sat, 26 Sep 2026`, and three bursts of probes returned 04:23:47, then 04:24:39, then
+-- 04:28:13 — a value that tracks the request, not the directory.
+--
+-- The cost is not the two rows the seed writes. It is that `startScan` runs on every
+-- Subsonic client login and on the operator's Rescan button, and each of those made every
+-- cached aggregate in the deployment unreachable to be refetched. The whole KV budget, for
+-- a rescan that changed nothing.
+--
+-- ### Why a column rather than a comparison
+--
+-- Because the question is about **this scan**, and the chunks that write rows are not the
+-- chunk that finishes. `finished()` runs on the chunk where the frontier happens to empty,
+-- which is not the chunk that reconciled the last folder — so a caller-side flag, a local,
+-- or a value derived inside `complete()` cannot see it. `saveProgress` is the one statement
+-- every scanning chunk issues, it already accumulates a per-scan total (`scanned_count`
+-- takes a delta for the same overlapping-chunk reason), and it is where "this scan changed
+-- the index" belongs.
+--
+-- `markScanning` zeroes it because the flag is per-scan: a new scan is a new question, and
+-- carrying the previous scan's answer forward would bump on the first no-op rescan and then
+-- never again.
+--
+-- ### Why the signal is not `rows_written > 0`
+--
+-- Because most of the rows a rescan writes are **frontier bookkeeping**, and invalidating a
+-- cache for them is a false answer. `reconcileFolder` writes each folder's own row last, and
+-- that row carries `is_scanned` — so a rescan flips it `1 → 0` in `start` and `0 → 1` in the
+-- walk, two real D1 rows describing no change to anything a cached answer reads. The root's
+-- own row adds a third: on the origin measured above its `mtime_ms` records the request's own
+-- clock, so the walk rewrites it on every pass while the index is untouched.
+--
+-- So the flag is set from **what a cached aggregate depends on** — a child `nodes` row, a
+-- `songs` row, a prune delete, a derivation stamp, an enrichment write — and never from the
+-- folder's own frontier row. The distinction is stated rather than inferred, because
+-- `rowsWritten` is a *different* question: it is the input to the day's row-write allowance,
+-- where every row counts, and conflating the two would let a cache be invalidated by a
+-- bookkeeping write and a budget be under-reported by a content one.
+--
+-- ### What this does not fix
+--
+-- A scan that writes rows and then *fails* still leaves `changed = 1`, so its eventual
+-- completion bumps — correct. But a scan that writes rows and is retried until it stalls
+-- never reaches `complete()` at all, so its writes are indexed under the old version. That
+-- hole predates this column and is unchanged by it: `fail()` deliberately does not touch
+-- `index_version`, and closing it means deciding what a failed scan should invalidate,
+-- which is a different question from this one.
+ALTER TABLE scan_state ADD COLUMN changed INTEGER NOT NULL DEFAULT 0;

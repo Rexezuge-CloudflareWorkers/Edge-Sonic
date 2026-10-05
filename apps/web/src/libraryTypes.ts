@@ -23,6 +23,13 @@
  * rendering `scanned` against it would show "12 of 0". Progress is `songCount` below — the
  * protocol's own unit, the same figure `getScanStatus` publishes as `count` — plus
  * `scanned`, which counts folders visited.
+ *
+ * The **column** still exists and is still written, because it is part of `scan_state`; what
+ * is gone is the field on the wire. `ChunkResult` carried it as a hardcoded `0` in five of the
+ * six places one is built and as `scanned_count` in the sixth, and `ScanStateSummary` below
+ * declared it a `number` — so a client could render "12 of 0" from two fields its own types
+ * said were both real. Removing the field rather than documenting it is what stops the next
+ * client from trusting it.
  */
 interface LibraryScanSummary {
   readonly status: ScanStatus;
@@ -109,8 +116,18 @@ type ChunkStopReason = 'frontier' | 'requests' | 'deadline' | null;
 
 interface ScanStateSummary {
   readonly status: ScanStatus;
+  /**
+   * Folders this scan has visited. **Not a fraction** — there is no denominator to render it
+   * against, and there is deliberately no field here that could be read as one.
+   *
+   * `total: number` used to be declared on this type and the server sent a hardcoded `0` in
+   * every chunk result but one, where it sent `scanned_count` instead — the same number in a
+   * different unit. So a client rendering `scanned / total` got "12 of 0" while its own type
+   * said the denominator was a real figure, and no assertion anywhere could have caught it.
+   * Progress is `LibrarySummary.songCount`, which is the protocol's own unit and a total
+   * rather than a delta.
+   */
   readonly scanned: number;
-  readonly total: number;
   readonly indexVersion: number;
   readonly lastError: string | null;
   /**

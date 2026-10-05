@@ -174,7 +174,7 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
     // know about a pause entered *because* it was refusing writes, so its row is guaranteed stale
     // about it — it says `scanning`, which an operator reads as working and a client reads as
     // poll-me. D1 still fills the counts when it answers.
-    return held === null ? stored : pausedResult(held.resumeAt, held.reason, stored.scanned, stored.total);
+    return held === null ? stored : pausedResult(held.resumeAt, held.reason, stored.scanned);
   }
 
   /**
@@ -293,12 +293,19 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
    * Enrich from file facts without a row in hand. The scan calls this path
    * in-process already; this RPC exists for callers outside the DO that hold
    * facts rather than rows.
+   *
+   * Projects the outcome to its tags rather than carrying it over the wire: an RPC whose
+   * reason to exist is "enrich this track" has no caller that needs the row count, and the
+   * scan — the one caller that does — reaches `EnrichmentService` in-process through the
+   * composition root, where `rowsWritten` is preserved. A second shape for the same
+   * operation across a boundary that only one caller uses is a second answer waiting for a
+   * second caller.
    */
   public async enrichFacts(libraryId: string, facts: EnrichFactsInput): Promise<AudioTags | null> {
     const library = await this.libraryFor(libraryId);
     if (library === null) throw new Error(`Unknown library "${libraryId}".`);
     const scope = this.scope();
-    return await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts);
+    return (await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts)).tags;
   }
 
   /**
