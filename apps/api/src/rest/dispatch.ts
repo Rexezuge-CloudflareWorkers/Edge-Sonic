@@ -230,6 +230,7 @@ async function buildContext(
     users: await scope.get(Tokens.UserDAO)(),
     playlists: await scope.get(Tokens.PlaylistDAO)(),
     annotations: await scope.get(Tokens.AnnotationDAO)(),
+    playCounts: await scope.get(Tokens.PlayCountDAO)(),
     cache: scope.get(Tokens.KvCache),
     pageSize: (requested, fallback) => {
       const base = requested ?? fallback ?? defaultPage;

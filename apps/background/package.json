@@ -6,7 +6,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./ScanWorker": "./src/ScanWorker.ts"
+    "./ScanWorker": "./src/ScanWorker.ts",
+    "./LibraryImportWorkflow": "./src/LibraryImportWorkflow.ts",
+    "./PlayCountImportWorker": "./src/PlayCountImportWorker.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

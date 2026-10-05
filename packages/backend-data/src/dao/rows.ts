@@ -177,6 +177,67 @@ interface IndexVersionRow {
   index_version: number;
 }
 
+/**
+ * A registered remote Subsonic instance.
+ *
+ * `username_ci` exists because the remote's own login is case-insensitive on every
+ * server worth importing from, and the `_ci` twin is what keeps the predicate on an index —
+ * the rule this whole layer states and `test/schema.int.test.ts` asserts.
+ */
+interface ImportSourceRow {
+  id: string;
+  name: string;
+  base_url: string;
+  username: string;
+  username_ci: string;
+  /**
+   * AES-256-GCM under `SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET` — a **third** key, not the
+   * user key and not the WebDAV key.
+   *
+   * Worth stating in the row type because it is the reason this table is not `libraries`
+   * with a different column: a remote credential is operator-supplied and re-entered per
+   * source, so a rotation of this key must not require re-entering any Subsonic user's
+   * password, and a compromise of the frequently-read WebDAV key must not yield it.
+   */
+  password_ciphertext: string;
+  password_iv: string;
+  key_version: number;
+  music_folder_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * One import run.
+ *
+ * `report_json` holds the per-phase outcome **including every item that did not
+ * resolve**. An import that silently dropped three tracks from a playlist is a wrong
+ * answer rather than an unfinished one, and this column is the only place that could say
+ * which three — so it is written by every phase and read by the operator surface.
+ */
+interface ImportRunRow {
+  id: string;
+  source_id: string;
+  target_user_id: string;
+  /**
+   * `running` | `completed` | `failed` | `paused`.
+   *
+   * The same four names `scan_state` uses, deliberately: an operator reading a scan and an
+   * operator reading an import are asking the same question — "will more work happen if I
+   * poll again?" — and one vocabulary is cheaper to reason about than two that mean the
+   * same thing.
+   */
+  status: string;
+  workflow_id: string | null;
+  play_count_worker: string | null;
+  phases_json: string;
+  report_json: string | null;
+  last_error: string | null;
+  started_at: number;
+  updated_at: number;
+  finished_at: number | null;
+}
+
 export type {
   UserRow,
   LibraryRow,
@@ -187,6 +248,8 @@ export type {
   PlaylistEntryRow,
   CountRow,
   IndexVersionRow,
+  ImportSourceRow,
+  ImportRunRow,
 };
 
 /**

@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { ScanWorker } from '@edge-sonic/background';
+import { LibraryImportWorkflow, PlayCountImportWorker, ScanWorker } from '@edge-sonic/background';
 import { deriveFromPath } from '@edge-sonic/backend-data/dao';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { executeD1WithRetry } from '@edge-sonic/backend-data/utils';
@@ -47,6 +47,8 @@ import { NotFoundError } from '@edge-sonic/backend-errors';
 `apps/api/src/index.ts` imports this specifier; nothing else may.
 */
 import { DurableObject } from 'cloudflare:workers';
+import { NonRetryableError } from 'cloudflare:workflows';
+import { PLATFORM_MODULE_MOCKS } from './helpers/aliases';
 
 describe('the shared alias table', () => {
   it('resolves every specifier both configs are asked to resolve', () => {
@@ -74,6 +76,12 @@ describe('the shared alias table', () => {
       subsonic: elList,
       webdav: WebDavClient,
       'cloudflare:workers': DurableObject,
+      'cloudflare:workflows': NonRetryableError,
+      // Resolved through the barrel rather than a subpath, because the three suites that broke
+      // on the missing mock all reached `@edge-sonic/background` for `ScanWorker` and nothing
+      // else — so the import that must work is the one they did *not* know they were making.
+      'background/LibraryImportWorkflow': LibraryImportWorkflow,
+      'background/PlayCountImportWorker': PlayCountImportWorker,
     })) {
       expect(value, `${name} must resolve`).toBeDefined();
     }
@@ -87,5 +95,22 @@ describe('the shared alias table', () => {
     // And the mock, which is the other exception: `cloudflare:workers` has no source tree
     // at all, so it must resolve to `test/mocks/cloudflare-workers.ts`.
     expect(typeof DurableObject).toBe('function');
+    expect(typeof NonRetryableError).toBe('function');
+  });
+
+  it('mocks every platform module the repository imports, so a new one fails here', () => {
+    // The third occurrence is prevented by this rather than discovered: a platform specifier with
+    // no mock is an unresolvable **startup** error, so it takes down every suite that reaches the
+    // module for some unrelated reason — three of them, the first time — and the error names a
+    // file none of them imported.
+    const mocked = PLATFORM_MODULE_MOCKS.map((mock) => mock.find);
+
+    expect(mocked).toContain('cloudflare:workers');
+    expect(mocked).toContain('cloudflare:workflows');
+    // And every entry resolves to a file that exists, which the alias table would otherwise only
+    // discover at import time — in whichever suite imported first.
+    for (const mock of PLATFORM_MODULE_MOCKS) {
+      expect(mock.file, `${mock.find} must point at a real mock`).toMatch(/^test\/mocks\//);
+    }
   });
 });

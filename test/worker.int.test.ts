@@ -5,6 +5,20 @@ import { fakeKv } from './helpers/fakeKv';
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import { SPA_HTML } from '../apps/api/src/generated/spa-shell';
 import { getRateLimitBucketCountForTests, resetRateLimitForTests } from '../apps/api/src/middleware/rateLimit';
+// Read as text, because the claim under test is that two *files* agree — see the route-parity
+// case below for why rendering the router would only prove the router renders.
+import { readFileSync } from 'node:fs';
+
+/**
+ * The worker's SPA route list, read out of its source.
+ *
+ * `exec` rather than `match`, and module-level rather than inline: the array may be written
+ * across several lines, `match` with a non-global regex happens to capture the whole bracketed
+ * list today and would not say that it means to, and a `/g` flag would put `lastIndex` on the
+ * result and make a second call in the same run a different answer. `exec` states the intent —
+ * one match, keep the group — and cannot silently become many.
+ */
+const SPA_ROUTES_PATTERN = /const SPA_ROUTES = \[(.*?)\] as const;/s;
 
 let harness: Harness;
 
@@ -281,6 +295,71 @@ describe('route order', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/html');
     expect(await response.text()).toBe(SPA_HTML);
+  });
+
+  /**
+   * The two halves of one decision, and the drift they invite.
+   *
+   * `SPA_ROUTES` in `EdgeSonicWorker.ts` and the `<Route path="\u2026">` list in
+   * `SpaViewRouter.tsx` are the same list written twice \u2014 once in the router and once in the
+   * route table that serves the shell. Nothing holds them together.
+   *
+   * The failure is asymmetric, which is why it is worth a guard rather than a convention: a
+   * route present in the router but missing from `SPA_ROUTES` **works perfectly** for an
+   * operator who reached it by clicking a nav link inside an already-loaded tab, and answers
+   * **404** for anybody who bookmarks it, opens it in a new tab, or follows a link from a chat.
+   * So the missing entry is invisible in every manual test that navigates within the SPA and
+   * obvious to every user who was sent there.
+   *
+   * Read as **source text** rather than through a DOM or a build: the claim is that two files
+   * agree, and rendering the router would only establish that the router renders \u2014 which it
+   * does, whether or not the worker serves it. This reads the `<Route path="\u2026">` attributes
+   * and the `SPA_ROUTES` array out of the two files and compares the sets, so a route added to
+   * one and not the other fails here.
+   *
+   * The catch-all `path="*"` is excluded on purpose: it is the router's *fallback*, not a route
+   * the worker should serve \u2014 it renders a not-found page inside the shell, and treating it as
+   * a served route would demand the worker answer it with the shell, which is the opposite.
+   */
+  it('serves the shell for every route the SPA router declares', () => {
+    const routerSource = readFileSync(new URL('../apps/web/src/components/layout/SpaViewRouter.tsx', import.meta.url), 'utf8');
+    const workerSource = readFileSync(new URL('../apps/api/src/workers/EdgeSonicWorker.ts', import.meta.url), 'utf8');
+
+    // `matchAll` rather than `match`, because **every** route matters: a regex with `/g` on
+    // `String.match` returns the first match's capture groups only, so this would have found one
+    // route, compared one, and passed — while a second client-side route had no `SPA_ROUTES`
+    // entry and 404'd on a direct navigation.
+    const routePattern = /<Route\s+path="([^"]*)"/g;
+    const declared: string[] = [];
+    for (let match = routePattern.exec(routerSource); match !== null; match = routePattern.exec(routerSource)) {
+      declared.push(match[1]);
+    }
+    // The catch-all is the router's *fallback*, not a route the worker should serve — it renders
+    // a not-found page inside the shell, so treating it as one would demand the worker answer it
+    // with the shell, which is the opposite.
+    const filtered = declared.filter((path) => path !== '*');
+
+    // `exec` rather than `match` for the same reason: the route array may be written across
+    // several lines, and `String.match` with a non-global regex would still capture the whole
+    // bracketed list — but `exec` states the intent (one match, keep the group) rather than relying
+    // on that. `exec` also keeps a `/g` flag out of it, which would make the result carry
+    // `lastIndex` and turn a second call in the same test into a different answer.
+    const served = (SPA_ROUTES_PATTERN.exec(workerSource)?.[1] ?? '')
+      .split(',')
+      // A single alternation per side rather than one global `['"]`: `replaceAll` with `/g`
+      // is right here, and `sonarjs/prefer-regexp-exec` objects to `replaceAll(/^['"]|['"]$/g)`
+      // because the alternation is two assertions rather than one.
+      .map((entry) => entry.trim().replaceAll(/^['"]|['"]$/g, ''))
+      .filter((entry) => entry.length > 0);
+
+    // Non-empty, so a parser change that silently yields `[]` fails rather than passing.
+    expect(filtered.length).toBeGreaterThan(2);
+    expect(served.length).toBeGreaterThan(2);
+    // Sorted, so the failure message names what is missing rather than an ordering mismatch.
+    expect([...filtered].sort()).toEqual([...served].sort());
+    // And the specific asymmetry, asserted on its own so a reader sees which direction breaks:
+    // a new client route with no `SPA_ROUTES` entry 404s on a direct navigation.
+    expect(filtered.filter((path) => !served.includes(path))).toEqual([]);
   });
 
   it('does not return HTML for an API path', async () => {

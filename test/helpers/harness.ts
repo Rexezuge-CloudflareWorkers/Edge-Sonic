@@ -51,6 +51,28 @@ export const MIGRATION = migrationSql();
 */
 export const TEST_KEY = 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=';
 
+/**
+ * The three per-feature keys, and **three distinct values**.
+ *
+ * ### Why they differ, when identical ones would have worked
+ *
+ * Because with all three set to `TEST_KEY`, **no test in this repository could see a merge.**
+ * Every assertion of the form "the stored value must be the *user* key's output, so rotating
+ * the DAV key does not log everyone out" — which `test/user-api.test.ts` states in those words
+ * for both a user password and a library password — passed against a deployment that had
+ * merged all three keys into one. The claim was in the comment; the harness made it unfalsifiable.
+ *
+ * That is `fakeKv` returning byte-exact reads one layer up: a double must model the platform's
+ * **defaults and distinctions**, not merely its shapes. Identical keys are not a simplification,
+ * they are the property under test.
+ *
+ * Exported by feature name so a test can name the key it expects rather than the one it
+ * happens to have, and so `resolveKey`'s three call sites are all reachable from a suite.
+ */
+export const USER_TEST_KEY = Buffer.alloc(32, 1).toString('base64');
+export const WEBDAV_TEST_KEY = Buffer.alloc(32, 2).toString('base64');
+export const REMOTE_TEST_KEY = Buffer.alloc(32, 3).toString('base64');
+
 export const ORIGIN = 'https://edge-sonic.test';
 export const LIBRARY_ID = 'L1';
 export const ALBUM_DIR = 'Bon Iver/For Emma';
@@ -172,7 +194,7 @@ export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeK
   const cache = fakeKv({}, kv);
   const dav = fakeDav(tree ?? {});
 
-  const userSecret = await encryptData(PASSWORD, TEST_KEY);
+  const userSecret = await encryptData(PASSWORD, USER_TEST_KEY);
   const userId = (
     await new UserDAO(db.db).create({
       username: USERNAME,
@@ -183,7 +205,7 @@ export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeK
     })
   ).id;
 
-  const davSecret = await encryptData('dav-password', TEST_KEY);
+  const davSecret = await encryptData('dav-password', WEBDAV_TEST_KEY);
   const timestamp = nowSeconds();
   await db.db
     .prepare(
@@ -256,9 +278,11 @@ export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeK
     CACHE: cache.ns,
     // Raw keys rather than Secrets Store bindings: there is no Secrets Store here, and
     // `resolveKey` treats a raw var as a test-only escape hatch that must never mask a
-    // production binding.
-    SUBSONIC_USER_ENCRYPTION_KEY: TEST_KEY,
-    WEBDAV_ENCRYPTION_KEY: TEST_KEY,
+    // production binding. **Three distinct values** — see `USER_TEST_KEY`'s docstring for why
+    // identical ones would have made the per-feature key policy untestable.
+    SUBSONIC_USER_ENCRYPTION_KEY: USER_TEST_KEY,
+    WEBDAV_ENCRYPTION_KEY: WEBDAV_TEST_KEY,
+    SUBSONIC_REMOTE_ENCRYPTION_KEY: REMOTE_TEST_KEY,
     ENVIRONMENT: 'development',
     DEV_AUTH_EMAIL: 'operator@example.com',
     TEAM_DOMAIN: 'example.cloudflareaccess.com',

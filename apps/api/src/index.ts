@@ -6,4 +6,4 @@ export default {
   fetch: (request: Request, env: Cloudflare.Env, ctx: ExecutionContext) => worker.fetch(request, env, ctx),
 };
 
-export { ScanWorker } from '@edge-sonic/background';
+export { ScanWorker, LibraryImportWorkflow, PlayCountImportWorker } from '@edge-sonic/background';

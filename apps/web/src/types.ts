@@ -24,4 +24,16 @@ interface Notice {
 
 export type { LibrarySummary, LibraryScanSummary, ProbeResult, ScanStateSummary, ScanStatus, ChunkStopReason } from './libraryTypes';
 export type { UserSummary } from './userTypes';
+// The import wire types live beside the user types because an import *targets* a user account:
+// the page is "manage this account's library, accounts, and what it moved from somewhere else",
+// and splitting the third over a new file for four types would be structure without a question.
+export type {
+  ImportSourceSummary,
+  ImportPhase,
+  ImportReport,
+  ImportRunSummary,
+  PhaseReport,
+  UnresolvedItem,
+  UnresolvedReason,
+} from './userTypes';
 export type { CurrentUser, Notice };

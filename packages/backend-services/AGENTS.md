@@ -366,6 +366,83 @@ Per-folder enrichment is capped by `SCAN_ENRICH_MAX_PER_FOLDER` because a cold s
 that fails. Failures are swallowed for the same reason: the scan's rows are already
 written, and one unavailable origin must not discard them.
 
+## Import
+
+Bringing one user's player data in from **another Subsonic server**. Operator-triggered from
+`/user/import/*`; the execution is `apps/background`'s `LibraryImportWorkflow` (a Workflow) and
+`PlayCountImportWorker` (a Durable Object).
+
+| File | Owns |
+| --- | --- |
+| `remoteOrigin.ts` | the SSRF gate on an operator-supplied host, and the mount path |
+| `remoteParse.ts` | the **pure** parse rules for a response this repository does not control |
+| `remoteClient.ts` | the transport: URL, token auth, timeout, body limit, subrequest charge |
+| `sourceService.ts` | registering an instance, and the one reader of its stored credential |
+| `matchRemoteIds.ts` | turning a foreign id into a local one — path, then metadata |
+| `albumIdentity.ts` | the album and artist id matchers, under the configured grouping |
+| `phases.ts` | playlists, stars, bookmarks, the play queue |
+| `playCountPhases.ts` | the album and page halves of the play-count walk |
+| `phaseShared.ts` | the two decisions every phase makes: grant-filtering, and naming failures |
+| `report.ts` | the per-phase report, with every unresolved item **named** |
+| `importPause.ts` | refusing to run beside a scan |
+
+### The invariant the module exists to hold
+
+**An unresolved id is reported, never substituted, and never silently dropped.** Every phase
+returns the *named* items it could not match, with the reason. A playlist that lost three tracks
+is a **wrong answer** rather than an unfinished one, and it is indistinguishable from one the user
+deliberately shortened — so the operator gets a list rather than a count, and the cap
+(`MAX_REPORTED_UNRESOLVED`) bounds the names while the count stays exact.
+
+### Path first, then metadata — and the order is backwards from the intuition
+
+Path is *exact*; metadata is a *guess*. So path is tried first and the guess is a fallback, and
+the report says which strategy fired, because telling an operator an exact match is a guess is
+its own kind of wrong.
+
+`Child.path` is emitted by Navidrome and **not by this server** — it deliberately is not,
+because publishing it leaks the storage layout of someone's WebDAV bucket. So path matching works
+against third-party sources and **never** against another Edge-Sonic, and the fallback is what
+carries a same-product migration.
+
+### An ambiguous match is refused, not resolved
+
+Two local songs can share an artist, album and title: a compilation, a live cut beside the studio
+one, an `.flac` beside its `.mp3`. Choosing one is a coin flip that writes a star onto the wrong
+track with no way to find out, so a key matching more than one local row resolves to nothing and is
+reported as `ambiguous` — which is **recoverable information**, where a wrong match is not. Disc and
+track narrow the candidates when the remote publishes them, and the narrowing is **skipped** rather
+than applied against `null`, because a library with no disc tags has `disc = NULL` everywhere and
+filtering for `1` would turn a resolvable match into a reported one.
+
+### An album id is derived through the *same* key this server publishes
+
+`albumKeyFor` calls `subsonic/albumKey.ts`'s `albumKeySpec` and nothing else, and
+`SongMatchDAO.findPresentAlbumKeys` **confirms existence** before an id is minted. Two
+implementations of "what is an album" would be free to disagree over a separator or over whether a
+missing album artist is a value or a wildcard — and a disagreement is invisible until a star lands
+on an album `getAlbum` cannot resolve, which **no client can see**, because the row exists.
+Existence is checked because the release may simply not be indexed here yet.
+
+### `remoteParse` is separate from `remoteClient` because it is pure
+
+No `fetch`, no credential, no state — so every rule is testable from the Node suite with no Workers
+runtime and no double, which is the same reason `packages/subsonic` is Layer 0. The two shapes it
+must survive are a **single-element list collapsing to a bare object** (a one-track playlist read
+naively imports as an *empty* one) and a **protocol error arriving as HTTP 200** (a wrong password
+reads as "no playlists", and the import reports success having imported nothing).
+
+Token auth, never `p=`: a password in a query string lands in the remote's access log and every
+proxy's between here and there, and that is invisible from here.
+
+### `sourceService` owns the credential, because `apps/api` may not
+
+Two readers of one stored secret is two implementations of "decrypt it", free to disagree about
+which key — and the credential *is* read twice: the route lists the remote's playlists before the
+Workflow starts, and the Workflow reads it per step. A Workflow payload is persisted by the
+platform, so a password can never be part of one. The client is built **per call**, never cached:
+it holds the plaintext password for its lifetime.
+
 ## Errors
 
 `errors/ErrorMapper.ts` has two dialects, and the split is **by surface, not by

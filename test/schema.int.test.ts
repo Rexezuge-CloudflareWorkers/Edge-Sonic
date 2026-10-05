@@ -30,11 +30,28 @@ import {
   D1_MAX_BIND_PARAMETERS,
   bindChunkSize,
   deriveFromPath,
+  SongMatchDAO,
+  ImportSourceDAO,
+  ImportRunDAO,
+  ImportPlayCountProgressDAO,
+  PlayCountDAO,
 } from '@edge-sonic/backend-data/dao';
+import { ImportSourceService } from '@edge-sonic/backend-services/import';
+import { SubrequestCounter } from '@edge-sonic/shared';
+import { NotFoundError, SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import {
+  albumKeyFor,
+  buildReport,
+  collectUnresolved,
+  MAX_REPORTED_UNRESOLVED,
+  parseReport,
+  phase,
+  serializeReport,
+} from '@edge-sonic/backend-services/import';
 import { DERIVED_MARKER, EMPTY_DERIVED_MARKER } from './helpers/harness';
 import { sqliteQueryable, queryPlan } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
-import { albumIdOf } from '@edge-sonic/subsonic';
+import { albumIdOf, specFromKey } from '@edge-sonic/subsonic';
 // The comparator under test is the one the endpoints publish with, imported rather than
 // restated: a copy here would pass against itself, and the assertion it exists for is that
 // the row fetch's SQL order and this order agree.
@@ -158,8 +175,22 @@ describe('the squashed baseline', () => {
     return JSON.stringify({ tables, columns: columns.toSorted(), indexes }, null, 2);
   }
 
-  it('is one file, and it is the last one, so a future migration cannot sort before it', () => {
-    expect(migrationFiles()).toEqual([BASELINE]);
+  it('sorts first, so a migration added after the squash cannot land before it', () => {
+    // **First**, not last. Both this and the ordering assertion below used to say "last", and
+    // both were wrong in the same direction — while the comment beside the second one said the
+    // opposite thing ("a migration added after the squash must be numbered above `0008`").
+    //
+    // The two disagreed because of how filenames sort, not because of a typo: `0009` sorts
+    // **after** `0008_squash.sql`, so a migration added after the squash lands at the *end* of the
+    // list. "Numbered above `0008`" is right; `files.at(-1) === BASELINE` could only have been
+    // written by someone reading the comment as "numbered after".
+    //
+    // Neither assertion could fail before this migration existed — there was nothing to add
+    // — so both were assertions of a *fact* dressed as an assertion of an *invariant*. Stated
+    // as the invariant now: the baseline must be the **first** file, which is exactly what
+    // "a future migration cannot sort before it" means, and it stays true however many files
+    // are added after it.
+    expect(migrationFiles().at(0)).toBe(BASELINE);
   });
 
   it('leaves the schema unchanged when applied to a database that already has it', () => {
@@ -561,9 +592,19 @@ describe('the migration lock', () => {
     // that can pass on a schema production never had.
     const files = migrationFiles();
     expect(files).toEqual([...files].sort());
-    // The baseline sorts last on purpose: it absorbs everything before it, so a
-    // migration added after the squash must be numbered above `0008`.
-    expect(files.at(-1)).toBe(BASELINE);
+    // The baseline sorts **first** on purpose: it absorbs everything numbered below it, so a
+    // migration added after the squash has to sort *after* it — which is what "numbered above
+    // `0008`" means, since `0009` > `0008` as a string.
+    //
+    // Asserted as a position rather than as a file count, so the claim survives the next
+    // migration. `expect(files).toEqual([BASELINE])` was true only while the baseline was the
+    // *only* migration, which made it a measurement of today's directory rather than a rule
+    // about it — and the first migration anyone added turned it red for having done nothing
+    // wrong.
+    expect(files.indexOf(BASELINE)).toBe(0);
+    // And every file after it really is newer, by filename — the property that makes
+    // "wrangler applies these in this order" true of the whole list rather than of the pair.
+    expect(files.filter((file) => file !== BASELINE).every((file) => file > BASELINE)).toBe(true);
   });
 });
 
@@ -2280,5 +2321,496 @@ describe('the index_version bump is conditional, over real SQL', () => {
     await scanState.saveProgress(libraryId, 1, null, false);
 
     expect(await scanState.complete(libraryId, 0, true)).toBe(2);
+  });
+});
+
+/**
+ * The import's own schema, against the same real planner.
+ *
+ * ### Why the query plan and not the rows
+ *
+ * `WHERE library_id = ? AND path IN (?, ?)` and `WHERE library_id = ? AND lower(path) IN
+ * (lower(?), lower(?))` return the same rows on a case-consistent library and differ only when
+ * a library holds `Album/x.flac` beside `album/x.flac` — which a Linux WebDAV origin makes
+ * **two files**, not one. A row-comparison assertion written on a tidy fixture cannot see it.
+ *
+ * That is the same reason `idx_songs_album_title_ci` is asserted by plan above, and the same
+ * defect this file's header describes: the double lowercased both sides in JavaScript, the
+ * predicate was wrong in SQL, and the answers were right. Here the risk runs the other way —
+ * an import matching by metadata would return *more* rows and star a plausible-looking track —
+ * so the plan is what proves the key is a seek.
+ *
+ * ### And the import resolves album keys with the **same** predicate the album page groups with
+ *
+ * `findPresentAlbumKeys` exists so an imported album star lands on an id `getAlbum` can resolve.
+ * If its predicate differed from `albumKeySql`'s — a `COALESCE(album_artist_ci, '')`, say — it
+ * would return the *same rows* while dropping `idx_songs_album`, and the disagreement would be
+ * invisible until a star landed on the wrong album. So the plan is asserted against the real
+ * one, and the rows are asserted too, because the two facts differ.
+ */
+describe('the import match predicates are seeks, not scans', () => {
+  let libraryId: string;
+
+  beforeEach(async () => {
+    const userId = await seedUser('Importer');
+    libraryId = await seedLibrary(userId, 'LIMPORTS');
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
+    // Two albums in two directories, one of them a **release split across folders**, so the
+    // `(album_ci, title_ci)` key and the `path` key cannot answer each other's question — a
+    // fixture where they coincide would pass against a predicate on the wrong column.
+    await songs.upsertFileFacts([
+      { id: songId(libraryId, 'Bon Iver/For Emma/re: Stacks.flac'), libraryId, path: 'Bon Iver/For Emma/re: Stacks.flac', dirPath: 'Bon Iver/For Emma', name: 're: Stacks.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      { id: songId(libraryId, 'Bon Iver/For Emma/holocene.flac'), libraryId, path: 'Bon Iver/For Emma/holocene.flac', dirPath: 'Bon Iver/For Emma', name: 'holocene.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      // The same album, different folder: `ALBUM_GROUP_BY=album` says it is one album.
+      { id: songId(libraryId, 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac'), libraryId, path: 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac', dirPath: 'Bon Iver/For Emma (Deluxe)', name: 're: Stacks (live).flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+    ]);
+    for (const path of ['Bon Iver/For Emma/re: Stacks.flac', 'Bon Iver/For Emma/holocene.flac', 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac']) {
+      await songs.applyMetadata(songId(libraryId, path), { title: path.includes('live') ? 're: Stacks' : path.split('/').pop()!.replace('.flac', ''), artist: 'Bon Iver', album: 'For Emma', albumArtist: 'Bon Iver', track: 1, disc: 1, duration: 1, readerVersion: 1 });
+    }
+  });
+
+  it('uses the path index for the exact-path lookup', async () => {
+    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND path IN (?)', [libraryId, 'Bon Iver/For Emma/holocene.flac']);
+
+    // `(library_id, path)` — named for what it indexes, so the assertion is about the *pair*
+    // being seekable and not about a path-only lookup being possible.
+    expect(plan).toContain('idx_songs_library_path');
+    // The negative: `lower(path)` returns identical rows on this fixture and cannot use the
+    // index, because there is a function on the column. It is named here because it is the
+    // wrong answer that *looks* right — a Linux origin treats `Album/x` and `album/x` as two
+    // files, so lowercasing merges them and a star lands on whichever came back first.
+    const coerced = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND lower(path) IN (lower(?))', [libraryId, 'Bon Iver/For Emma/holocene.flac']);
+    expect(coerced).not.toContain('idx_songs_library_path');
+    expect(coerced).not.toBe(plan);
+  });
+
+  it('uses idx_songs_album_title_ci for the metadata key', async () => {
+    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND (album_ci = ? AND title_ci = ?)', [libraryId, 'for emma', 'holocene']);
+
+    expect(plan).toContain('idx_songs_album_title_ci');
+    // A `LIKE` on the same columns is the shape this layer forbids everywhere else: it cannot
+    // use the index and it makes an import a scan of the library, hundreds of times.
+    const searched = queryPlan(handle, "SELECT * FROM songs WHERE library_id = ? AND album_ci LIKE ? AND title_ci LIKE ?", [libraryId, '%for emma%', '%holocene%']);
+    expect(searched).not.toContain('idx_songs_album_title_ci');
+  });
+
+  it('matches every row for a key rather than one, so ambiguity stays visible', async () => {
+    // The remote's `re: Stacks` is the studio cut; the deluxe folder holds a **live** recording
+    // under the same album and the same title. Both match, so this is the ambiguous case — and
+    // the DAO returning both is what lets the caller report it instead of picking one.
+    const rows = await new SongMatchDAO(handle.db).findByAlbumTitle(libraryId, [
+      ['for emma', 're: stacks'],
+    ]);
+
+    expect(rows).toHaveLength(2);
+  });
+
+  it('resolves an album key with the same predicate the album page groups with', async () => {
+    const key = albumKeyFor('Bon Iver', 'For Emma', ALBUM_GROUPING);
+    // Non-null **asserted**, not cast: `albumKeyFor` returns `null` for an album the remote did
+    // not name, and a `key!` here would make a null key bind as `undefined` into a predicate
+    // rather than fail the case that is about a real one.
+    expect(key).not.toBeNull();
+    const present = await new SongMatchDAO(handle.db).findPresentAlbumKeys(libraryId, [key as string], ALBUM_GROUPING);
+
+    // Present, under the configured grouping — and the release spans two directories, so this
+    // is the assertion that cannot pass under `folder`.
+    expect(present.has(key as string)).toBe(true);
+    // And the plan of **the predicate the DAO actually issues** uses `idx_songs_album`, which a
+    // `COALESCE(album_artist_ci, '')` cannot. Read through `specFromKey` — the same function
+    // `SongMatchDAO.findPresentAlbumKeys` builds its statement from — because a predicate written
+    // here would be a second answer, and a second answer is exactly what this assertion exists to
+    // catch. `albumKeyProjection` is the *page's* face (`SELECT`/`GROUP BY`), not the row fetch's.
+    const spec = specFromKey(key as string);
+    const plan = queryPlan(handle, `SELECT 1 FROM songs WHERE library_id = ? AND (${spec.predicate})`, [libraryId, ...spec.values]);
+    expect(plan).toContain('idx_songs_album');
+  });
+
+  it('reports an album this library does not hold rather than inventing one', async () => {
+    const absent = albumKeyFor('Nobody', 'Not Indexed Here', ALBUM_GROUPING);
+    expect(absent).not.toBeNull();
+
+    expect(await new SongMatchDAO(handle.db).findPresentAlbumKeys(libraryId, [absent as string], ALBUM_GROUPING)).toEqual(new Set());
+  });
+
+  it('uses idx_songs_artist for the artist lookup', async () => {
+    const plan = queryPlan(handle, 'SELECT DISTINCT artist_ci, artist FROM songs WHERE library_id = ? AND artist_ci IS NOT NULL AND artist_ci IN (?)', [libraryId, 'bon iver']);
+
+    expect(plan).toContain('idx_songs_artist');
+    // `artist_ci IS NOT NULL` is not decoration: an id minted for an artist `getArtists` does
+    // not list is a star no client can find, so the filter and the id have to agree.
+    expect(await new SongMatchDAO(handle.db).findPresentArtists(libraryId, ['bon iver'])).toEqual(new Map([['bon iver', 'Bon Iver']]));
+  });
+
+  it('orders a remote source by username, on the index it declares', async () => {
+    // The unique index is on `username_ci`, not on the display name, because two sources may
+    // share a name and two sharing a *credential* is what would quietly import one server's
+    // data into another's.
+    const plan = queryPlan(handle, 'SELECT id FROM import_sources ORDER BY username_ci ASC', []);
+
+    expect(plan).toContain('idx_import_sources_username_ci');
+  });
+});
+
+/**
+ * The import tables' own integrity.
+ *
+ * These are ordinary foreign keys, and the reason they are asserted is the one this repository
+ * has already paid for twice: a foreign key that **does not resolve** passes every DAO test and
+ * fails at `wrangler d1 migrations apply`, because D1 enforces foreign keys and SQLite by
+ * default does not. `PRAGMA foreign_key_check` is the only instrument that sees it.
+ */
+describe('the import schema holds', () => {
+  /**
+   * Every column a DAO **writes** exists.
+   *
+   * `report_json` was in `ImportRunRow`, written by `ImportRunDAO.writeReport` and read by
+   * `parseReport` — and absent from `CREATE TABLE import_runs`. Every DAO test passed, because
+   * none of them reached the write: the phase tests drive a port, the route tests use a run with
+   * no report, and the migration lock records **bytes**, not columns.
+   *
+   * This is the defect `packages/backend-data/AGENTS.md` records twice already — `songs.reader_version`
+   * and `scan_state.consecutive_failures` — and both times the instrument that found it was *this*
+   * file reading `PRAGMA table_info` rather than a DAO failing. A column that is real to the code
+   * and absent from the database makes the statement fail, which the retry layer then turns into a
+   * `DatabaseError`; nothing about the schema looks wrong.
+   *
+   * So the names are written out here rather than derived from the DAOs: a list derived from the
+   * code cannot detect a column the code and the schema disagree about, because the code is one
+   * of the two things under test.
+   */
+  it('has every column a DAO names, because a missing one fails the statement and nothing else', () => {
+    const columnsOf = (table: string): string[] => (handle.raw.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all() as Array<{ name: string }>).map((row) => row.name);
+
+    // `import_sources`
+    for (const column of ['id', 'name', 'base_url', 'username', 'username_ci', 'password_ciphertext', 'password_iv', 'key_version', 'music_folder_id', 'created_at', 'updated_at']) {
+      expect(columnsOf('import_sources'), `import_sources.${column}`).toContain(column);
+    }
+    // `import_runs` — including `report_json`, which was missing and which nothing else caught.
+    for (const column of ['id', 'source_id', 'target_user_id', 'status', 'workflow_id', 'play_count_worker', 'phases_json', 'report_json', 'last_error', 'started_at', 'updated_at', 'finished_at']) {
+      expect(columnsOf('import_runs'), `import_runs.${column}`).toContain(column);
+    }
+    // `import_play_count_progress`
+    for (const column of ['run_id', 'last_remote_album_id', 'albums_done', 'songs_imported', 'updated_at']) {
+      expect(columnsOf('import_play_count_progress'), `import_play_count_progress.${column}`).toContain(column);
+    }
+  });
+
+  it('resolves every foreign key, because D1 enforces them and SQLite does not by default', async () => {
+    const userId = await seedUser('RunTarget');
+    const sourceId = (await new ImportSourceDAO(handle.db).create({
+      name: 'Old server',
+      baseUrl: 'https://music.example.com/sonic',
+      username: 'alice',
+      passwordCiphertext: 'c',
+      passwordIv: 'iv',
+      musicFolderId: null,
+    })).id;
+    await new ImportRunDAO(handle.db).create({ sourceId, targetUserId: userId, phases: ['playlists', 'stars'] });
+
+    expect(handle.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  it('cascades a run with its user, because a report about rows that no longer exist is a lie', async () => {
+    const userId = await seedUser('Doomed');
+    const sourceId = (await new ImportSourceDAO(handle.db).create({ name: 'S', baseUrl: 'https://m.example.com', username: 'bob', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null })).id;
+    const runs = new ImportRunDAO(handle.db);
+    const run = await runs.create({ sourceId, targetUserId: userId, phases: ['playlists'] });
+
+    handle.raw.prepare('DELETE FROM users WHERE id = ?').run(userId);
+
+    // The annotations a run wrote cascade with the user anyway, so a run outliving them would
+    // be a report about rows nobody can reach.
+    expect(await runs.findById(run.id)).toBeNull();
+  });
+
+  it('refuses a second source with the same remote account, at the schema level', async () => {
+    const sources = new ImportSourceDAO(handle.db);
+    await sources.create({ name: 'Old server', baseUrl: 'https://m.example.com', username: 'alice', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null });
+
+    // Same account, different label and host: still refused, because two sources sharing a
+    // credential is what would quietly import one server's data into another's.
+    await expect(
+      sources.create({ name: 'Another label', baseUrl: 'https://other.example.com', username: 'ALICE', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null }),
+    ).rejects.toThrow();
+
+    // And two sources may share a *name*, because a staging server called "music" beside a
+    // production one called "music" is ordinary.
+    await expect(sources.create({ name: 'Old server', baseUrl: 'https://other.example.com', username: 'bob', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null })).resolves.toBeDefined();
+  });
+
+  it('never selects a stored credential, so a list cannot carry one into a response', async () => {
+    const sources = new ImportSourceDAO(handle.db);
+    await sources.create({ name: 'Old server', baseUrl: 'https://m.example.com', username: 'alice', passwordCiphertext: 'SUPER-SECRET', passwordIv: 'iv', musicFolderId: null });
+
+    // The projection, not a filter in the route: a caller that forgot to strip the ciphertext
+    // would leak it, and a caller cannot forget to strip what was never selected.
+    for (const summary of await sources.listSummaries()) {
+      expect(summary).not.toHaveProperty('password_ciphertext');
+      expect(summary).not.toHaveProperty('password_iv');
+      expect(JSON.stringify(summary)).not.toContain('SUPER-SECRET');
+    }
+    // And the row is genuinely there, so the assertion is about the projection rather than about
+    // a source that was never stored.
+    expect((await sources.findByUsername('alice'))?.password_ciphertext).toBe('SUPER-SECRET');
+  });
+
+  it('advances the play-count cursor by a delta, so two overlapping batches cannot publish the smaller count', async () => {
+    // `saveProgress`'s reason verbatim, one layer down. A cursor written as an absolute total
+    // goes **backwards** while the work is being done, and an operator watching progress fall
+    // has no way to tell that from a fault.
+    const userId = await seedUser('PlayCounts');
+    const sourceId = (await new ImportSourceDAO(handle.db).create({ name: 'S', baseUrl: 'https://m.example.com', username: 'c', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null })).id;
+    const run = await new ImportRunDAO(handle.db).create({ sourceId, targetUserId: userId, phases: ['playCounts'] });
+    const progress = new ImportPlayCountProgressDAO(handle.db);
+    await progress.ensure(run.id);
+
+    await progress.advance(run.id, 'al5', 5, 40);
+    await progress.advance(run.id, 'al9', 4, 30);
+
+    const row = await progress.read(run.id);
+    expect(row?.albums_done).toBe(9);
+    expect(row?.songs_imported).toBe(70);
+    expect(row?.last_remote_album_id).toBe('al9');
+  });
+
+  it('serialises a report and reads it back, and refuses one it cannot read rather than throwing', async () => {
+    // The parse is `null` rather than an exception on purpose: a status read that throws takes
+    // down the operator's whole page over a field that is decoration next to `import_runs.status`.
+    expect(parseReport('{not json')).toBeNull();
+    expect(parseReport(null)).toBeNull();
+    expect(parseReport(JSON.stringify({ runId: 'r', phases: [] }))?.phases).toEqual([]);
+    // A body with no phases is not a report: it would render as an empty list, which is the
+    // one sentence meaning "nothing happened".
+    expect(parseReport(JSON.stringify({ runId: 'r' }))).toBeNull();
+  });
+
+  it('replaces a phase line by name, so a retried step cannot list the same item twice', async () => {
+    const first = buildReport({ runId: 'r', sourceName: 'S', targetUsername: 'ann', finished: true, phases: [phase({ phase: 'stars', status: 'partial', unresolved: [{ category: 'star', context: 'starred', remoteId: 'r1', label: 'Track', reason: 'not-found' }] })] });
+    const second = buildReport({
+      runId: 'r',
+      sourceName: 'S',
+      targetUsername: 'ann',
+      finished: true,
+      // The same phase name, re-run: the line is **replaced**, which is what makes recording a
+      // phase outside the step idempotent. Appending would double every unresolved item.
+      phases: [phase({ phase: 'stars', status: 'imported', imported: 3 })],
+    });
+
+    expect(parseReport(serializeReport(first))?.phases).toHaveLength(1);
+    expect(parseReport(serializeReport(second))?.phases.map((entry) => entry.phase)).toEqual(['stars']);
+    expect(parseReport(serializeReport(second))?.phases[0].imported).toBe(3);
+    // And the cap holds: the count stays exact while the names are truncated, so an operator
+    // learns the scale of the problem even when the list is summarised.
+    const many = Array.from({ length: MAX_REPORTED_UNRESOLVED + 50 }, (_, index) => ({ category: 'star', context: 'starred', remoteId: `r${index}`, label: `T${index}`, reason: 'not-found' as const }));
+    const capped = phase({ phase: 'stars', status: 'partial', unresolvedCount: many.length, unresolved: collectUnresolved([], many) });
+    expect(capped.unresolved).toHaveLength(MAX_REPORTED_UNRESOLVED);
+    expect(capped.unresolvedCount).toBe(MAX_REPORTED_UNRESOLVED + 50);
+  });
+});
+
+/**
+ * The two play-count writers, and the difference between them.
+ *
+ * ### Why this needs its own case
+ *
+ * `recordPlay` **increments** and `setPlayCounts` **overwrites**, on one table, and the difference
+ * is **completely silent**. An import that added to a count already set would inflate every count
+ * in the library — and unlike a playlist there is no observable difference between "played twice"
+ * and "imported twice", so nothing downstream could catch it and no client would complain.
+ *
+ * Both properties are asserted over the same table and in the same order, because a test that only
+ * wrote one of them would pass whichever implementation it was given.
+ */
+describe('play counts: a scrobble increments, an import overwrites', () => {
+  async function seeded(): Promise<string> {
+    const userId = await seedUser('Plays');
+    const libraryId = await seedLibrary(userId, 'LPLAYS');
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
+    await songs.upsertFileFacts([
+      { id: songId(libraryId, 'A/one.flac'), libraryId, path: 'A/one.flac', dirPath: 'A', name: 'one.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      { id: songId(libraryId, 'A/two.flac'), libraryId, path: 'A/two.flac', dirPath: 'A', name: 'two.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+    ]);
+    return userId;
+  }
+
+  const countsOf = async (userId: string): Promise<Map<string, number>> =>
+    await new PlayCountDAO(handle.db).listPlayCounts(userId);
+
+  it('adds one per scrobble, and keeps the last-played instant', async () => {
+    const userId = await seeded();
+    const plays = new PlayCountDAO(handle.db);
+
+    await plays.recordPlay(userId, 'one');
+    await plays.recordPlay(userId, 'one');
+
+    expect((await countsOf(userId)).get('one')).toBe(2);
+  });
+
+  it('writes the remote value exactly, so a re-run cannot inflate a count', async () => {
+    const userId = await seeded();
+    const plays = new PlayCountDAO(handle.db);
+
+    await plays.setPlayCounts(userId, [{ songId: 'one', playCount: 7 }]);
+    // **The same call twice.** An additive implementation gives 14 here, and the only symptom
+    // anywhere in the product would be a number that is quietly wrong.
+    await plays.setPlayCounts(userId, [{ songId: 'one', playCount: 7 }]);
+
+    expect((await countsOf(userId)).get('one')).toBe(7);
+  });
+
+  it('does not let the two writers meet: a scrobble after an import counts from the imported value', async () => {
+    // The property that makes them one table rather than two. An import sets 7 and a later scrobble
+    // makes 8 — which is what a user who had listened seven times and then played it once should see.
+    const userId = await seeded();
+    const plays = new PlayCountDAO(handle.db);
+
+    await plays.setPlayCounts(userId, [{ songId: 'one', playCount: 7 }]);
+    await plays.recordPlay(userId, 'one');
+
+    expect((await countsOf(userId)).get('one')).toBe(8);
+  });
+
+  it('keeps two users’ counts for one song apart, because the composite key is the upsert target', async () => {
+    // The failure this guards is invisible in every assertion above: a statement whose conflict
+    // target were only `song_id` would make the second listener’s scrobble increment the first
+    // listener’s count, and both would read back a plausible number.
+    const first = await seeded();
+    const second = (await new UserDAO(handle.db).create({ username: 'Plays2', passwordCiphertext: 'c', passwordIv: 'iv' })).id;
+    const plays = new PlayCountDAO(handle.db);
+
+    await plays.recordPlay(first, 'one');
+    await plays.recordPlay(second, 'one');
+    await plays.recordPlay(second, 'one');
+
+    expect((await countsOf(first)).get('one')).toBe(1);
+    expect((await countsOf(second)).get('one')).toBe(2);
+  });
+
+  it('leaves last_played_at alone when overwriting, because a remote published no play time', async () => {
+    // The remote reported a *count*, not when it happened. Stamping `last_played_at` would claim
+    // the import is when the listener last played the track, and it is the column a client reads
+    // as "last played".
+    const userId = await seeded();
+    const plays = new PlayCountDAO(handle.db);
+    await plays.recordPlay(userId, 'one');
+
+    await plays.setPlayCounts(userId, [{ songId: 'one', playCount: 40 }]);
+    const row = handle.raw.prepare('SELECT last_played_at FROM play_counts WHERE user_id = ? AND song_id = ?').get(userId, 'one') as { last_played_at: number | null };
+    expect(row.last_played_at).not.toBeNull();
+  });
+
+  it('floors and clamps a negative count rather than storing one', async () => {
+    // A remote reporting a negative count is a defect on its side, and storing it would make
+    // `getSong` publish a negative number. Clamping is the honest reading: nobody has played a
+    // track fewer than zero times.
+    const userId = await seeded();
+    await new PlayCountDAO(handle.db).setPlayCounts(userId, [{ songId: 'one', playCount: -4 }]);
+
+    expect((await new PlayCountDAO(handle.db).listPlayCounts(userId)).get('one')).toBe(0);
+  });
+
+  it('writes nothing for an empty list, rather than spending a statement on it', async () => {
+    const userId = await seeded();
+    expect(await new PlayCountDAO(handle.db).setPlayCounts(userId, [])).toBe(0);
+    expect(await countsOf(userId)).toEqual(new Map());
+  });
+
+  it('refuses rather than truncating a page larger than the invocation can write', async () => {
+    // A partially-applied page of counts is a set of numbers right in places and wrong in others,
+    // and nothing downstream can tell which is which — the same reason the play queue and the
+    // derivation backfill use `requireComplete`.
+    const userId = await seeded();
+    const narrow = new PlayCountDAO(handle.db, new SubrequestCounter(2));
+    const many = Array.from({ length: 200 }, (_, index) => ({ songId: `s${index}`, playCount: 1 }));
+
+    await expect(narrow.setPlayCounts(userId, many)).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
+    // And nothing at all was written — the refusal happens before the batch.
+    expect(await countsOf(userId)).toEqual(new Map());
+  });
+});
+
+describe('a remote instance’s two refusals are told apart, because they are not the same thing', () => {
+  async function seeded(): Promise<{ sources: ImportSourceDAO; userId: string; sourceId: string }> {
+    const userId = await seedUser('Refusals');
+    const encrypted = await encryptData('hunter2', await testKey());
+    const sources = new ImportSourceDAO(handle.db);
+    const sourceId = (
+      await sources.create({
+        name: 'Old server',
+        baseUrl: 'https://music.example.com/sonic',
+        username: 'alice',
+        passwordCiphertext: encrypted.ciphertext,
+        passwordIv: encrypted.iv,
+        musicFolderId: null,
+      })
+    ).id;
+    return { sources, userId, sourceId };
+  }
+
+  it('answers a private host as “no longer permitted” and a deleted row as “no longer exists”', async () => {
+    // The Durable Object settles on both, and re-arms on neither — but an operator reading the
+    // report needs to tell them apart, because the second is their own doing and the first is a
+    // configuration change they may need to reverse.
+    const { sources, sourceId } = await seeded();
+    const service = new ImportSourceService({
+      sources: async () => sources,
+      resolveKey: async () => await testKey(),
+      allowPrivateHosts: () => false,
+      onRequest: () => undefined,
+    });
+
+    await handle.db.prepare('UPDATE import_sources SET base_url = ?').bind('https://10.1.2.3:4533').run();
+    const refused = await service.clientFor(sourceId);
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.reason).toMatch(/permitted/i);
+
+    await handle.db.prepare('DELETE FROM import_sources WHERE id = ?').bind(sourceId).run();
+    const gone = await service.clientFor(sourceId);
+    expect(gone.ok).toBe(false);
+    expect(!gone.ok && gone.reason).toMatch(/no longer exists/i);
+  });
+
+  it('builds a client when both refusals do not apply, and a second one next time', async () => {
+    // **Per call**, because the client holds the plaintext password for its lifetime: a client
+    // cached on a Workflow instance would carry it through storage the platform does not encrypt.
+    const { sources, sourceId } = await seeded();
+    const service = new ImportSourceService({
+      sources: async () => sources,
+      resolveKey: async () => await testKey(),
+      allowPrivateHosts: () => false,
+      onRequest: () => undefined,
+    });
+
+    const first = await service.clientFor(sourceId);
+    const second = await service.clientFor(sourceId);
+    expect(first.ok && second.ok).toBe(true);
+    expect(first.ok && first.client).not.toBe(second.ok && second.client);
+  });
+
+  it('permits a private host when the policy opts in, so local development is not broken by the gate', async () => {
+    const { sources, sourceId } = await seeded();
+    await handle.db.prepare('UPDATE import_sources SET base_url = ?').bind('http://localhost:4533').run();
+    const service = new ImportSourceService({
+      sources: async () => sources,
+      resolveKey: async () => await testKey(),
+      allowPrivateHosts: () => true,
+      onRequest: () => undefined,
+    });
+
+    expect((await service.clientFor(sourceId)).ok).toBe(true);
+  });
+
+  it('reports a delete of a row that is already gone as absence, so a client can tell', async () => {
+    // Otherwise a second delete returns success and the caller cannot tell it did nothing.
+    const { sources } = await seeded();
+    const service = new ImportSourceService({
+      sources: async () => sources,
+      resolveKey: async () => await testKey(),
+      allowPrivateHosts: () => false,
+      onRequest: () => undefined,
+    });
+
+    await expect(service.remove('no-such-source')).rejects.toBeInstanceOf(NotFoundError);
   });
 });

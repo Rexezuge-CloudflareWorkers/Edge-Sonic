@@ -17,7 +17,7 @@ import type { ScanService } from '@edge-sonic/backend-services/index';
 import type { EnrichmentService } from '@edge-sonic/backend-services/index';
 import type { ScanStub } from '../workers/scanStubs';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
-import type { SongDAO, PlaylistDAO, AnnotationDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
+import type { SongDAO, PlaylistDAO, AnnotationDAO, PlayCountDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
 interface RestContext {
   readonly params: SubsonicParams;
@@ -59,6 +59,16 @@ interface RestContext {
   readonly users: UserDAO;
   readonly playlists: PlaylistDAO;
   readonly annotations: AnnotationDAO;
+  /**
+   * Play counts, separately from the annotations.
+   *
+   * A second field rather than two more methods on `annotations`, because play counts carry **two
+   * semantics** — a scrobble increments and an import overwrites — and the difference is silent.
+   * `packages/backend-data/src/dao/playCounts.ts` is where those two writers sit next to each other;
+   * handing them out from a class that also owns stars and bookmarks would put them back on
+   * opposite sides of a boundary.
+   */
+  readonly playCounts: PlayCountDAO;
   /**
    * The KV cache, for the endpoints that read something expensive off the origin.
    *

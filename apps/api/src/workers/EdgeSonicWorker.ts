@@ -60,7 +60,21 @@ type App = Hono<WorkerEnv>;
 /**
 The SPA's client-side routes. Anything else is a 404 in the SPA itself.
 */
-const SPA_ROUTES = ['/', '/libraries', '/users'] as const;
+/**
+ * The paths the SPA shell answers.
+ *
+ * A browser navigating to a client-side route sends **no API call** for the worker to
+ * authenticate, so every one of these has to return the shell rather than fall through to a 404 —
+ * a route missing from this list renders as a not-found page to anyone who bookmarks it or
+ * follows a link, while working perfectly for the operator who typed it in the address bar of an
+ * already-loaded tab.
+ *
+ * It must stay in step with `SpaViewRouter`'s `<Route>` list. The two are one decision made in
+ * two places, which is the shape that drifts, so `test/user-api.test.ts` asserts that every
+ * client-side route appears here — the failure being a route a link reaches and the worker does
+ * not serve.
+ */
+const SPA_ROUTES = ['/', '/libraries', '/users', '/import'] as const;
 
 class EdgeSonicWorker extends AbstractEntrypointWorker {
   protected readonly app: App;

@@ -28,12 +28,36 @@
         "name": "SCAN",
         "class_name": "ScanWorker",
       },
+      {
+        // The play-count walk. A **separate class** rather than a second name on `SCAN`, because
+        // a Durable Object's lifecycle is its alarm's: sharing the namespace would put an import
+        // walk and a library scan in the same object, where one one's `deleteAlarm` silently
+        // disarms the other. The play-count walk is alarm-chained like the scan, and it must not
+        // be able to stop it — an import *pauses* the scan rather than sharing its budget.
+        "name": "IMPORT_DO",
+        "class_name": "PlayCountImportWorker",
+      },
     ],
   },
   "migrations": [
     {
       "tag": "v1000000000",
       "new_sqlite_classes": ["ScanWorker"],
+    },
+    {
+      "tag": "v1000000001",
+      "new_sqlite_classes": ["PlayCountImportWorker"],
+    },
+  ],
+  "workflows": [
+    {
+      // The bounded import phases. A Workflow rather than more Durable Object alarms because a
+      // step is **cached by name**: `playlist <remoteId>` cannot write the same playlist twice
+      // even though "create this playlist" is not idempotent, which is the whole reason the
+      // derived ids in `UUIDUtil.deterministicId` exist as well.
+      "binding": "IMPORT_WORKFLOW",
+      "name": "edge-sonic-subsonic-import",
+      "class_name": "LibraryImportWorkflow",
     },
   ],
   "d1_databases": [
@@ -93,6 +117,19 @@
       "binding": "WEBDAV_ENCRYPTION_KEY_SECRET",
       "store_id": "00000000000000000000000000000000",
       "secret_name": "edge-sonic-webdav-encryption-key",
+    },
+    {
+      // The **third** key, guarding a remote Subsonic instance's credential. Three keys, one per
+      // feature, never merged — see migrations/0009_subsonic_import.sql.
+      //
+      // The `*-encryption-key` name shape is what makes this free to provision: `init-secrets.ts`
+      // derives the value's shape from the name, so nothing there needs editing. That matters
+      // because adding an entry without updating a known-names list broke a deploy once already
+      // (`Unknown secret`, swallowed by a `catch` that returned 0, surfacing two steps later as a
+      // 10182).
+      "binding": "SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET",
+      "store_id": "00000000000000000000000000000000",
+      "secret_name": "edge-sonic-subsonic-remote-encryption-key",
     },
   ],
 

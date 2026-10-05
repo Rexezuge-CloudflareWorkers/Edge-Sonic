@@ -180,7 +180,33 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
             throw new SqliteError(error instanceof Error ? error.message : String(error));
           }
         },
-        async run(): Promise<D1Result> {
+        /**
+         * `D1PreparedStatement.run()`, which takes **no** arguments — the values come from
+         * {@link bind}.
+         *
+         * ### Why the refusal is here rather than in a lint rule
+         *
+         * Because this method **used** to accept anything and silently ignore it. A test that
+         * wrote `prepare('DELETE FROM t WHERE id = ?').run(id)` — the `node:sqlite` spelling —
+         * ran the statement with `id = undefined`, matched **zero** rows, and returned a perfectly
+         * ordinary success. Every assertion after it then read a database the test believed it had
+         * changed and had not, so the failure surfaced as *the code under test ignoring a delete
+         * it was supposed to see* — which is a real defect, not a fixture bug, and cost an hour of
+         * reading correct code to find.
+         *
+         * The generalisation is the one this repository already states about `fakeKv`: **a double
+         * must model the platform's defaults, not only its shapes.** D1's `run()` takes no
+         * arguments, and a double that accepts and drops them fails *silently* — the one failure
+         * mode no assertion catches, because the assertion is reading data the wrong call never
+         * touched. So the mismatch is refused here, where the mistake is.
+         */
+        async run(...positional: unknown[]): Promise<D1Result> {
+          if (positional.length > 0) {
+            throw new TypeError(
+              `D1PreparedStatement.run() takes no arguments; use .bind(...). Found ${positional.length} positional value(s). ` +
+                'A run() that silently ignored them would execute the statement with undefined bound variables.',
+            );
+          }
           return run();
         },
       };

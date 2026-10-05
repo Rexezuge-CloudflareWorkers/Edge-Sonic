@@ -2,6 +2,7 @@
   "version": 1,
   "baseline": "0008_squash.sql",
   "migrations": {
-    "0008_squash.sql": "sha256:d741c27b5ae3295db5df5b73b5da5a910a1809101467c37ae2155dd456eddee2"
+    "0008_squash.sql": "sha256:d741c27b5ae3295db5df5b73b5da5a910a1809101467c37ae2155dd456eddee2",
+    "0009_subsonic_import.sql": "sha256:96839989aef896a950fdd153002f857b7e6ab764788ffb21d051e8c1c9eb937b"
   }
 }

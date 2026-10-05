@@ -15,8 +15,16 @@ declare global {
     CACHE?: unknown;
     SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> };
     WEBDAV_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> };
+    /**
+     * The third key, guarding a remote Subsonic instance's credential.
+
+     * One per feature, never merged — see `migrations/0009_subsonic_import.sql` for why a
+     * remote credential cannot live under the user key or the WebDAV key.
+     */
+    SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> };
     SUBSONIC_USER_ENCRYPTION_KEY?: string;
     WEBDAV_ENCRYPTION_KEY?: string;
+    SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
     ENVIRONMENT?: string;
     DEBUG_MODE?: string;
     SITE_URL?: string;
