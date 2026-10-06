@@ -23,14 +23,27 @@
  * `503`, a timeout or a reset is an answer about the network, and stamping `enriched_at` over
  * one makes the fault permanent, because `shouldEnrich` reads the stamp as "already read" and no
  * later call re-reads the row. It shipped — four tracks of a live library were stamped empty
- * during a flapping origin and reported duration `0` for ever.
+ * during a flapping origin and reported duration `0` for ever — and then it shipped again with a
+ * different status: `413` is **this server's own body bound**, which an origin that answers a
+ * `Range` request with the whole file trips on every track, so one such origin stamped an entire
+ * library "read" without reading any of it. The rule is in `enrichmentRetry.ts` and it is one
+ * question: does this failure describe the file, or the request?
+ *
+ * The cache carries the same discipline in the other direction, and lives in
+ * `songMetaCache.ts`: an entry exists to skip a read, and an entry recording "no duration"
+ * skips a read to produce `null` again for as long as the file does not move — which for an
+ * Ogg file is every future `getSong`.
  */
 import type { LibraryRow, MetadataWriteResult, SongRow } from '@edge-sonic/backend-data/dao';
-import { readAudioTags, readOggTailDuration, READER_VERSION } from '@edge-sonic/media-tags';
+import { readAudioTags, READER_VERSION } from '@edge-sonic/media-tags';
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import { isTransientEnrichmentFailure, shouldEnrich } from './enrichmentRetry';
+import { isCompleteEnrichment } from './songMetaCache';
+import type { CachedEnrichment } from './songMetaCache';
+import { resolveTailDuration } from './oggTailDuration';
+import type { TailDuration } from './oggTailDuration';
 
 interface SongStore {
   findById(id: string): Promise<SongRow | null>;
@@ -101,24 +114,6 @@ interface EnrichFacts {
 }
 
 /**
-Cached enrichment, keyed by song id and validated by the file's mtime.
-*/
-interface CachedEnrichment {
-  readonly mtimeMs: number;
-  /**
-   * Which reader produced this entry. Part of the entry rather than implied by it: an entry written
-   * by a reader that could not read something a later reader can is not a value this reader may skip
-   * a read for, and the mtime cannot say so — the file really did not move.
-   */
-  readonly readerVersion: number;
-  readonly durationSeconds: number | null;
-  readonly bitrateKbps: number | null;
-  readonly sampleRate: number | null;
-  readonly channels: number | null;
-  readonly container: string;
-}
-
-/**
  * What an enrichment actually did, as distinct from what it found.
  *
  * `rowsWritten` is rows **written to `songs`**, not tracks asked about, and the two differ: a
@@ -182,7 +177,7 @@ class EnrichmentService {
     if (song.enriched_at !== null && song.duration > 0 && song.reader_version === READER_VERSION) return NO_ENRICHMENT_WRITTEN;
 
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [song.id]);
-    if (cached && cached.mtimeMs === song.mtime_ms && cached.readerVersion === READER_VERSION) {
+    if (cached && cached.mtimeMs === song.mtime_ms && cached.readerVersion === READER_VERSION && isCompleteEnrichment(cached)) {
       // Replay the cached result into D1 if the row lost it (a restored backup, or
       // a row written by a scan after the cache was populated). The reader version is
       // part of the entry for the same reason it is a column: a cached value is only
@@ -215,7 +210,7 @@ class EnrichmentService {
     // A cache hit is `0` rows, not `1`, and that is why this reports rather than returning
     // tags: on a library already enriched by `getSong` this branch is the common one, and
     // reporting `1` would pace the scan off a write that never happened.
-    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION) return NO_ENRICHMENT_WRITTEN;
+    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION && isCompleteEnrichment(cached)) return NO_ENRICHMENT_WRITTEN;
     return await this.readAndPersist(library, null, facts, onRequest);
   }
 
@@ -287,7 +282,12 @@ class EnrichmentService {
     }
 
     // The prefix read cannot see an Ogg stream's final page, so `durationSeconds` is null there
-    // by design rather than by failure.
+    // by design rather than by failure — which is what sends it to the second read.
+    //
+    // `tags.durationSeconds === undefined` is included because the reader's field is
+    // optional, and `undefined` is not `null`: an MP3 read that found no Xing frame would
+    // otherwise skip the tail read and be written with no duration and no attempt to get
+    // one.
     const tail = tags.durationSeconds === null || tags.durationSeconds === undefined
       ? await this.resolveTailDuration(library, facts, tags, onRequest)
       : { duration: tags.durationSeconds, transient: false };
@@ -308,48 +308,40 @@ class EnrichmentService {
       channels: tags.channels,
       container: tags.container,
     };
+    // Only a **complete** read is cached, and the incompleteness is not the container's
+    // fault: `resolveTailDuration` answers `null` for a container it cannot date, and also
+    // for one whose duration it was not allowed to read. Caching the first would trade a
+    // retry for a permanent wrong answer about a file that never moved — see
+    // `isCompleteEnrichment`.
+    //
+    // Losing the cache here costs nothing measurable. The row is stamped either way, so
+    // `enrich` never reaches this path for it again; and a row that is *not* stamped is
+    // re-read, which is what an unstamped row is for.
+    //
     // A cache write is best-effort and must not fail the call: D1 already holds
     // the result, which is what the outage requirement depends on.
-    await this.deps.kv.putJson('songMeta', [facts.id], entry);
+    if (isCompleteEnrichment(entry)) await this.deps.kv.putJson('songMeta', [facts.id], entry);
     await write(entry.durationSeconds, entry.bitrateKbps, entry.sampleRate, entry.channels, tags);
     return { tags, rowsWritten, billedRows };
   }
 
   /**
-   * The duration of a container whose length is recorded at the **end** of the file.
+   * The second read, for a container whose length is recorded at the **end** of the file.
    *
-   * Best effort. `duration: null` is a real answer: a tail that does not contain the
-   * final page leaves the duration unknown, and the row is written as `0`. That is the
-   * honest value — the alternative is a confident wrong one, and a client seeks by it.
-   * A 240.61 s track was served as 3 s and 15329 kbps instead of 191 because the prefix
-   * read's truncated page was taken for the file's last.
-   *
-   * `transient: true` is the third answer and means "do not write": the tail read failed in a way
-   * that says nothing about the file, so even the good prefix tags stay out of D1. A result object
-   * rather than a `null`-or-sentinel union, because `null` is the *other* answer.
+   * A delegation rather than the implementation, and the split is by **decision**: the three
+   * answers and the distinction between them are what `oggTailDuration.ts` is for, and the
+   * one thing this method owns is the client — which the caller's request meter is threaded
+   * into, so a tail read is charged against the same subrequest ceiling as the `PROPFIND`
+   * that found the file.
    */
   private async resolveTailDuration(
     library: LibraryRow,
     facts: EnrichFacts,
     tags: AudioTags,
     onRequest?: () => void,
-  ): Promise<{ duration: number | null; transient: boolean }> {
-    const tailBytes = this.deps.readTailBytes ?? 0;
-    if ((tailBytes <= 0) || tags.sampleRate === null || facts.size === 0) return { duration: null, transient: false };
-    // Only Ogg records its length this way. MP4 puts `moov` at the end and needs a
-    // different parse, so this does not pretend to cover it.
-    if (tags.container !== 'ogg-opus' && tags.container !== 'ogg-vorbis') return { duration: null, transient: false };
-
-    try {
-      const client = await this.deps.clientFor(library, onRequest);
-      const bytes = await client.readTail(facts.path, tailBytes, facts.size, this.deps.timeoutMs);
-      // The granule includes the pre-skip and the duration must not, and the pre-skip is
-      // in the identification header at the *front* of the file — which the prefix read
-      // already read, and which is why it is carried on `AudioTags` rather than re-read.
-      return { duration: readOggTailDuration(bytes, tags.sampleRate, tags.preskip ?? 0), transient: false };
-    } catch (error) {
-      return { duration: null, transient: isTransientEnrichmentFailure(error) };
-    }
+  ): Promise<TailDuration> {
+    const client = await this.deps.clientFor(library, onRequest);
+    return await resolveTailDuration(client, facts, tags, this.deps.readTailBytes, this.deps.timeoutMs);
   }
 
   /**
@@ -396,4 +388,8 @@ class EnrichmentService {
 
 export { EnrichmentService };
 export { shouldEnrich } from './enrichmentRetry';
-export type { EnrichmentDeps, CachedEnrichment, EnrichFacts, EnrichmentOutcome };
+export type { EnrichmentDeps, EnrichFacts, EnrichmentOutcome };
+// Re-exported so the entry's shape and the test about it have one import path, and so a
+// caller that built one by hand keeps the module that decides whether it is usable.
+export { isCompleteEnrichment } from './songMetaCache';
+export type { CachedEnrichment } from './songMetaCache';

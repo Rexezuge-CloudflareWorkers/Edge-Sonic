@@ -42,27 +42,61 @@ function shouldEnrich(song: SongRow): boolean {
 }
 
 /**
- * Whether a read failure is about the network rather than the file.
+ * Whether a read failure is about something other than the file.
  *
  * The stamp this module writes means "already read", and `shouldEnrich` trusts it — so
  * writing it over a failure that says nothing about the file makes the failure
- * permanent. Only a definitive answer earns the stamp: an unknown container, a `400`
- * (the request was refused before any file was involved), a `404` (this revision of
- * the file is not there), a `413` (the bound refused it, deterministically).
+ * permanent. That much is the `503` defect below. This function is the same rule with
+ * the question asked properly, and the answer changed because asking it properly
+ * changed the answer:
  *
- * Everything else — a timeout, a `429`, a `5xx`, or an error with no status at all
- * (DNS, TLS, a reset connection) — leaves the row untouched, and the next call tries
- * again. That is the whole retry path for a flapping origin: there is no queue and no
- * backoff, just a row that does not claim to have been read.
+ * **A status that describes *this revision of this file* earns the stamp. A status that
+ * describes the request, the session or the network does not.** There is exactly one of
+ * the first kind on this path, and the whole class that used to be lumped in with it —
+ * `400`, `401`, `403`, `413`, `416` — is the second.
  *
- * It shipped the other way round: every read failure was recorded as an attempt, so
- * four tracks of a live library caught a flapping origin during the scan and reported
- * duration `0` for ever — the stamp said "already read", and nothing ever re-read
- * them.
+ * ### Why the class was wrong
+ *
+ * The old list called `400`, `404` and `413` "deterministic", which is true of the
+ * *request* and says nothing about the file. `413` is the sharpest case, and it is the
+ * one that shipped: it is thrown by `WebDavClient.readBounded`, which is **this
+ * server's own limit** on a body it was asked to read, and it is thrown routinely by an
+ * origin that answers a `Range` request with `200` and the whole file — a server that
+ * has not heard of ranges answers "here is everything" rather than "no". Stamping
+ * `enriched_at` over that records "we looked and this file is unreadable" for a file
+ * this server never managed to read, and the row then says so for ever: `shouldEnrich`
+ * declines it, `getSong` re-reads nothing, and `songs.duration` stays `0` with the
+ * path-derived `(derived)` names still on the row.
+ *
+ * It is the `503` defect with a different status code, and it is worse than the `503`
+ * because it is *systematic*: one origin that ignores `Range` poisons a whole library
+ * in a single scan, with no error anywhere and nothing on the operator's page — a
+ * Subsonic client showing every track with no duration and no tags, which is what an
+ * unreadable library looks like and is not one.
+ *
+ * ### What is left, and why it is safe to retry the rest
+ *
+ * Only `404` stamps: this revision of this path is not there. A file deleted between
+ * the scan's listing and its enrichment looks exactly like it, and re-reading it for
+ * ever would cost a subrequest per play for a file that is gone.
+ *
+ * Everything else leaves the row untouched, and the next call tries again — no queue, no
+ * backoff. That is a real cost when the fault is permanent (`403` from a rotated
+ * credential costs one ranged read per play), and it is the same trade the `503` case
+ * already makes: a row that does not claim to have been read is recoverable when the
+ * cause is fixed, and a row that claims it was read is not recoverable at all.
+ *
+ * It shipped the other way round twice: first every read failure was recorded, so four
+ * tracks of a live library caught a flapping origin during the scan and reported
+ * duration `0` for ever; then the "deterministic" list above, so a whole library whose
+ * origin ignores `Range` reported duration `0` for ever instead.
  */
 function isTransientEnrichmentFailure(error: unknown): boolean {
   if (error instanceof WebDavError) {
-    return error.status === 408 || error.status === 429 || error.status >= 500;
+    // `404` is the only answer about the file. Everything else — `400`, `401`, `403`,
+    // `408`, `413`, `416`, `429`, `5xx` — describes the request, the session or the
+    // network, and stamping over one of those makes it permanent.
+    return error.status !== 404;
   }
   return true;
 }

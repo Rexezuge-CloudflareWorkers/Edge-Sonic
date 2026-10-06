@@ -110,17 +110,61 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `test/ogg-packet-layout.test.ts`, whose fixtures are written from the framing spec and
   **decode their own lacing table back**, because the existing suite built one packet per
   page — the reader's assumption — and so could not see either defect.
-- **A failure that says nothing about the file earns no stamp.** `enriched_at` means
-  "already read", and `shouldEnrich` trusts it — so writing it over a `503`, a timeout,
-  or a reset connection makes a transient fault permanent: the row reports duration `0`
-  for ever, and no `getSong`, rescan, or re-index re-reads it. It shipped: four tracks
-  of a live library caught a flapping origin during the scan and stayed at duration `0`
-  with no tags. `isTransientEnrichmentFailure` (`index/enrichmentRetry.ts`) is the split —
-  `408`/`429`/`5xx` or no status at all leaves the row untouched — and it covers the
-  tail read too, where even good prefix tags are discarded rather than written without
-  their duration. Asserted in `test/enrichment-config.test.ts`, paired with the `404`
-  case proving a definitive failure still stamps, without which the fix is just "never
-  write".
+- **A failure earns a stamp only if it describes the file, and "deterministic" is not the
+  same question.** `enriched_at` means "already read", and `shouldEnrich` trusts it — so
+  stamping over a failure that says nothing about the file makes the fault permanent: the
+  row reports duration `0` for ever, and no `getSong`, rescan, or re-index re-reads it.
+  It shipped twice, with two different status codes and one mistake in common.
+  - The first was the `503`: a flapping origin, four tracks of a live library stamped
+    empty during a scan, still `duration: 0` with no tags afterwards.
+  - The second came from calling `400`, `404` and `413` "deterministic, therefore about
+    the file". They are deterministic about the **request**. `413` is the sharp one: it is
+    `WebDavClient.readBounded`'s own body limit, and an origin that answers a `Range`
+    request with `200` and the whole file trips it on *every* track. So one such origin
+    stamped an entire library "already read" without reading any of it — a Subsonic client
+    saw every album and artist still carrying the path-derived `(derived)` name and every
+    song with a null duration, with no error anywhere and nothing on the operator's page,
+    and neither a `getSong` nor a rescan could undo it because the files had not moved.
+  - So the rule is one question: **does this failure describe this revision of this file?**
+    On this path exactly one status does — `404`. `400`, `401`, `403`, `408`, `413`, `416`,
+    `429` and `5xx` describe the request, the session or the network, and none of them
+    leaves the row touched. `isTransientEnrichmentFailure` (`index/enrichmentRetry.ts`) is
+    that one line, and it covers the tail read too, where even good prefix tags are
+    discarded rather than written without their duration. Asserted in
+    `test/enrichment-config.test.ts`: the `413` case staged with a `fakeDav` whose
+    `setIgnoreRange` makes it answer `200` with the whole file, **paired** with the `404`
+    case proving a failure about the file still stamps — without which the fix is just
+    "never write".
+  - The retry is unbounded, and that is the accepted cost: a row that does not claim to
+    have been read recovers when the cause is fixed, and a row that claims it was read
+    does not recover at all. A revoked credential costs one ranged read per play.
+  - Repairing rows already stamped by the old rule is `READER_VERSION`, because a
+    "what counts as an answer" change makes every previously written value wrong in the
+    same way a corrected reader does. It is at **2** for this.
+- **A cache entry recording an absence is not an answer, and the writer and the reader
+  both have to know it.** `songMeta` exists so the next `getSong` can skip a read, so an
+  entry with `durationSeconds: null` skips a read to produce `null` again — for ever,
+  because it matches on `mtime_ms` and `readerVersion`, neither of which changes when the
+  thing that made it null goes away. For an Ogg library this is not hypothetical: the
+  prefix read reports no duration **by design** and only the tail read supplies one, so a
+  refused tail — or a deployment running `TAG_READ_TAIL_BYTES=0` — wrote an entry that
+  answered "no duration" for that file's mtime, and raising the setting afterwards changed
+  nothing. It is the artwork negative-cache defect below, in the one cache written
+  *before* anybody knows whether the answer is complete.
+  - `isCompleteEnrichment` (`index/songMetaCache.ts`) is the test, and **both sides** call
+    it: the writer does not produce one, and the reader does not trust one. Guarding only
+    the writer helps libraries created after it shipped and leaves every existing entry in
+    place, still matching — which is why the reader's guard has its own test with a
+    hand-placed entry whose mtime and reader version both match, so it cannot pass with the
+    guard removed. Verified by mutation on both sides.
+  - The tags in such an entry are still real, so the row is written in full and only the
+    cache declines to remember it. The incompleteness is `durationSeconds` alone: the
+    artist, album and genre came from the prefix read, and discarding them to make room for
+    a retry of the one missing value would throw away a correct answer.
+  - It lives in its own module because it is the third thing answering "has this file been
+    read?" — `shouldEnrich` asks it of a **row**, this asks it of a **cache entry**, and
+    `enrich` consults the cache *before* the row, so an entry disagreeing with the row's
+    own stamp would decide the answer alone.
 - **"We looked and there is nothing" and "we could not look" are different
   observations, and only the first is worth remembering.** The artwork negative cache
   used to be written whenever the probe found nothing — including when the probe threw —
