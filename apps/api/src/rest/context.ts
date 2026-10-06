@@ -15,7 +15,7 @@ import type { LibraryService } from '@edge-sonic/backend-services/library';
 import type { TreeService } from '@edge-sonic/backend-services/index';
 import type { ScanService } from '@edge-sonic/backend-services/index';
 import type { EnrichmentService } from '@edge-sonic/backend-services/index';
-import type { ScanStub } from '../workers/scanStubs';
+import type { ScanStub, MediaStub } from '../workers/scanStubs';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, PlayCountDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
@@ -43,10 +43,17 @@ interface RestContext {
   readonly enrichment: EnrichmentService;
   /**
    * The per-library scan worker stub, or `null` when no `SCAN` binding is
-   * configured (tests, local dev). A present stub means scan/enrich/cover CPU
-   * runs in the DO isolate; a null means the direct service runs in-fetch.
+   * configured (tests, local dev). A present stub means the scan loop runs in
+   * the DO isolate; a null means the direct service runs in-fetch.
    */
   readonly scanStubFor: (libraryId: string) => ScanStub | null;
+  /**
+   * The per-library media worker stub, or `null` when no `MEDIA_DO` binding is
+   * configured. **Separate from `scanStubFor`**, and not an aesthetic choice:
+   * a Durable Object handles one event at a time, so the same stub would put a
+   * scan chunk's walk on the critical path of `getSong` and `getCoverArt`.
+   */
+  readonly mediaStubFor: (libraryId: string) => MediaStub | null;
   readonly songs: SongDAO;
   /**
    * The aggregate reads: album pages, artist pages, genres.

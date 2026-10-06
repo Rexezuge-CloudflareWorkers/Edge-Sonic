@@ -25,7 +25,7 @@ import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
 import { albumIdentity } from './albumIdentity';
-import { getScanStub, hasScanBinding } from '../workers/scanStubs';
+import { getScanStub, getMediaStub, hasScanBinding, hasMediaBinding } from '../workers/scanStubs';
 import { ENDPOINTS } from './endpoints';
 import { openSubsonicExtensionsPayload } from './endpoints/system';
 import type { RestHandler } from './endpoints';
@@ -223,8 +223,11 @@ async function buildContext(
     scan: scope.get(Tokens.ScanService),
     enrichment: scope.get(Tokens.EnrichmentService),
     // Charged through the scope's own counter, so the DO RPC is inside the same 50 as the D1
-    // statements and the WebDAV reads this same request makes.
+    // statements and the WebDAV reads this same request makes. Two resolvers rather than one:
+    // the objects are two objects, and resolving them apart is what keeps a scan chunk off the
+    // critical path of `getSong` and `getCoverArt`.
     scanStubFor: (libraryId: string) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null),
+    mediaStubFor: (libraryId: string) => (hasMediaBinding(c.env) ? getMediaStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null),
     songs: await scope.get(Tokens.SongDAO)(),
     songIndex: await scope.get(Tokens.SongIndexDAO)(),
     users: await scope.get(Tokens.UserDAO)(),
