@@ -56,6 +56,32 @@ interface NodeRow {
   updated_at: number;
 }
 
+/**
+ * A child of a folder, plus whether a `songs` row exists for it.
+ *
+ * The join is the point. A reconcile pass has to answer "does this child need writing" once for
+ * the **node** row and once for the **song** row, and answering the second from `nodes` — which is
+ * what `changed` did — is a proxy that the two tables are free to disagree about. They do
+ * disagree whenever a write batch truncates between the two writers, and the disagreement is
+ * permanent: the folder closes with the node row present and the song row never written, so no
+ * later pass re-offers it. Measured on a live library: 117 `nodes` rows, 116 `songs` rows, one
+ * track absent from every album list with no error anywhere.
+ *
+ * So the caller reads both planes in the statement it already issues, rather than spending a
+ * second subrequest to ask.
+ */
+type ChildNodeRow = NodeRow & {
+  /**
+   * `1` when a `songs` row exists for this path, `0` when it does not.
+   *
+   * `0` is also the answer for every non-audio file and every subfolder, because only audio
+   * children become songs — so this is meaningful **only after** the caller has decided the
+   * child is audio. Read in the other order it is a guarantee that a `cover.jpg` will be
+   * upserted as a song for ever.
+   */
+  has_song: 0 | 1;
+};
+
 interface SongRow {
   id: string;
   library_id: string;
@@ -242,6 +268,7 @@ export type {
   UserRow,
   LibraryRow,
   NodeRow,
+  ChildNodeRow,
   SongRow,
   ScanStateRow,
   PlaylistRow,

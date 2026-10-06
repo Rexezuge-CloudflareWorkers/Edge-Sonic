@@ -214,6 +214,47 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     the two doubles that hid this (`scan-budget`'s `upsertMany`, which *skipped* unchanged
     rows, and `scan-incremental`'s `chunkMaxRequests: 10_000` with a double that never
     truncates) each modelled the fixed implementation or a bound that never fires.
+- **A compare must read the table the row it guards lives in.** This is the same rule as
+  `nodeRowNeedsWrite` above, one column further out, and it cost a track on a live library:
+  **117 `nodes` rows against 116 `songs` rows**, one song absent from every album list while its
+  `nodes` row sat there current.
+  `reconcileFolder` gates both writers on `changed`, which is `mtimeMoved || etagMoved` read off
+  the **`nodes`** row — so the song writer was answering a node's question about a song's row. The
+  two upserts are separate batches and `runWriteBatch` truncates each against the meter's
+  remaining budget **independently**, so a pass can land every node row and truncate the song rows.
+  `truncated` then correctly kept the folder on the frontier — and the next pass read the node
+  rows, found every mtime already current, computed `changed === false` for all of them, offered
+  nothing, saw no truncation, and closed the folder.
+  Nothing else reaches that state, which is what makes it permanent rather than merely unlikely:
+  `songPaths.push` runs *before* the gate, so the prune keeps the path and never deletes a row that
+  was never written; and `startScan`'s root-mtime probe means the folder is not re-listed at all.
+  No error, no retry, no operator — one chunk boundary in the wrong place, once. Three rules:
+  - **The gate names its own table's answer.** `songRowMissing = known?.has_song !== 1`, beside
+    `changed` rather than merged with it, because they are different questions and only one of them
+    is about the file. Asserted in both directions: a folder with a song row for every child and
+    nothing moved still writes **zero** rows, or adding a second reason to write quietly takes the
+    "an unchanged rescan is free" invariant with it.
+  - **The read is one statement, not two.** `NodeDAO.listChildrenWithSongPresence` is
+    `listChildren` plus a `LEFT JOIN songs … ON (library_id, path)`, riding
+    `idx_songs_library_path` and leaving the driving predicate on `idx_nodes_parent_ci` alone. The
+    obvious alternative — a second `SELECT path FROM songs` per folder — also works, and costs a
+    subrequest per folder against a ceiling of 50, so `SUBSREQUESTS_PER_FOLDER_BASE` and both
+    constants derived from it would have to rise. **The bound is unchanged at 6**, and
+    `test/scan-convergence.test.ts` asserts a folder still fits inside it, so a future change that
+    does spend a statement here turns red rather than quietly taking a folder's share.
+    `EXPLAIN QUERY PLAN` is asserted in `test/schema.int.test.ts` because a wrong join and a
+    right one return identical rows.
+  - **The audio test runs before the gate, and that ordering is load-bearing.** `has_song` is `0`
+    for every non-audio child, so reading it first would offer `cover.jpg` to the song upsert on
+    every pass, for ever — an album of art that never converges and art in `search3`. Asserted with
+    a cover in the fixture; the count is the assertion.
+  - **Reordering the two batches is not a fix**, and that is worth recording because it looks like
+    the cheap one. Whichever batch truncates, the other can still land, so the asymmetry survives
+    any order — only reading the row's own table removes it. Asserted by mutation: reverting the
+    gate to `if (changed)` fails four cases, and moving the audio test below it fails three more.
+  This is the third instance of the file's own recurring shape — **a compare standing in for a
+  measurement** — and the reason it recurs is that `changed` reads correctly and reads *the wrong
+  table*: a predicate nobody can distinguish from the right one by reading it.
 - **A spent D1 daily allowance is a *pause*, and it is not `failed`.** Since 2026-09-01 a
   Free account over its daily row allowance has **every query fail** — reads included — until
   **midnight UTC**, so the whole product is down (Subsonic auth reads `users`) and the remedy

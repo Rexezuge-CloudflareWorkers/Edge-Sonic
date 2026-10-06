@@ -231,6 +231,8 @@ function createRequestScope(env: RequestScopeEnv, scanFor?: (libraryId: string) 
       nodes: {
         find: async (libraryId, path) => (await scope.get(Tokens.NodeDAO)()).find(libraryId, path),
         listChildren: async (libraryId, parentPath) => (await scope.get(Tokens.NodeDAO)()).listChildren(libraryId, parentPath),
+        listChildrenWithSongPresence: async (libraryId, parentPath) =>
+          (await scope.get(Tokens.NodeDAO)()).listChildrenWithSongPresence(libraryId, parentPath),
         listRoots: async (libraryId) => (await scope.get(Tokens.NodeDAO)()).listRoots(libraryId),
         listFrontier: async (libraryId, limit) => (await scope.get(Tokens.NodeDAO)()).listFrontier(libraryId, limit),
         upsertMany: async (inputs) => (await scope.get(Tokens.NodeDAO)()).upsertMany(inputs),

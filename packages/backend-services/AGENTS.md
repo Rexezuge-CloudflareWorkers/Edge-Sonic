@@ -179,6 +179,21 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   to D1 the state could not occur at all — the operator surface had a string for it and could
   never render it, so a self-inflicted ceiling spent `MAX_CONSECUTIVE_FAILURES` as though it
   were a credential failure.
+- **The song writer's compare reads `songs`, and a compare that reads the wrong table loses a
+  track.** `reconcileFolder` gates both writers on `changed`, which is `mtimeMoved || etagMoved`
+  off the **`nodes`** row. That is the right question about a *file* and the wrong question about a
+  *song row*, and the two writers' batches truncate independently — so a pass can land every node
+  row and truncate the song rows, and the next pass finds the mtimes current, offers nothing, and
+  closes the folder. It shipped: **117 `nodes` rows against 116 `songs` rows** on a live library,
+  one track invisible to every aggregate with no error and no way to recover it. So the gate is
+  `changed || songRowMissing`, where `songRowMissing` is `known?.has_song !== 1` read from
+  `NodeDAO.listChildrenWithSongPresence` — the **same** read the node compare uses, so it costs no
+  extra subrequest and `SUBSREQUESTS_PER_FOLDER_BASE` stays at 6. `songRowMissing` sits *after* the
+  `isAudioFile` test, which is load-bearing in the permissive direction: `has_song` is `0` for every
+  non-audio child, so reading it first would offer `cover.jpg` to the song upsert for ever.
+  `songRowMissing` is a **second** reason to write and not a replacement — a folder whose two planes
+  already agree still writes zero rows, asserted, because adding a compare is exactly the change that
+  can quietly give back "an unchanged rescan is free". See the parent index.
 - **A folder larger than the invocation is resumable, not truncated-and-forgotten.**
   `runWriteBatch` splits a write batch by what is left of the budget and reports
   `truncated`; `reconcileFolder` writes the children first and the folder's own row — the

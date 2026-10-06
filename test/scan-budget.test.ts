@@ -59,7 +59,7 @@ import {
 import { SubrequestCounter } from '@edge-sonic/shared';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { DERIVED_VERSION, billedRowsForTable, deriveFromPath, deriveTitleFromFileName } from '@edge-sonic/backend-data/dao';
-import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { ChildNodeRow, LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
 import { DERIVED_MARKER } from './helpers/harness';
 import type { DavEntry, FakeDav } from './helpers/fakeDav';
@@ -230,6 +230,22 @@ function createIndex(options: IndexOptions = {}) {
         find: async (_libraryId: string, path: string) => await charge(() => nodes.get(nodeKey(path)) ?? null),
         listChildren: async (_libraryId: string, parentPath: string) =>
           await charge(() => [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci))),
+        // Reports both planes, and `has_song` is read from `songs` rather than inferred from
+        // `nodes` — which is the whole point of the method. Deriving it from the node row would
+        // model the shipped defect, where a node row current meant "nothing to write" for a song
+        // row that had never been written, and the folder closed on that answer.
+        listChildrenWithSongPresence: async (_libraryId: string, parentPath: string) =>
+          await charge(() =>
+            [...nodes.values()]
+              .filter((node) => node.parent_path === parentPath)
+              .sort((a, b) => a.name_ci.localeCompare(b.name_ci))
+              // Matched by **path**, not by the song id: `songs` is keyed by the encoded id while
+              // `nodes` is keyed by path, and the real statement joins on `(library_id, path)`.
+              // A double that looked the id up in a path-keyed map — or vice versa — would report
+              // every child as having no song row, which is the defect's own symptom and would
+              // make this suite re-enrich every track on every pass.
+              .map((node) => ({ ...node, has_song: [...songs.values()].some((song) => song.path === node.path) ? 1 : 0 }) as ChildNodeRow),
+          ),
         listRoots: async () => await charge(() => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== '')),
         listFrontier: async (_libraryId: string, limit: number) =>
           await charge(() =>
