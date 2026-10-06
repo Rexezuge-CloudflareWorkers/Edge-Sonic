@@ -190,7 +190,7 @@ class AppConfiguration {
     return this.auth.getDevAuthEmail();
   }
 
-  public getDemoUserEmail(): string | null {
+  public getDemoUserEmail(): string {
     return this.auth.getDemoUserEmail();
   }
 

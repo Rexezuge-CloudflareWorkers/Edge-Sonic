@@ -11,8 +11,10 @@ Layer 3: layers 0–2, and never `apps/*`.
   cookie. `t` is `md5(password + salt)` and is compared in constant time; `p` (the legacy
   cleartext password) is accepted as a fallback because the protocol allows it; an empty
   salt is **refused**, because computing `md5(password + "")` would accept a token the
-  caller chose by supplying nothing. Bumping `token_epoch` on a password change is what
-  revokes an already-issued token.
+  caller chose by supplying nothing. **A password change revokes an already-issued token
+  because `t` is derived from the current password** — not because of `token_epoch`, which
+  is bumped in the same statement and read by nothing. The credential carries no epoch
+  field for a server to compare one against, so there is no mechanism here to add.
 - `auth/AccessAuthService` authenticates `/user/*` behind Cloudflare Access. The bypass
   chain is `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT → the **`ACCESS` binding**, and the first
   two are gated on an **environment allow-list**. A deny-list would enable the bypass for
@@ -109,10 +111,14 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   different resources. `chunkMaxRequests` (default 42) is the platform's subrequest ceiling
   **less an invocation reserve**: Workers Free allows **50 subrequests per invocation**, and
   a subrequest is a `fetch`, a **D1 statement**, a KV operation, a DO RPC or a Secrets Store
-  read — D1 states its own limit as *queries per Worker invocation — 50 (Free)*.
+  read. **Measured 2026-10-05, there are two budgets and this charges against the external
+  one deliberately**: D1 has 1,000 of its own and an overrun *throws* rather than killing
+  the invocation, so bounding by the 50 is ~21× conservative and errs toward availability.
+  See `docs/agents/runtime/AGENTS.md`.
   `chunkDeadlineMs` (default 20 s) is what makes a poll *return* on a slow origin.
-  `chunkFolders` (default 7) bounds D1 work against the day's row-write allowance, and is
-  **derived** from the ceiling rather than typed beside it: 40 folders is ~240 subrequests.
+  `chunkFolders` (default 7) is **derived** from that same ceiling rather than typed beside
+  it: 40 folders is ~240 subrequests. It was once documented as a bound on the day's *row
+  writes*, which it has never been.
   The loop checks `budget.canAfford()` before each folder — at a folder's whole base cost of
   6, not at its one `PROPFIND`, because a chunk that starts a folder it cannot finish does
   not get a slow folder, it gets a terminated invocation — and before each enriched track at
@@ -464,8 +470,11 @@ convenience**:
   because a request that authenticated fine and was then refused is a different thing, and
   reporting it as 40 sends a user with valid credentials to re-enter their password. A
   5xx is masked completely: the cause is logged, and a D1 error names tables and columns.
-  The one exception is a  `429` emitted by the rate limiter, which keeps its status so a
-  client backs off — still in the envelope on `/rest`, so the dialect does not split.
+  A `429` keeps its status so a client backs off — still in the envelope on `/rest`, so the
+  dialect does not split. It is **built** by `apps/api/src/middleware/rateLimit.ts` through
+  `BaseRoute.toErrorBody(…, 429)` and reaches here as a status the mapper passes through, so
+  a route never decides one itself: `ConflictError` → 409 and `BadRequestError` → 400 carry
+  their own status.
 - `toUserResponse` → `{Exception:{Type,Message}}` with the status the SPA reads. A 4xx
   keeps its message; a 5xx is masked to the generic one.
 

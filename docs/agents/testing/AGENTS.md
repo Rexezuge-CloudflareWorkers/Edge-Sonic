@@ -108,7 +108,7 @@ Two more from the scan's subrequest budget, and the second is the subtler one:
   the platform's *constraints*, not just its results — `bindChunkSize` for 100 parameters,
   the receiver check for `Illegal invocation`, and now the subrequest ceiling.
 
-Two more rules that are easy to get wrong:
+Seven more rules, and the first is a limit rather than a rule:
 
 - **Only KV and WebDAV are doubled**, because they are exactly the two things that are
   modellable without lying. D1 is real.
@@ -205,6 +205,63 @@ answered `ping` and authenticated correctly.
   The suite pairs it with the case that must **reject** the record and the quoted forms,
   because a decoder that accepted anything would let both tests pass forever.
 
+## Invariants
+
+Four cross-cutting rules, split out of the root guide. Each is a defect this repository
+shipped with a green suite, so each names the test that now holds it.
+
+- **A double that cannot observe a failure is worse than no double.** 423 tests were green
+  throughout the `Illegal invocation` incident, because `fakeDav`'s `fetch` was an **arrow
+  function** and an arrow has no `this` binding — structurally incapable of detecting the
+  one class of bug it existed to catch. Node's real `globalThis.fetch` does not check its
+  receiver either, so the `vi.stubGlobal` suites inherited the blind spot.
+  `withReceiverCheck` models the receiver, and 33 tests across 5 suites go red against the
+  bug — including a paired test proving the guard has teeth, without which the guard could
+  be removed and the first test would pass for ever. **A passing test is evidence only to
+  the extent the double shares the platform's assumptions.**
+- **A double that compensates for a bug hides it.** `test/scan-incremental.test.ts`'s
+  `listRoots` filtered `node.path !== ''` while `NodeDAO.listRoots` did not, so the library
+  root's own row reached `getIndexes` as a `shortcut` with an empty `name` — an unlabelled
+  entry whose id then failed with `code 70` — and the suite stayed green. Here the double
+  shared the *correct* behaviour and the DAO did not. The DAO now runs against real
+  `node:sqlite` for this predicate, where a wrong query and a double cannot disagree.
+- **A double that models *an* implementation of the platform is not modelling the
+  platform.** The DAOs run against `node:sqlite` precisely so a wrong predicate and a right
+  one differ in the query plan, and that instinct was right. But D1 is SQLite with a
+  **different build**: `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 in Node's and **100** in D1's.
+  So the double was structurally incapable of failing the way the product fails — and
+  `songsForAlbumKeys` bound two variables per album group, so **any** request for 50+ albums
+  raised `too many SQL variables` and answered a masked `code=0` on the endpoint a player
+  draws its album list from. `listArtists` bound one per artist against callers asking for
+  500, 5,000 and 500, so `getArtists`, `getArtist` and `getCoverArt` were each a guaranteed
+  failure on a library with 100+ artists. 500+ tests were green throughout. `listIdsIn` was
+  the sharpest, because it *did* guard: it batched at 200 under a comment reading "SQLite's
+  limit (999 by default)" — a real guard whose stated budget was fiction, at twice the
+  ceiling. The generalization is the transferable part. Being the same *engine* earned this
+  double the trust that being the same *build* requires, and that trust is what hid the
+  bug. `helpers/sqlite.ts` now enforces the ceiling on every statement, and the batch sizes
+  are **derived** from one measured constant (`bindChunkSize`) rather than chosen per query
+  — a number typed beside a query is wrong by the time someone raises a page size. **Those
+  figures are historical**: the album-key rewrite since made `songsForAlbumKeys` bind *one*
+  variable per group under `folder` and `album` (two under `album_artist`), so the 50-album
+  ceiling no longer applies to it — but the rule is the one that caught it, and
+  `bindChunkSize(2)` is still what `album_artist` derives. Asserted: removing the batching
+  from any of the three sites, dropping the re-sort that makes a chunked fetch
+  order-independent, raising the constant to 999, or removing the double's own enforcement
+  each turn tests red.
+- **A double may disagree with production about the very column under repair.** The
+  `upsertFileFacts` double in `test/scan-incremental.test.ts` wrote `artist: null,
+  album: null` while the real `UPSERT_FILE_FACTS` *derived* them. That is the same failure
+  as the one above, and it is why the grouping fix appeared to do nothing: the suite agreed
+  with itself and with neither production, so every test passed against a deployment whose
+  aggregates stayed empty. The double now calls `deriveFromPath` and stamps
+  `DERIVED_VERSION`. **It then happened again, on the same column and in the same files, in
+  the opposite direction**: both doubles stamped `derived_version` and each one's comment
+  asserted that `UPSERT_FILE_FACTS` did — which it did not, because that statement omitted
+  the column entirely. So the *fix* for the first occurrence was applied to the doubles
+  only, agreeing with a statement that did not exist. Which platform a double models
+  matters as much as whether it models one.
+
 ## Suites
 
 | File                                     | Covers                                                                                  |
@@ -233,7 +290,19 @@ answered `ping` and authenticated correctly.
 | `rate-limit.test.ts`                     | The token bucket, the identity key, both error dialects, and the `/rest` 429 envelope   |
 | `scan-do.test.ts`                        | The alarm chain: the `try` guard, the re-arm, and the overlap with a manual step         |
 | `security-headers.test.ts`               | The header baseline, and that the `no-store` predicate names a path this router serves   |
-| `endpoint-registry.test.ts`              | The `/rest` registry as a contract: `code=70` for all 33, no name in two maps, the exact error key set |
+| `endpoint-registry.test.ts`              | The `/rest` registry as a contract: each entry's answer through the real dispatcher, no name in two maps, the exact error key set |
+| `alias-table.int.test.ts`                | That the one shared alias table resolves every package root and subpath export, and mocks `cloudflare:` modules |
+| `d1-daily-limit.test.ts`                 | A spent daily allowance as `paused`: the classifier, the two predicates, and DO storage as the only store still accepting writes |
+| `import-routes.test.ts`                  | The operator's import surface: both refusals, each paired with the case that proves the gate has teeth |
+| `import-phases.test.ts`                  | Each phase in isolation, and the injective id encoding a retried step depends on |
+| `import-matching.test.ts`                | Path before metadata, and an ambiguous match refused rather than resolved |
+| `import-execution.test.ts`               | Twenty albums across several alarms to completion — the only assertion that reaches the second batch |
+| `import-client.test.ts`                  | `remoteParse` against real Subsonic envelopes, including the single-element collapse and `code=70` inside a 200 |
+| `subrequest-budget.test.ts`              | Every charge point, with negatives — a counter that charges nothing passes a suite that never crosss the ceiling |
+| `scan-convergence.test.ts`               | Each reconciliation pass writes **strictly less** than the one before, over real SQLite with a real meter |
+| `scan-progress.test.ts`                  | `storedStatus`, `willResumeWithoutAPoll` against `isAdvancing`, and what the SPA renders for each |
+| `redos-linear-parsing.test.ts`           | The linear rewrites on a wall-clock bound, against `new RegExp` copies of the three originals |
+| `web-library-row.test.tsx`               | The library row's decisions: a stale poll, `stoppedBy`, the i18n values against their inline defaults |
 | `spa-decisions.test.ts`                  | The SPA's error decoder across both dialects and a non-JSON body, and `describeStopReason` |
 | `web-landing.test.tsx`                   | The signed-out surface: all three `authorized` states, and the sign-in-that-changed-nothing hint |
 | `test/scripts/locale-checks.test.ts`          | The locale rules as rules, and the `t()` parser's three wrong shapes — each pinned |

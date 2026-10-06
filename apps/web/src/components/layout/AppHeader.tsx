@@ -30,7 +30,7 @@ function AppHeader({ userEmail, signedIn }: { userEmail?: string | null; signedI
             so the header read `Edge--Sonic`. Nothing could have caught it: the bundle had one
             well-formed key with one well-formed value, the inline default said `"Sonic"` and
             matched what the author meant, and the rendered string is only wrong to somebody who
-            already knows the product is called "Edge-Sonic". `scripts/validate_locales.mjs` now
+            already knows the product is called "Edge-Sonic". `scripts/i18n/validate_locales.ts` now
             compares every inline default against the bundle, which is the check that makes the
             next one of these fail the build instead of the review.
           */}

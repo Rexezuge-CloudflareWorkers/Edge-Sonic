@@ -4,8 +4,9 @@
  * ### What this is, precisely
  *
  * A `Map<symbol, unknown>` with a fluent setter. `bindValue` is the only registration
- * this codebase uses — all twenty-two bindings in `createRequestScope` and
- * `createScanWorkerScope` — so the container's *factory* tier is unreachable and the
+ * this codebase uses — all **thirty** bindings in `createRequestScope`, and
+ * `createScanWorkerScope` is a one-line delegation to it — so the container's *factory*
+ * tier is unreachable and the
  * "Factory + Singleton scopes" claim in the old header was describing a capability the
  * composition root never used.
  *

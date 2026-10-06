@@ -4,11 +4,13 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 
 - `src/index.ts` — `fetch` via `EdgeSonicWorker`, plus a re-export of `ScanWorker`
   (from `@edge-sonic/background`) so the `SCAN` Durable Object binding resolves.
-- `src/workers/scanStubs.ts` — per-library `SCAN.getByName(libraryId)` stubs (Git
-  `doStubs.ts` pattern); `hasScanBinding` gates the DO path with a direct-service
-  fallback when no binding is configured.
+- `src/workers/scanStubs.ts` — per-library `SCAN.getByName(libraryId)` stubs, following the
+  `doStubs` pattern Cloudflare's Durable Objects docs describe (that is a documentation
+  pattern, not a file in this repository); `hasScanBinding` gates the DO path with a
+  direct-service fallback when no binding is configured.
 - `src/workers/EdgeSonicWorker.ts` — Hono routes, no file routing, in this order:
-  `securityHeaders` → `onError` → `/health` + SPA shell → `scopeMiddleware` →
+  `securityHeaders` → `onError` → `/health` + SPA shell → `/user/` redirect →
+  `scopeMiddleware` →
   `OPTIONS *` preflight → `/rest/*` limits → `/user/*` (Access) → `/user/*` limits →
   `/user/*` routes → `/rest/*` (Subsonic). Runs `AppConfiguration.validate()` once per
   isolate on the first request. The two limit registrars sit on opposite sides of auth
@@ -40,8 +42,15 @@ gone from `apps/api/tsconfig.json` so it cannot be reintroduced silently.
 
 The preflight precedes auth because a Fetch-spec preflight carries no credentials by
 design, and a browser never issues the real request after a failed one. It is gated on
-`Access-Control-Request-Method` so it cannot shadow anything else. The rate limiter
-precedes auth so it can key on the resolved identity.
+`Access-Control-Request-Method` so it cannot shadow anything else.
+
+The two limit
+registrars sit on **opposite** sides of auth, for different reasons: `/user/*` limits
+come **after** `userAuthentication`, because the limiter prefers the resolved
+`AuthenticatedUserEmailAddress` over the client address and that variable does not exist
+until auth has run. `/rest` limits come **before** their route, because a Subsonic client
+authenticates inside the dispatcher from query parameters — there is no ambient identity
+on that surface to key on. See *The user rate limits come after auth* below.
 
 ## `onError` speaks both dialects
 
@@ -184,22 +193,39 @@ sets its own `no-store` and the tests that existed all passed. Asserted in
 
 ## The list shapes, and the one element that is not a record
 
-- `elList(name, listKey, attrs, children)` declares the repeated element's name, so an
-  **empty** list serializes as `[]` rather than as an absent key. The name is a
-  parameter, not inferred: with no children there is nothing to infer it from.
+- `elList(name, listKey, attrs, children)` declares the repeated element's name. **A
+  declared list key with no items is an absent key, not `[]`** — the seeding this used
+  to do was removed deliberately, because emitting `[]` made this the only
+  implementation answering differently from Navidrome. The name is a parameter, not
+  inferred: with no children there is nothing to infer it from.
+- `el(name, {}, [index])` states a **scalar**, and `el(name, attrs)` a record — an
+  element carrying an attribute is a record to every serializer.
+- `elArray` is the fourth shape: a bare array at the parent's key, for a field whose
+  wrapper and child are the same word in two grammatical forms (`Child.artists`).
+  Pairs with `array: true`.
 - It flags **only** the child named by `listKey`. `playQueue` and `bookmarks` mix a
   repeated element with scalar siblings (`current`, `position`, `username`), and
   flagging those made `playQueue.current` a one-element array.
 - An element's **name is the JSON key a client reads**. A `song` element inside a
-  `bookmarks` wrapper produces `bookmarks.song` and leaves `bookmarks.bookmark` as its
-  empty seed, so a client following the schema sees nothing.
+  `bookmarks` wrapper produces `bookmarks.song` and leaves `bookmarks.bookmark` absent, so
+  a client following the schema sees nothing.
 - An element with no attributes and exactly one scalar child **is** that scalar:
   `<position>42000</position>` is `42000` in JSON, not `{"#text": 42000}`.
 - Every other element **is** a record, which is what makes the last rule usable: the
   one exception the schema makes is `user.folder`, and a record there fails to decode.
   See *A scalar the schema says is a scalar* below.
+- **An album is two elements over one attribute builder**: `albumElement` is the list
+  child (`getAlbumList2`, `getArtist`, `search2`), `albumChildElement` is the `Child`
+  shape, and `albumWithSongs` is `getAlbum`'s payload — over `albumAttrs`. The split is
+  in the builders because each element's schema is known there and nowhere else; see
+  [`docs/agents/protocol/AGENTS.md`](../../docs/agents/protocol/AGENTS.md).
 
 ## Paging
+
+`MAX_PAGE_SIZE` (`500`) is **clamped** to `MAX_PAGE_SIZE_CEILING`, which is
+derived from the statement budget rather than chosen — a limit the platform imposes is
+not a number this code may pick, and `validate()` *reports* the clamp. `DEFAULT_PAGE_SIZE`
+is `20`; `context.pageSize(n, fallback)` clamps to `[1, maxPage]`.
 
 `context.pageSize(context.params.optionalInt('size'), 10)`. `params.int` returns the
 **number** `0` for an absent parameter, `0` is not nullish, so the fallback never applies
@@ -391,9 +417,14 @@ body is not audio.
 
 ## `code=70` means absent, not empty
 
-`UNIMPLEMENTED` answers `code=70`, and that is right for an endpoint this server does not
-have: videos, podcasts, last.fm, lyrics. It is **wrong** for an endpoint that exists and has
-nothing to report, and `getOpenSubsonicExtensions` was in that list — the protocol says a
+`UNIMPLEMENTED` carries a `kind`, and `code=70` is the **fourth** of them rather than the
+only one: `gone` → 410, `not-implemented` → 501, `not-authorized` → `code=50`, `absent` →
+`code=70`. **No entry uses `absent` today**, so the registry answers 410 five times, 501
+twelve times and `code=50` three times, and `code=70` from here is unreachable. The seven
+endpoints a client calls routinely — `getLyrics` on every track among them — are in
+`EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
+`code=70` is still right for an endpoint this server does not have at all, which is the
+case `getOpenSubsonicExtensions` was in — the protocol says a
 server supporting no extensions returns an empty *list*, and answering a failure from the
 **capability-discovery** call told a client it could not ask the question, which is the one
 answer it cannot use. It is implemented now and reports `[]`.
@@ -422,7 +453,8 @@ That flag alone was not enough — a childless flagged element serialized as `{}
 grouping step wrapped the result again as `[[]]`, so a client reading `.length` got
 `undefined` and then `1`. `serialize.ts` now collapses a lone list element back to that
 list, which is what makes `array: true` mean "render as a JSON array" rather than "render as
-an array wrapped in another array". Same rule as `listKey` seeding, one level out.
+an array wrapped in another array". The exception to "an empty list is an absent key", and the reason it is not arbitrary:
+it is a bare list at a key rather than a record wrapping one.
 
 ## Never
 

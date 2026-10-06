@@ -2,22 +2,37 @@
 
 Scope: `packages/backend-data/**`. Parent index: `../../AGENTS.md`.
 
-All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns exactly one thing:
-`withRetry`, the transient-fault retry. Per-table SQL belongs in the concrete DAO, and
-`D1ErrorClassifier.isD1ErrorRetryable` is the only thing that decides what is transient.
+All D1 access goes through a DAO over `D1Queryable`. `BaseDAO` owns the write path and the
+meter: `withRetry` (the transient-fault retry, decided by
+`D1ErrorClassifier.isD1ErrorRetryable`), `runWriteBatch`, `runWriteStatement`,
+`requireSubrequests`, `fitCount`/`canFitAll`, `clampToSubrequestBudget`, and the charge each
+statement makes against the invocation's subrequest ceiling — which is why it, and not each
+DAO, is the one place a forgotten charge would have no symptom. Per-table SQL belongs in the
+concrete DAO.
 
 ## The files
 
 | File             | Holds                                                                        |
 | ---------------- | ---------------------------------------------------------------------------- |
 | `dao/BaseDAO.ts` | `withRetry`, `runWriteBatch`, and the ceiling both enforce                     |
-| `dao/rows.ts`    | every row type and the aggregate row shapes                                   |
+| `dao/rows.ts`    | every row type, plus the `CountRow` / `IndexVersionRow` shapes (a few aggregate
+  shapes live beside the query that produces them, in `songIndex.ts`)                 |
 | `dao/SongDAO.ts` | one song row: its facts, its derived metadata, its lifecycle, its single-row reads |
 | `dao/songIndex.ts`| the aggregate reads: a page of albums, a page of artists, the genres         |
 | `dao/albumKeySql.ts`| the album key as SQL: the `GROUP BY` per grouping, and the batch size |
 | `dao/NodeDAO.ts` | the folder tree, the scan frontier, the subtree prune                         |
 | `dao/playlists.ts` | a named, ordered list of songs owned by one user                            |
-| `dao/UserStateDAO.ts` | per-user state: playlists, stars, ratings, bookmarks, play queue, now playing, throttle |
+| `dao/UserStateDAO.ts` | per-user state: stars, ratings, bookmarks, play queue, now playing, throttle (`AnnotationDAO` + `AuthThrottleDAO`; **playlists are `dao/playlists.ts`**) |
+| `dao/ScanStateDAO.ts` | scan status per library: the frontier's home, the retry counter, the index version |
+| `dao/songDerivation.ts` | `SongDerivationDAO` — re-running the path convention over rows the walk will never revisit |
+| `dao/songMetadata.ts` | the `applyMetadata` patch builder, and `GROUPING_FIELDS` |
+| `dao/songMatch.ts` | the import's lookups: by path, by album title, and which album keys are present |
+| `dao/playCounts.ts` | `PlayCountDAO` |
+| `dao/imports.ts` | `ImportSourceDAO`, `ImportRunDAO`, and `IMPORT_PHASES` |
+| `dao/importProgress.ts` | `ImportPlayCountProgressDAO` — the walk's own resume point |
+| `dao/index.ts` | the barrel every other layer imports rather than a deep path |
+| `crypto/` | `encryptData`, `decryptData`, `isUsableKey` — every stored credential |
+| `utils/` | `D1Types`, `D1Utils`, `D1ErrorClassifier` |
 | `dao/identity.ts` | `UserDAO` and `LibraryDAO` — the two rows with a credential                   |
 | `dao/songSql.ts` | the `songs` upsert statement                                                  |
 | `dao/pathConvention.ts` | the `Artist/Album` and `Artist - Album` naming rules, and `DERIVED_VERSION` |
@@ -78,7 +93,7 @@ a silent data loss rather than a filter.
   against "SQLite's limit" is written against a limit this database does not have. Measured
   on a live D1 on 2026-09-29: 99 bound variables answer, 101 raise `too many SQL variables`.
   It shipped as a masked `code=0` on the endpoint a player draws its album list from, and
-  it was not one client or one page size. `songsForAlbumKeys` binds **two** variables per
+  it was not one client or one page size. `songsForAlbumKeys` bound **two** variables per
   album group, so **any** request for 50 or more albums failed — while `MAX_PAGE_SIZE` is
   500, so the server was *required* to accept requests it could not answer. `listArtists`
   binds one per artist and its three callers ask for 500, 5,000 and 500, so `getArtists`,
@@ -143,7 +158,10 @@ a silent data loss rather than a filter.
     silently drops `idx_songs_album`, which is a page of albums becoming a scan of the library's
     rows. `EXPLAIN QUERY PLAN` is the only instrument that tells the two apart.
   - **The batch size is derived from the grouping**, because the halves are not the author's to
-    count: one variable per group under `folder` and `album`, two under `album_artist`. 49, not 50.
+    count: one variable per group under `folder` and `album` (`bindChunkSize(1)` = **99**), two
+    under `album_artist` (`bindChunkSize(2)` = **49**). So a 500-album page is 6 statements
+    under the default grouping and 11 under `album_artist`, and neither is a number to type
+    beside the query.
   - **The page's tiebreak is the key columns, not `dir_path`.** A directory can hold two album keys
     under a tag grouping, so `dir_path` was never a *total* order, and a page boundary between two
     albums that tie on every term could return one twice or skip it.
@@ -166,7 +184,8 @@ a silent data loss rather than a filter.
   would drop the track out of every group.
 - **A path-derived grouping fills a gap, and never overwrites a tag.** The aggregates
   filter in SQL — `listAlbums` on `album_ci IS NOT NULL AND album_ci <> ''`,
-  `listArtists` on `artist_ci IS NOT NULL`, `listGenres` on `genre_ci IS NOT NULL` — so a
+  `listArtists` on `artist_ci IS NOT NULL AND artist_ci <> ''`, `listGenres` on
+  `genre_ci IS NOT NULL AND genre_ci <> ''` — so a
   row the scan has not range-read is **absent** from every one of them rather than shown
   with a blank name, and `search3` cannot match it. Those columns are written only by a
   tag read, one ranged request per track, bounded twice over, so most rows of any real
@@ -361,15 +380,21 @@ a silent data loss rather than a filter.
 
 ## Schema
 
-One migration, `migrations/0008_squash.sql`, with 17 tables — the squashed baseline every
-database is built from and every future migration stacks on. `libraries` and `users` carry
-a `key_version` for credential rotation; `users` carries `token_epoch`, bumped on a
-password change, because a Subsonic token is valid forever and that is the only lever for
-revoking one. The header of the file records what it absorbs and why it is idempotent —
+**Two** migrations, applied in Wrangler's order: `migrations/0008_squash.sql` is the
+squashed baseline every database is built from and every future migration stacks on (17
+tables), and `migrations/0009_subsonic_import.sql` adds the import's three (20 in all, with
+40 index entries counting the implicit `sqlite_autoindex_*` a `TEXT PRIMARY KEY` creates).
+`libraries` and `users` carry a `key_version` for credential rotation. `users` also carries
+`token_epoch`, bumped on a password change and **read by nothing** — a Subsonic token is
+`md5(password + salt)`, so the password change is what actually revokes issued tokens, and
+the credential carries no epoch to compare. The header of the file records what it absorbs and why it is idempotent —
 which is the property to read before editing it, because it also runs against databases
 that already have the full schema.
 
 ## Layer 2 (layer 0 only)
 
-Import only `@edge-sonic/shared` and `@edge-sonic/backend-errors`. Never
-`backend-runtime`, `backend-services`, or `apps/*` — enforced by `no-restricted-imports`.
+Import only `@edge-sonic/shared`, `@edge-sonic/backend-errors` and
+`@edge-sonic/subsonic`. Never `backend-runtime`, `backend-services`, `webdav` or `apps/*` —
+enforced by `no-restricted-imports`. `subsonic` is layer 0 and carries the album key, so it
+has no block of its own; it is declared in this package's manifest, which is where a
+dependency that resolves only by hoisting should be noticed.

@@ -70,9 +70,9 @@ The SPA's client-side routes. Anything else is a 404 in the SPA itself.
  * already-loaded tab.
  *
  * It must stay in step with `SpaViewRouter`'s `<Route>` list. The two are one decision made in
- * two places, which is the shape that drifts, so `test/user-api.test.ts` asserts that every
- * client-side route appears here — the failure being a route a link reaches and the worker does
- * not serve.
+ * two places, which is the shape that drifts, so `test/worker.int.test.ts` reads both files
+ * as source text and asserts that every client-side route appears here — the failure being a
+ * route a link reaches and the worker does not serve.
  */
 const SPA_ROUTES = ['/', '/libraries', '/users', '/import'] as const;
 

@@ -16,7 +16,7 @@
  *
  * For `songs` that factor is **10**: eight declared indexes plus the implicit unique index
  * SQLite creates for `id TEXT PRIMARY KEY`. A single `upsertFileFacts` insert is therefore
- * nine rows of work for one row of data, and `nodes` is four for one.
+ * ten rows of work for one row of data, and `nodes` is four for one.
  *
  * ### Why this is a derivation and not a typed constant
  *

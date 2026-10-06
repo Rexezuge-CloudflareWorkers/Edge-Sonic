@@ -233,10 +233,10 @@ function albumChildElement(album: Album, parent?: string): ElementNode {
  * `elList` states it, for the same reason it is a parameter rather than inferred: an
  * element carrying attributes is a record to every serializer, and the serializer cannot
  * tell a record's scalar child from a record's list child, so the builder that knows
- * says so. `listKey` also seeds `song: []`, which is unreachable here (`getAlbum` throws
- * `code=70` for an album with no songs) and is why the declaration must **not** move up
- * into `albumAttrs`/`albumElement`: seeding happens unconditionally, so every album in
- * `getAlbumList2`, `getArtist` and `search2`/`search3` would carry an empty `song` key.
+ * says so. The declaration must **not** move up into `albumAttrs`/`albumElement`:
+ * `AlbumID3` declares no `song` field, so every album in `getAlbumList2`, `getArtist`
+ * and `search2`/`search3` would carry one that its schema does not declare — the same
+ * defect as the `title`/`isDir` half above, and invisible in a lenient client.
  */
 function albumWithSongs(album: Album, songs: readonly Song[]): ElementNode {
   return elList('album', 'song', albumAttrs(album), songs.map((song) => songElement(song)));

@@ -2,7 +2,8 @@
 
 An RFC 4918 **client**. This is the only way Edge-Sonic reads a music library.
 
-Zero runtime dependencies, zero `@edge-sonic/*` dependencies, Layer 0.
+**Zero runtime dependencies** — `src/` imports nothing but its own relative modules, which
+is why there is no XML library below. Layer 0.
 
 ## What is here
 
@@ -10,8 +11,9 @@ Zero runtime dependencies, zero `@edge-sonic/*` dependencies, Layer 0.
 | --- | --- |
 | `xml.ts` | A small strict XML reader for `207 Multi-Status` |
 | `multistatus.ts` | `207` body → `DavResource[]` |
-| `url.ts` | Origin + root + relative path → an absolute URL, with containment rules |
-| `client.ts` | `WebDavClient`: `propfind`, `get` (with `Range`), `readPrefix` |
+| `url.ts` | Origin + root + relative path → an absolute URL |
+| `multistatus.ts` | also owns `decodeHrefPath`/`toLibraryPath`, the containment check — open this file, not `url.ts` |
+| `client.ts` | `WebDavClient`: `propfind`, `get` (with `Range`), `readPrefix`, `readTail`, `readRange` |
 
 ## Why there is no XML library
 
@@ -63,6 +65,9 @@ unmodified. Edge-Sonic does not transcode, so nothing in this package is
 permitted to rewrite media bytes: a `206` has to stay a `206` with its
 `Content-Range`, because that is how every Subsonic client seeks.
 
-`readPrefix` exists for tag enrichment and is a ranged read for the same reason
-— an ID3v2 tag can declare itself hundreds of megabytes, and a 3 MB FLAC must
-not be pulled through the worker to learn its duration.
+`readPrefix` and `readTail` exist for tag enrichment and are ranged reads for the same
+reason — an ID3v2 tag can declare itself hundreds of megabytes, and a 3 MB FLAC must
+not be pulled through the worker to learn its duration. **`readTail` is the harder case
+and cannot be answered by a prefix at all**: an Ogg duration is the granule of the *last*
+page, so the read has to be at the end of the file. `readRange` serves embedded artwork,
+where the picture block is itself as large as the image.

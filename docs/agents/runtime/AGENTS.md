@@ -3,6 +3,25 @@
 Scope: wrangler bindings, build output, environment variables, DI. Parent index:
 `../../../AGENTS.md`.
 
+The invariants that used to sit in the root guide are split by audience. Each is written up
+once, in the guide whose reader needs it:
+
+| Guide | Covers |
+| --- | --- |
+| [`../protocol/AGENTS.md`](../protocol/AGENTS.md) | the Subsonic wire: ids, node model, serializers, the endpoint registry |
+| [`../scanning/AGENTS.md`](../scanning/AGENTS.md) | the walk, the chunk budget, and what a status promises |
+| [`../indexing/AGENTS.md`](../indexing/AGENTS.md) | D1, the DAOs, and the migrations |
+| [`../albums/AGENTS.md`](../albums/AGENTS.md) | what an album **is**: grouping key, id, track order |
+| [`../media/AGENTS.md`](../media/AGENTS.md) | tags, enrichment and artwork |
+| [`../import/AGENTS.md`](../import/AGENTS.md) | moving a player's data in from another Subsonic server |
+| [`../testing/AGENTS.md`](../testing/AGENTS.md) | the suite, the thresholds, and the doubles |
+| this file | bindings, secrets, configuration, DI, the KV cache |
+
+Four more were already written up in an area guide and are **not** repeated here: the
+rate-limit registration order and the two error dialects (`apps/api/AGENTS.md`), the probe's
+one-`try`-per-step taxonomy (`packages/backend-services/AGENTS.md`), and the library list's
+scan summary (`apps/api/AGENTS.md`).
+
 - pnpm workspaces: `apps/*`, `packages/*`, and **`test`** — `test` is a workspace
   project, so `pnpm -r typecheck` and `pnpm run lint` both reach it. It sat outside the
   workspace once while holding ~200 KB of test code, and `eslint.config.mjs` ignored
@@ -97,7 +116,11 @@ it authenticates against the `users` table.
 ## Local-only (no default, absent from the production template)
 
 `DEV_AUTH_EMAIL` — bypasses Cloudflare Access locally. `DEMO_MODE` — authenticates as
-`DEMO_USER_EMAIL` without verification.
+`DEMO_USER_EMAIL` (`demo@edge-sonic.invalid`) without verification. That constant is
+reached through `config.getDemoUserEmail()`; it used to be a hardcoded literal in
+`AccessAuthService` **and** a second, different one in `@edge-sonic/shared/constants`, while
+the getter reading the variable had no caller at all — so this line described an answer
+the auth path did not give.
 
 **Both are honored only when `ENVIRONMENT` is in an allow-list** (`development`, `dev`,
 `local`, `test`). That set is an allow-list on purpose: a deny-list (`!== 'production'`)
@@ -109,12 +132,15 @@ one is present but inert, because that is the case one config edit from being li
 
 | Group  | Vars (default)                                                             |
 | ------ | -------------------------------------------------------------------------- |
-| App    | `DEBUG_MODE` (`false`), `SITE_URL` (`""`), `ENVIRONMENT` (`development`) |
-| Scan   | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`), `WEBDAV_TIMEOUT_MS` (`10000`), `TAG_READ_BYTES`, `TAG_READ_TAIL_BYTES` |
+| App    | `DEBUG_MODE` (`false`), `SITE_URL` (`""`), `LOG_LEVEL` (unset), `ENVIRONMENT` (`production`) |
+| Scan   | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`) |
+| Media  | `TAG_READ_BYTES` (`131072`), `TAG_READ_TAIL_BYTES` (`65536`), `WEBDAV_TIMEOUT_MS` (`10000`) |
 | Limits | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`) |
 | Grouping | `ALBUM_GROUP_BY` (`album`), `DERIVED_MARKER` (`""`) |
 | Auth   | `TEAM_DOMAIN`, `POLICY_AUD` (no default — see above)                       |
 | SSRF   | `ALLOW_PRIVATE_WEBDAV_HOSTS` (unset)                                       |
+| Stream | `STREAM_RATE_LIMIT` (`600`), `STREAM_TIMEOUT_MS` (`30000`)                  |
+| Throttle | `AUTH_FAILURE_LIMIT` (`10`), `AUTH_FAILURE_WINDOW_SECONDS` (`900`)      |
 
 `DERIVED_MARKER` is appended to an artist or album name this server derived from a file's
 **path** rather than from its tags. Empty by default, and empty is a **decision**: it makes a
@@ -194,8 +220,9 @@ poll"*), which on Free converts a chunk that pauses into a chunk the runtime ter
 
 `SCAN_CHUNK_DEADLINE_MS` is a different resource and still needed: the ceiling bounds
 *count*, the deadline bounds *time*, and on a slow origin the deadline is what makes a poll
-return. `SCAN_CHUNK_FOLDERS` still bounds D1 row writes against the 5,000-rows/day
-allowance as well — two resources, one number, which is why it is derived rather than typed.
+return. `SCAN_CHUNK_FOLDERS` still bounds D1 row writes against the daily allowance as
+well — **100,000 billed rows/day** less a 10% reserve, itself halved per registered library,
+so **90,000** (`subrequests.ts`) — two resources, one number, which is why it is derived rather than typed.
 
 **Never trust the Workers limits page's "subrequests to internal services: 1,000 on Free"
 row over D1's own page.** This repository did, for long enough to ship a scan that died in
@@ -267,12 +294,7 @@ pipeline, in that order — a script that claims to do both has silently skipped
 
 A secret's value is chosen by its **name shape**: `*-encryption-key` gets a generated
 32-byte AES-GCM key (base64, which is what `isUsableKey` requires on the read side) and
-`*-signing-secret` gets 32 random bytes. This used to be a hardcoded list of known names,
-and adding an entry to `secrets_store_secrets[]` without also editing the list broke
-deployment: `init-secrets.ts` threw `Unknown secret`, and because the rejection was
-swallowed the CD step reported success and the failure surfaced two steps later as a
-10182. **A provisioning script must exit non-zero on failure** — a guard that logs and
-returns 0 is indistinguishable from a guard that passed.
+`*-signing-secret` gets 32 random bytes.
 
 `resolveKey(binding, rawVar, bindingName, varName)` resolves a key, memoizes a success,
 and **fails closed**: no configuration is an error, a binding that throws is an error
@@ -282,9 +304,14 @@ escape hatch so `wrangler dev` works without a Secrets Store; the production tem
 does not declare it, and a broken binding must never be masked by one.
 
 The schema carries `key_version` on both tables and `token_epoch` on `users`.
-`key_version` is the rotation handle — re-encrypt under a new version, then drop the old
-— and `token_epoch` is bumped by a password change, because a Subsonic token is valid
-forever and there is no other way to revoke one.
+`key_version` is the rotation handle — re-encrypt under a new version, then drop the old.
+**`token_epoch` is bumped by a password change and read by nothing**, and a previous
+version of this file called it "the only way to revoke a token". It is not, and it could
+not be: `t` is `md5(password + salt)`, so a password change already invalidates every
+issued token by changing what the token is computed *from*, and the credential carries no
+epoch field for a server to compare one against. Revocation is therefore real and
+`token_epoch` is redundant belt-and-braces. Asserted as a column and as a bump
+(`test/schema.int.test.ts`), **not** as a read — and nothing should be written to read it.
 
 **A store that is recreated is a new key, and the rows are not.**
 `provisionWranglerResources` mints a *new* `store_id` when the store has to be created,
@@ -311,11 +338,13 @@ the origin's.
   because a bare `catch` there would silently re-mint a scope **per call site**, which is
   the defect the middleware ordering exists to prevent.
   It used to be described as a "Factory + Singleton" DI, and the factory tier was
-  **unreachable**: all 22 registrations are `bindValue`, so `bind`, `resolve`,
+  **unreachable**: all **30** registrations are `bindValue`, so `bind`, `resolve`,
   `createChild`, `has`, `dispose` and `get`'s own factory branch had no callers (23 of 33
   statements). That took the "no binding for token" throw with it — the only diagnostic
   for a correctly-spelled-but-unbound token. The throw is back and is asserted for every
-  entry in `Tokens` against **both** composition roots, in `test/rate-limit.test.ts`.
+  entry in `Tokens` in `test/rate-limit.test.ts`. There is **one** composition root —
+  `createScanWorkerScope` is a one-line delegation to `createRequestScope`, so "both roots"
+  was two entry names for one thing.
 - **A binding that wraps another binding must not take a second meter.** `PlayCountImportWorker`
   needs a *narrower* budget than the invocation's 50, so it took the scan's approach — but it
   built a **local** `SubrequestCounter` for the batch loop's `canAfford` while its DAOs charged
@@ -358,9 +387,11 @@ keys of the form `domain:v1:<parts...>`.
   zero writes rather than a TTL. `libIndex` and `libTree` were the two such domains and
   neither had a production caller, so the strategy was documented over dead code — a worse
   state than not having it, because the next reader takes it as evidence it is in force.
-  `index_version` is read nowhere in `KvDomains` or `KvCache`. A new aggregate-caching
-  domain should reintroduce it, and `test/enrichment-config.test.ts` asserts the live set
-  so one cannot be added and quietly left unversioned.
+  `index_version` is read nowhere in `KvDomains` or `KvCache`, and there is no
+  `versionScoped` field left to reintroduce it — a previous version of this file claimed
+  `test/enrichment-config.test.ts` "asserted the live set so one cannot be added and
+  quietly left unversioned", and that test asserts the domain **names** and nothing
+  about versioning. A new aggregate-caching domain has to bring the key part itself.
 - **`KvCache` fails soft.** A missing binding and a throwing binding are the same code
   path, and the responses are byte-identical to a warm cache; D1 is what answers.
 - **Every read states its `type`, because `get()`'s default is `text`.** That default is
@@ -382,3 +413,111 @@ keys of the form `domain:v1:<parts...>`.
   `resetBreakerForTests()` is the only escape hatch.
 - Values over the KV size limit are reported as not stored rather than thrown, which
   turns a wasted round trip into a skipped one.
+
+## Invariants
+
+Split out of the root guide. Each is a defect this repository shipped, and each names the
+test that now holds it.
+
+- **`await` the authorization check.** A `void`ed `requireForUser` starts the check and
+  discards the rejection, so the write it was guarding proceeds. It shipped: a play
+  queue accepted an id for a library the caller could not see.
+- **The cache is never load-bearing.** D1 answers everything; KV only avoids a repeat.
+  `KvCache` fails soft, and its circuit breaker is module-level so one outage opens it
+  for the whole isolate rather than per request scope.
+- **Cache keys carry `scan_state.index_version`.** A superseded entry becomes
+  structurally unreachable, so invalidation costs zero writes — the free plan allots
+  1,000 writes a day against 100,000 reads.
+- **5xx bodies are masked.** `toSubsonicError` logs the cause and returns a localized
+  generic message; a D1 error names tables and columns.
+- **An unbounded quantifier before a character that can fail is quadratic in the _input_,
+  and JavaScript cannot be told to stop backtracking.** Three CodeQL alerts, all
+  `js/polynomial-redos`, all on data that arrived from an untrusted WebDAV origin:
+  `/\/+$/` in `toLibraryPath` (twice — once per operand) and `/\s+[-–—]\s+/` in
+  `fromFlatAlbumFolder`. The mechanism is not a nested quantifier, which is why it is easy to
+  miss: an unanchored `/+$` over a run of *n* identical characters makes the engine retry every
+  length the run could have, from each of the *n* start positions inside it. 16 KB costs ~200 ms
+  and 100 KB costs ~8 s, against a **10 ms CPU limit on Workers Free**, and well inside the
+  8 MiB body cap `MAX_METADATA_BYTES` already allows — so one hostile `PROPFIND` is an
+  invocation the runtime kills. The rule is *unanchored quantifier, then something that can
+  fail*, and `[gimsuy]` cannot fix it: JS has no possessive quantifier and no atomic group, so
+  the fix is a scan. Five things, and each is how this one would have collapsed:
+  - **A quadratic regex without a nested quantifier is invisible to every linter this
+    repository runs.** Probed: `eslint-plugin-regexp`'s `no-super-linear-backtracking` and
+    `sonarjs`'s `slow-regex` both fire on `^(a+)+$`, only `slow-regex` fires on
+    `/\s+[-–—]\s+/`, and **neither fires on `/\/+$/`**. So the lint gate was green over a live
+    DoS and CodeQL — not a test, and not on every commit — was the only instrument that found
+    it. There is no lint rule for "quadratic in the input", so the guard is a measurement.
+  - **The expensive shape is the _interior_ run, and the obvious test input is the cheap
+    one.** A *leading* run is consumed by `replace(/^\/+/, '')` before `/+$/` runs; a
+    *trailing* run matches, and V8 fast-paths a successful `/[/]+$/`. Measured at 16,000
+    slashes: **0.0 ms leading, 0.0 ms trailing, 198 ms interior**. The first version of
+    `test/redos-linear-parsing.test.ts` asserted the leading and trailing runs, and both
+    passed against the regex it was written to catch — 48 of 48 green. So a guard built on the
+    wrong shape of the input is indistinguishable from no guard, and a hostile `DAV:href` is
+    `<base>/<path>`, so the expensive shape is also the ordinary one.
+  - **The rewrite is only equivalent because the caller discards what the regex measured.**
+    `findAlbumSeparator` returns the **dash's** index rather than the match index because both
+    sides of the split are `.trim()`ed by the caller, so the *extent* of the whitespace runs
+    cannot change the answer. Strip the trim and the equivalence argument goes with it.
+  - **A fixture that disagrees with the reader is the finding, and it was the fixture twice.**
+    The oracle is `split('/')`-based and was written *filtering every* empty segment, which
+    silently normalises the middle of the string; the seeded fuzz caught it on the first
+    interior run it met. An inverted `&&`/`||` in the whitespace test was caught the same way.
+    Both were bugs in the check, not in the code — which is the argument for the fuzz, since
+    "written from the spec" is a claim and the fuzz is the measurement.
+  - **A test must not trip the query it exists to close.** CodeQL's default configuration scans
+    `test/` as well as `packages/`, so the quadratic reference is built with `new RegExp` and
+    `prefer-regex-literals` is disabled there with that reason attached. Asserted: reintroducing
+    each original regex turns the file red, on the wall-clock bound and on nothing else — every
+    equivalence assertion stays green, which is what makes the timing assertion the only thing
+    distinguishing a linear implementation from a slow one.
+- **A platform global is invoked bare, never as a stored field.** `WebDavClient` kept
+  the global `fetch` in a field and called it as `this.fetchImpl(...)` — a *method call*,
+  so the receiver was the client rather than the global scope. workerd validates that
+  receiver and throws `TypeError: Illegal invocation: function called with incorrect
+  'this' reference.` It broke every WebDAV path in the product — probe, scan, tree,
+  enrichment, streaming — against a live origin answering `207`. Being a `TypeError`, it
+  has no `status`, so it fell through every status-based branch and reached the operator
+  as *"Library is unreachable."*: a fault in **this** server, described as a fault in
+  theirs. The wrapper lives in the constructor, so no call site can reintroduce it, and
+  the same mistake is worth grepping for after any refactor that stores a function.
+- **An unawaited promise is not a cheaper version of an awaited one, it is a different
+  one.** The artwork cache was the only KV write in the product issued as `void
+  deps.cache.putBytes(...)`, and work a Workers handler does not await is not guaranteed
+  to run — so the cover cache never populated, and every cell of an album grid re-read
+  the origin at up to two ranged reads each against a 50-subrequest ceiling. Same defect
+  as voiding `requireForUser`, one level down. Both writes are awaited now, and the
+  double can tell the difference: `fakeKv`'s `put` used to settle on the microtask queue,
+  so an abandoned write still landed in time and the suite proved a cache that production
+  never filled. `deferPuts` holds every write until released, so the ordering — the
+  response must not resolve before its write settles — is asserted rather than assumed.
+  Asserted in `test/cover-art-embedded.test.ts`, which goes red on the `void` version.
+- **A variable can be declared, parsed, validated, templated and read by nothing.**
+  Five were, and they fail in three distinguishable ways, which is why one rule does not
+  cover them. `STREAM_RATE_LIMIT` was inert: the limiter used a literal, so `600` lived in
+  three places and an operator setting `50` got a clean validation pass and an unchanged
+  limiter. `LOG_LEVEL` was inert for a structural reason — **both loggers are module-level
+  constants**, so the level was resolved before `env` existed and `logger.debug` could never
+  emit in a deployed Worker; the coverage report proved it rather than suggesting it, since
+  every `console.*` call sat in an arm reachable only at `minLevel <= 0`. And
+  `TAG_READ_TAIL_BYTES=0` was *reachable but inverted*: it read through a parser whose
+  contract is `> 0`, so the documented "0 disables the second read" became the default.
+  That parser's `>= 0` sibling had **no callers anywhere** in the repository — the helper
+  for that value existing, unused, in the same layer, while the line beside it called the
+  other one.
+
+  **All three are fixed, and a reader should check rather than assume it**: the limiter
+  reads `getStreamRateLimit()`, `requestScope` calls `setLogLevel()` on the one request that
+  builds the scope, and the tail read goes through `nonNegativeInt`. The rule is the one that
+  catches the next one — a variable that no caller reads is not a variable, and validation
+  passing is not evidence that anything happened.
+
+## Also canonical elsewhere
+
+These three moved out of the root guide and are written up in
+[`apps/api/AGENTS.md`](../../../apps/api/AGENTS.md), which is where the router is:
+
+- **A `no-store` predicate must name a path the router serves.**
+- **One surface speaks one error dialect.**
+- **Untrusted names never reach a header unescaped.**

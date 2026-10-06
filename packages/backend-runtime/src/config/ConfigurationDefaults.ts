@@ -11,6 +11,17 @@ import {
  */
 
 
+/**
+ * The identity `DEMO_MODE` authenticates as when the bypass allow-list permits it.
+ *
+ * A `.invalid` TLD on purpose: it is reserved by RFC 2606 and can never resolve, so a
+ * demo identity that escaped a development environment cannot become a real account
+ * anywhere. It used to be a literal in `AccessAuthService` *and* a different one in
+ * `@edge-sonic/shared/constants`, while the getter that read this variable had no
+ * caller — two answers and a third nobody asked.
+ */
+export const DEFAULT_DEMO_USER_EMAIL = 'demo@edge-sonic.invalid';
+
 export const DEFAULT_DEBUG_MODE = 'false';
 export const DEFAULT_ENVIRONMENT = 'production';
 export const DEFAULT_SITE_URL = '';

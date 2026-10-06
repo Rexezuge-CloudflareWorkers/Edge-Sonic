@@ -162,7 +162,7 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   // every poll is not something an operator reads once and remembers.
   const scanPaused = describeStopReason(stoppedBy, {
     // The inline default and the bundle are validated against each other by
-    // `scripts/validate_locales.mjs`, so both say the same thing: on Workers Free the ceiling
+    // `scripts/i18n/validate_locales.ts`, so both say the same thing: on Workers Free the ceiling
     // is the platform's and cannot be raised from here, the server clamps the value, and a chunk
     // that spends more is terminated rather than slowed. "Raise this knob" was advice that made
     // the scan die.

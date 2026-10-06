@@ -3,7 +3,7 @@
 Scope: `apps/background/**`. Parent index: `../../AGENTS.md`. Bindings, secrets and the platform
 limits are in `docs/agents/runtime/AGENTS.md`, which this file defers to.
 
-Two Worker classes, and **the split between them is one decision**, not an accident of which file
+Three Worker classes, and **the split between them is one decision**, not an accident of which file
 was opened first.
 
 | File | Owns |

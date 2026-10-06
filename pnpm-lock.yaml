@@ -263,6 +263,9 @@ importers:
       '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
+      '@edge-sonic/subsonic':
+        specifier: workspace:*
+        version: link:../subsonic
     devDependencies:
       '@cloudflare/workers-types':
         specifier: 5.20261001.1
@@ -361,16 +364,6 @@ importers:
         version: 6.0.3
 
   packages/webdav:
-    dependencies:
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:../backend-errors
-      '@edge-sonic/shared':
-        specifier: workspace:*
-        version: link:../shared
-      '@xmldom/xmldom':
-        specifier: ^0.9.12
-        version: 0.9.12
     devDependencies:
       '@types/node':
         specifier: 26.6.3
@@ -1589,10 +1582,6 @@ packages:
 
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
-
-  '@xmldom/xmldom@0.9.12':
-    resolution: {integrity: sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==}
-    engines: {node: '>=14.6'}
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -3719,8 +3708,6 @@ snapshots:
       '@vitest/pretty-format': 4.1.11
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
-
-  '@xmldom/xmldom@0.9.12': {}
 
   acorn-jsx@5.3.2(acorn@8.18.0):
     dependencies:

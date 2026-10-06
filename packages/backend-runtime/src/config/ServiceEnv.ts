@@ -26,6 +26,7 @@ interface ServiceEnv {
   DEBUG_MODE?: string;
   DEV_AUTH_EMAIL?: string;
   DEMO_MODE?: string;
+  DEMO_USER_EMAIL?: string;
   TEAM_DOMAIN?: string;
   POLICY_AUD?: string;
   SITE_URL?: string;
