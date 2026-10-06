@@ -26,6 +26,7 @@ import type { AccessAuthService } from '../auth/AccessAuthService';
 import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import type { LibraryService } from '../library/LibraryService';
 import type { IndexDropService } from '../library/IndexDropService';
+import type { ScanDriver } from '../library/ScanDriver';
 import type { ScanService } from '../index/ScanService';
 import type { TreeService } from '../index/TreeService';
 import type { ImportSourceService } from '../import/sourceService';
@@ -141,6 +142,18 @@ const Tokens = {
   IndexStore: Symbol('IndexStore') as Token<{ stats: IndexStatsDAO; drop: IndexDropDAO }>,
   TreeService: Symbol('TreeService') as Token<TreeService>,
   ScanService: Symbol('ScanService') as Token<ScanService>,
+  /**
+   * How **this deployment** advances a library's index — one `ScanDriver` strategy, chosen once.
+   *
+   * A token rather than a `hasScanBinding` call at each route because that question was being
+   * asked at seven sites, and two of them gave the *same* question different answers: one read
+   * where the other advanced. Both compiled and both returned a `ChunkResult`, so the
+   * disagreement had no way to surface. The port is what makes read-versus-advance a **name**.
+   *
+   * Supplied by the app rather than built here, for the same reason `scanFor` is: constructing a
+   * Durable Object namespace stub is `apps/api`'s business and Layer 3 cannot see one.
+   */
+  ScanDriver: Symbol('ScanDriver') as Token<ScanDriver>,
   EnrichmentService: Symbol('EnrichmentService') as Token<EnrichmentService>,
 
   // Per-feature encryption keys, as memoized thunks. Resolving one never fetches

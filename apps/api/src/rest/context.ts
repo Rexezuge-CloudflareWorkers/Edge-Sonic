@@ -13,9 +13,9 @@ import type { SubsonicParams } from '@edge-sonic/subsonic';
 import type { ResponseFormat } from '@edge-sonic/subsonic';
 import type { LibraryService } from '@edge-sonic/backend-services/library';
 import type { TreeService } from '@edge-sonic/backend-services/index';
-import type { ScanService } from '@edge-sonic/backend-services/index';
+import type { MediaStub } from '../workers/scanStubs';
+import type { ScanDriver } from '@edge-sonic/backend-services/library';
 import type { EnrichmentService } from '@edge-sonic/backend-services/index';
-import type { ScanStub, MediaStub } from '../workers/scanStubs';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, PlayCountDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
@@ -39,18 +39,24 @@ interface RestContext {
   readonly clientIp: string;
   readonly libraries: LibraryService;
   readonly tree: TreeService;
-  readonly scan: ScanService;
+  /**
+   * How this deployment advances a library's index — a `ScanDriver`, resolved once per request.
+   *
+   * **Not** a nullable stub plus a service. Five sites used to ask "is there a `SCAN` binding?"
+   * and two of them gave the *same question* different answers, so the read/advance distinction
+   * is now a named method on the port rather than a per-call-site ternary.
+   */
+  readonly scan: ScanDriver;
+  /**
+   * The in-process `EnrichmentService`, for the path that runs the tag parse without the media
+   * object. `getSong` uses it when there is no `MEDIA_DO` binding; with one, the parse happens in
+   * `MediaWorker` and this is never reached.
+   */
   readonly enrichment: EnrichmentService;
   /**
-   * The per-library scan worker stub, or `null` when no `SCAN` binding is
-   * configured (tests, local dev). A present stub means the scan loop runs in
-   * the DO isolate; a null means the direct service runs in-fetch.
-   */
-  readonly scanStubFor: (libraryId: string) => ScanStub | null;
-  /**
    * The per-library media worker stub, or `null` when no `MEDIA_DO` binding is
-   * configured. **Separate from `scanStubFor`**, and not an aesthetic choice:
-   * a Durable Object handles one event at a time, so the same stub would put a
+   * configured. **Separate from the scan driver**, and not an aesthetic choice:
+   * a Durable Object handles one event at a time, so one object would put a
    * scan chunk's walk on the critical path of `getSong` and `getCoverArt`.
    */
   readonly mediaStubFor: (libraryId: string) => MediaStub | null;
