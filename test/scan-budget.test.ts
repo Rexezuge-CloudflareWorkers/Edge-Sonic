@@ -58,7 +58,7 @@ import {
 } from '@edge-sonic/backend-runtime/config';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
-import { DERIVED_VERSION, billedRowsForTable, deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { DERIVED_VERSION, billedRowsForTable, deriveFromPath, deriveTitleFromFileName } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';
 import { DERIVED_MARKER } from './helpers/harness';
@@ -340,8 +340,14 @@ function createIndex(options: IndexOptions = {}) {
               mtime_ms: input.mtimeMs,
               content_type: null,
               suffix: 'flac',
-              title: null,
-              title_ci: null,
+              // Derived from the file's name, which is what the statement does. `null` here
+              // is this repository's recorded double defect on this pair of columns: the
+              // suite agreed with itself and with neither production, and 113 of 118
+              // imported stars reported `not-found` on a library indexed under exactly the
+              // titles it was displaying. `test/schema.int.test.ts` runs the statement over
+              // real SQLite; this line is the double agreeing with it.
+              title: deriveTitleFromFileName(input.path.split('/').pop() ?? input.path),
+              title_ci: deriveTitleFromFileName(input.path.split('/').pop() ?? input.path).toLowerCase(),
               artist: derived.artist,
               artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
               album: derived.album,
@@ -965,10 +971,10 @@ describe('the backfill and the walk share one chunk budget', () => {
       store: {
         listNeedingDerivation: async (_libraryId: string, limit: number) => {
           meter.charge(1, 'd1');
-          return Array.from({ length: Math.min(limit, state.remaining) }, (_, index) => ({ id: `s${index}`, dir_path: 'Blur/Holocene' }));
+          return Array.from({ length: Math.min(limit, state.remaining) }, (_, index) => ({ id: `s${index}`, dir_path: 'Blur/Holocene', name: '01 - Holocene.opus' }));
         },
-        async deriveFor(rows: readonly { id: string; dir_path: string }[]) {
-          return rows.map((row) => ({ id: row.id, ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
+        async deriveFor(rows: readonly { id: string; dir_path: string; name: string }[]) {
+          return rows.map((row) => ({ id: row.id, title: deriveTitleFromFileName(row.name), ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
         },
         applyDerivation: async (writes: readonly { id: string }[]) => {
           if (!meter.canAfford(writes.length)) {

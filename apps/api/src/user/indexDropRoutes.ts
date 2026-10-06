@@ -90,7 +90,7 @@ async function dropLibraryIndex(c: UserContext): Promise<Response> {
   // `some`, not `find`: the row itself is not used, only its existence. `deleteLibrary` below in
   // `routes.ts` binds the row because `LibraryService.delete` takes an id and validating it is
   // what it does — here the existence check is the whole reason this read is here at all.
-  if (!(await service.listAll()).some((candidate) => candidate.id === id)) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  if ((await service.listAll()).every((candidate) => candidate.id !== id)) return BaseRoute.jsonError(c, 'Library not found.', 404);
   const outcome = await scope.get(Tokens.IndexDropService).dropLibrary(id);
   return c.json({ ok: true, ...outcome });
 }

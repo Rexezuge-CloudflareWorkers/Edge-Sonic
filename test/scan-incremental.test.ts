@@ -29,7 +29,7 @@ import { MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-servi
 import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, billedRowsForTable, deriveFromPath } from '@edge-sonic/backend-data/dao';
+import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, billedRowsForTable, deriveFromPath, deriveTitleFromFileName } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { ScanDeps } from '@edge-sonic/backend-services/index';
@@ -209,8 +209,17 @@ function createIndex() {
               mtime_ms: input.mtimeMs,
               content_type: input.contentType,
               suffix: input.suffix,
-              title: null,
-              title_ci: null,
+              // Derived from the file's `name`, because the real `UPSERT_FILE_FACTS` derives
+              // it — and it did not, once, which is why a whole import reported 113 of 118
+              // starred tracks `not-found` on a library where they were indexed under the
+              // title this product was displaying to the user the entire time. `title_ci` was
+              // written by `applyMetadata` alone, so a row nothing had range-read held NULL
+              // in both, and `search3` (filters on `title_ci`) and `findByAlbumTitle`
+              // (matches on `(album_ci, title_ci)`) could not see it. `null` here is the same
+              // defect in a double: it would agree with itself and with neither production,
+              // and this file is where that was already caught twice.
+              title: deriveTitleFromFileName(input.name),
+              title_ci: deriveTitleFromFileName(input.name).toLowerCase(),
               // Derived from `dir_path`, because the real `UPSERT_FILE_FACTS` derives them
               // — this double had `null` here while the statement filled the columns, and
               // that disagreement is the reason the first attempt at the grouping fix was
@@ -1149,7 +1158,7 @@ describe('ScanService', () => {
      * write charges one per row, and a page that does not fit raises the error the DAO
      * raises rather than inventing a shape of its own.
      */
-    function derivationOver(pending: string[], dirPaths: Record<string, string> = {}) {
+    function derivationOver(pending: string[], dirPaths: Record<string, string> = {}, names: Record<string, string> = {}) {
       const state = { remaining: [...pending], written: 0 };
       const meter = index.deps.subrequests;
       return {
@@ -1157,11 +1166,14 @@ describe('ScanService', () => {
         store: {
           listNeedingDerivation: async (_libraryId: string, limit: number) => {
             meter.charge(1, 'd1');
-            return state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '' }));
+            // `name` because the real row carries it and the real derivation reads it: a
+            // double holding only `dir_path` cannot derive a `title`, so it cannot detect
+            // the statement forgetting to. That is this file's recorded defect twice already.
+            return state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '', name: names[id] ?? '' }));
           },
-          async deriveFor(rows: readonly { id: string; dir_path: string }[]) {
-          return rows.map((row) => ({ id: row.id, ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
-        },
+          async deriveFor(rows: readonly { id: string; dir_path: string; name: string }[]) {
+            return rows.map((row) => ({ id: row.id, title: deriveTitleFromFileName(row.name), ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
+          },
           applyDerivation: async (writes: readonly { id: string }[]) => {
             // `requireComplete`, so this is a refusal and not a truncation. Nothing is
             // written — which is what leaves the rows owed for the next poll.

@@ -28,9 +28,8 @@ import type { SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { SongIdLookupDAO } from './songIdLookup';
 import { SongCountDAO } from './songCounts';
-import { UPSERT_FILE_FACTS } from './songSql';
-import type { SongMetadataInput } from './songSql';
-import { deriveFromPath } from './pathConvention';
+import { UPSERT_FILE_FACTS, bindFileFacts } from './songSql';
+import type { SongMetadataInput, SongUpsertInput } from './songSql';
 import { buildMetadataPatch, NO_METADATA_WRITE } from './songMetadata';
 import type { MetadataWriteResult } from './songMetadata';
 
@@ -41,18 +40,6 @@ import type { MetadataWriteResult } from './songMetadata';
  * Derived from the measured ceiling rather than chosen, so a raised `MAX_LIBRARIES` cannot
  * silently push this over D1's 100-parameter limit. See `sqlLimits.ts`.
  */
-
-interface SongUpsertInput {
-  id: string;
-  libraryId: string;
-  path: string;
-  dirPath: string;
-  name: string;
-  size: number;
-  mtimeMs: number;
-  contentType: string | null;
-  suffix: string;
-}
 
 /**
  * Insert or refresh a song's *file* facts, leaving derived metadata alone.
@@ -132,48 +119,18 @@ class SongDAO extends BaseDAO {
    * `WriteBatchResult` rather than a count: a cold album of 500 tracks is ~500 statements against a
    * ceiling of 50, so truncation is the *expected* case on Free, and the caller must see it or it
    * will mark a half-written folder reconciled.
+   *
+   * The bind order and the derivations are in `songSql.ts`, beside the statement they target.
+   * The two are positional — a `?` in one is an argument in the other — so a reader who has to
+   * hold both files open to check them is being asked to do what a module boundary is for, and
+   * this one is over the soft god-file limit.
    */
   public async upsertFileFacts(inputs: readonly SongUpsertInput[]): Promise<WriteBatchResult> {
     if (inputs.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
-    const timestamp = nowSeconds();
-    // Derived once per input rather than per bound parameter. `upsertFileFacts` used to accept
-    // a caller-supplied `derivedAlbum`/`derivedArtist` and prefer it, on the reasoning that the
-    // indexer knows `dirPath`. **No caller ever supplied either** — the two fields were
-    // declared, documented and read by nothing, which is this repository's recorded shape of a
-    // defect that looks identical from outside. Worse, they were a *second* path to the same
-    // answer: a caller that had passed one would have disagreed with `deriveFromPath` about a
-    // naming convention, silently, on a column the aggregates group by. One implementation,
-    // called from here. See `pathConvention.ts`.
-    const statements = inputs.map((input) => {
-      const { artist, album } = deriveFromPath(input.dirPath, this.derivedMarker);
-      return this.prepare(UPSERT_FILE_FACTS).bind(
-        input.id,
-        input.libraryId,
-        input.path,
-        input.dirPath,
-        input.name,
-        input.name.toLowerCase(),
-        input.size,
-        input.mtimeMs,
-        input.contentType,
-        input.suffix,
-        // Derived names, each with its `_ci` twin, because a `_ci` column that
-        // drifts from its counterpart is an ungroupable row and the drift is
-        // invisible until somebody browses by artist.
-        artist,
-        artist?.toLowerCase() ?? null,
-        album,
-        album?.toLowerCase() ?? null,
-        // `album_artist` mirrors the derived artist: `getArtist` groups on it, and an
-        // album with a NULL album artist does not appear under the artist a client
-        // navigated to. The same value, so a compilation's tracks group consistently.
-        artist,
-        artist?.toLowerCase() ?? null,
-        timestamp,
-        timestamp,
-      );
-    });
-    return await this.runWriteBatch(statements, 'songs.upsertFileFacts');
+    return await this.runWriteBatch(
+      inputs.map((input) => bindFileFacts(this.prepare(UPSERT_FILE_FACTS), input, this.derivedMarker, nowSeconds())),
+      'songs.upsertFileFacts',
+    );
   }
 
   /**
@@ -395,4 +352,6 @@ class SongDAO extends BaseDAO {
 
 
 export { SongDAO };
-export type { SongUpsertInput };
+
+
+export {type SongUpsertInput} from './songSql';

@@ -56,11 +56,18 @@ const SCALAR_COLUMNS = ['track', 'disc', 'year', 'duration', 'bitrate', 'sample_
  * not. A SQL column name here would silently match nothing, which is the one outcome that
  * would look like a correct test.
  *
- * `title` is absent because it is never derived, and `genre` because a guessed genre is one
- * this product refuses to publish — so neither can be "replaced by a derivation" and neither
- * has any provenance to clear.
+ * `title` **is** here now, which is the fix rather than the bookkeeping: `title` was derived
+ * from the file's name by neither this list nor anything else in the row, so a file the scan
+ * had not range-read carried no `title` and no `title_ci`, and `search3` filters on
+ * `title_ci`. It is derived now (`pathConvention.ts`), which means a tag write has real
+ * provenance to clear — without this entry a tag's `title` would leave `grouping_source`
+ * standing at `'derived'`, and the next `DERIVED_VERSION` bump would overwrite a real title
+ * with a filename. The omission was a data-loss defect waiting for a bump, not a detail.
+ *
+ * `genre` is absent because a guessed genre is one this product refuses to publish — so it
+ * cannot be "replaced by a derivation" and has no provenance to clear.
  */
-const GROUPING_FIELDS = ['artist', 'album', 'albumArtist'] as const;
+const GROUPING_FIELDS = ['title', 'artist', 'album', 'albumArtist'] as const;
 
 /**
  * Build the patch for a partial metadata update.

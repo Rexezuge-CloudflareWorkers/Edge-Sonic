@@ -208,6 +208,35 @@ a silent data loss rather than a filter.
     anything but a guess, and `getGenres` would publish a guessed genre with a song count
     beside it. An uninformative path yields NULL, never `''` — `''` groups under a blank
     name, the defect `NodeDAO.listRoots` had with the library root.
+  - **`title` IS derived, and it was the one that shipped missing.** `deriveTitleFromFileName`
+    reads the file's own `name`, and it is the only writer of `title_ci` other than a tag read.
+    Every rule above applied to the grouping applied to it here and was not applied, so a row
+    the indexer wrote held `title = NULL` **and `title_ci = NULL`** until a client opened the
+    track by hand — and neither reader is per-row. `search3` filters on `title_ci`, and
+    `SongMatchDAO.findByAlbumTitle`, which is how an import resolves a foreign song id, matches
+    on `(album_ci, title_ci)`, where a NULL half matches **no row at all**. So the metadata
+    fallback was not a weaker guess, it was absent for every unenriched track: a measured
+    import reported **113 of 118** starred tracks `not-found` on a library where 102 of them
+    were indexed under exactly the title `apps/api`'s mapper had been displaying to the user
+    the whole time. `title` is also why it could not be spotted per-track: the mapper's
+    read-time filename fallback made every per-track surface look healthy.
+    - **The rules are three, and two of them exist because of real filenames.** Two track
+      prefixes, because `02-03 - Koi Yuki.opus` is disc 2 track 3 and one strip leaves
+      `03 - Koi Yuki`, which matches nothing — the remote publishes `Koi Yuki`. And a
+      **non-breaking space is normalized to a plain one**: seven files carried U+00A0 where
+      every tag and every remote publishes an ordinary space, which is the same glyph, so no
+      user can see the difference and no query can match it. A bare leading number followed by
+      whitespace is deliberately **not** stripped — `2001 A Space Odyssey` is a film.
+    - **The suffix is stripped only when it is a container this server indexes**, against a
+      transcribed copy of `libraryNames.ts`'s `AUDIO_SUFFIXES` (layer 0 cannot import layer 3,
+      so it is a copy pinned by `test/schema.int.test.ts`). Cutting at the last dot instead
+      turned `Mr. Lonely` into `Mr`, and the function was **not idempotent** — which the
+      "unchanged rescan writes nothing" guarantee rests on.
+    - **It carries no marker**, unlike the grouping. The marker exists so a client can tell a
+      folder-name guess from a release name, and under a non-empty `DERIVED_MARKER` that
+      deliberately makes two *albums* of one release. A title is the opposite case: the
+      derived and tagged titles are one track by any reading, so a marked title would put two
+      spellings of one song into `search3` and make the derived one unmatchable.
   - **The `Artist - Album` split is a scan, and the scan is only equivalent because the
     caller trims.** `findAlbumSeparator` used to be `/\s+[-–—]\s+/.exec(dirName)`, which is
     quadratic on a folder name that reached this module from an untrusted `DAV:href` — 16 KB

@@ -53,15 +53,24 @@ function suffixOfPath(path: string): string {
 }
 
 /**
-A title for a row the scan has not enriched: the filename without its suffix.
+A title for a row, and it is the stored one.
+
+It used to re-derive one here, from the filename, when `title` was NULL — `01 - Holocene`
+became `Holocene` at *read* time. That was cosmetic and correct-looking, and it was the
+reason the absence went unnoticed for as long as it did: the mapper supplied a title the row
+did not have, so every per-track surface looked healthy while `search3` (which filters on
+`title_ci`) and `SongMatchDAO.findByAlbumTitle` (which matches on `(album_ci, title_ci)`) saw
+a row with no title at all. A display fallback that never reaches the row is a comment about
+a feature — 113 of 118 starred tracks reported `not-found` on the library where this was
+measured.
+
+The derivation now lives in `pathConvention.ts` and is written by the indexer, so `title` is
+populated on the row and this is a read. The `|| song.name` is the one thing kept: a row with
+no title at all shows its filename rather than an empty field, and it is a *read* fallback
+rather than a second implementation of the naming rule.
 */
-function titleFromPath(song: SongRow): string {
-  if (song.title) return song.title;
-  const dot = song.name.lastIndexOf('.');
-  const stem = dot > 0 ? song.name.slice(0, dot) : song.name;
-  // `01 - Holocene` → `Holocene` when the folder is not tag-read yet. Purely
-  // cosmetic, and it keeps a browsable library from showing a list of filenames.
-  return stem.replace(/^\d{1,3}\s*[-._)]\s*/, '').trim() || song.name;
+function titleOf(song: SongRow): string {
+  return song.title ?? song.name;
 }
 
 /**
@@ -245,7 +254,7 @@ function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity
   // album names one thing, and a client grouping an album grid by `displayAlbumArtist` needs
   // the album's answer rather than each track's.
   const albumArtist = song.album_artist ?? song.artist ?? undefined;
-  const title = titleFromPath(song);
+  const title = titleOf(song);
   return {
     id: song.id,
     mediaType: 'song',
@@ -324,7 +333,7 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, ident
     id: song.id,
     parent: parentId,
     isDir: false,
-    title: titleFromPath(song),
+    title: titleOf(song),
     // The same derivation as `songToModel`, and the same reasoning: a child and its parent
     // record describing one track cannot disagree about which album it is on.
     album: albumNameOf(song),

@@ -8,8 +8,28 @@
  * of step is how a file ends up with a path-derived title on a rescan and no duration, or
  * with an `enriched_at` that survives a file whose bytes changed.
  */
-import { DERIVED_VERSION } from './pathConvention';
+import { DERIVED_VERSION, deriveFromPath, deriveTitleFromFileName } from './pathConvention';
 import { GROUPING_SOURCE_DERIVED } from './groupingSource';
+import type { TrackedStatement } from '../utils/D1Types';
+
+/**
+ * One row's file facts, as the indexer holds them.
+ *
+ * Declared here rather than in `SongDAO` because {@link bindFileFacts} takes one and this is
+ * the module that statement lives in — and an input shape whose only reader is on the other
+ * side of an import is a shape two files have to agree about.
+ */
+interface SongUpsertInput {
+  id: string;
+  libraryId: string;
+  path: string;
+  dirPath: string;
+  name: string;
+  size: number;
+  mtimeMs: number;
+  contentType: string | null;
+  suffix: string;
+}
 
 /**
  * Derived metadata and enrichment results, for one row.
@@ -77,6 +97,21 @@ interface SongMetadataInput {
  * and a guessed genre is worse than an absent one: it is offered to the user as though
  * it were real, and `getGenres` would publish it with a song count.
  *
+ * ### `title` is derived here too, and it was the one that was missing
+ *
+ * The artist and album come from `dir_path`; the **title** comes from the file's own
+ * `name`, and it is `COALESCE`d on exactly the same terms — a tag wins, a rescan writes
+ * nothing.
+ *
+ * It was absent, and the absence is the recorded reason a whole import failed: `title_ci`
+ * had exactly one writer, `applyMetadata`, so every row this statement created held
+ * `title_ci = NULL` until something range-read the file. `search3` filters on `title_ci`,
+ * so the track was unsearchable by its own name, and `SongMatchDAO.findByAlbumTitle`
+ * matches on `(album_ci, title_ci)`, where `title_ci = NULL` matches no row at all — 113
+ * of 118 starred tracks reported `not-found` on a library where 102 of them were indexed
+ * under the title the mapper was displaying to the user the whole time. See
+ * `pathConvention.ts`.
+ *
  * ### `derived_version` is stamped here, and it is load-bearing
  *
  * The backfill (`songDerivation.ts`) selects `WHERE derived_version < ?` — the same
@@ -114,9 +149,9 @@ interface SongMetadataInput {
  * lines below, as though the omission were an oversight; this comment is the assertion.
  */
 const UPSERT_FILE_FACTS = `INSERT INTO songs
-  (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix, duration, bitrate,
+  (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix, title, title_ci, duration, bitrate,
    artist, artist_ci, album, album_ci, album_artist, album_artist_ci, created_at, updated_at, derived_version, grouping_source)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ${DERIVED_VERSION}, '${GROUPING_SOURCE_DERIVED}')
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ${DERIVED_VERSION}, '${GROUPING_SOURCE_DERIVED}')
 ON CONFLICT (library_id, path) DO UPDATE SET
   -- The bytes changed, so everything read *out of* those bytes is stale. Leaving
   -- 'duration' alone here is the silent bug this guards: a client shows a scrubber for a
@@ -151,6 +186,14 @@ ON CONFLICT (library_id, path) DO UPDATE SET
   mtime_ms = excluded.mtime_ms,
   content_type = excluded.content_type,
   suffix = excluded.suffix,
+  -- The filename's title, under the same 'fill a gap and only a gap' rule as the grouping
+  -- below and for the same reason: a real tag must never be rolled back to a guess, and an
+  -- unchanged rescan must write nothing. Both halves move together, because a 'title_ci'
+  -- that disagrees with 'title' is a row that displays one string and cannot be found by
+  -- another — which is the drift the album/artist pair below already warns about, and is
+  -- exactly what a title written without its twin would produce.
+  title = COALESCE(songs.title, excluded.title),
+  title_ci = COALESCE(songs.title_ci, excluded.title_ci),
   -- The path-derived grouping, filling a gap and only a gap. Every '_ci' twin moves
   -- with its counterpart in the same statement, because a '_ci' column that drifts
   -- from its source is an unsearchable row and the drift is invisible until somebody
@@ -172,5 +215,58 @@ ON CONFLICT (library_id, path) DO UPDATE SET
   derived_version = excluded.derived_version,
   updated_at = excluded.updated_at`;
 
-export { UPSERT_FILE_FACTS };
-export type { SongMetadataInput };
+/**
+ * Bind one row's file facts, in {@link UPSERT_FILE_FACTS}'s placeholder order.
+ *
+ * Beside the statement rather than at the call site, because **the two are positional** and
+ * `SongDAO` is over the soft god-file limit — a reader who has to open both files to check that a
+ * `?` and an argument correspond is being asked to do what a module boundary is for.
+ *
+ * ### The derivations happen here, once per row
+ *
+ * `deriveFromPath` for the grouping and {@link deriveTitleFromFileName} for the title, and
+ * both because the aggregates read the result in SQL rather than per row. A caller-supplied
+ * derivation was tried before this and removed: **no caller ever supplied one**, so the two
+ * fields were declared, documented and read by nothing — and worse, they were a second path
+ * to the same answer, free to disagree with `deriveFromPath` about a convention, silently,
+ * on the columns `getArtists` and `getAlbumList2` group by. One implementation, called here.
+ *
+ * Every `_ci` twin is bound beside its counterpart, in the same call. A twin that drifts is
+ * a row that displays one string and answers a different question about another: ungroupable
+ * for the artist, and — for a title, which is what the second derivation added — invisible to
+ * `search3` and to every import's `findByAlbumTitle`.
+ */
+function bindFileFacts(statement: TrackedStatement, input: SongUpsertInput, derivedMarker: string, timestamp: number): TrackedStatement {
+  const { artist, album } = deriveFromPath(input.dirPath, derivedMarker);
+  const title = deriveTitleFromFileName(input.name);
+  const artistCi = artist?.toLowerCase() ?? null;
+  const albumCi = album?.toLowerCase() ?? null;
+  return statement.bind(
+    input.id,
+    input.libraryId,
+    input.path,
+    input.dirPath,
+    input.name,
+    input.name.toLowerCase(),
+    input.size,
+    input.mtimeMs,
+    input.contentType,
+    input.suffix,
+    title,
+    title.toLowerCase(),
+    artist,
+    artistCi,
+    album,
+    albumCi,
+    // `album_artist` mirrors the derived artist: `getArtist` groups on it, and an album with a
+    // NULL album artist does not appear under the artist a client navigated to. The same value,
+    // so a compilation's tracks group consistently.
+    artist,
+    artistCi,
+    timestamp,
+    timestamp,
+  );
+}
+
+export { UPSERT_FILE_FACTS, bindFileFacts };
+export type { SongMetadataInput, SongUpsertInput };
