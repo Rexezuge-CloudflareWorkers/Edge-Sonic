@@ -15,7 +15,7 @@
  */
 import { BaseDAO } from './BaseDAO';
 import type { WriteBatchResult } from './BaseDAO';
-import type { NodeRow } from './rows';
+import type { NodeRow, ChildNodeRow } from './rows';
 import { nowSeconds } from './identity';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
@@ -125,6 +125,60 @@ class NodeDAO extends BaseDAO {
           .bind(libraryId, parentPath)
           .all<NodeRow>(),
       'nodes.listChildren',
+    );
+    return result.results ?? [];
+  }
+
+  /**
+   * `listChildren`, plus whether each child has a `songs` row.
+   *
+   * ### Why the scan cannot use `listChildren`
+   *
+   * A reconcile pass writes two rows per audio child, in **two separate batches**, and
+   * `runWriteBatch` truncates each against the meter's remaining budget independently. So a pass
+   * can land the node rows and truncate the song rows — and then the folder closes, because the
+   * next pass re-reads `nodes`, finds every child's mtime already current, concludes "nothing
+   * changed", and offers no song rows to write.
+   *
+   * That state is permanent and silent. `songPaths` is built *before* the change gate, so the
+   * prune keeps the path and never deletes the row; the root mtime probe means the folder is not
+   * even re-listed; and a forced re-walk computes `changed === false` again. Measured on a live
+   * library: **117 `nodes` rows against 116 `songs` rows**, one track absent from every album
+   * list, browsable as a node with `duration: 0` and no album or artist, and `getSong` answering
+   * `70` for an id the browse had just published.
+   *
+   * The predicate that caused it reads `nodes` to decide about a row in `songs`. `nodeRowNeedsWrite`
+   * does not have this problem because it reads the table the row it guards *lives in* — so the fix
+   * is to give the song writer the same property, from the read it already makes.
+   *
+   * **One statement, not two.** The alternative was a second `SELECT path FROM songs` per folder,
+   * which is a subrequest per folder against a ceiling of 50, on a budget already derived to
+   * `SUBSREQUESTS_PER_FOLDER_BASE = 6`. Reusing this read costs nothing, which is why the fix is
+   * a `LEFT JOIN` rather than an extra query.
+   *
+   * The join rides `idx_songs_library_path (library_id, path)` and leaves the driving predicate on
+   * `idx_nodes_parent_ci (library_id, parent_path, name_ci)` alone, so the ordering is still free
+   * and the folder is still read by index. Asserted with `EXPLAIN QUERY PLAN` in
+   * `test/schema.int.test.ts`, because a predicate and its join return identical rows either way
+   * and the plan is the only observable difference.
+   *
+   * `has_song` is `0` for every non-audio child, so it is only meaningful once the caller has
+   * applied its own audio test. See `ChildNodeRow`.
+   */
+  public async listChildrenWithSongPresence(libraryId: string, parentPath: string): Promise<ChildNodeRow[]> {
+    const result = await this.withRetry(
+      async () =>
+        await this.database
+          .prepare(
+            `SELECT n.*, (s.id IS NOT NULL) AS has_song
+             FROM nodes n
+             LEFT JOIN songs s ON s.library_id = n.library_id AND s.path = n.path
+             WHERE n.library_id = ? AND n.parent_path = ?
+             ORDER BY n.name_ci ASC`,
+          )
+          .bind(libraryId, parentPath)
+          .all<ChildNodeRow>(),
+      'nodes.listChildrenWithSongPresence',
     );
     return result.results ?? [];
   }

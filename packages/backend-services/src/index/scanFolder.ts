@@ -20,7 +20,8 @@ import { nodeRowNeedsWrite } from './nodeWrite';
 import type { ScanBudget } from './scanBudget';
 import type { FolderWrites } from './scanAccounting';
 import type { WriteBatchResult } from '@edge-sonic/backend-data/dao';
-import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
+import type { ScanDeps, ScanSongInput } from './scanTypes';
+import type { ScanNodeInput } from './scanNodeStore';
 
 /**
  * Reconcile one folder's listing: write what changed, prune what vanished.
@@ -36,6 +37,12 @@ import type { ScanDeps, ScanNodeInput, ScanSongInput } from './scanTypes';
  *
  * The second is what makes a one-album change cost one request instead of one per
  * folder, so it has to be right rather than merely cheap.
+ *
+ * And a **third**, one level below the first two and the one that cost a track: **does
+ * this child have a `songs` row?** That is the song writer's own compare, and it is
+ * read from `songs` rather than from `nodes`. All three are the same rule — **a compare
+ * must read the table the row it guards lives in** — and the third is where it was
+ * broken. See `songRowMissing` for the measurement.
  *
  * ### The first is what makes a folder that fits in one invocation finish
  *
@@ -65,7 +72,23 @@ async function reconcileFolder(
 
   // One query for the folder's existing children; every comparison below is then
   // in-memory. A `find` per child is 2N round trips for a 500-track album.
-  const existing = new Map((await deps.nodes.listChildren(library.id, folder.path)).map((node) => [node.path, node]));
+  //
+  // `listChildrenWithSongPresence` rather than `listChildren`, and the reason is the whole
+  // defect this file's second writer used to carry. The two upserts below are separate batches
+  // with independent budgets, so a pass can land the node rows and truncate the song rows. The
+  // next pass would then read `nodes`, find every child's mtime already current, compute
+  // `changed === false` for all of them, and offer no song rows — so the folder closes with the
+  // `nodes` row present and the `songs` row never written, for ever and silently.
+  //
+  // Measured on a live library: 117 `nodes` rows, 116 `songs` rows, one track browsable with
+  // `duration: 0` and no album, absent from every album list, `getSong` answering `70` for an id
+  // the browse had just published.
+  //
+  // So a compare must read the table the row it guards lives in. `nodeRowNeedsWrite` always has;
+  // the song writer did not, and `changed` was doing a node's job for a song's row.
+  const existing = new Map(
+    (await deps.nodes.listChildrenWithSongPresence(library.id, folder.path)).map((node) => [node.path, node]),
+  );
 
   const nodeInputs: ScanNodeInput[] = [];
   const songInputs: ScanSongInput[] = [];
@@ -81,6 +104,8 @@ async function reconcileFolder(
     const known = existing.get(path);
     const mtimeMoved = !known || known.mtime_ms !== resource.lastModifiedMs;
     const etagMoved = known !== undefined && resource.etag !== null && known.etag !== null && known.etag !== resource.etag;
+    // **The file moved**, which is a question about the WebDAV and is the same answer for both
+    // writers. It is deliberately *not* the gate on the song upsert below — see `songRowMissing`.
     const changed = mtimeMoved || etagMoved;
 
     // ### `is_scanned` has two writers and one key
@@ -128,7 +153,33 @@ async function reconcileFolder(
     // become songs, so they never reach an index or a search result.
     if (resource.isCollection || !isAudioFile(name)) continue;
     songPaths.push(path);
-    if (changed) {
+
+    // ### A compare must read the table the row it guards lives in
+    //
+    // Two questions, and the second is not a restatement of the first:
+    //
+    // - `changed` — did this **file** move? Same answer for both writers, and it is what
+    //   `needsDescent` asks too.
+    // - `songRowMissing` — does a `songs` row exist for this path? Read from `songs`, which is
+    //   the only place that answer lives.
+    //
+    // They came apart because the gate was `if (changed)`, which is the node's question. The two
+    // upserts are separate batches and `runWriteBatch` truncates each against the meter's
+    // remaining budget on its own, so a pass can write every node row and truncate the song rows.
+    // `truncated` then correctly kept the folder on the frontier — and the *next* pass read the
+    // node rows, found the mtimes already current, computed `changed === false` for all of them,
+    // offered nothing, saw no truncation, and closed the folder.
+    //
+    // Nothing else could have produced that state, which is what makes it permanent rather than
+    // merely unlikely: `songPaths.push` runs *before* this gate, so the prune keeps the path and
+    // never deletes a row that was never written; and `startScan`'s root-mtime probe means the
+    // folder is not re-listed to begin with.
+    //
+    // Reordering the two batches would not have fixed it, and that is worth recording because it
+    // looks like the cheap fix: whichever batch truncates, the other can still land, so the
+    // asymmetry survives any order. Only reading the row's own table removes it.
+    const songRowMissing = known?.has_song !== 1;
+    if (changed || songRowMissing) {
       songInputs.push({
         id: encodeId(IdKind.Song, library.id, path),
         libraryId: library.id,

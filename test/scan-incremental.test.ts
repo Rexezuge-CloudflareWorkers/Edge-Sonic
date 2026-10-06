@@ -31,7 +31,7 @@ import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, billedRowsForTable, deriveFromPath, deriveTitleFromFileName } from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
-import type { LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { ChildNodeRow, LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { ScanDeps } from '@edge-sonic/backend-services/index';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavEntry } from './helpers/fakeDav';
@@ -100,6 +100,19 @@ function createIndex() {
         find: async (_libraryId: string, path: string) => db(() => nodes.get(nodeKey(path)) ?? null),
         listChildren: async (_libraryId: string, parentPath: string) =>
           db(() => [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci))),
+        // The reconcile diff, and it reports **both** planes. Derived from `songs` rather than
+        // from `nodes` because that is where the answer lives — a compare that read the node row
+        // to decide about a song row is a proxy the two tables can disagree about, and they do
+        // whenever a write batch truncates between the two writers. That shipped: a live library
+        // at 117 `nodes` rows and 116 `songs` rows, the missing track permanent because the
+        // folder closed with the disagreement already in place.
+        listChildrenWithSongPresence: async (_libraryId: string, parentPath: string) =>
+          db(() =>
+            [...nodes.values()]
+              .filter((node) => node.parent_path === parentPath)
+              .sort((a, b) => a.name_ci.localeCompare(b.name_ci))
+              .map((node) => ({ ...node, has_song: [...songs.values()].some((song) => song.path === node.path) ? 1 : 0 }) as ChildNodeRow),
+          ),
         // `path !== ''` excludes the library root's own row, which is
         // `path === parentPath === ''` and so matches `parent_path === ''` exactly as a
         // top-level folder does. This double had that filter while `NodeDAO.listRoots`

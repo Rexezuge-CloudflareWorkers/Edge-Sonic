@@ -11,7 +11,8 @@
  * handful of queries its case needs, and a change to a DAO that the scan does not depend
  * on is not a change here.
  */
-import type { DerivableRow, DerivationWrite, LibraryRow, NodeRow, ScanStateRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
+import type { DerivableRow, DerivationWrite, LibraryRow, ScanStateRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
+import type { ScanNodeStore } from './scanNodeStore';
 import type { EnrichmentCost } from './scanEnrichment';
 import type { SubrequestCounter, SubrequestSpend } from '@edge-sonic/shared';
 import type { WebDavClient } from '@edge-sonic/webdav';
@@ -29,17 +30,6 @@ interface ScanEnrichFacts {
   mtimeMs: number;
 }
 
-interface ScanNodeInput {
-  libraryId: string;
-  path: string;
-  parentPath: string;
-  name: string;
-  mtimeMs: number | null;
-  etag: string | null;
-  depth: number;
-  isScanned?: boolean;
-}
-
 interface ScanSongInput {
   id: string;
   libraryId: string;
@@ -50,26 +40,6 @@ interface ScanSongInput {
   mtimeMs: number;
   contentType: string | null;
   suffix: string;
-}
-
-interface ScanNodeStore {
-  find(libraryId: string, path: string): Promise<NodeRow | null>;
-  listChildren(libraryId: string, parentPath: string): Promise<NodeRow[]>;
-  listRoots(libraryId: string): Promise<NodeRow[]>;
-  listFrontier(libraryId: string, limit: number): Promise<NodeRow[]>;
-  /**
-   * `WriteBatchResult` and not a count, because a cold album of 500 tracks is ~500 statements
-   * against a ceiling of 50 and is *expected* to come back truncated on a Free plan. The scan
-   * has to see that, because the one write it must not do for a half-written folder is the
-   * folder's own row carrying `is_scanned: true`.
-   */
-  upsertMany(inputs: readonly ScanNodeInput[]): Promise<WriteBatchResult>;
-  /**
-   * `WriteBatchResult` and not a count, because a prune is billed like any other write and the
-   * day's allowance is denominated in billed rows. `scanAccounting` for the two counts.
-   */
-  deleteSubtree(libraryId: string, path: string): Promise<WriteBatchResult>;
-  countByLibrary(libraryId: string): Promise<number>;
 }
 
 interface ScanSongStore {
@@ -383,8 +353,6 @@ const LAST_ERROR_MAX = 500;
 
 export type {
   ScanDeps,
-  ScanNodeInput,
-  ScanNodeStore,
   ScanSongInput,
   ScanSongStore,
   ScanStateStore,

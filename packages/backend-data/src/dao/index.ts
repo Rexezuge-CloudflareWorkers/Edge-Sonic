@@ -80,6 +80,7 @@ export type {
   UserRow,
   LibraryRow,
   NodeRow,
+  ChildNodeRow,
   SongRow,
   ScanStateRow,
   PlaylistRow,

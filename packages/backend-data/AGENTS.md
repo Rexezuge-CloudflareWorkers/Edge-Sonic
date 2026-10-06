@@ -430,6 +430,31 @@ is pinned there.
   statement works, the rows are right, the suite is green. `runWriteBatch` charges
   **per statement**, not per `batch()` call, because the platform does not say which reading
   is right and an over-count costs throughput while an under-count costs availability.
+- **A compare must read the table the row it guards lives in.** `nodeWrite.ts`'s
+  `nodeRowNeedsWrite` has always held to this — it reads `nodes` to decide about a `nodes` row —
+  and the scan's *song* writer broke it: `reconcileFolder` gated both writers on `changed`, which
+  is `mtimeMoved || etagMoved` read off the **`nodes`** row. The two upserts are separate batches
+  and `runWriteBatch` truncates each against the meter's remaining budget independently, so a pass
+  can land every node row and truncate the song rows; the next pass then finds the mtimes already
+  current, concludes `changed === false`, and closes the folder with the song rows never written.
+  It shipped: **117 `nodes` rows against 116 `songs` rows** on a live library, one track absent from
+  every album list, browsable as a node with `duration: 0` and no album, and `getSong` answering
+  `70` for an id the browse had just published. Three rules:
+  - **The read that already happens carries the answer**, as a `LEFT JOIN`. `listChildrenWithSongPresence`
+    is `listChildren` plus `LEFT JOIN songs s ON s.library_id = n.library_id AND s.path = n.path`,
+    riding `idx_songs_library_path` and leaving the driving predicate on `idx_nodes_parent_ci` alone
+    — so it is a drop-in for the read it replaces, every node column is still there for
+    `nodeRowNeedsWrite`, and a folder costs **no extra subrequest**. The second-statement
+    alternative also works and would have forced `SUBSREQUESTS_PER_FOLDER_BASE` (and both constants
+    derived from it) up by one, against a ceiling of 50.
+  - **`has_song` is `0` for every non-audio child**, because only audio becomes a song. It is
+    therefore only meaningful *after* the caller's audio test — read the other way round it is a
+    guarantee that a `cover.jpg` is upserted as a song on every pass, for ever. Asserted with a
+    cover in the fixture.
+  - **A join's plan is the only observable difference**, since a wrong join and a right one return
+    identical rows. `EXPLAIN QUERY PLAN` is asserted in `test/schema.int.test.ts` for both indexes
+    and against `SCAN songs`, which would be proportional to the library per folder and invisible
+    in the rows.
 - **A write batch splits to fit, and reports that it did.** `runWriteBatch` returns
   `WriteBatchResult`, not a count, because a 500-track album is ~1,000 statements against a
   ceiling of 50 — truncation is the *expected* case on Free, not an edge case. The caller

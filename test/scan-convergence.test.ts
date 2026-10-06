@@ -36,17 +36,18 @@ import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { NodeDAO } from '@edge-sonic/backend-data/dao';
+import { NodeDAO, SongDAO, DERIVED_VERSION } from '@edge-sonic/backend-data/dao';
 import { TreeService, nodeRowNeedsWrite, reconcileFolder } from '@edge-sonic/backend-services/index';
-import type { DesiredNodeRow } from '@edge-sonic/backend-services/index';
+import type { DesiredNodeRow, ScanDeps } from '@edge-sonic/backend-services/index';
 import { ScanBudget } from '@edge-sonic/backend-services/index';
-import { SCAN_CHUNK_SUBSREQUEST_BUDGET, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
+import { SCAN_CHUNK_SUBSREQUEST_BUDGET, SUBSREQUESTS_PER_FOLDER_BASE, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { WebDavClient } from '@edge-sonic/webdav';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavResource } from '@edge-sonic/webdav';
 import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
 import { migrationSql } from './helpers/migrations';
 import { sqliteQueryable } from './helpers/sqlite';
+import { DERIVED_MARKER } from './helpers/harness';
 
 const LIBRARY_ID = 'L1';
 const ROOT = '/music';
@@ -113,19 +114,58 @@ function rootListing(albums: number): DavResource[] {
  * via `batch()`, and a `void`-ed promise would still be holding it when the test's first statement
  * ran — surfacing as `cannot start a transaction within a transaction` and saying nothing at all
  * about the behaviour under test. Setup that is synchronous cannot interleave.
+ *
+ * `children` seeds one album folder's node rows. For the audio fixture it also writes the
+ * matching `songs` rows, because the point of that fixture is that the two planes are seeded
+ * **consistently** — seeding only one of them would be arranging the very disagreement the
+ * production case is about.
  */
-function seeded(): ReturnType<typeof sqliteQueryable> {
+function seeded(children: readonly SeededChild[] = [], rootScanned = false): ReturnType<typeof sqliteQueryable> {
   const handle = sqliteQueryable();
   handle.raw.exec(migrationSql());
   handle.raw.exec(
     `INSERT INTO libraries (id, slug, slug_ci, base_url, root_path, dav_username, password_ciphertext, password_iv, key_version, display_name, is_enabled, created_at, updated_at)
      VALUES ('${LIBRARY_ID}', 'home', 'home', 'https://dav.example.com', '${ROOT}', 'ann', '', '', 1, 'Home', 1, 0, 0)`,
   );
+  // The root row is on the frontier unless a case says otherwise. `audioHarness` reconciles an
+  // **album** folder, not the root, so the root's frontier flag would otherwise stay `0` for ever
+  // and `frontier()` would report a folder nothing in the fixture ever walks — a failure that says
+  // "the frontier did not drain" about a row the test does not touch.
   handle.raw.exec(
     `INSERT INTO nodes (library_id, path, parent_path, name, name_ci, mtime_ms, etag, depth, is_scanned, created_at, updated_at)
-     VALUES ('${LIBRARY_ID}', '', '', '', '', 1000, '"root"', 0, 0, 0, 0)`,
+     VALUES ('${LIBRARY_ID}', '', '', '', '', 1000, '"root"', 0, ${rootScanned ? 1 : 0}, 0, 0)`,
   );
+  for (const child of children) {
+    const parent = child.path.slice(0, Math.max(0, child.path.lastIndexOf('/')));
+    const depth = child.path.split('/').length;
+    // `mtime_ms` 2000 matches `albumListing` too, so a seed is only ever "current" or "moved" on
+    // the axis a case means to move.
+    handle.raw.exec(
+      `INSERT INTO nodes (library_id, path, parent_path, name, name_ci, mtime_ms, etag, depth, is_scanned, created_at, updated_at)
+       VALUES ('${LIBRARY_ID}', '${child.path}', '${parent}', '${child.name}', '${child.name.toLowerCase()}', 2000, '${child.etag}', ${depth}, ${child.isCollection ? 0 : 1}, 0, 0)`,
+    );
+  }
   return handle;
+}
+
+/**
+ * A child row `seeded` writes, and whether it should come with a `songs` row.
+ *
+ * `hasSong` is a parameter rather than a default because the interesting fixture is the one that
+ * seeds **both** planes and the one that seeds only `nodes` — and the second is how a truncated
+ * write is arranged rather than produced.
+ */
+interface SeededChild {
+  readonly path: string;
+  readonly name: string;
+  readonly isCollection: boolean;
+  readonly hasSong: boolean;
+  /**
+   * The stored etag. Must be the one `albumListing` reports for the same child, or the first pass
+   * rewrites every node row and a case asserting "nothing changed" measures the fixture's
+   * bookkeeping instead of the gate. A number beside a seed is a way to make that mistake quietly.
+   */
+  readonly etag: string;
 }
 
 interface Harness {
@@ -148,13 +188,33 @@ interface Harness {
 }
 
 /**
+ * The same harness with a **real** `SongDAO` and audio children, which is what makes it capable
+ * of seeing the second half of the truncation.
+ */
+interface AudioHarness extends Harness {
+  /**
+   * How many `songs` rows the library holds. Must equal the audio-child count after every pass.
+   */
+  readonly songs: () => Promise<number>;
+  /**
+   * Paths that have a `nodes` row and no `songs` row — the production symptom, as a query.
+   *
+   * This is the check the live library was found with, and it is the one that answers "is any
+   * track invisible to every aggregate" without a client in the loop.
+   */
+  readonly orphans: () => Promise<string[]>;
+}
+
+/**
  * Real DAO, real SQLite, real counter.
  *
  * `SubrequestCounter` at the platform ceiling rather than unmetered, because the whole defect is
  * arithmetic against that number and an unmetered DAO would make every assertion vacuous.
  *
  * `songs` is a double and it is **not** the subject: no entry in this fixture's root listing is an
- * audio file, so no statement reaches it. Everything asserted here is `nodes`.
+ * audio file, so no statement reaches it. Everything asserted here is `nodes`. `audioHarness`
+ * below is the fixture that made that sentence true and therefore could not see the second half
+ * of the same defect.
  */
 function harness(maxRequests: number = SCAN_CHUNK_SUBSREQUEST_BUDGET): Harness {
   const handle = seeded();
@@ -218,6 +278,194 @@ function harness(maxRequests: number = SCAN_CHUNK_SUBSREQUEST_BUDGET): Harness {
           .prepare('SELECT path FROM nodes WHERE library_id = ? AND is_scanned = 0 ORDER BY depth ASC, path ASC')
           .all(LIBRARY_ID)
       ).map((row) => (row as { path: string }).path),
+    spent: () => meter.spent,
+    close: () => handle.close(),
+  };
+}
+
+/**
+ * A `Depth: 1` listing of one album folder: itself, plus its files.
+ *
+ * Shaped by the origin rather than by convenience, for the same reason `rootListing` is — the
+ * count of entries is the quantity under test. `tracks` audio files at the given size; the
+ * non-audio entry is what proves `has_song` is not read before the audio test.
+ *
+ * **Root-prefixed**, because `toLibraryPath` strips `library.root_path` and a listing whose hrefs
+ * are library-relative places nothing — which the "a listing that placed nothing" guard rightly
+ * throws on. `album` is therefore the *request* path here and the library-relative one everywhere
+ * else, and the distinction is the reason `rootListing` prefixes its entries too.
+ */
+function albumListing(album: string, tracks: number, size = 5_000_000): DavResource[] {
+  const absolute = `${ROOT}/${album}`;
+  const track = (index: number): DavResource => ({
+    href: `${absolute}/${String(index + 1).padStart(2, '0')}.flac`,
+    path: `${absolute}/${String(index + 1).padStart(2, '0')}.flac`,
+    isCollection: false,
+    contentLength: size,
+    contentType: 'audio/flac',
+    lastModifiedMs: 2000,
+    etag: `"t${index}"`,
+    displayName: null,
+  });
+  return [
+    { href: absolute, path: absolute, isCollection: true, contentLength: null, contentType: null, lastModifiedMs: 2000, etag: '"album"', displayName: null },
+    ...Array.from({ length: tracks }, (_, index) => track(index)),
+    // A cover, which is a node and never a song. If the song gate read `has_song` before the
+    // audio test, this row would be upserted as a song on every pass, for ever.
+    {
+      href: `${absolute}/cover.jpg`,
+      path: `${absolute}/cover.jpg`,
+      isCollection: false,
+      contentLength: 1000,
+      contentType: 'image/jpeg',
+      lastModifiedMs: 2000,
+      etag: '"cover"',
+      displayName: null,
+    },
+  ];
+}
+
+/**
+ * The album folder's node rows, seeded alongside a `songs` row for each audio child.
+ *
+ * Both planes seeded, because the fixture's claim is that the reconcile converges on a folder
+ * whose two planes are consistent — and a fixture that seeded only `nodes` would be asserting the
+ * answer rather than producing it.
+ */
+function albumChildren(album: string, tracks: number): SeededChild[] {
+  return [
+    { path: album, name: album, isCollection: true, hasSong: false, etag: '"album"' },
+    ...Array.from({ length: tracks }, (_, index) => {
+      const name = `${String(index + 1).padStart(2, '0')}.flac`;
+      return { path: `${album}/${name}`, name, isCollection: false, hasSong: true, etag: `"t${index}"` };
+    }),
+    { path: `${album}/cover.jpg`, name: 'cover.jpg', isCollection: false, hasSong: false, etag: '"cover"' },
+  ];
+}
+
+/**
+ * The same harness as `harness`, with a **real** `SongDAO` and a real `UPSERT_FILE_FACTS`.
+ *
+ * ### Why a second harness rather than extending the first
+ *
+ * `harness` stubs `songs` because no entry in its fixture is an audio file, so no statement
+ * reaches it — and that is exactly why the missing-song defect survived a suite written for
+ * truncation. `reconcileFolder`'s two writers truncate **independently**, so a fixture with one
+ * writer exercised can only ever see one of them.
+ *
+ * A double would also have been the wrong instrument: the defect is that a compare read the
+ * wrong table, so the test has to observe two real tables disagreeing. A double's `truncated` is
+ * whatever the test says it is, and the two doubles in this file's history each modelled
+ * something other than production — one skipping unchanged rows the statement did not skip, one
+ * with a ceiling high enough that the bound never fired.
+ */
+interface AudioOptions {
+  /**
+   * How many audio children the album holds. Above ~45 the folder cannot close in one chunk, which
+   * is the case the truncation cases need and the reason the bound is worth stating.
+   */
+  readonly tracks: number;
+  readonly maxRequests?: number;
+  /**
+   * Whether the `songs` rows are seeded as well as the `nodes` rows.
+   *
+   * `false` is how the production state is arranged: every child has a node row and no song row.
+   * Seeded rather than produced, because the chunk that produced it was a *position* in the meter
+   * rather than a behaviour — so a fixture that had to hit that position would be asserting
+   * arithmetic instead of the rule.
+   */
+  readonly seedSongs?: boolean;
+}
+
+function audioHarness(options: AudioOptions): AudioHarness {
+  const { tracks, maxRequests = SCAN_CHUNK_SUBSREQUEST_BUDGET, seedSongs = true } = options;
+  const ALBUM = 'Artist - Album';
+  const children = albumChildren(ALBUM, tracks);
+  // The album row starts unreconciled, which is the frontier state a walk finds. The root is closed
+  // because this harness reconciles the album, never the root.
+  const handle = seeded(children, true);
+  const meter = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
+  const nodes = new NodeDAO(handle.db, meter);
+  // The real store, not a double: `songs` bills ten rows per row, and the batch is what
+  // truncates. Both are load-bearing here. The marker is the test harness's own rather than the
+  // deployment default, so the derived names this seeds match what `deriveFromPath` writes.
+  const songs = new SongDAO(handle.db, DERIVED_MARKER, meter);
+
+  const base = harnessFor(handle, meter, nodes, songs, maxRequests, ALBUM);
+
+  if (seedSongs) {
+    // Seed the song rows directly rather than through a reconcile, so the fixture does not depend
+    // on the code under test to arrive at its starting state. A fixture that indexes itself would
+    // pass against a broken gate, because the broken gate is what would have to run first.
+    for (const child of children) {
+      if (!child.hasSong) continue;
+      handle.raw.exec(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                            title, title_ci, duration, bitrate, artist, artist_ci, album, album_ci,
+                            album_artist, album_artist_ci, created_at, updated_at, derived_version, grouping_source)
+         VALUES ('song:${child.path}', '${LIBRARY_ID}', '${child.path}', '${ALBUM}', '${child.name}', '${child.name.toLowerCase()}',
+                 5000000, 2000, 'audio/flac', 'flac', '${child.name}', '${child.name.toLowerCase()}', 0, 0,
+                 NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, ${DERIVED_VERSION}, 'derived')`,
+      );
+    }
+  }
+
+  return {
+    ...base,
+    // `node:sqlite`'s `.all()` returns the array itself, where D1 wraps it in `{ results }` — the
+    // same engine-with-a-different-build gap `helpers/sqlite.ts` exists for. Read the array
+    // directly so the assertion is about the row count rather than about which binding it is on.
+    songs: async () =>
+      (handle.raw.prepare('SELECT COUNT(*) AS n FROM songs WHERE library_id = ?').all(LIBRARY_ID) as unknown as { n: number }[])[0]?.n ?? 0,
+    orphans: async () =>
+      (
+        handle.raw
+          .prepare(
+            `SELECT n.path FROM nodes n
+             LEFT JOIN songs s ON s.library_id = n.library_id AND s.path = n.path
+             WHERE n.library_id = ? AND n.path != '' AND s.id IS NULL AND n.name LIKE '%.flac'
+             ORDER BY n.path`,
+          )
+          .all(LIBRARY_ID) as unknown as { path: string }[]
+      ).map((row) => row.path),
+  };
+}
+
+/**
+ * The shared body of both harnesses, over whichever stores the caller supplies.
+ *
+ * Split so the two fixtures cannot drift on the parts they share — the budget, the folder under
+ * test, the counts — while differing on the one thing that matters: whether `songs` is real.
+ */
+function harnessFor(
+  handle: ReturnType<typeof sqliteQueryable>,
+  meter: SubrequestCounter,
+  nodes: NodeDAO,
+  songs: ScanDeps['songs'],
+  maxRequests: number,
+  folderPath: string,
+): Harness {
+  return {
+    reconcile: async (listing) => {
+      const budget = new ScanBudget({ meter, maxRequests, deadlineMs: 20_000 });
+      const folder = await nodes.find(LIBRARY_ID, folderPath);
+      if (folder === null) throw new Error(`the "${folderPath}" row is missing; the frontier was never seeded`);
+      const reconciled = await reconcileFolder({ nodes, songs, enrichMaxPerFolder: 0 } as never, library(), folder, listing, budget);
+      return reconciled.rowsWritten;
+    },
+    browse: async () => {
+      throw new Error('the audio fixture does not exercise the browse path');
+    },
+    raw: (sql) => {
+      handle.raw.exec(sql);
+    },
+    root: async () => await nodes.find(LIBRARY_ID, folderPath),
+    frontier: async () =>
+      (
+        handle.raw
+          .prepare('SELECT path FROM nodes WHERE library_id = ? AND is_scanned = 0 ORDER BY depth ASC, path ASC')
+          .all(LIBRARY_ID) as unknown as { path: string }[]
+      ).map((row) => row.path),
     spent: () => meter.spent,
     close: () => handle.close(),
   };
@@ -662,6 +910,258 @@ describe('the guard has teeth', () => {
     expect(treeService).toMatch(/nodeRowNeedsWrite\(known, \{/);
     // And the browse preserves the flag rather than clearing it — the amplifier's other half.
     expect(treeService.match(/isScanned: known\?\.is_scanned === 1/g)).toHaveLength(2);
+  });
+});
+
+describe('a node row with no song row is not a finished folder', () => {
+  // ### The measurement
+  //
+  // A live library of 84 album folders: **117 files on the WebDAV, 117 `nodes` rows, 116 `songs`
+  // rows.** One track — `07 - 僕が最高だから.opus` — had a `nodes` row and no `songs` row, so it
+  // was absent from every album list, rendered by the browse as a node with `duration: 0` and no
+  // album or artist, and answered `getSong` with `70` for an id the browse had just published.
+  //
+  // ### Why it was permanent
+  //
+  // `reconcileFolder` writes an audio child's node row and its song row in **two batches**, and
+  // `runWriteBatch` truncates each against the meter's remaining budget independently. A pass can
+  // therefore land every node row and truncate the song rows. `truncated` correctly kept the folder
+  // on the frontier — and the *next* pass read the node rows, found every mtime already current,
+  // computed `changed === false` for all of them, offered no song rows, saw no truncation, and
+  // closed the folder.
+  //
+  // Nothing else reaches that state. `songPaths.push` runs *before* the change gate, so the prune
+  // keeps the path and never deletes a row that was never written; and `startScan`'s root-mtime
+  // probe means the folder is not re-listed to begin with. So it needed no error, no retry and no
+  // operator — only a chunk boundary in the wrong place, once.
+  //
+  // And `harness` above could not see it: its fixture holds no audio files, so the `songs` writer
+  // is never reached. A suite written for truncation, with two real writers in the code under
+  // test, exercised one of them.
+
+  const ALBUM = 'Artist - Album';
+
+  it('writes a song row for a child whose node row is already current', async () => {
+    // The production state, arrived at the only way it can be: the node rows landed, the song rows
+    // did not. Seeded rather than produced by a truncated chunk, because the chunk is a *position*
+    // in the meter rather than a behaviour, and a fixture that had to hit it would be asserting
+    // arithmetic instead of the rule.
+    const h = audioHarness({ tracks: 3, seedSongs: false });
+    try {
+      // Three audio children with node rows and no song rows — which is exactly what the bug left.
+      expect(await h.songs()).toBe(0);
+      expect(await h.orphans()).toHaveLength(3);
+
+      // The listing reports them all, unchanged: same mtimes, same etags. So `changed` is false for
+      // every child, which is precisely why the shipped gate offered nothing.
+      await h.reconcile(albumListing(ALBUM, 3));
+
+      // All three songs written, and no orphans left. On the shipped code this assertion is the one
+      // that fails: `songInputs` is empty, nothing is written, and the folder closes.
+      expect(await h.songs()).toBe(3);
+      expect(await h.orphans()).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('reaches every song row across passes when the batches truncate independently', async () => {
+    // The case the production state was a sample of, driven as arithmetic: more audio children than
+    // the chunk can write, so the node batch and the song batch truncate against the same meter at
+    // different offsets. The invariant is the count, and it is the assertion that cannot be
+    // satisfied by a status or a shape — a scan that reports `idle` with a missing row satisfies
+    // every other assertion in this file.
+    const TRACKS = 60;
+    expect(TRACKS).toBeGreaterThan(WORKER_SUBSREQUEST_CEILING - PER_FOLDER_PRELUDE);
+    const h = audioHarness({ tracks: TRACKS, seedSongs: false });
+    try {
+      // Four passes, against a folder whose children cannot fit in one chunk. Bounded rather than
+      // `while (!closed)` because a fixture that loops until it agrees with itself terminates for
+      // the wrong reason when the code never converges.
+      for (let pass = 0; pass < 4; pass += 1) {
+        await h.reconcile(albumListing(ALBUM, TRACKS));
+      }
+
+      // Every audio child has a song row, which is the whole claim. The shipped code reaches a
+      // stable state with fewer, and then reports success while doing it.
+      expect(await h.songs()).toBe(TRACKS);
+      expect(await h.orphans()).toEqual([]);
+
+      // And the folder closed, so the frontier drained — the two together being "finished" rather
+      // than "stopped asking".
+      expect((await h.root())?.is_scanned).toBe(1);
+      expect(await h.frontier()).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('does not upsert a cover.jpg as a song, though it has no song row either', async () => {
+    // The permissive direction of `has_song`, and the reason the audio test runs first.
+    //
+    // `has_song` is `0` for every non-audio child, so reading it before the `isAudioFile` test
+    // would offer `cover.jpg` to the song upsert on **every pass, for ever** — a folder of art
+    // never closing, and art appearing in `search3`. The cover is in the listing precisely so this
+    // is observable, and the count is the assertion.
+    const h = audioHarness({ tracks: 3, seedSongs: false });
+    try {
+      await h.reconcile(albumListing(ALBUM, 3));
+      // Three tracks, and not four rows.
+      expect(await h.songs()).toBe(3);
+
+      // A rescan writes nothing: the cover is not re-offered, so this is not a slow accumulation
+      // but an unbounded one. The folder is the second pass.
+      await h.reconcile(albumListing(ALBUM, 3));
+      expect(await h.songs()).toBe(3);
+      expect(await h.reconcile(albumListing(ALBUM, 3))).toBe(0);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('still writes nothing on a rescan of a folder whose two planes already agree', async () => {
+    // The property the whole design rests on, re-asserted with audio children, because adding a
+    // compare to the song writer is exactly the kind of change that can quietly give it back.
+    //
+    // `songRowMissing` must be a *second* reason to write and not a replacement one: a folder where
+    // every child already has a song row and nothing moved must cost zero rows, or an unchanged
+    // library stops being free.
+    const h = audioHarness({ tracks: 3 });
+    try {
+      // Seeded consistent: three songs, three node rows, no orphans.
+      expect(await h.songs()).toBe(3);
+      expect(await h.orphans()).toEqual([]);
+
+      // The first pass writes the album's own row, and nothing else — the folder was seeded
+      // unreconciled, which is the frontier state. One row, and it is the frontier flag.
+      expect(await h.reconcile(albumListing(ALBUM, 3))).toBe(1);
+      expect((await h.root())?.is_scanned).toBe(1);
+
+      // Now nothing at all. Three songs already present and three nodes already current: the
+      // second reason to write a song row must not make the first one unnecessary, or an unchanged
+      // library stops being free and the daily allowance is spent re-writing rows that are right.
+      expect(await h.reconcile(albumListing(ALBUM, 3))).toBe(0);
+      expect(await h.reconcile(albumListing(ALBUM, 3))).toBe(0);
+      expect(await h.songs()).toBe(3);
+      expect(await h.orphans()).toEqual([]);
+    } finally {
+      h.close();
+    }
+  });
+
+  it('reads the song row from songs, so the two planes are read in one statement', async () => {
+    // The statement is the other half of the fix, and it is asserted directly because the caller
+    // could be reading a correct answer from a double indefinitely.
+    //
+    // Its own handle rather than the audio harness's: this case is about one statement's output, so
+    // it builds exactly the two planes it needs and reads them through the DAO.
+    {
+      // One track with a song row, one without, both with node rows — plus a non-audio child, which
+      // must read `0` and is what the audio test in `reconcileFolder` exists to catch up on.
+      const ALBUMS = seeded([
+        { path: 'Artist - Album/01.flac', name: '01.flac', isCollection: false, hasSong: false, etag: '"01.flac"' },
+        { path: 'Artist - Album/02.flac', name: '02.flac', isCollection: false, hasSong: false, etag: '"02.flac"' },
+        { path: 'Artist - Album/cover.jpg', name: 'cover.jpg', isCollection: false, hasSong: false, etag: '"cover.jpg"' },
+      ]);
+      const meter = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
+      const nodes = new NodeDAO(ALBUMS.db, meter);
+      ALBUMS.raw.exec(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                            title, title_ci, duration, bitrate, created_at, updated_at, derived_version, grouping_source)
+         VALUES ('s1', '${LIBRARY_ID}', 'Artist - Album/02.flac', 'Artist - Album', '02.flac', '02.flac',
+                 1, 2000, 'audio/flac', 'flac', 'two', 'two', 0, 0, 0, 0, ${DERIVED_VERSION}, 'derived')`,
+      );
+      try {
+        const children = await nodes.listChildrenWithSongPresence(LIBRARY_ID, 'Artist - Album');
+        const presence = new Map(children.map((child) => [child.name, child.has_song]));
+        expect(presence.get('01.flac')).toBe(0);
+        expect(presence.get('02.flac')).toBe(1);
+        // The non-audio child reads `0` — which is correct and is only safe because the caller
+        // applies its audio test first.
+        expect(presence.get('cover.jpg')).toBe(0);
+        // And the node columns are all still there, or this could not serve `nodeRowNeedsWrite`.
+        expect(children.find((child) => child.name === '02.flac')?.mtime_ms).toBe(2000);
+      } finally {
+        ALBUMS.close();
+      }
+    }
+  });
+
+  it('answers from an index on both sides, so the join costs the folder nothing extra', async () => {
+    // The plan, because a join that returns identical rows is invisible in a result set — the same
+    // reason `test/schema.int.test.ts` asserts `EXPLAIN QUERY PLAN` rather than row contents.
+    //
+    // `idx_nodes_parent_ci` has to drive the `WHERE` (and supply the `ORDER BY name_ci` for free),
+    // and `idx_songs_library_path` the join. A `songs` scan per child would be invisible in the
+    // results and ruinous in the chunk's arithmetic — the fold the ceiling cannot see.
+    const ALBUMS = seeded([{ path: 'Artist - Album/01.flac', name: '01.flac', isCollection: false, hasSong: false, etag: '"e"' }], true);
+    try {
+      const plan = (
+        ALBUMS.raw
+          .prepare(
+            `EXPLAIN QUERY PLAN
+             SELECT n.*, (s.id IS NOT NULL) AS has_song
+             FROM nodes n
+             LEFT JOIN songs s ON s.library_id = n.library_id AND s.path = n.path
+             WHERE n.library_id = ? AND n.parent_path = ?
+             ORDER BY n.name_ci ASC`,
+          )
+          .all(LIBRARY_ID, 'Artist - Album') as unknown as { detail: string }[]
+      ).map((row) => row.detail);
+
+      // The driving predicate is an index seek, not a scan of `nodes`.
+      expect(plan.some((detail) => detail.includes('idx_nodes_parent_ci'))).toBe(true);
+      // The join side is an index lookup rather than a scan of `songs`, which is what keeps the
+      // cost proportional to the folder's children instead of to the library.
+      expect(plan.some((detail) => detail.includes('idx_songs_library_path'))).toBe(true);
+      // And `songs` is never walked end to end.
+      expect(plan.some((detail) => detail.includes('SCAN songs'))).toBe(false);
+    } finally {
+      ALBUMS.close();
+    }
+  });
+});
+
+describe('the guard has teeth for the song writer too', () => {
+  // Paired with a behavioural case above, and each of the four is what makes the other three
+  // meaningful: removing the second reason to write fails the count assertions, moving the audio
+  // test after the gate fails the cover case, and putting the gate back on `changed` fails both.
+  it('goes red if the song gate goes back to reading the node row', async () => {
+    // The paired case, and the reason the fix is asserted rather than described.
+    //
+    // Each guard below is paired with a behavioural test above, because a source assertion alone
+    // would pass for a predicate that is present and unused — and the failure mode here is precisely
+    // that it looks present. `if (changed)` is a correct, readable, entirely reasonable gate that
+    // loses a track, which is why it survived.
+    const source = sourceOf('../packages/backend-services/src/index/scanFolder.ts');
+    // The compare names its own table's answer.
+    expect(source).toContain('songRowMissing');
+    // …and it guards the write rather than sitting beside it.
+    expect(/if \(changed \|\| songRowMissing\) \{\s*songInputs\.push/.test(source)).toBe(true);
+    // The node's compare is still the shared predicate, so this did not solve the problem by
+    // inlining a second comparison.
+    expect(/if \(nodeRowNeedsWrite\(known, desired\)\) \{\s*nodeInputs\.push/.test(source)).toBe(true);
+    // And the read is the one that reports both planes, because reading `nodes` is what the two
+    // writers disagreed about.
+    expect(source).toContain('listChildrenWithSongPresence');
+  });
+
+  it('derives the folder base cost from the read it makes, not from the one it used to', async () => {
+    // The bound that would have caught the wrong fix.
+    //
+    // Adding `has_song` as a **second statement** would also have worked, and it would have cost a
+    // subrequest per folder against a ceiling of 50 — so `SUBSREQUESTS_PER_FOLDER_BASE` would have
+    // had to rise, and `SCAN_CHUNK_FOLDER_LIMIT` and `SCAN_DERIVE_MAX_ROWS_PER_CHUNK` with it.
+    // Asserting the relationship means a future change that does spend a statement here turns red
+    // rather than quietly taking a folder's share of the ceiling.
+    const h = audioHarness({ tracks: 1 });
+    try {
+      // One folder, one audio child, one cover, and the closing row.
+      await h.reconcile(albumListing('Artist - Album', 1));
+      expect(h.spent()).toBeLessThanOrEqual(SUBSREQUESTS_PER_FOLDER_BASE);
+    } finally {
+      h.close();
+    }
   });
 });
 

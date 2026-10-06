@@ -1046,17 +1046,20 @@ describe("listRoots does not return the library root's own row", () => {
    * parent `''` — but `listRoots` answers "what is at the top level for `getIndexes`",
    * and the root is not a top-level entry, it is the thing they are all inside.
    */
-  async function seedLibraryWithRoot(): Promise<{ userId: string; libraryId: string; nodes: NodeDAO }> {
+  async function seedLibraryWithRoot(): Promise<{ userId: string; libraryId: string; nodes: NodeDAO; songs: SongDAO }> {
     const userId = await seedUser('RootsTest');
     const libraryId = await seedLibrary(userId, 'LROOTS');
     const nodes = new NodeDAO(handle.db);
+    // Returned because the song-presence cases below read both planes, and the point of them is
+    // that the two disagree in a way a single-table fixture cannot express.
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
     await nodes.upsertMany([
       { libraryId, path: '', parentPath: '', name: '', mtimeMs: 1, etag: null, depth: 0 },
       { libraryId, path: 'Bon Iver', parentPath: '', name: 'Bon Iver', mtimeMs: 1, etag: null, depth: 1 },
       { libraryId, path: 'Blur', parentPath: '', name: 'Blur', mtimeMs: 1, etag: null, depth: 1 },
       { libraryId, path: 'Blur/Bubbley', parentPath: 'Blur', name: 'Bubbley', mtimeMs: 1, etag: null, depth: 2 },
     ]);
-    return { userId, libraryId, nodes };
+    return { userId, libraryId, nodes, songs };
   }
 
   it('lists the top-level folders and not the root', async () => {
@@ -1087,6 +1090,67 @@ describe("listRoots does not return the library root's own row", () => {
     const { libraryId, nodes } = await seedLibraryWithRoot();
     const children = await nodes.listChildren(libraryId, '');
     expect(children.map((row) => row.path)).toContain('');
+  });
+
+  it('reports song presence per child, from songs, and returns the node columns too', async () => {
+    // The scan's reconcile diff reads this, and it exists because `nodes` alone cannot answer the
+    // question: a folder's children are written as a `nodes` row and, when audio, a `songs` row,
+    // in two batches that truncate independently — so the node row can be current while the song row
+    // was never written. Reading `has_song` from `nodes` is what made that permanent, on a live
+    // library at 117 node rows against 116 song rows.
+    const { libraryId, nodes, songs } = await seedLibraryWithRoot();
+    await nodes.upsertMany([
+      { libraryId, path: 'Artist', parentPath: '', name: 'Artist', mtimeMs: 1, etag: null, depth: 1, isScanned: true },
+      { libraryId, path: 'Artist/Album', parentPath: 'Artist', name: 'Album', mtimeMs: 1, etag: null, depth: 2, isScanned: true },
+      { libraryId, path: 'Artist/Album/01.flac', parentPath: 'Artist/Album', name: '01.flac', mtimeMs: 1, etag: '"a"', depth: 3, isScanned: true },
+      { libraryId, path: 'Artist/Album/02.flac', parentPath: 'Artist/Album', name: '02.flac', mtimeMs: 1, etag: '"b"', depth: 3, isScanned: true },
+      { libraryId, path: 'Artist/Album/cover.jpg', parentPath: 'Artist/Album', name: 'cover.jpg', mtimeMs: 1, etag: '"c"', depth: 3, isScanned: true },
+    ]);
+    await songs.upsertFileFacts([
+      { id: 's1', libraryId, path: 'Artist/Album/01.flac', dirPath: 'Artist/Album', name: '01.flac', size: 10, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+    ]);
+
+    const children = await nodes.listChildrenWithSongPresence(libraryId, 'Artist/Album');
+    const presence = new Map(children.map((child) => [child.name, child.has_song]));
+    expect(presence.get('01.flac')).toBe(1);
+    expect(presence.get('02.flac')).toBe(0);
+    // Artwork is a node and never a song, so it reads `0` — which is why `reconcileFolder`
+    // applies its audio test before consulting this.
+    expect(presence.get('cover.jpg')).toBe(0);
+
+    // Every node column is still present, because the same row serves `nodeRowNeedsWrite`. A
+    // projection that dropped them would answer the new question and quietly break the old one.
+    const first = children.find((child) => child.name === '01.flac');
+    expect(first?.path).toBe('Artist/Album/01.flac');
+    expect(first?.parent_path).toBe('Artist/Album');
+    expect(first?.mtime_ms).toBe(1);
+    expect(first?.etag).toBe('"a"');
+    expect(first?.is_scanned).toBe(1);
+    // And the ordering is unchanged, so this is a drop-in for the read it replaces.
+    expect(children.map((child) => child.name)).toEqual(['01.flac', '02.flac', 'cover.jpg']);
+  });
+
+  it('joins on songs through its index rather than scanning it', async () => {
+    // A join that returns the right rows is invisible in a result set, so the plan is the only
+    // instrument. `SCAN songs` would be proportional to the whole library per folder, on a chunk
+    // budget of 42 subrequests, and the results would look identical.
+    const { libraryId } = await seedLibraryWithRoot();
+    const plan = (
+      handle.raw
+        .prepare(
+          `EXPLAIN QUERY PLAN
+           SELECT n.*, (s.id IS NOT NULL) AS has_song
+           FROM nodes n
+           LEFT JOIN songs s ON s.library_id = n.library_id AND s.path = n.path
+           WHERE n.library_id = ? AND n.parent_path = ?
+           ORDER BY n.name_ci ASC`,
+        )
+        .all(libraryId, 'Artist') as unknown as { detail: string }[]
+    ).map((row) => row.detail);
+
+    expect(plan.some((detail) => detail.includes('idx_nodes_parent_ci'))).toBe(true);
+    expect(plan.some((detail) => detail.includes('idx_songs_library_path'))).toBe(true);
+    expect(plan.some((detail) => detail.includes('SCAN songs'))).toBe(false);
   });
 });
 
