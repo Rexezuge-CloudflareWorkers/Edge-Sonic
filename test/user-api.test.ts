@@ -19,10 +19,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHarness, ORIGIN, USER_TEST_KEY, WEBDAV_TEST_KEY } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { decryptData } from '@edge-sonic/backend-data/crypto';
+import { resetRateLimitForTests } from '../apps/api/src/middleware/rateLimit';
 
 let harness: Harness;
 
 beforeEach(async () => {
+  // The `/user/*` buckets are module-level and keyed on the dev bypass's identity, so they
+  // survive `createHarness` — every test in this file spends from one 60-per-minute budget.
+  // The file was close enough to the ceiling that adding the Danger Zone's routes tipped five
+  // later tests over it, and the symptom was a `429` in a suite about users, which reads as a
+  // product fault rather than as the limiter working.
+  //
+  // Resetting here rather than raising the limit is the point: the limit itself is asserted in
+  // `test/rate-limit.test.ts` with its own harness, and a test file that needs it raised to fit
+  // its request count is one measuring the limiter by accident.
+  resetRateLimitForTests();
   harness = await createHarness();
 });
 
@@ -518,6 +529,180 @@ describe('libraries', () => {
     const { status, body } = await call('/user/libraries/nope/scan/step', { method: 'POST' });
     expect(status).toBe(404);
     expect(body.Exception?.Message).toContain('not found');
+  });
+});
+
+/**
+ * The Danger Zone: the index drop and its cost projection.
+ *
+ * The claims here are the ones only the HTTP surface can see. What a drop *removes* is asserted
+ * over real SQLite in `test/index-drop.test.ts`, and what it does to the scan object in
+ * `test/index-drop-do.test.ts`; neither can see that the routes are reachable, that the shape
+ * is what `apps/web` reads, or that the two answers about cost agree.
+ *
+ * ### Why the projection is a route at all
+ *
+ * Because `apps/api` may not import `@edge-sonic/backend-data`'s values, and the billed-row
+ * arithmetic lives there. A route quoting `songs * 10` would be a second copy of a per-table
+ * table it cannot see — and the figure is the one an operator consents to.
+ *
+ * The **authentication** half is not here: `test/user-auth.test.ts` covers what `/user/*`
+ * refuses, and it enumerates paths rather than asserting that every route exists, so a new pair
+ * of routes is guarded by the prefix they sit under rather than by a name in that file.
+ */
+describe('the index drop', () => {
+  /**
+   * What the projection answers, typed.
+   *
+   * Spelled out rather than `Record<string, unknown>` so a wire change that drops
+   * `billedRows` is a **type** failure here instead of an `any` that silences it — the same
+   * reasoning `LibraryWire` carries.
+   */
+  interface StatsWire {
+    /**
+     * The projection's per-library rows.
+     *
+     * A **separate** interface from `UserBody` rather than a reuse of it, because this key
+     * collides: `UserBody.libraries` is `LibraryWire[]` from `GET /user/libraries` and the drop's
+     * `libraries` is a **count**. Declaring both in one interface is a duplicate identifier,
+     * and picking either shape makes the other assertion read through a lie.
+     *
+     * The key stays `libraries` because that is what the route sends — renaming the local type's
+     * field would have made the assertions below pass against a wire nobody publishes.
+     */
+    libraries?: Array<{ libraryId?: string; songs?: number; nodes?: number; scanStates?: number; billedRows?: number }>;
+    total?: { songs?: number; nodes?: number; scanStates?: number; billedRows?: number };
+    songs?: number;
+    nodes?: number;
+    ok?: boolean;
+    Exception?: { Message: string };
+    [key: string]: unknown;
+  }
+
+  /**
+   * What a `POST …/drop` reports.
+   *
+   * Its own interface because `libraries` here is a **number** of affected registrations, and
+   * `StatsWire.libraries` is an array. Asserted as a count rather than read through either
+   * shape, because a notice that says "everything" where the server said "1" is the failure.
+   */
+  interface DropWire {
+    ok?: boolean;
+    songs?: number;
+    nodes?: number;
+    libraries?: number;
+    billedRows?: number;
+  }
+
+  async function stats(): Promise<StatsWire> {
+    const { body } = await call('/user/index/stats');
+    return body as StatsWire;
+  }
+
+  it('quotes what a drop would cost, in the rows D1 bills', async () => {
+    // The harness seeds two tracks and five node rows, so this is `2 * 10 + 5 * 4 = 60`.
+    // Written as the arithmetic rather than the literal `60` so a change to a table's index
+    // count fails here — which is the point: the figure has a source in `sqlite_schema`, and
+    // `test/schema.int.test.ts` asserts that source against the real schema.
+    const body = await stats();
+
+    expect(body.libraries?.[0]).toMatchObject({ libraryId: 'L1', songs: 2, nodes: 5, scanStates: 0 });
+    expect(body.total?.billedRows).toBe(2 * 10 + 5 * 4);
+  });
+
+  it('reports a never-scanned library as costing nothing', async () => {
+    // A library that has never been indexed is what most of a new deployment's libraries are,
+    // and the Danger Zone is reachable for them. `scanStates: 0` rather than `1` — a projection
+    // quoting a cost for a table it is not going to touch is the direction that makes an
+    // operator distrust the other numbers.
+    const body = await stats();
+    expect(body.libraries?.[0]?.scanStates).toBe(0);
+    expect(body.total?.billedRows).toBeGreaterThan(0);
+  });
+
+  it('drops the index and keeps the library, so a rescan can rebuild it', async () => {
+    // The reason this is not `DELETE /user/libraries/:id`. That route cascades `libraries`,
+    // and with it the only copy of the WebDAV password — so an operator with a rejected
+    // credential had no remedy but re-registering the origin.
+    const { status, body } = await call('/user/libraries/L1/index/drop', { method: 'POST' });
+
+    expect(status).toBe(200);
+    expect(body as DropWire).toMatchObject({ ok: true, libraries: 1, songs: 2 });
+
+    const list = await call('/user/libraries');
+    expect(list.body.libraries?.[0]).toHaveProperty('songCount', 0);
+    // Registered, still granted, and now reporting "never scanned" — the `scan: null` that
+    // `describeScanState` renders as needing an action, rather than `idle` beside zero tracks.
+    expect(list.body.libraries?.[0]).toHaveProperty('scan', null);
+    const row = await harness.db.db.prepare('SELECT COUNT(*) AS cnt FROM libraries').first<{ cnt: number }>();
+    expect(row?.cnt).toBe(1);
+  });
+
+  it('reports what it billed, rather than what it estimated', async () => {
+    // The measured figure. A projection is a reading of the index at one moment; the deletes
+    // are what happened. They agree unless a scan ran in between, and when they disagree the
+    // measured one is what was spent.
+    const before = await stats();
+    const { body } = await call('/user/libraries/L1/index/drop', { method: 'POST' });
+    const after = await stats();
+
+    expect((body as DropWire).billedRows).toBe(before.total?.billedRows);
+    expect(after.total?.billedRows).toBe(0);
+  });
+
+  it('answers 404 for an unknown library rather than reporting a successful drop', async () => {
+    // A mistyped id must not read as "done". An operator told the index was dropped presses
+    // Rescan, finds the library they meant still fully indexed, and has no reason to suspect
+    // the id rather than the action.
+    const { status, body } = await call('/user/libraries/does-not-exist/index/drop', { method: 'POST' });
+    expect(status).toBe(404);
+    expect(body.Exception?.Message).toContain('not found');
+  });
+
+  it('keeps stars and play counts, because song ids are derived from the path', async () => {
+    /**
+     * The reason the annotations survive.
+     *
+     * They have **no foreign key** to `songs` — they hold opaque id strings — so this is only
+     * safe because a rescan recreates the identical ids, which `test/index-drop.test.ts`
+     * asserts directly. Over HTTP what is checkable is that the rows are still there, and that
+     * a rescan makes them resolve again.
+     */
+    await harness.db.db
+      .prepare('INSERT INTO stars (user_id, item_id, item_type, starred_at) SELECT id, ?, ?, 0 FROM users LIMIT 1')
+      .bind(harness.ids.skinnyLove, 'song')
+      .run();
+
+    await call('/user/libraries/L1/index/drop', { method: 'POST' });
+
+    const stars = await harness.db.db.prepare('SELECT COUNT(*) AS cnt FROM stars').first<{ cnt: number }>();
+    expect(stars?.cnt).toBe(1);
+  });
+
+  it('drops every index at once and leaves every registration', async () => {
+    const { status, body } = await call('/user/index/drop', { method: 'POST' });
+
+    expect(status).toBe(200);
+    // One library in the harness, so the count says so rather than "everything" — a notice
+    // naming a scope is the difference between a message and a shrug.
+    expect(body as DropWire).toMatchObject({ ok: true, libraries: 1 });
+
+    const list = await call('/user/libraries');
+    expect(list.body.libraries?.[0]).toHaveProperty('songCount', 0);
+    const row = await harness.db.db.prepare('SELECT COUNT(*) AS cnt FROM libraries').first<{ cnt: number }>();
+    expect(row?.cnt).toBe(1);
+  });
+
+  it('does not spend an index drop on a GET that a prefetcher can fire', async () => {
+    // A `DELETE` on the library id would have been the obvious spelling, and this is why it is
+    // a `POST` on a sub-path: `DELETE /user/libraries/:id` means "forget this origin and its
+    // credential", and a second destructive route under one id that differs in whether the
+    // operator must re-enter a password is a distinction the verb should carry. The projection
+    // is the one `GET`, because it cannot write.
+    const projection = await call('/user/index/stats');
+    expect(projection.status).toBe(200);
+    const before = await harness.db.db.prepare('SELECT COUNT(*) AS cnt FROM songs').first<{ cnt: number }>();
+    expect(before?.cnt).toBe(2);
   });
 });
 

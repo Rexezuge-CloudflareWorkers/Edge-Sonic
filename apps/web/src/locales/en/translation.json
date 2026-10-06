@@ -7,7 +7,8 @@
     "label": "Primary",
     "libraries": "Libraries",
     "users": "Users",
-    "import": "Import"
+    "import": "Import",
+    "settings": "Settings"
   },
   "errors": {
     "pageNotFound": "Page not found",
@@ -16,14 +17,18 @@
     "languageSaveFailed": "Unable to save language.",
     "signInToViewLibraries": "Sign in to view libraries.",
     "signInToViewUsers": "Sign in to view users.",
-    "signInToViewImport": "Sign in to import."
+    "signInToViewImport": "Sign in to import.",
+    "signInToViewSettings": "Sign in to view settings."
   },
   "common": {
     "loading": "Loading…",
     "refresh": "Refresh",
     "save": "Save",
     "delete": "Delete",
-    "close": "Close"
+    "close": "Close",
+    "cancel": "Cancel",
+    "copyToClipboard": "Copy to clipboard",
+    "typeToConfirm": "Type {{name}} to confirm"
   },
   "landing": {
     "title": "The Subsonic API, Served From A WebDAV Library",
@@ -149,5 +154,36 @@
     "importedCount": "{{count}} imported",
     "rowsWritten": "{{count}} rows written",
     "unresolvedCount": "{{count}} not matched"
+  },
+  "settings": {
+    "title": "Settings",
+    "intro": "Operational controls for this deployment."
+  },
+  "danger": {
+    "title": "Danger zone",
+    "intro": "Dropping an index empties it without unregistering the library, so a rescan can rebuild it from scratch. Registrations, WebDAV passwords, stars, play counts and playlists are all kept.",
+    "loading": "Loading settings",
+    "noLibraries": "No libraries registered yet.",
+    "dropOneLibrary": "Delete this library’s scanned index",
+    "readingCost": "Reading what this would cost…",
+    "currentSize": "{{songs}} tracks indexed.",
+    "dropIndex": "Drop index",
+    "dropEverything": "Drop every index",
+    "dropEverythingDescription": "Empties every registered library at once. Registrations are kept.",
+    "everythingSizeOne": "{{songs}} tracks.",
+    "everythingSizeMany": "{{songs}} tracks across {{count}} libraries.",
+    "dropEverythingAction": "Drop every index",
+    "confirmOneTitle": "Drop index",
+    "confirmAllTitle": "Drop every index",
+    "confirmAllAction": "Drop every index",
+    "libraryDropDescription": "Deletes the scanned index for {{slug}}: every indexed track and every folder. The library and its saved WebDAV password stay registered, and stars, play counts and playlists are kept — a rescan restores them, because track ids are derived from the file path. Press Rescan on the library afterwards to index it again from scratch.",
+    "allDropDescription": "Deletes the scanned index for {{scope}}: every indexed track and every folder. No library registration, WebDAV password, star, play count or playlist is removed. Press Rescan afterwards to index from scratch.",
+    "allDropOneLibrary": "the one registered library",
+    "allDropManyLibraries": "all {{count}} registered libraries",
+    "dropCost": "{{songs}} tracks and {{nodes}} folders, billing about {{rows}} rows against the daily write allowance.",
+    "dropOutageRisk": "A drop this large can exceed the daily row-write allowance. Past that limit the database refuses every query until midnight UTC, including reads — so streaming stops too, not just scanning.",
+    "dropped": "Index dropped for {{scope}} — {{songs}} tracks removed, about {{rows}} rows billed.",
+    "droppedOne": "1 library",
+    "droppedMany": "{{count}} libraries"
   }
 }

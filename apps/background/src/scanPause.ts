@@ -164,6 +164,61 @@ class ScanPauseStore {
   }
 
   /**
+   * Drop a held pause without touching the day's count.
+   *
+   * Separate from `record` because the Danger Zone's index drop needs exactly this and nothing
+   * else: it clears a pause that would otherwise be overlaid on an empty library, and it must
+   * not reset the day's row count — deleting an index **spends** allowance, so the count has
+   * to keep going up, not start over. A caller reaching for `record` to clear a pause would
+   * have to fabricate a `ChunkResult` to say so, and that object means "a chunk ran".
+   */
+  public async clear(): Promise<void> {
+    const memory = await this.read();
+    // The no-op case is decided **here**, not by the caller. The Danger Zone's drop used to ask
+    // `held()` first and only then call this, and removing that guard turned no test red — which
+    // is the point: the check belonged to whoever owns the state, so it is here now, and the
+    // caller spends no read proving something this method already knows.
+    if (memory.pause === null) return;
+    await this.storage.put('memory', { day: memory.day, rows: memory.rows + this.pendingRows, pause: null });
+    this.pendingRows = 0;
+  }
+
+  /**
+   * Add already-billed rows to the count without running a chunk.
+   *
+   * For work this object did not do. The index drop issues its `DELETE`s from the API worker's
+   * scope and then reports what they billed, because that figure is measured by
+   * `runWriteStatement` against the real statement — and the object that paces tomorrow's
+   * scan has to hear about it, or the next scan believes it has headroom the platform has
+   * already refused.
+   *
+   * `pendingRows` rather than a direct `put`, so the persisted write still happens on the
+   * interval and a figure carried here is not lost to the eviction that `pendingRows` exists
+   * to bound. That is also why `flushIfDue` is a separate call: a drop is one large figure,
+   * not an accumulation, and persisting it immediately is worth the single write.
+   */
+  public addPendingRows(billedRows: number): void {
+    if (billedRows > 0) this.pendingRows += billedRows;
+  }
+
+  /**
+   * Persist the count if it has crossed the interval.
+   *
+   * The same threshold `record` applies, reached through the same accumulation, so a drop and
+   * a chunk cannot produce two different answers to "how much has today cost". A drop is
+   * large enough that it will almost always cross it, which is the point — the figure is worth
+   * one storage write.
+   */
+  public async flushIfDue(): Promise<void> {
+    if (this.pendingRows < SCAN_ROW_COUNT_PERSIST_INTERVAL) return;
+    const memory = await this.read();
+    const today = utcDay(Date.now());
+    const rolledOver = memory.day !== today;
+    await this.storage.put('memory', { day: today, rows: (rolledOver ? 0 : memory.rows) + this.pendingRows, pause: memory.pause });
+    this.pendingRows = 0;
+  }
+
+  /**
    * Arm the chain for a chunk's result, or disarm it.
    *
    * `willResumeWithoutAPoll` and not `isAdvancing`, and the arm time is the pause's — so a paused

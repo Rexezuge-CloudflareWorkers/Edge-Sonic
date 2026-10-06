@@ -17,6 +17,16 @@ import { BaseDAO } from './BaseDAO';
 import type { WriteBatchResult } from './BaseDAO';
 import type { NodeRow } from './rows';
 import { nowSeconds } from './identity';
+import { chunkArray } from './chunking';
+import { bindChunkSize } from './sqlLimits';
+
+/**
+ * Library ids per statement for the batched counts: one variable each, and nothing else.
+ *
+ * Derived from the measured ceiling rather than chosen, so a raised `MAX_LIBRARIES` cannot
+ * silently push this over D1's 100-parameter limit. See `sqlLimits.ts`.
+ */
+const LIBRARIES_PER_STATEMENT = bindChunkSize(1);
 
 /**
  * The one statement a node row is written by.
@@ -225,6 +235,35 @@ class NodeDAO extends BaseDAO {
     return row?.cnt ?? 0;
   }
 
+  /**
+   * Folder counts for many libraries in one statement, keyed by library id.
+   *
+   * The batched twin of {@link countByLibrary}, and for the reason `SongCountDAO`'s is: a
+   * caller rendering a row per library would otherwise spend one D1 statement per library,
+   * and each statement is a subrequest out of the invocation's fifty. `idx_nodes_frontier`
+   * and `idx_nodes_parent_ci` both lead with `library_id`, so the grouping is an index walk.
+   *
+   * A library with no folders is **absent from the map**, not present with a zero — the same
+   * convention `countByLibraries` and `listByLibraries` use, so a caller combining several
+   * of these reads treats "no rows" the same way whichever one reported it. The batch size
+   * is derived from the measured ceiling rather than chosen; see `sqlLimits.ts`.
+   */
+  public async countByLibraries(libraryIds: readonly string[]): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    for (const chunk of chunkArray(libraryIds, LIBRARIES_PER_STATEMENT)) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const result = await this.withRetry(
+        async () =>
+          await this.database
+            .prepare(`SELECT library_id, COUNT(*) AS cnt FROM nodes WHERE library_id IN (${placeholders}) GROUP BY library_id`)
+            .bind(...chunk)
+            .all<{ library_id: string; cnt: number }>(),
+        'nodes.countByLibraries',
+      );
+      for (const row of result.results ?? []) counts.set(row.library_id, row.cnt);
+    }
+    return counts;
+  }
 }
 
 export { NodeDAO };

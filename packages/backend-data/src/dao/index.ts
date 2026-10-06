@@ -65,6 +65,14 @@ export { ImportSourceDAO, ImportRunDAO, IMPORT_PHASES } from './imports';
 // reader, so it is not beside the runs an operator creates.
 export { ImportPlayCountProgressDAO } from './importProgress';
 export type { ImportPlayCountProgressRow } from './importProgress';
+// The Danger Zone's two halves: what a drop would cost, and performing it. Split because they
+// answer different questions about the same three tables — one reads counts and projects a
+// bill, the other issues `DELETE`s and measures what they cost — and folding them together
+// would put the projection on a class whose reason to exist is destructive.
+export { IndexStatsDAO } from './indexStats';
+export type { IndexStats, LibraryIndexStats } from './indexStats';
+export { IndexDropDAO } from './indexDrop';
+export type { IndexDropResult } from './indexDrop';
 export type { ImportPhase } from './imports';
 export type {
   UserRow,

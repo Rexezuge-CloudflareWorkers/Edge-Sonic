@@ -6,7 +6,7 @@
  */
 import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/api';
 import type { LibraryPatch } from '../lib/libraryDraft';
-import type { LibrarySummary, ProbeResult, ScanStateSummary } from '../types';
+import type { IndexDropResult, IndexStats, LibrarySummary, ProbeResult, ScanStateSummary } from '../types';
 
 export const listLibraries = (): Promise<{ libraries: LibrarySummary[] }> => apiGet('/libraries');
 
@@ -68,3 +68,41 @@ export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiG
  * while some other surface happened to poll it.
  */
 export const stepLibraryScan = (id: string): Promise<ScanStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/scan/step`);
+
+/**
+ * What dropping every library's index would cost.
+ *
+ * The one `GET` among the Danger Zone's calls, and it is a `GET` only because it cannot
+ * write: `IndexStatsDAO` has no write method, so there is no version of this that spends
+ * anything. A prefetcher firing it costs three batched counts and nothing else.
+ *
+ * It returns **both** the per-library rows and the total, so the Danger Zone can render a
+ * row per library and a global action from one reading — two calls would be two answers to
+ * "what does this cost", and the figure the operator consents to would depend on which one
+ * they happened to read.
+ */
+export const indexStats = (): Promise<IndexStats> => apiGet('/index/stats');
+
+/**
+ * Drop one library's index.
+ *
+ * A `POST`, and deliberately **not** a `DELETE` on `/libraries/:id` — that route exists and
+ * means "forget this origin and its credential", cascading the registration away. Two
+ * destructive routes under one id that differ in whether the operator has to re-enter a
+ * WebDAV password is a distinction worth carrying in the verb.
+ *
+ * The library registration and its encrypted credential **survive**, and so do every
+ * per-user annotation: song ids are derived from `(libraryId, path)`, so a rescan recreates
+ * them byte-identically and every star and play count re-attaches to the row it belonged to.
+ */
+export const dropLibraryIndex = (id: string): Promise<IndexDropResult & { readonly ok: true }> =>
+  apiPost(`/libraries/${encodeURIComponent(id)}/index/drop`);
+
+/**
+ * Drop **every** library's index, leaving every registration in place.
+ *
+ * The unscoped sibling of `dropLibraryIndex`, and the reason its confirmation is a literal
+ * phrase rather than a library name: nothing in the request names what is being destroyed,
+ * so the operator types the fact that *everything* is.
+ */
+export const dropAllIndexes = (): Promise<IndexDropResult & { readonly ok: true }> => apiPost('/index/drop');

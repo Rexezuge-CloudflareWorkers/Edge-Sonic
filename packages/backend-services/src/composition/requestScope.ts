@@ -16,6 +16,7 @@ import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
+import type { ScanControl } from '../library/IndexDropService';
 import { matchRemoteAlbums, matchRemoteArtists, resolveGrouping } from '../import/albumIdentity';
 import { ImportSourceService } from '../import/sourceService';
 import { ScanService } from '../index/ScanService';
@@ -23,9 +24,16 @@ import { TreeService } from '../index/TreeService';
 import { EnrichmentService } from '../index/EnrichmentService';
 import { resolveKey } from './serviceFactory';
 import type { RequestScopeEnv } from './serviceFactory';
+import { bindIndexDrop } from './bindIndexDrop';
 import { Tokens } from './tokens';
 
-function createRequestScope(env: RequestScopeEnv): Container {
+/**
+ * @param scanFor Resolves the scan Durable Object for one library, or `null` when there is
+ *   none. See the `IndexDropService` binding below for why this is a parameter and why it is
+ *   optional. Typed loosely on purpose — the interface this must satisfy is declared by the
+ *   service, and re-declaring it here would be a second definition that could disagree.
+ */
+function createRequestScope(env: RequestScopeEnv, scanFor?: (libraryId: string) => ScanControl | null): Container {
   const scope = new Container();
   const config = AppConfiguration.fromEnv(env);
 
@@ -174,6 +182,17 @@ function createRequestScope(env: RequestScopeEnv): Container {
       allowPrivateHosts: () => config.getAllowPrivateWebdavHosts() ?? config.isBypassAllowed(),
     }),
   );
+
+  /**
+ * The Danger Zone's drop and its cost projection.
+ *
+ * Two lines here, and the rest of it is in `bindIndexDrop.ts`. Which is where the DAOs are
+ * built and why `scanFor` arrives as a parameter — a Durable Object stub is `apps/api`'s to
+ * construct, so Layer 3 takes the resolver rather than reading `env`. The argument this call
+ * keeps is the forwarding of the **meter**, because a DAO without one still works and nothing
+ * would say its writes went uncharged.
+ */
+  bindIndexDrop(scope, db, subrequests, scanFor);
 
   // The optional `onRequest` is the caller's subrequest meter. It is threaded here
   // rather than at each service so a range read and a `PROPFIND` are charged to the

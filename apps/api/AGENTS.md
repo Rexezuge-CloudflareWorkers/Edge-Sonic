@@ -26,6 +26,8 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
   (the aggregate reads), plus `params`, `format`, and `pageSize`.
 - `src/user/routes.ts` — the operator API behind Access. `src/user/librarySummary.ts` — the
   library list's projection over `libraries`, `scan_state` and `songs`.
+  `src/user/indexDropRoutes.ts` — the Danger Zone's three routes.
+  `src/user/importRoutes.ts` — the import surface.
 - `src/middleware/` — `scopeMiddleware`, `userAuth`, `rateLimit`, `rateLimitConfig`,
   `securityHeaders`. `index.ts` is the barrel the worker imports from, so the installed
   set is one list rather than one import line per middleware.
@@ -129,6 +131,40 @@ deliberately does **not** do:
 The status stays `207` on the failure, because the origin *did* answer: this is a
 configuration fault, and reporting it as unreachable would send an operator off to debug their
 own server — the exact failure `classifyBeforeRequest` exists to prevent.
+
+## The Danger Zone drops an index, and keeps the library
+
+Three routes in `user/indexDropRoutes.ts`: `GET /user/index/stats`, `POST /user/index/drop`,
+`POST /user/libraries/:id/index/drop`. They empty `songs`, `nodes` and `scan_state` and leave
+`libraries` in place — which is the whole difference from `DELETE /user/libraries/:id`, whose
+cascade takes the registration **and** the encrypted WebDAV password with it. Before this, a
+rejected credential had no remedy but re-registering the origin.
+
+Three things about the shape, and each would have been the obvious alternative:
+
+- **The per-library drop is a `POST` on a sub-path, not a `DELETE`.** `DELETE /user/libraries/:id`
+  already exists and means something quite different; a second destructive route under the same
+  id that differs only in whether the operator must re-enter a password is a distinction the verb
+  should carry. The projection is the one `GET`, because `IndexStatsDAO` has no write method — so
+  there is no version of it that can be triggered by a prefetcher into doing damage.
+- **There is no confirmation token here.** Every caller of `/user/*` is already an operator —
+  Cloudflare Access *is* the authorization boundary, and `users.is_admin` is written but read only
+  to render a badge. The two gates are in `apps/web`. What this side owes is **honesty about
+  cost**: the figure the dialog quotes comes from the same `billedRowsForTable` that charges the
+  delete, so what the operator consents to is what they pay. And the figure is why the drop is
+  not merely "expensive": past the daily row-write allowance D1 refuses every query until midnight
+  UTC, reads included, so a large drop takes the deployment down rather than slowing the scan.
+- **The projection and the measured result are both reported.** `stats` is what the dialog shows;
+  the `POST` answers what the deletes **measured**. They differ whenever a scan ran while the
+  dialog was open, and when they differ the measured one is what was spent — so it is the one the
+  notice renders. Computing the projection here instead would be a second copy of a per-table
+  table this layer cannot import (`no-restricted-imports`).
+
+A global drop's measured total cannot be attributed per library, because the three `DELETE`s are
+unscoped and `meta.changes` is one number. `IndexDropService` splits it by what each library held
+and **corrects the parts to sum to the measured total**, then charges each object its share —
+`dailyRowWriteShare` divides the allowance by library count, so an object told the whole bill
+would pause itself at a quarter of a budget sized for a quarter.
 
 ## `/user/import/*` holds no credential, and that is a layer rule
 

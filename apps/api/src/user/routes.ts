@@ -5,6 +5,7 @@ import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { listLibrarySummaries } from './librarySummary';
 import { registerImportRoutes } from './importRoutes';
+import { registerIndexDropRoutes } from './indexDropRoutes';
 import type { Context } from 'hono';
 import type { SubrequestCounter } from '@edge-sonic/shared';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
@@ -311,6 +312,15 @@ function registerUserRoutes(app: {
   app.post('/user/libraries/:id/scan', startScan);
   app.get('/user/libraries/:id/scan', scanStatus);
   app.post('/user/libraries/:id/scan/step', stepScan);
+
+  /**
+   * The Danger Zone, registered after the library routes so `/user/libraries/:id/index/drop`
+   * cannot be shadowed by a narrower `/user/libraries/:id/...` route registered later. It is
+   * the **last** of the library-shaped paths and not a sibling of them: `index/drop` sits one
+   * segment deeper than `:id`, so the order is what keeps a future `POST /user/libraries/:id/x`
+   * from silently capturing it.
+   */
+  registerIndexDropRoutes(app);
 
   app.get('/user/users', listUsers);
   app.post('/user/users', createUser);

@@ -4,6 +4,8 @@ import type {
   ImportPlayCountProgressDAO,
   ImportRunDAO,
   ImportSourceDAO,
+  IndexDropDAO,
+  IndexStatsDAO,
   LibraryDAO,
   NodeDAO,
   PlaylistDAO,
@@ -22,6 +24,7 @@ import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { AccessAuthService } from '../auth/AccessAuthService';
 import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import type { LibraryService } from '../library/LibraryService';
+import type { IndexDropService } from '../library/IndexDropService';
 import type { ScanService } from '../index/ScanService';
 import type { TreeService } from '../index/TreeService';
 import type { ImportSourceService } from '../import/sourceService';
@@ -115,6 +118,26 @@ const Tokens = {
    */
   AccessAuthService: Symbol('AccessAuthService') as Token<AccessAuthService>,
   LibraryService: Symbol('LibraryService') as Token<LibraryService>,
+  /**
+   * The Danger Zone's drop, and its cost projection.
+   *
+   * Separate from `LibraryService` because it **keeps** what `LibraryService.delete` removes:
+   * the `libraries` row and its encrypted credential. A drop leaves a library registered and
+   * scannable, so folding it into the service that deletes registrations would make two
+   * opposite outcomes reachable through one name, and the difference between them is whether
+   * the operator has to re-enter a WebDAV password.
+   */
+  IndexDropService: Symbol('IndexDropService') as Token<IndexDropService>,
+  /**
+   * The two Danger Zone DAOs, behind one token.
+   *
+   * Bound as a pair rather than two tokens because nothing outside this composition root has a
+   * reason to hold one without the other: a caller projects a bill with one and spends it with
+   * the other, and a token for each would be an invitation to quote a cost from one and act
+   * without the other. The two DAOs are separate *classes* for the same reason the stats and the
+   * drop are separate methods — one reads and one destroys.
+   */
+  IndexStore: Symbol('IndexStore') as Token<{ stats: IndexStatsDAO; drop: IndexDropDAO }>,
   TreeService: Symbol('TreeService') as Token<TreeService>,
   ScanService: Symbol('ScanService') as Token<ScanService>,
   EnrichmentService: Symbol('EnrichmentService') as Token<EnrichmentService>,

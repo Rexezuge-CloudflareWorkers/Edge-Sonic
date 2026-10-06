@@ -74,7 +74,7 @@ The SPA's client-side routes. Anything else is a 404 in the SPA itself.
  * as source text and asserts that every client-side route appears here — the failure being a
  * route a link reaches and the worker does not serve.
  */
-const SPA_ROUTES = ['/', '/libraries', '/users', '/import'] as const;
+const SPA_ROUTES = ['/', '/libraries', '/users', '/import', '/settings'] as const;
 
 class EdgeSonicWorker extends AbstractEntrypointWorker {
   protected readonly app: App;

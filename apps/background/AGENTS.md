@@ -13,6 +13,41 @@ was opened first.
 | `PlayCountImportWorker.ts` | the import's **unbounded** half: walking a remote's albums for play counts |
 | `ScanWorkerFactory.ts` | the composition root both classes build their scope through |
 | `scanPause.ts` | the scan's day-row-write budget and the pause a spent allowance implies |
+| `scanIndexDrop.ts` | the two `ScanWorker` RPCs the Danger Zone's drop calls, and the ordering they must be called in |
+
+## A drop stops this object **before** the D1 deletes, and charges it after
+
+`ScanWorker.reset` and `ScanWorker.charge` exist for the Danger Zone's index drop, and the
+**ordering** between them and the `DELETE`s is the entire reason they are separate RPCs.
+
+- **The alarm is deleted first.** It fires every second. One that fires between the delete of
+  `songs` and the delete of `nodes` finds a frontier describing rows that no longer exist,
+  walks the origin and writes fresh song rows — landing *after* the delete meant to have removed
+  them. The operator is told their index is empty and it is not, and nothing records that anything
+  happened. The alarm has to be deleted from **this** object for the result to be a fact rather
+  than a race.
+- **The held pause is cleared with it.** `getStatus` overlays a pause over the stored status,
+  because a pause is usually *caused* by D1 refusing writes and so cannot be recorded in the row
+  it would override. One surviving a drop renders "paused until 00:00 UTC" over an empty library,
+  and the operator's only conclusion is that the drop failed.
+- **The day's billed-row count is deliberately kept, and then added to.** Deleting an index
+  spends allowance like any other write — `songs` bills ten rows per row, so a 5,000-track drop
+  is ~55,000 rows of a 100,000-row day. Forgetting that would let the next scan believe in
+  headroom the platform has already refused, which is how an outage is reached rather than
+  survived. `charge` takes what the deletes **measured**, not the projection the operator
+  confirmed against, and it routes through `ScanPauseStore`'s own `pendingRows` because the
+  `memory` key has three writers and a fourth would have to reproduce the interval and the
+  day-rollover branches.
+- **Nothing is seeded.** `start` is the only thing that seeds the frontier, and it exists
+  because a scan needs a root row to descend from. A drop that reached for it would put every
+  folder back on `is_scanned = 0` — which is the state `listFrontier` reads, so the next chunk
+  would walk the whole origin and write back the index that was just deleted.
+- **`libraryId` is accepted and ignored.** One object per library means the id is always the one
+  this object holds, and re-pointing it is `startScan`'s job.
+
+The reasoning lives in `scanIndexDrop.ts` and the two methods on `ScanWorker` are three-line
+delegations, because `ScanWorker` is over the god-file limit and the answer to that is to move a
+block that does not belong rather than to shorten the blocks that do.
 
 ## The scan's stored count is in *billed* rows
 
