@@ -49,6 +49,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { SCAN_CHUNK_SUBSREQUEST_BUDGET } from '@edge-sonic/backend-runtime/config';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { runPlayCountAlbumPhase } from '@edge-sonic/backend-services/import';
+import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import { createScanWorkerScope } from './ScanWorkerFactory';
 
 /**
@@ -182,16 +183,16 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
     const phaseContext = {
       runId,
       userId: run.target_user_id,
-      // The walk resolves against **one** library, because `matchRemoteSongs` scopes every
-      // lookup to one and a library-less resolution would let a track from a library the target
-      // user cannot see through. See `libraryIdFor` for the two-library limitation, which is
-      // reported rather than hidden.
-      libraryId: await this.libraryIdFor(run.target_user_id),
+      // The walk resolves against **every** library the target user was granted, so a count
+      // whose track lives in the second is matched rather than reported unmatched. The
+      // alternative — `libraries[0]` — is the narrowing `SongIdLookupDAO` records for the play
+      // queue, and it cost this walk every count outside the first library.
+      libraryId: await this.libraryIdsFor(run.target_user_id),
       store: this.store(scope, run.target_user_id),
       remote: remote as never,
-      matchAlbum: (libraryId: string, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
+      matchAlbum: (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
         scope.get(Tokens.MatchRemoteAlbums)(libraryId, albums),
-      matchArtist: (libraryId: string, artists: ReadonlyArray<{ id: string; name: string | null }>) =>
+      matchArtist: (libraryId: LibraryScope, artists: ReadonlyArray<{ id: string; name: string | null }>) =>
         scope.get(Tokens.MatchRemoteArtists)(libraryId, artists),
       albumPageSize: ALBUMS_PER_BATCH,
     };
@@ -249,10 +250,13 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
    * granted two libraries has their counts matched against the first, and the rest appear in the
    * report rather than silently resolving somewhere else.
    */
-  private async libraryIdFor(userId: string): Promise<string> {
+  private async libraryIdsFor(userId: string): Promise<readonly string[]> {
     const scope = createScanWorkerScope(this.env);
     const granted = await scope.get(Tokens.LibraryService).listForUser(userId);
-    return granted[0]?.id ?? '';
+    // Every granted library, not the first: the walk resolves foreign ids against the scope, and
+    // `libraries[0]` reported every count in the second library as unmatched — the same
+    // narrowing `SongIdLookupDAO` records for the play queue.
+    return granted.map((row) => row.id);
   }
 
   private store(scope: ReturnType<typeof createScanWorkerScope>, userId: string) {

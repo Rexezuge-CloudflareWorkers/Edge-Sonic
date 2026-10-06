@@ -78,6 +78,39 @@ iterates all libraries, disagreed with both.
 So the invariant is: **a per-user record is not scoped to one library**, and narrowing it is
 a silent data loss rather than a filter.
 
+## Library scope, and why it is a type rather than a method
+
+Every aggregate here is `WHERE library_id = ?`, and that could not express a
+user who was granted two libraries — the answer a client got was the first one.
+`dao/libraryScope.ts` makes it `LibraryScope = string | readonly string[]`: the
+**type** widens without the call widening, so `listAlbums(libraryId, …)` still
+means one library and a union caller passes a list.
+
+The alternative was a parallel `listAlbumsAcrossLibraries`, and that is a second
+implementation of one query — free to disagree about the `WHERE` that decides
+what a row is. Two spellings over one implementation is the shape
+`SongIdLookupDAO` already has in `listIdsIn` / `listIdsAcrossLibraries`, for the
+same reason: the per-user records there are not scoped to one library.
+
+Three things follow, and each is a rule rather than a detail:
+
+- **A singleton renders as `=`, not `IN (?)`.** Same plan, and it keeps the
+  single-library query text identical to what every plan assertion in
+  `test/schema.int.test.ts` was written against.
+- **An empty scope is `0 = 1`,** a predicate that selects nothing. `IN ()` is a
+  syntax error and dropping the clause would turn "this user can see no library"
+  into "every library".
+- **Every batch size subtracts `libraryReserve(scope)`,** because an `IN (?, ?, …)`
+  binds one variable *per library*. The arithmetic fitting while the statement is
+  one variable over D1's ceiling is this package's recorded bind defect, twice,
+  and a typed `1` is exactly the number that is wrong by the time someone grants
+  a second library.
+
+The plans are asserted in `test/schema.int.test.ts` for **all four** aggregates
+under a two-library scope, because `=` and `IN` return identical rows and the plan
+is the only observable difference — the same reason `idx_songs_album`'s coercion
+is pinned there.
+
 ## The rules that keep getting broken
 
 - **D1 predicates: lowercase the _parameter_, never the column.** `lower(col)` cannot use
@@ -227,6 +260,32 @@ a silent data loss rather than a filter.
       every tag and every remote publishes an ordinary space, which is the same glyph, so no
       user can see the difference and no query can match it. A bare leading number followed by
       whitespace is deliberately **not** stripped — `2001 A Space Odyssey` is a film.
+    - **The title is fill-once, and that is a standing cost rather than a bug.**
+      `APPLY_DERIVATION` writes `title`/`title_ci` only when they are `NULL`, and
+      `grouping_source` keeps its three-column meaning — so a corrected
+      `deriveTitleFromFileName` **cannot reach a title this derivation already
+      wrote**, and changing one is a deliberate decision instead of a version bump.
+      Asserted in both directions in `test/schema.int.test.ts` so the cost is a claim.
+
+      The obvious improvement — putting `title` under the flag — is a data-loss
+      defect, and the reason is the shape of the problem rather than the flag.
+      Adding `title` widens `'derived'` from three columns to four, and every row
+      stamped under the old definition is then read under the new one. Nothing on
+      the row records which definition wrote a given stamp, and the two shapes are
+      **byte-for-byte identical**: a file tagged `TITLE` but not
+      `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag title *and* `'derived'`, and
+      a tagless enriched file holds a derived title *and* `'derived'`. A guarded
+      `title` reads the first as the second's filename guess and destroys a real
+      tag — for ever, because `enriched_at` is set and `shouldEnrich` then
+      short-circuits the file.
+
+      A dedicated `songs.title_source` is the shape that holds **both** "never
+      overwrite a tag" and "a corrected derivation still propagates", and the
+      schema rules are what stop it: **SQLite has no `ALTER TABLE … ADD COLUMN IF
+      NOT EXISTS`** (measured on 3.53.4, after assuming otherwise), a migration
+      here may not `ALTER`, and editing the locked baseline is the
+      `songs.reader_version` defect this package has already paid for once. Worth
+      revisiting if a column-adding migration path is ever built.
     - **The suffix is stripped only when it is a container this server indexes**, against a
       transcribed copy of `libraryNames.ts`'s `AUDIO_SUFFIXES` (layer 0 cannot import layer 3,
       so it is a copy pinned by `test/schema.int.test.ts`). Cutting at the last dot instead

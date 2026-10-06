@@ -17,13 +17,13 @@
  */
 import { albumChildElement, albumElement, decodeId, el, elList, ErrorCode, IdKind, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
 import type { AnnotationLookup } from '../mappers';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
-import { resolveLibrary } from './libraries';
+import { resolveLibraries } from './libraries';
 import { annotationsFor } from './structured';
 import { groupAlbumsOf } from './albumRecord';
 
@@ -103,7 +103,9 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   if (!(type in ALBUM_ORDER_BY) && type !== 'starred') {
     throw new SubsonicError(ErrorCode.Generic, `type '${type}' not implemented`);
   }
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const identity = context.albumsFor(library);
   const size = context.pageSize(context.params.optionalInt('size'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
@@ -111,7 +113,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   if (type === 'starred') {
     const starredIds = await context.annotations.listStarred(context.user.id, 'album');
     const annotations = await annotationsFor(context, starredIds.length > 0);
-    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, library, starredIds, annotations), wrapperName)));
+    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, library, scope, starredIds, annotations), wrapperName)));
   }
 
   const needsRange = type === 'byYear' || type === 'byGenre';
@@ -122,7 +124,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   const toYear = needsRange ? Math.max(rawFrom, rawTo) : Number.MAX_SAFE_INTEGER;
   const genre = type === 'byGenre' ? context.params.get('genre') : undefined;
 
-  const rows = await context.songIndex.listAlbums(library.id, {
+  const rows = await context.songIndex.listAlbums(scope, {
     grouping: identity.grouping,
     genreCi: genre ? genre.toLowerCase() : null,
     ...(needsRange && { fromYear, toYear }),
@@ -154,6 +156,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
 async function starredAlbums(
   context: RestContext,
   library: LibraryRow,
+  scope: LibraryScope,
   starredIds: readonly string[],
   annotations: AnnotationLookup,
 ): Promise<Album[]> {
@@ -169,7 +172,7 @@ async function starredAlbums(
     keys.push(key);
   }
   if (keys.length === 0) return [];
-  const rows = await context.songIndex.listForAlbumKeys(library.id, keys, identity.grouping);
+  const rows = await context.songIndex.listForAlbumKeys(scope, keys, identity.grouping);
   return groupAlbumsOf(rows, library, identity, annotations);
 }
 
@@ -192,12 +195,14 @@ async function songNodes(context: RestContext, library: LibraryRow, rows: readon
 }
 
 async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const size = context.pageSize(context.params.optionalInt('size'), 10);
   const genre = context.params.get('genre');
   const fromYear = context.params.int('fromYear', Number.MIN_SAFE_INTEGER);
   const toYear = context.params.int('toYear', Number.MAX_SAFE_INTEGER);
-  const rows = await context.songs.listRandom(library.id, {
+  const rows = await context.songs.listRandom(scope, {
     genreCi: genre ? genre.toLowerCase() : null,
     ...((fromYear !== Number.MIN_SAFE_INTEGER) && { fromYear }),
     ...((toYear !== Number.MAX_SAFE_INTEGER) && { toYear }),
@@ -207,11 +212,13 @@ async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
 }
 
 async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const genre = context.params.require('genre');
   const count = context.pageSize(context.params.optionalInt('count'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
-  const rows = await context.songs.listByGenre(library.id, genre.toLowerCase(), count + offset, 0);
+  const rows = await context.songs.listByGenre(scope, genre.toLowerCase(), count + offset, 0);
   return respond(context, elList('songsByGenre', 'song', {}, await songNodes(context, library, rows.slice(offset, offset + count))));
 }
 
@@ -225,8 +232,8 @@ async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> 
  * nothing to do with the library.
  */
 async function getGenres(context: RestContext): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
-  const rows = await context.songIndex.listGenres(library.id);
+  const scope = (await resolveLibraries(context, context.params.get('musicFolderId'))).map((row) => row.id);
+  const rows = await context.songIndex.listGenres(scope);
   const nodes = rows
     .filter((row) => row.value.trim().length > 0)
     .map((row) => el('genre', { value: row.value, songCount: row.song_count, albumCount: row.album_count }));
@@ -243,7 +250,9 @@ async function getGenres(context: RestContext): Promise<EnvelopeResponse> {
  * artist element itself.
  */
 async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const [songIds, albumIds] = await Promise.all([
     context.annotations.listStarred(context.user.id, 'song'),
     context.annotations.listStarred(context.user.id, 'album'),
@@ -256,7 +265,7 @@ async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'
   // Through `starredAlbums`, not a per-id directory read: an album's identity is now a tag for
   // most libraries, so a starred *folder* id has to resolve through the group or the starred
   // list publishes half of an album the rest of the server publishes whole.
-  const albums = await starredAlbums(context, library, albumIds, annotations);
+  const albums = await starredAlbums(context, library, scope, albumIds, annotations);
   // `starred` and `starred2` declare both an `album` and a `song` key, so the wrapper is
   // a record either way. An album in that wrapper is a `Child`, matching `starred`'s own
   // schema — see `renderAlbums` for why the element type follows the wrapper.
@@ -280,7 +289,8 @@ async function getStarred2(context: RestContext): Promise<EnvelopeResponse> {
  * dropped rather than shown as a broken entry.
  */
 async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, undefined);
+  const libraries = await resolveLibraries(context, undefined);
+  const library = libraries[0];
   const identity = context.albumsFor(library);
   const entries = await context.annotations.listNowPlaying();
   const nodes: ElementNode[] = [];

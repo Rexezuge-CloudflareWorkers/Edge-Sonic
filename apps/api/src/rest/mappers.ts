@@ -16,7 +16,7 @@
  *   folder).
  */
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { artistElement, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
+import { artistElement, artistIdOf, elList } from '@edge-sonic/subsonic';
 import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
 import type { AlbumIdentity } from './albumIdentity';
 
@@ -183,7 +183,7 @@ function groupArtistRows(rows: readonly SongRow[], identity: AlbumIdentity): Art
 function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], starred: ReadonlyMap<string, number> = new Map()): ElementNode[] {
   const buckets = new Map<string, ElementNode[]>();
   for (const group of groups) {
-    const id = encodeId(IdKind.Artist, library.id, group.name);
+    const id = artistIdOf(group.name);
     const letter = firstLetterOf(group.name);
     const starredAt = starred.get(id);
     const node = artistElement({
@@ -248,7 +248,7 @@ function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity
   // root is exactly that. So: the same object emitted `album` derived from the folder and
   // `artist` absent, which is a record half-built.
   const artistName = artistNameOf(song);
-  const artistId = encodeId(IdKind.Artist, library.id, artistName);
+  const artistId = artistIdOf(artistName);
   // The album artist, for the two OpenSubsonic fields carrying it. `album_artist` preferred,
   // `artist` as the fallback: a compilation's tracks each name their own performer while the
   // album names one thing, and a client grouping an album grid by `displayAlbumArtist` needs

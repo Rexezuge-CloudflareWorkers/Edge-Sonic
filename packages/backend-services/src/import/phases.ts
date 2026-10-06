@@ -35,6 +35,7 @@
  * playlist.
  */
 import { UUIDUtil } from '@edge-sonic/shared/utils';
+import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import { matchRemoteSongs } from './matchRemoteIds';
 import { authorizedSongIds, toCandidate, unresolvedFor } from './phaseShared';
 import { phase } from './report';
@@ -45,17 +46,26 @@ import type { RemoteSong, RemoteSubsonicClient } from './remoteClient';
 /**
 How an album's remote identity becomes a local one, supplied by the composition root.
 */
-type AlbumMatcher = (libraryId: string, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) => Promise<Map<string, string>>;
+type AlbumMatcher = (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) => Promise<Map<string, string>>;
 
 /**
 How an artist's remote identity becomes a local one.
 */
-type ArtistMatcher = (libraryId: string, artists: ReadonlyArray<{ id: string; name: string | null }>) => Promise<Map<string, string>>;
+type ArtistMatcher = (libraryId: LibraryScope, artists: ReadonlyArray<{ id: string; name: string | null }>) => Promise<Map<string, string>>;
 
 interface PhaseContext {
   readonly runId: string;
   readonly userId: string;
-  readonly libraryId: string;
+  /**
+   * The libraries a foreign id may resolve against — **every** one the target user was
+   * granted, not the first.
+   *
+   * A list because a scope is what every lookup is scoped to, and because a user with two
+   * libraries is not a user with a preference between them: a track in the second was reported
+   * `not-found` and the operator sent to re-index a library that already held it. One element
+   * is the single-library case, so a caller that genuinely wants one passes one.
+   */
+  readonly libraryId: LibraryScope;
   readonly store: PhaseStore;
   readonly remote: RemoteSubsonicClient;
   readonly matchAlbum: AlbumMatcher;

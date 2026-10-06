@@ -21,6 +21,7 @@ import type { SubrequestCounter } from '@edge-sonic/shared';
 import type { Token } from '@edge-sonic/backend-runtime/di';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
+import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import type { AccessAuthService } from '../auth/AccessAuthService';
 import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import type { LibraryService } from '../library/LibraryService';
@@ -159,8 +160,8 @@ const Tokens = {
 /**
 The two matchers, as the shapes the composition root binds.
 */
-type RemoteAlbumMatcher = (libraryId: string, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) => Promise<Map<string, string>>;
-type RemoteArtistMatcher = (libraryId: string, artists: ReadonlyArray<{ id: string; name: string | null }>) => Promise<Map<string, string>>;
+type RemoteAlbumMatcher = (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) => Promise<Map<string, string>>;
+type RemoteArtistMatcher = (libraryId: LibraryScope, artists: ReadonlyArray<{ id: string; name: string | null }>) => Promise<Map<string, string>>;
 
 export { Tokens };
 export type { RemoteAlbumMatcher, RemoteArtistMatcher };

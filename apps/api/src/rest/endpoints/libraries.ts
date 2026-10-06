@@ -17,7 +17,7 @@
  * one was rejected by the other, and the comment on `user` claiming the list was the
  * index into described a contract nothing tested.
  */
-import { musicFolderElement, userFolderElements, ErrorCode, SubsonicError } from '@edge-sonic/subsonic';
+import { musicFolderElement, SPANNING_LIBRARY_ID, userFolderElements, ErrorCode, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -96,16 +96,77 @@ const CANONICAL_POSITION = /^(?:0|[1-9]\d*)$/;
  *    position *in range*, so nothing that resolved before stops resolving.
  */
 async function resolveLibrary(context: RestContext, requested: string | undefined): Promise<LibraryRow> {
+  return (await resolveLibraries(context, requested))[0];
+}
+
+/**
+ * The libraries a request reads, which is **every** one the caller was granted unless it
+ * named a folder.
+ *
+ * ### Why the default is the union
+ *
+ * A user with two libraries is not a user with two libraries *and* a preference between them —
+ * they registered both because they wanted both in their library, and a server that answers the
+ * un-scoped request with only the first is answering a question nobody asked. The measured case:
+ * a release whose track 01 lives in one library and track 03 in the other was browsable from
+ * **no** `musicFolderId` at all, because folder 0 held half the album and folder 1 the other
+ * half, so a client that showed the album listed it at a `songCount` of 1 and never opened the
+ * track it was missing.
+ *
+ * So the default is the union and `musicFolderId` remains the way to narrow. That keeps the
+ * protocol's own model intact — `musicFolderId` is a **scope selector**, and a client that sends
+ * one still gets exactly the library it asked for.
+ *
+ * ### And what it costs, stated rather than hidden
+ *
+ * `getMusicFolders` still publishes the individual libraries, so a client with a folder picker
+ * can still choose one and will then see *less* than the default. That is the price of the
+ * default being the union, and the alternative — a synthetic "All" entry — would shift every
+ * published `musicFolderId` position, which the stored ones depend on. `folder` grouping is
+ * **not** unioned, because under it an album *is* a directory and directories are per-source.
+ */
+async function resolveLibraries(context: RestContext, requested: string | undefined): Promise<LibraryRow[]> {
   const libraries = await userLibraries(context, context.user.id);
   if (libraries.length === 0) {
     throw new SubsonicError(ErrorCode.NotFound, 'No library has been granted to this user.');
   }
-  if (requested === undefined || requested.length === 0) return libraries[0];
+  if (requested === undefined || requested.length === 0) return libraries;
   if (CANONICAL_POSITION.test(requested)) {
     const position = Number(requested);
-    if (position < libraries.length) return libraries[position];
+    if (position < libraries.length) return [libraries[position]];
   }
-  return await context.libraries.requireForUser(context.user.id, requested);
+  return [await context.libraries.requireForUser(context.user.id, requested)];
 }
 
-export { userLibraries, libraryName, userFolderElementsFor, musicFolderElementsFor, resolveLibrary };
+/**
+ * The libraries a **decoded id** may reach, and the only way an endpoint turns an id into a
+ * scope.
+ *
+ * ### Two answers, because an id names a group or a file
+ *
+ * - A **song** or **directory** id carries a real library, because `path` only means something
+ *   inside one: the same relative path in two libraries is two files, and resolving it against
+ *   the union would let a client read a track from a library it never named. So those answer one
+ *   library, and `requireForUser` is the authorization — a library the caller cannot see is
+ *   still `code=70`, never `50`, because `50` would confirm the id is real.
+ * - An **album** or **artist** id carries {@link SPANNING_LIBRARY_ID}, because it names a group
+ *   and a group is what two libraries share. Those answer **every** library the caller was
+ *   granted, so a release whose tracks live in two of them opens whole.
+ *
+ * The union is still grant-scoped, so the oracle rule holds on the union branch too: a key that
+ * exists only in a library the caller cannot see resolves to nothing, because the lookup is
+ * restricted to the granted set rather than widened to everything and filtered afterwards.
+ *
+ * A forged id cannot reach the union branch as an oracle — the sentinel is a fixed constant, so
+ * it says "all granted libraries" and nothing about which ones exist.
+ */
+async function librariesForId(context: RestContext, libraryId: string): Promise<LibraryRow[]> {
+  if (libraryId === SPANNING_LIBRARY_ID) {
+    const libraries = await userLibraries(context, context.user.id);
+    if (libraries.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'No library has been granted to this user.');
+    return libraries;
+  }
+  return [await context.libraries.requireForUser(context.user.id, libraryId)];
+}
+
+export { userLibraries, libraryName, userFolderElementsFor, musicFolderElementsFor, resolveLibrary, resolveLibraries, librariesForId };

@@ -445,7 +445,7 @@ describe('LibraryImportWorkflow', () => {
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
     await workflow.run(
-      { payload: { runId, sourceId, userId, libraryId, phases: ['stars'], playlistIds: [] } } as never,
+      { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars'], playlistIds: [] } } as never,
       step as never,
     );
 
@@ -485,7 +485,10 @@ describe('LibraryImportWorkflow', () => {
           runId,
           sourceId,
           userId,
-          libraryId,
+          // The **scope**, not one library: the phases resolve a foreign id against every
+          // library the target user was granted, and a payload carrying a single id made the
+          // second library's tracks unmatchable.
+          libraryIds: [libraryId],
           phases: ['playlists'],
           // The ids are in the **payload**, read before the workflow started: a step name is a
           // cache key and has to be nameable before the first step runs.
@@ -509,7 +512,7 @@ describe('LibraryImportWorkflow', () => {
     );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    const payload = { runId, sourceId, userId, libraryId, phases: ['playlists' as ImportPhase], playlistIds: ['p1'] } as never;
+    const payload = { runId, sourceId, userId, libraryIds: [libraryId], phases: ['playlists' as ImportPhase], playlistIds: ['p1'] } as never;
     await workflow.run({ payload } as never, step as never);
     await workflow.run({ payload } as never, step as never);
 
@@ -529,7 +532,7 @@ describe('LibraryImportWorkflow', () => {
     // `NonRetryableError`, so the engine records a **failed** instance rather than burning three
     // attempts on a row that will not come back — and rather than reporting success.
     await expect(
-      workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never),
+      workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never),
     ).rejects.toBeInstanceOf(NonRetryableError);
   });
 
@@ -573,7 +576,7 @@ describe('LibraryImportWorkflow', () => {
       },
     } as never);
 
-    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['playCounts'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['playCounts'], playlistIds: [] } } as never, fakeStep() as never);
 
     const runs = new ImportRunDAO(handle.db);
     const run = await runs.findById(runId);
@@ -619,7 +622,7 @@ describe('LibraryImportWorkflow', () => {
       },
     } as never);
 
-    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['stars', 'playCounts'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars', 'playCounts'], playlistIds: [] } } as never, fakeStep() as never);
 
     const runs = new ImportRunDAO(handle.db);
     const run = await runs.findById(runId);
@@ -655,7 +658,7 @@ describe('LibraryImportWorkflow', () => {
     );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never);
 
     const runs = new ImportRunDAO(handle.db);
     expect((await runs.findById(runId))?.status).toBe('completed');
@@ -670,7 +673,7 @@ describe('LibraryImportWorkflow', () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })));
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: [], playlistIds: [] } } as never, step as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: [], playlistIds: [] } } as never, step as never);
 
     // **No steps at all**. A phase the operator left out is skipped, not run-and-found-empty —
     // so the report cannot show a category they did not ask for as imported.
@@ -705,7 +708,7 @@ describe('LibraryImportWorkflow', () => {
     );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['stars'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars'], playlistIds: [] } } as never, fakeStep() as never);
 
     const stored = parseReport(await runs.readReport(runId));
     // **One** line named `stars`, not two.

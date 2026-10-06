@@ -17,14 +17,14 @@
  * at the index. What is *not* acceptable is silently shipping a full-table scan
  * across every library, which is what dropping the `library_id` predicate would do.
  */
-import { albumChildElement, albumElement, el, elList, encodeId, IdKind, songElement } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, artistIdOf, el, elList, songElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
 import { NO_ANNOTATIONS, songToModel } from '../mappers';
-import { resolveLibrary } from './libraries';
+import { resolveLibraries } from './libraries';
 import { annotationsFor } from './structured';
 import { groupAlbumsOf } from './albumRecord';
 import { artistNameOf } from '../mappers';
@@ -54,11 +54,11 @@ function readSpec(context: RestContext): SearchSpec {
   return album === undefined ? { term: context.params.require('query'), field: 'any' } : { term: album, field: 'album' };
 }
 
-async function runSearch(context: RestContext, library: LibraryRow): Promise<{ songs: SongRow[]; spec: SearchSpec }> {
+async function runSearch(context: RestContext, library: LibraryRow, scope: LibraryScope): Promise<{ songs: SongRow[]; spec: SearchSpec }> {
   const spec = readSpec(context);
   const limit = context.pageSize(context.params.optionalInt('songCount'), 20);
   const offset = context.params.int('songOffset', 0, { min: 0 });
-  const songs = await context.songs.search(library.id, spec.term, { limit: limit + offset, offset: 0, field: spec.field });
+  const songs = await context.songs.search(scope, spec.term, { limit: limit + offset, offset: 0, field: spec.field });
   return { songs: songs.slice(offset, offset + limit), spec };
 }
 
@@ -66,8 +66,10 @@ async function runSearch(context: RestContext, library: LibraryRow): Promise<{ s
 `search` — the legacy single-group envelope.
 */
 async function search(context: RestContext): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
-  const { songs } = await runSearch(context, library);
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
+  const { songs } = await runSearch(context, library, scope);
   const count = context.pageSize(context.params.optionalInt('count'), 20);
   const annotations = await annotationsFor(context, songs.length > 0);
   const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, context.albumsFor(library), annotations)));
@@ -82,9 +84,11 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
  * only one organization. Both are answered from the same grouped view.
  */
 async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | 'searchResult3'): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const identity = context.albumsFor(library);
-  const { songs } = await runSearch(context, library);
+  const { songs } = await runSearch(context, library, scope);
   const annotations = await annotationsFor(context, songs.length > 0);
 
   const artists = groupArtists(songs, library, identity, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
@@ -96,7 +100,7 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
   // so the album's numbers are supposed to be the album's. One statement per 49 keys, against a
   // default page of 20 albums.
   const albumKeys = [...new Set(songs.map((song) => identity.keyOf(song)))];
-  const complete = await context.songIndex.listForAlbumKeys(library.id, albumKeys, identity.grouping);
+  const complete = await context.songIndex.listForAlbumKeys(scope, albumKeys, identity.grouping);
   const albums = groupAlbumsOf(complete, library, identity, NO_ANNOTATIONS).slice(
     albumOffset,
     albumOffset + context.pageSize(context.params.optionalInt('albumCount'), 20),
@@ -151,7 +155,7 @@ function groupArtists(rows: readonly SongRow[], library: LibraryRow, identity: A
   return [...counts.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(offset, offset + limit)
-    .map((entry) => el('artist', { id: encodeId(IdKind.Artist, library.id, entry.name), name: entry.name, albumCount: entry.albums.size }));
+    .map((entry) => el('artist', { id: artistIdOf(entry.name), name: entry.name, albumCount: entry.albums.size }));
 }
 
 async function search2(context: RestContext): Promise<EnvelopeResponse> {

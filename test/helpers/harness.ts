@@ -25,6 +25,7 @@
  */
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { NodeDAO, SongDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { SPANNING_LIBRARY_ID } from '@edge-sonic/subsonic';
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import { EdgeSonicWorker } from '../../apps/api/src/workers/EdgeSonicWorker';
 import { sqliteQueryable } from './sqlite';
@@ -113,9 +114,20 @@ export function base64(bytes: Uint8Array): string {
 
 /**
 Mint an id the way the product does: `kind:base64url(libraryId \n path)`.
+
+**`ar` and `alk` default to the sentinel, not to `LIBRARY_ID`.** Those two name a *group*, and a
+group is what two libraries share — an album whose track 01 is in one library and track 03 in
+another is one album, and an id carrying one library's identity would publish it twice. So a
+test that mints one by hand has to mint the same id the server does, or it is asserting against
+an id no client would ever hold. `s`, `dir` and the rest still carry a real library: a path only
+means something inside one.
+
+The default is applied here rather than at each call site so the two spellings cannot drift —
+and a test that genuinely wants the library-scoped form passes the library explicitly.
 */
-export function subsonicId(kind: 's' | 'al' | 'alk' | 'ar' | 'dir' | 'vid' | 'mf' | 'dira', path: string, libraryId = LIBRARY_ID): string {
-  return `${kind}:${base64(new TextEncoder().encode(`${libraryId}\n${path}`))}`;
+export function subsonicId(kind: 's' | 'al' | 'alk' | 'ar' | 'dir' | 'vid' | 'mf' | 'dira', path: string, libraryId?: string): string {
+  const owner = libraryId ?? (kind === 'alk' || kind === 'ar' ? SPANNING_LIBRARY_ID : LIBRARY_ID);
+  return `${kind}:${base64(new TextEncoder().encode(`${owner}\n${path}`))}`;
 }
 
 /**

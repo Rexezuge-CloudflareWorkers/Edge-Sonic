@@ -30,6 +30,8 @@ export type { WriteBatchResult } from './BaseDAO';
 // question from "one row by id", and because it is the query that had to be batched to
 // D1's ceiling — which put `SongDAO` over the god-file limit.
 export { SongIdLookupDAO } from './songIdLookup';
+export { libraryScope, libraryIds, libraryReserve } from './libraryScope';
+export type { LibraryScope } from './libraryScope';
 export { deriveFromPath, deriveTitleFromFileName, DERIVED_VERSION } from './pathConvention';
 export type { DerivedNames } from './pathConvention';
 // Provenance of the grouping columns, and why it cannot be a suffix on the value. The

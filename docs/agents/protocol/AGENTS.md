@@ -178,6 +178,25 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the same defect as the subrequest bound that lived in a comment. Asserted in
   `test/music-folder-index.test.ts`, paired with the shape assertions because shapes
   alone pass again on two surfaces that disagree.
+- **An omitted `musicFolderId` means *all* of them, and a group id cannot name one.**
+  Two rules and one measurement. A user with two libraries used to get the first one
+  from every un-scoped read, and the case that settles it is a **release split across
+  both**: track 01 in one, track 03 in the other, so folder 0 held half the album,
+  folder 1 the other half, and there was no client view that showed both. An album id
+  minted per library makes that unfixable — it publishes the release twice at a
+  `songCount` of 1 — so `alk:` and `ar:` carry `SPANNING_LIBRARY_ID` instead, a value
+  no `LibraryDAO` ever mints. A **song** id still names its library, because the same
+  relative path in two libraries is two files. `al:` (`ALBUM_GROUP_BY=folder`) also
+  keeps its library and is therefore **not** unioned: under that grouping an album is a
+  directory.
+
+  What the client sees, then, is a folder picker listing the parts and a default view
+  showing the whole. That is incoherent on its face and is kept anyway: a synthetic
+  "All" entry would shift every published position, and stored `musicFolderId`s depend
+  on those positions. Asserted — both halves, and that the union stays inside the
+  caller's grants — in `test/library-union.test.ts`, with the round trip through a
+  **stored annotation written before the re-key** so "clients keep working" is a
+  measurement and not a hope.
 - **A repeated child lives where the schema puts it, and the suite reads the schema.**
   `getIndexes` nested the folders as `shortcut` children *inside* the letter `index`
   groups; the schema puts `shortcut` directly under `indexes` and `artist` under

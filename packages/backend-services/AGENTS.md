@@ -500,6 +500,30 @@ missing album artist is a value or a wildcard — and a disagreement is invisibl
 on an album `getAlbum` cannot resolve, which **no client can see**, because the row exists.
 Existence is checked because the release may simply not be indexed here yet.
 
+The id is then minted through **`encodeAlbumKey`**, not through `encodeId` directly,
+and that is a second defect the union work found on the way. An `alk:` payload is
+`a/<base64url>` — one of three shapes, read by `decodeAlbumKey` — so writing a bare
+key into it produces a payload the decoder answers `null` for. The import used to do
+exactly that, so an imported **album star** was stored against an id `getStarred`
+and `getAlbum` could not resolve: `findPresentAlbumKeys` exists to prevent precisely
+that, and the encoder reached it instead of the key. The round trip is asserted in
+`test/import-matching.test.ts` through `decodeAlbumKey`, because the assertion has to
+go the way a client does.
+
+### The scope is **every** granted library, and it was `libraries[0]`
+
+`PhaseContext.libraryId` is a `LibraryScope`, and the route and the play-count
+worker both build it from **all** of the target user's grants. They used to take the
+first, so a track living in the second library was reported `not-found` and the
+operator was sent to re-index a library that already held it — the same narrowing
+`SongIdLookupDAO` records for the play queue, one layer down and for the same reason.
+The measured case was a release split across two libraries, so the track the
+operator's own client could play was one the report said did not exist.
+
+`ALBUM_GROUP_BY=folder` is the exception and takes the first library of the scope:
+under that grouping an album *is* a directory, so there is no id that spans sources.
+That narrowing is stated in `spanningLibraryIdFor` rather than left to the reader.
+
 ### `remoteParse` is separate from `remoteClient` because it is pure
 
 No `fetch`, no credential, no state — so every rule is testable from the Node suite with no Workers

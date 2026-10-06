@@ -36,7 +36,7 @@
  */
 import { bindChunkSize } from '@edge-sonic/backend-data/dao';
 import { chunkArray } from '@edge-sonic/backend-data/dao';
-import type { SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 
 /**
 How a local row was found, so the operator report can say which strategy worked.
@@ -87,7 +87,7 @@ interface MatchStore {
    * is case-sensitive, so `Album/track.flac` and `album/track.flac` are two files and
    * lowercasing would merge them into one match.
    */
-  findByPaths(libraryId: string, paths: readonly string[]): Promise<SongRow[]>;
+  findByPaths(libraryId: LibraryScope, paths: readonly string[]): Promise<SongRow[]>;
   /**
    * Rows whose `(album_ci, title_ci)` is one of these pairs, within one library.
    *
@@ -96,7 +96,7 @@ interface MatchStore {
    * invocation, so an unbatched version would be a guaranteed failure on the very phase that
    * matters most.
    */
-  findByAlbumTitle(libraryId: string, pairs: ReadonlyArray<readonly [string, string]>): Promise<SongRow[]>;
+  findByAlbumTitle(libraryId: LibraryScope, pairs: ReadonlyArray<readonly [string, string]>): Promise<SongRow[]>;
 }
 
 /**
@@ -167,7 +167,7 @@ const PAIRS_PER_STATEMENT = bindChunkSize(2);
  */
 async function matchRemoteSongs(
   store: MatchStore,
-  libraryId: string,
+  libraryId: LibraryScope,
   candidates: readonly MatchCandidate[],
 ): Promise<MatchOutcome[]> {
   const outcomes = new Map<string, MatchOutcome>();

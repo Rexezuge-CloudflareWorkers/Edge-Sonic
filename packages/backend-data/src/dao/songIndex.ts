@@ -23,6 +23,8 @@ import { bindChunkSize } from './sqlLimits';
 import { albumKeySpec, specFromKey } from '@edge-sonic/subsonic';
 import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
 import { albumGroupsPerStatement, albumKeyProjection } from './albumKeySql';
+import { libraryReserve, libraryScope } from './libraryScope';
+import type { LibraryScope } from './libraryScope';
 import type { AlbumKeyRowOut } from './albumKeySql';
 import type { SongRow } from './rows';
 
@@ -114,7 +116,7 @@ class SongIndexDAO extends BaseDAO {
    *   tiebreak, because a page boundary needs a total order.
    */
   public async listAlbums(
-    libraryId: string,
+    scope: LibraryScope,
     options: {
       grouping: AlbumGroupingValue;
       albumArtistCi?: string | null;
@@ -126,8 +128,9 @@ class SongIndexDAO extends BaseDAO {
       orderBy: readonly string[];
     },
   ): Promise<SongRow[]> {
-    const where: string[] = ['library_id = ?', "album_ci IS NOT NULL AND album_ci <> ''"];
-    const values: unknown[] = [libraryId];
+    const libraries = libraryScope(scope);
+    const where: string[] = [libraries.sql, "album_ci IS NOT NULL AND album_ci <> ''"];
+    const values: unknown[] = [...libraries.values];
     if (options.albumArtistCi) {
       where.push('album_artist_ci = ?');
       values.push(options.albumArtistCi);
@@ -164,7 +167,7 @@ class SongIndexDAO extends BaseDAO {
 
     const keys = (page.results ?? []).map((row) => projection.keyOf(row));
     if (keys.length === 0) return [];
-    return await this.songsForAlbumKeys(libraryId, keys, options.grouping, 'songs.listAlbums.rows');
+    return await this.songsForAlbumKeys(scope, keys, options.grouping, 'songs.listAlbums.rows');
   }
 
   /**
@@ -175,9 +178,9 @@ class SongIndexDAO extends BaseDAO {
    * All four need **whole** groups, which is why this returns rows rather than albums — the counts
    * and the album-level fields come from the same rows.
    */
-  public async listForAlbumKeys(libraryId: string, keys: readonly string[], grouping: AlbumGroupingValue): Promise<SongRow[]> {
+  public async listForAlbumKeys(scope: LibraryScope, keys: readonly string[], grouping: AlbumGroupingValue): Promise<SongRow[]> {
     if (keys.length === 0) return [];
-    return await this.songsForAlbumKeys(libraryId, keys, grouping, 'songs.listForAlbumKeys');
+    return await this.songsForAlbumKeys(scope, keys, grouping, 'songs.listForAlbumKeys');
   }
 
   /**
@@ -204,7 +207,7 @@ class SongIndexDAO extends BaseDAO {
    * @param keys Album keys in the caller's chosen order.
    */
   private async songsForAlbumKeys(
-    libraryId: string,
+    scope: LibraryScope,
     keys: readonly string[],
     grouping: AlbumGroupingValue,
     context: string,
@@ -214,9 +217,14 @@ class SongIndexDAO extends BaseDAO {
     // and the client will render as "that is all there is". The size is bounded upstream by
     // `MAX_PAGE_SIZE_CEILING`, so this is the backstop for a caller that bypassed it — and it is
     // checked before the first statement, so a refusal costs nothing.
-    const perStatement = albumGroupsPerStatement(grouping);
+    //
+    // The reservation is the library count rather than a single `library_id`, so a scope of ten
+    // libraries cannot quietly push the statement one variable over D1's ceiling — the batch size
+    // is derived, so the derivation has to know what else the statement binds.
+    const perStatement = albumGroupsPerStatement(grouping) - libraryReserve(scope);
     this.requireSubrequests(Math.ceil(keys.length / perStatement), context);
 
+    const libraries = libraryScope(scope);
     const rows: SongRow[] = [];
     for (const chunk of chunkArray(keys, perStatement)) {
       // One predicate per key, and the predicate comes **from the key** — never reconstructed from a
@@ -226,14 +234,14 @@ class SongIndexDAO extends BaseDAO {
       // using `idx_songs_album`. Identical results, one page instead of a scan, nothing to see.
       const specs = chunk.map((key) => specFromKey(key));
       const clause = specs.map((spec) => `(${spec.predicate})`).join(' OR ');
-      const values: unknown[] = [libraryId];
+      const values: unknown[] = [...libraries.values];
       for (const spec of specs) values.push(...spec.values);
 
       const result = await this.withRetry(
         async () =>
           await this.database
             .prepare(
-              `SELECT * FROM songs WHERE library_id = ? AND (${clause})
+              `SELECT * FROM songs WHERE ${libraries.sql} AND (${clause})
                 ORDER BY disc ASC, track ASC, name_ci ASC`,
             )
             .bind(...values)
@@ -259,7 +267,7 @@ class SongIndexDAO extends BaseDAO {
     return ordered;
   }
 
-  public async listArtists(libraryId: string, requestedLimit: number, offset: number): Promise<SongRow[]> {
+  public async listArtists(scope: LibraryScope, requestedLimit: number, offset: number): Promise<SongRow[]> {
     // Clamped, and this is the one read whose size the caller *does* choose, so it is the one
     // place a page can be made to fit rather than refused. The callers ask for 500
     // (`getArtists`), 5,000 (`getArtist`) and 500 (`getCoverArt`'s artist probe); against a
@@ -268,16 +276,23 @@ class SongIndexDAO extends BaseDAO {
     //
     // It clamps the **artist count**, not the statement count, so the answer is still one page
     // of whole artists rather than a page of half-fetched ones.
-    const limit = this.clampToSubrequestBudget(requestedLimit, ARTISTS_PER_STATEMENT);
+    //
+    // Both statements reserve the library count, so a union of ten libraries spends ten of the
+    // hundred variables on its own scope and the derived batch is nine keys smaller. That is
+    // arithmetic rather than a policy: the batch sizes below are `bindChunkSize` with the
+    // reservation already subtracted, so a statement cannot bind one variable past D1's ceiling.
+    const perStatement = ARTISTS_PER_STATEMENT - libraryReserve(scope, true);
+    const libraries = libraryScope(scope);
+    const limit = this.clampToSubrequestBudget(requestedLimit, perStatement);
     const page = await this.withRetry(
       async () =>
         await this.database
           .prepare(
             `SELECT artist_ci AS artist_key FROM songs
-              WHERE library_id = ? AND artist_ci IS NOT NULL AND artist_ci <> ''
+              WHERE ${libraries.sql} AND artist_ci IS NOT NULL AND artist_ci <> ''
               GROUP BY artist_ci ORDER BY artist_ci ASC LIMIT ? OFFSET ?`,
           )
-          .bind(libraryId, limit, offset)
+          .bind(...libraries.values, limit, offset)
           .all<{ artist_key: string }>(),
       'songs.listArtists.page',
     );
@@ -291,15 +306,15 @@ class SongIndexDAO extends BaseDAO {
     // any library with 100 or more artists — the endpoint a player draws its front page
     // from.
     const rows: SongRow[] = [];
-    for (const chunk of chunkArray(keys, ARTISTS_PER_STATEMENT)) {
+    for (const chunk of chunkArray(keys, perStatement)) {
       const result = await this.withRetry(
         async () =>
           await this.database
             .prepare(
-              `SELECT * FROM songs WHERE library_id = ? AND artist_ci IN (${chunk.map(() => '?').join(', ')})
+              `SELECT * FROM songs WHERE ${libraries.sql} AND artist_ci IN (${chunk.map(() => '?').join(', ')})
                 ORDER BY artist_ci ASC, album_ci ASC, disc ASC, track ASC, name_ci ASC`,
             )
-            .bind(libraryId, ...chunk)
+            .bind(...libraries.values, ...chunk)
             .all<SongRow>(),
         'songs.listArtists.rows',
       );
@@ -322,7 +337,8 @@ class SongIndexDAO extends BaseDAO {
    * grouping is a pair of columns, so it is `DISTINCT` over their concatenation rather than over
    * `album_ci` alone: counting by name alone would report one album for two self-titled records.
    */
-  public async listGenres(libraryId: string): Promise<GenreCountRow[]> {
+  public async listGenres(scope: LibraryScope): Promise<GenreCountRow[]> {
+    const libraries = libraryScope(scope);
     const result = await this.withRetry(
       async () =>
         await this.database
@@ -330,11 +346,11 @@ class SongIndexDAO extends BaseDAO {
             `SELECT genre AS value, genre_ci AS value_ci, COUNT(*) AS song_count,
                     COUNT(DISTINCT COALESCE(album_artist_ci || char(31) || album_ci, '')) AS album_count
                FROM songs
-              WHERE library_id = ? AND genre_ci IS NOT NULL AND genre_ci <> ''
+              WHERE ${libraries.sql} AND genre_ci IS NOT NULL AND genre_ci <> ''
               GROUP BY genre_ci
               ORDER BY genre_ci ASC`,
           )
-          .bind(libraryId)
+          .bind(...libraries.values)
           .all<GenreCountRow>(),
       'songs.listGenres',
     );

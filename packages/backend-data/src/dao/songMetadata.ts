@@ -56,18 +56,27 @@ const SCALAR_COLUMNS = ['track', 'disc', 'year', 'duration', 'bitrate', 'sample_
  * not. A SQL column name here would silently match nothing, which is the one outcome that
  * would look like a correct test.
  *
- * `title` **is** here now, which is the fix rather than the bookkeeping: `title` was derived
- * from the file's name by neither this list nor anything else in the row, so a file the scan
- * had not range-read carried no `title` and no `title_ci`, and `search3` filters on
- * `title_ci`. It is derived now (`pathConvention.ts`), which means a tag write has real
- * provenance to clear — without this entry a tag's `title` would leave `grouping_source`
- * standing at `'derived'`, and the next `DERIVED_VERSION` bump would overwrite a real title
- * with a filename. The omission was a data-loss defect waiting for a bump, not a detail.
+ * `title` is **not** here, and its absence is load-bearing rather than tidiness. It was added
+ * when the title derivation landed, on the reasoning that a tag's title then has provenance
+ * to clear — which was true, and *this list* is where it went wrong. Widening `grouping_source`
+ * from three columns to four means every row stamped under the old definition is read under
+ * the new one, and the two shapes are **indistinguishable on the row**: a file tagged `TITLE`
+ * but not `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag title *and* `'derived'`, and a
+ * tagless enriched file holds a derived title *and* `'derived'`. A guarded `title` reads the
+ * first as the second's filename guess and destroys a tag for ever, because `enriched_at` is
+ * set and `shouldEnrich` then short-circuits the file.
+ *
+ * So `title` has no provenance column of its own, and `APPLY_DERIVATION` fills it **only when
+ * it is NULL** instead. The schema is what forces that trade rather than a preference: a
+ * dedicated `songs.title_source` is the shape that would let a bump correct a wrong derived
+ * title while still leaving a tag alone, but SQLite has no `ALTER TABLE … ADD COLUMN IF NOT
+ * EXISTS` (measured on 3.53.4), a migration here may not `ALTER`, and editing the locked
+ * baseline is the `songs.reader_version` defect this package has already paid for once.
  *
  * `genre` is absent because a guessed genre is one this product refuses to publish — so it
  * cannot be "replaced by a derivation" and has no provenance to clear.
  */
-const GROUPING_FIELDS = ['title', 'artist', 'album', 'albumArtist'] as const;
+const GROUPING_FIELDS = ['artist', 'album', 'albumArtist'] as const;
 
 /**
  * Build the patch for a partial metadata update.
@@ -136,6 +145,11 @@ function buildMetadataPatch(metadata: SongMetadataInput): MetadataPatch {
     assignments.push('grouping_source = ?');
     values.push(null);
   }
+  // A tag's title is written like any other tag, and deliberately does **not** clear
+  // `grouping_source`: that column describes the three grouping columns, and widening it to
+  // cover the title is the defect `GROUPING_FIELDS` documents. The title needs no provenance
+  // to clear, because `APPLY_DERIVATION` fills it only when it is NULL and never replaces
+  // one — so a tag's title is safe without a flag saying so.
   // `reader_version` is written through the same `push` as every other scalar, and in
   // the same statement as the values, because a row whose `enriched_at` moved without it
   // is a row no future reader can tell apart from a current one.

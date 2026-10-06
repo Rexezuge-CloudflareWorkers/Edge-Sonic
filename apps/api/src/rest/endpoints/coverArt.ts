@@ -46,7 +46,8 @@
  */
 import { decodeAlbumKey, decodeId, encodeId, IdKind } from '@edge-sonic/subsonic';
 import type { IdKindValue } from '@edge-sonic/subsonic';
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
+import { librariesForId } from './libraries';
 import { embeddedAlbumArt, TreeService } from '@edge-sonic/backend-services/index';
 import type { ResolvedArt } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
@@ -118,13 +119,18 @@ async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
   // against the wrong thing — and skipping it for the folder kinds would leave a traversal
   // reachable through the directory branch.
   if (decoded.kind !== IdKind.AlbumKey) TreeService.assertPath(decoded.path);
-  const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+  // `librariesForId`, not `requireForUser`: an album or artist id carries the sentinel, because
+  // it names a group rather than one library, and asking for a library by that id would refuse
+  // the cover of every album on a multi-library user. The union it returns is still only the
+  // caller's grants, so the id names nothing invisible.
+  const libraries = await librariesForId(context, decoded.libraryId);
+  const library = libraries[0];
   context.libraries.assertReachable(library);
 
   // Resolved once and used by both branches, so the sidecar probe and the embedded probe
   // cannot be looking at different albums. See `AlbumTarget`.
   const target =
-    decoded.kind === IdKind.Artist ? { dirPath: null, songs: [] } : await albumTargetFor(library, decoded.kind, decoded.path, context);
+    decoded.kind === IdKind.Artist ? { dirPath: null, songs: [] } : await albumTargetFor(library, libraries.map((row) => row.id), decoded.kind, decoded.path, context);
 
   const folder = await resolveCoverFolder(library, decoded.kind, decoded.path, target.dirPath, context);
   if (folder !== null) {
@@ -210,7 +216,7 @@ interface AlbumTarget {
  * arrive in clients. A song id resolves through its own row, and an artist id through its
  * directory — see `resolveCoverFolder` for the artist case, which is not this function's problem.
  */
-async function albumTargetFor(library: LibraryRow, kind: IdKindValue, path: string, context: RestContext): Promise<AlbumTarget> {
+async function albumTargetFor(library: LibraryRow, scope: LibraryScope, kind: IdKindValue, path: string, context: RestContext): Promise<AlbumTarget> {
   if (kind === IdKind.Song) {
     const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
     return { dirPath: song?.dir_path ?? null, songs: song === null ? [] : [song] };
@@ -218,7 +224,7 @@ async function albumTargetFor(library: LibraryRow, kind: IdKindValue, path: stri
   if (kind === IdKind.AlbumKey) {
     const key = decodeAlbumKey(path);
     if (key === null) return { dirPath: null, songs: [] };
-    const songs = await context.songIndex.listForAlbumKeys(library.id, [key], context.albumsFor(library).grouping);
+    const songs = await context.songIndex.listForAlbumKeys(scope, [key], context.albumsFor(library).grouping);
     return { dirPath: representativeDir(songs), songs };
   }
   if (kind === IdKind.Album) {
