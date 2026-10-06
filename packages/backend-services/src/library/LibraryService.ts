@@ -199,6 +199,24 @@ class LibraryService {
   }
 
   /**
+   * One library by id, or `null`.
+   *
+   * A **single indexed statement**, and it exists because the alternative was reading the whole
+   * table to find one row. `MediaWorker` resolves a library on all three of its RPCs — the
+   * `getSong` and `getCoverArt` hot paths — and did it with `listAll().find(...)`, which is a
+   * full `SELECT * FROM libraries` returning every row including `password_ciphertext` and
+   * `password_iv` for a lookup by primary key. `LibraryDAO.findById` has always existed; this
+   * is the service exposing it, and the caller is one statement cheaper per request.
+   *
+   * Deliberately **not** `requireForUser`, and not `findByIdForUser`: this is the background and
+   * media path, which runs after the caller's own grant check and has no user to check against.
+   * The `requireForUser` variant stays the one an HTTP surface goes through.
+   */
+  public async findById(id: string): Promise<LibraryRow | null> {
+    return await this.deps.libraries.findById(id);
+  }
+
+  /**
   Display name, falling back to the slug.
   */
   public static displayName(row: LibraryRow): string {

@@ -86,9 +86,15 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
   /**
    * Every registered library, which is also the divisor of the day's row-write budget.
    *
-   * Returned whole rather than as a count because `libraryFor` needs the row anyway and D1 charges
-   * one statement per query: reading the list once and using it for both is the difference between
-   * one statement and two, on a path every chunk takes.
+   * Returned **whole**, and that is not incidental: the count is what paces this object's chunk,
+   * and D1 charges one statement per query, so reading the list once and using it for both the
+   * divisor and the row is the difference between one statement and two on a path every chunk
+   * takes.
+   *
+   * It is *not* how a caller resolves one library. `MediaWorker` needs exactly one row and uses
+   * `LibraryService.findById`, because this reads every row — including each one's
+   * `password_ciphertext` and `password_iv` — to find one by primary key. Two callers, two
+   * shapes, and the reason is the count: this one needs the number.
    */
   private async libraries(): Promise<LibraryRow[]> {
     return await this.scope().get(Tokens.LibraryService).listAll();

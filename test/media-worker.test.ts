@@ -93,6 +93,35 @@ describe('MediaWorker', () => {
     await expect(worker.coverArt('L-nope', 'Bon Iver/For Emma', [], 10_000)).rejects.toThrow(/L-nope/);
   });
 
+  it('resolves its library with one indexed statement, not the whole table', async () => {
+    // ### What is being measured, and why a statement count
+    //
+    // This object runs on `getSong` and `getCoverArt`, so the library lookup is on two hot paths.
+    // It used to be `listAll().find(...)` — a full `SELECT * FROM libraries ORDER BY slug_ci`,
+    // returning every row and every row's `password_ciphertext` and `password_iv`, to answer a
+    // lookup by primary key. `LibraryDAO.findById` has always existed.
+    //
+    // The property is the **rows read**, and rows read is only observable in the statement, so
+    // this asserts the statement rather than counting returned rows (a table with one library
+    // returns one row either way, and the harness fixture is exactly one library). Asserting the
+    // *number of statements* would not have caught it: both forms are one statement.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const statements: string[] = [];
+    const real = harness.db.db.prepare.bind(harness.db.db);
+    vi.spyOn(harness.db.db, 'prepare').mockImplementation((sql: string) => {
+      statements.push(sql);
+      return real(sql);
+    });
+
+    await workerFor(fakeState()).enrichSong('L1', harness.ids.skinnyLove);
+
+    const libraryReads = statements.filter((sql) => sql.includes('FROM libraries'));
+    expect(libraryReads, 'exactly one libraries read, and it must be the indexed one').toHaveLength(1);
+    expect(libraryReads[0]).toContain('WHERE id = ?');
+    expect(libraryReads[0]).not.toContain('ORDER BY slug_ci');
+    vi.restoreAllMocks();
+  });
+
   it('carries neither half of the scan, and the scan carries neither half of the media', async () => {
     // The structural half of the split, asserted on instances rather than on types, because a
     // type assertion would pass on a method that was declared and never reachable and fail on a

@@ -65,6 +65,12 @@ class MediaWorker extends DurableObject<Cloudflare.Env> {
   /**
    * The library this call is about, or an error naming it.
    *
+   * One indexed statement rather than the whole table: this runs on all three RPCs, and
+   * `getSong` and `getCoverArt` are hot paths. It used to be `listAll().find(...)` here and in
+   * `ScanWorker` — a full `SELECT * FROM libraries` carrying every row's `password_ciphertext`
+   * and `password_iv` to answer a lookup by primary key. `LibraryDAO.findById` always existed;
+   * `LibraryService` now exposes it.
+   *
    * A throw rather than `null` because there is no caller that wants to render "unknown
    * library" as an ordinary answer: `getSong` and `getCoverArt` have already resolved the
    * library through the grant check, so reaching this with an id that is not registered means
@@ -72,8 +78,8 @@ class MediaWorker extends DurableObject<Cloudflare.Env> {
    * or an unenriched track.
    */
   private async libraryFor(libraryId: string): Promise<LibraryRow> {
-    const library = (await this.scope().get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === libraryId);
-    if (library === undefined) throw new Error(`Unknown library "${libraryId}".`);
+    const library = await this.scope().get(Tokens.LibraryService).findById(libraryId);
+    if (library === null) throw new Error(`Unknown library "${libraryId}".`);
     return library;
   }
 
