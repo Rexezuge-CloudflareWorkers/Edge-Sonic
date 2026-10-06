@@ -41,6 +41,8 @@ concrete DAO.
 | `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
 | `dao/songIdLookup.ts` | `IN (...)` id lookups, scoped to one library and across all of them    |
 | `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
+| `dao/indexStats.ts`| `IndexStatsDAO` — what dropping an index would cost, before it is run |
+| `dao/indexDrop.ts` | `IndexDropDAO` — the Danger Zone's `DELETE`s, and what they billed   |
 | `dao/billedRows.ts`| What D1 bills a write as: the row **plus every index entry it rewrote**  |
 | `utils/`         | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                     |
 
@@ -375,6 +377,34 @@ a silent data loss rather than a filter.
   `DELETE FROM parent`, firing every `ON DELETE CASCADE` beneath it. Only a **child** table
   may be rebuilt. The schema is correct on the first migration precisely so this never has
   to be tested.
+- **Deleting an index keeps `libraries`, and that is the whole point of it.** `dao/indexDrop.ts`
+  empties `songs`, `nodes` and `scan_state` and nothing else. Three things follow from what it
+  does *not* touch, and each is a decision rather than an omission:
+  - **The registration and its encrypted WebDAV credential survive.** This is the difference from
+    `LibraryDAO.delete`, which cascades `libraries` and with it the only copy of the password —
+    so before this, a rejected credential had no remedy but re-registering the origin.
+  - **The per-user annotations survive**, because they have **no foreign key** to `songs` and
+    hold derived id strings, so a rescan re-attaches every star, play count and playlist entry.
+    Asserted in `test/index-drop.test.ts` by re-deriving a song id from `(libraryId, path)` with
+    a helper that does **not** call the production encoder — a test using the same helper would
+    pass even if that helper became a UUID, which is the property the whole decision rests on.
+  - **`scan_state` is deleted rather than reset to `idle`.** Absence *is* a state the operator
+    surface reads: `librarySummary` publishes `scan: null` for a library with no row and the SPA
+    renders that as "never scanned", which is what an operator wants after an empty index. A row
+    reset to `idle` beside `songCount: 0` renders the success-toned "Up to date." next to "0
+    tracks indexed" — the contradictory pair `describeScanState`'s `empty` case exists to catch.
+  - **`scan_state` is deleted *first*.** It is the smallest statement and the one whose absence
+    makes the library read as unscanned, so a reader arriving between the three sees an honestly
+    "never scanned" library rather than one reporting progress towards rows being removed.
+- **The projection and the charge are one arithmetic, and the projection has to live here.**
+  `IndexStatsDAO` projects a bill with `billedRowsForTable`; `IndexDropDAO` measures the same
+  figure through `runWriteStatement`, which calls the same function. `apps/api` may not import
+  this package's **values**, so a route quoting `songs * 10` would be a second copy of a
+  per-table table in the one layer that cannot see it — and the figure is the one an operator
+  consents to. `test/index-drop.test.ts` asserts the projection equals the measured total, over
+  real SQLite, because a double reporting expected numbers would agree with itself.
+  **A `DELETE`'s `meta.changes` *is* the rows deleted**, which is what makes the measurement
+  above exact rather than an estimate.
 - **No blanket `.catch(() => null)` on a D1 read.** Only `isMissingSchemaError` may
   degrade; everything else becomes a `DatabaseError`, or an outage reads as "not found".
 

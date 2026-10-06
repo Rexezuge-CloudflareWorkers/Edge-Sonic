@@ -8,6 +8,7 @@ import { LandingView } from '../../views/LandingView';
 import { LibrariesView } from '../../views/LibrariesView';
 import { UsersView } from '../../views/UsersView';
 import ImportView from '../../views/ImportView';
+import { SettingsView } from '../../views/SettingsView';
 
 interface SpaViewRouterProps {
   /**
@@ -102,6 +103,20 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         nothing notices.
       */}
       <Route path="/import" element={signedOut ? page(<Unauthorized message={t('errors.signInToViewImport', 'Sign in to import.')} />) : page(<ImportView showNotice={showNotice} />)} />
+      {/*
+        `/settings` holds the Danger Zone, so it is registered **after** `/import` and before
+        the catch-all for the same reason `/import` is: a route below `path="*"` is one nothing
+        can reach. This list is compared against `SPA_ROUTES` in `EdgeSonicWorker.ts` by
+        `test/worker.int.test.ts`, which reads both files as source text — the failure is
+        asymmetric, because a route missing from the worker's list works perfectly for an
+        operator who clicked a nav link and 404s for anyone who bookmarked it.
+      */}
+      <Route
+        path="/settings"
+        element={
+          signedOut ? page(<Unauthorized message={t('errors.signInToViewSettings', 'Sign in to view settings.')} />) : page(<SettingsView showNotice={showNotice} />)
+        }
+      />
       <Route
         path="*"
         element={

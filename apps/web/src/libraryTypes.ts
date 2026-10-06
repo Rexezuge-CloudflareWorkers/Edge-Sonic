@@ -148,4 +148,63 @@ interface ScanStateSummary {
   readonly resumeAt: number | null;
 }
 
-export type { LibrarySummary, LibraryScanSummary, ProbeResult, ScanStateSummary, ScanStatus, ChunkStopReason };
+/**
+ * What dropping one library's index would cost, as `GET /user/index/stats` projects it.
+ *
+ * `billedRows` is the field the Danger Zone's confirmation is built around, and it is the
+ * **server's** figure rather than one computed here. D1 bills a write as the row plus every
+ * index entry it rewrote, so `songs` costs ten rows per row deleted and `nodes` four — and a
+ * client multiplying `songs * 10` would be a second copy of a per-table table it cannot see,
+ * in the one layer where nothing would catch it being wrong.
+ */
+interface LibraryIndexStats {
+  readonly libraryId: string;
+  readonly songs: number;
+  readonly nodes: number;
+  readonly scanStates: number;
+  readonly billedRows: number;
+}
+
+/**
+ * The global drop's cost: per library, and the total.
+ *
+ * Both, because the Danger Zone renders a row per library *and* a global action, and the two
+ * have to agree — the global confirm phrase is agreed against a sum of the same numbers the
+ * per-library rows show. Two endpoints would be two answers to "what does this cost".
+ */
+interface IndexStats {
+  readonly libraries: readonly LibraryIndexStats[];
+  readonly total: LibraryIndexStats;
+}
+
+/**
+ * What a drop actually removed, as the `POST …/drop` routes report it.
+ *
+ * `billedRows` is the **measured** cost of the `DELETE`s, not the projection the operator
+ * confirmed against. They agree unless the index moved while the dialog was open, and when
+ * they disagree the measured one is what was spent — so it is the one rendered in the notice.
+ *
+ * `libraries` is how many registrations were affected: 1 for a per-library drop, N for the
+ * global one. Present so the notice can say "3 libraries" rather than "everything", which is
+ * the difference between a message naming a scope and one that does not.
+ */
+interface IndexDropResult {
+  readonly songs: number;
+  readonly nodes: number;
+  readonly scanStates: number;
+  readonly changes: number;
+  readonly billedRows: number;
+  readonly libraries: number;
+}
+
+export type {
+  LibrarySummary,
+  LibraryScanSummary,
+  ProbeResult,
+  ScanStateSummary,
+  ScanStatus,
+  ChunkStopReason,
+  LibraryIndexStats,
+  IndexStats,
+  IndexDropResult,
+};

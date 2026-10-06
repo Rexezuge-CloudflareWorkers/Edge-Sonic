@@ -22,7 +22,17 @@ interface Notice {
   readonly text: string;
 }
 
-export type { LibrarySummary, LibraryScanSummary, ProbeResult, ScanStateSummary, ScanStatus, ChunkStopReason } from './libraryTypes';
+export type {
+  LibrarySummary,
+  LibraryScanSummary,
+  ProbeResult,
+  ScanStateSummary,
+  ScanStatus,
+  ChunkStopReason,
+  LibraryIndexStats,
+  IndexStats,
+  IndexDropResult,
+} from './libraryTypes';
 export type { UserSummary } from './userTypes';
 // The import wire types live beside the user types because an import *targets* a user account:
 // the page is "manage this account's library, accounts, and what it moved from somewhere else",

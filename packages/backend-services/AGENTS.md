@@ -96,6 +96,35 @@ A timeout arrives as a `WebDavError(408)` rather than a bare abort — see
 since an `AbortSignal.timeout` rejection is neither an `Error` shape callers classify
 nor an HTTP status.
 
+### `IndexDropService`: a drop that keeps the library, in a fixed order
+
+`library/IndexDropService.ts` owns the Danger Zone's drop — what it removes, what it costs, and
+**the sequence**, which is the reason it is a service and not three calls in a route.
+
+- **`reset` the scan object, delete, then `charge` it.** The order is a race, not a style choice:
+  a live alarm fires every second, and one that fires between the two deletes writes the index
+  back. `charge` comes last because it needs the figure the deletes measured.
+- **A global drop charges each object its *share*, not the whole bill.** `dailyRowWriteShare`
+  divides the allowance by library count, so on a three-library deployment an object told the
+  whole 55,000-row figure pauses itself at 300% of a share sized for a third of it — three of
+  three scans refusing immediately after an operator emptied their index. The weights come from
+  the projection (the `DELETE`s are unscoped, so `meta.changes` is one number for all of them)
+  and the parts are **corrected to sum to the measured total**, because flooring leaves a
+  shortfall that would compound across every drop and scan in the day.
+- **The projection is a port, so the arithmetic stays in `backend-data`.** `apps/api` may not
+  import that package's values and the per-table index counts live there. A second copy of
+  `songs * 10` in a route or here would be a table nobody in that layer can see, applied to the
+  figure an operator consents to.
+- **`scanFor` is optional and defaulted.** `ScanWorkerFactory` is a Durable Object that cannot RPC
+  itself, and a scan never drops an index; `apps/api` passes the stub resolver because a namespace
+  stub is not Layer 3's to construct. Absent, the D1 deletes still run — there is simply no alarm
+  to stop — which is the honest outcome on a deployment with no `SCAN` binding rather than a
+  `TypeError` from a stub the caller never supplied.
+
+The wiring is in `composition/bindIndexDrop.ts`, out of `requestScope.ts` because that file was
+already over the god-file limit and this is a cohesive block that did not exist when it was
+written.
+
 ## Scanning
 
 `index/ScanService.ts` is a state machine advanced one chunk at a time. In
@@ -337,18 +366,29 @@ than wrong, because a client seeks by it.
   `backend-data`), and this module's real tags overwrite that fallback when it runs.
   The two are the same fact read by two means, and the path is always available while the
   ranged read is not.
-- A `WEBDAV` failure or an unreadable container resolves to "no enrichment" and is
-  **recorded as an attempt**, so a format this server cannot read is not retried on every
-  play. A transient error is deliberately *not* recorded, so a recovered origin is
-  retried. The split is `isTransientEnrichmentFailure` in `index/enrichmentRetry.ts`,
-  beside `shouldEnrich` because the two are one decision — what "already read" means and
-  what earns the stamp — and it covers the tail read too: a prefix whose tags parsed and
-  a tail that 503'd writes nothing, not even the good tags, because writing them would
-  strand the duration at `0` with the same permanence. It shipped the other way round:
-  every failure stamped the row, and four tracks of a live library caught a flapping
-  origin during the scan and reported duration `0` for ever.
+- An unreadable container resolves to "no enrichment" and is **recorded as an attempt**, so
+  a format this server cannot read is not retried on every play. A `WEBDAV` failure is not
+  recorded, so a recovered origin is retried — and the question is not "was it transient?"
+  but **"does this failure describe the file?"**. On this path one status does, `404`; every
+  other leaves the row untouched. That includes `413`, which is `readBounded`'s own body
+  limit and which an origin answering a `Range` with `200` and the whole file trips on
+  every track — so one such origin stamped a whole library "already read" without reading
+  it. The split is `isTransientEnrichmentFailure` in `index/enrichmentRetry.ts`, beside
+  `shouldEnrich` because the two are one decision — what "already read" means and what
+  earns the stamp — and it covers the tail read too: a prefix whose tags parsed and a tail
+  that was refused writes nothing, not even the good tags, because writing them would
+  strand the duration at `0` with the same permanence. Full account in
+  [`docs/agents/media/AGENTS.md`](../../docs/agents/media/AGENTS.md).
 - It is best-effort about the cache and authoritative about D1: a dead `CACHE` costs
   latency and nothing else.
+- `index/songMetaCache.ts` and `index/oggTailDuration.ts` hold the two decisions that
+  `EnrichmentService` used to carry inline and that the god-file guard now forbids it
+  carrying: **whether a cache entry is an answer** (a `durationSeconds: null` records an
+  absence, and an absence that matches on mtime and reader version answers `null` for the
+  life of the file — so both the writer and the reader consult `isCompleteEnrichment`),
+  and **the second read's three answers** (`null`, `null`-and-transient, a duration), whose
+  third case means "write nothing at all". Both are exported from `index/index.ts`; the
+  first because a caller building an entry by hand needs the same test the service applies.
 
 ### The scan enriches what it changed
 

@@ -93,6 +93,34 @@ function AppHeader({ userEmail, signedIn }: { userEmail?: string | null; signedI
             >
               {t('nav.import', 'Import')}
             </NavLink>
+            {/*
+              Last, and gated on the same `signedIn === true` as every other link rather than
+              on a second test.
+
+              It is last because of what it holds. `/settings` carries the Danger Zone, and the
+              nav's ordering is the only thing that says "this is not a page you browse" — an
+              operator reaching for Settings by position rather than by reading has already
+              decided they want to change something, and the destructive controls should not be
+              the fourth thing the eye lands on when they open the app to look at their music.
+
+              Gated the same way as the rest rather than because it is sensitive: the link is
+              not a control, and a control that is reachable but not clickable is worse than one
+              that is absent. The controls themselves are behind `/user/*`, which is
+              independently guarded — the same "a courtesy, not a control" the view gate is.
+            */}
+            <NavLink
+              to="/settings"
+              className={({ isActive }) =>
+                cn(
+                  'rounded-md px-3 py-1.5 transition-colors',
+                  isActive
+                    ? 'bg-[var(--color-surface-3)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text-primary)]',
+                )
+              }
+            >
+              {t('nav.settings', 'Settings')}
+            </NavLink>
           </nav>
         )}
         {/*

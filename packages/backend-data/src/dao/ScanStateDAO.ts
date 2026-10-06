@@ -33,7 +33,7 @@
 import { BaseDAO } from './BaseDAO';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
-import type { ScanStateRow } from './rows';
+import type { CountRow, ScanStateRow } from './rows';
 import { nowSeconds } from './identity';
 
 /**
@@ -50,6 +50,50 @@ class ScanStateDAO extends BaseDAO {
       async () => await this.database.prepare('SELECT * FROM scan_state WHERE library_id = ?').bind(libraryId).first<ScanStateRow>(),
       'scanState.find',
     );
+  }
+
+  /**
+   * One library's scan-state rows, which is 1 or 0.
+   *
+   * A count rather than a boolean so the caller can sum it across libraries without a second
+   * shape of the same question, and `0`/`1` rather than `true`/`false` so the answer composes
+   * with the song and node counts beside it — all three are what an index drop would remove,
+   * and a caller that had to convert one of them before summing had three conversions to keep
+   * correct instead of one.
+   */
+  public async countByLibrary(libraryId: string): Promise<number> {
+    const row = await this.withRetry(
+      async () => await this.database.prepare('SELECT COUNT(*) AS cnt FROM scan_state WHERE library_id = ?').bind(libraryId).first<CountRow>(),
+      'scanState.countByLibrary',
+    );
+    return row?.cnt ?? 0;
+  }
+
+  /**
+   * Scan-state counts for many libraries in one statement, keyed by library id.
+   *
+   * A `scan_state` row is at most one per library, so this is the batched twin of
+   * {@link countByLibrary} and it is needed for the same reason: a caller that renders a
+   * row per library spends a statement per library otherwise, and each statement is a
+   * subrequest. A library with no row is **absent from the map** — the "never scanned" state
+   * that `listByLibraries` documents as load-bearing, and the same convention as the other
+   * batched reads in this layer.
+   */
+  public async countByLibraries(libraryIds: readonly string[]): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    for (const chunk of chunkArray(libraryIds, LIBRARIES_PER_STATEMENT)) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const result = await this.withRetry(
+        async () =>
+          await this.database
+            .prepare(`SELECT library_id, COUNT(*) AS cnt FROM scan_state WHERE library_id IN (${placeholders}) GROUP BY library_id`)
+            .bind(...chunk)
+            .all<{ library_id: string; cnt: number }>(),
+        'scanState.countByLibraries',
+      );
+      for (const row of result.results ?? []) counts.set(row.library_id, row.cnt);
+    }
+    return counts;
   }
 
   /**

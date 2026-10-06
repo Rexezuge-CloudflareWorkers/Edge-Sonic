@@ -20,6 +20,14 @@ Access — it has no Subsonic credential and could not use one.
   `panels.tsx`/`controls.tsx` was the previous shape and is not to be reintroduced.
 - `src/components/library/` — `LibraryForm` + `LibraryRow`, colocated by domain rather
   than sitting at the root of `components/`.
+- `src/components/settings/DangerZoneCard.tsx` — the two index-drop rows and their
+  confirmations. **Not** on the libraries page; see the section below.
+- `src/components/modals/` — `ModalShell` (the portal and the click-outside) +
+  `TypeToConfirmModal` (the second gate). Ported from the reference project; `ModalHeader`,
+  `ModalBody`, `ModalRow`, `ModalEmpty` and `WIDE_MODAL_CLASS` were **deliberately not**
+  ported, because every one is an export with no caller here.
+- `src/views/SettingsView.tsx` — `/settings`, the Danger Zone's page. Owns the two reads
+  and the drop handlers; the decisions are in `lib/indexDrop.ts`.
 - `src/views/LandingView.tsx` — what a signed-out visitor sees at `/`.
 - `src/lib/scanStatus.ts` — the two scan decisions: `isAdvancingStatus` (when to keep
   polling) and `describeScanState` (what is said). Pure, so it is testable from the root suite
@@ -36,6 +44,8 @@ Access — it has no Subsonic credential and could not use one.
   `CurrentUser` and `Notice`), so existing `from '../types'` imports keep working.
 - `src/lib/probe.ts`, `src/lib/libraryDraft.ts`, `src/lib/signInLoop.ts` — the decisions,
   not the markup. See below for why they are not in a component.
+- `src/lib/indexDrop.ts` — the Danger Zone's confirm phrases and its five sentences. Pure,
+  labels as parameters, so `test/spa-index-drop.test.ts` reaches it from the root suite.
 - `src/lib/constants.ts` — `NOTICE_TIMEOUT_MS` and `ZERO_TRUST_AUTHENTICATION_PATH`
   (`/user/`, the path inside the Access application that the landing page navigates to).
 
@@ -335,6 +345,55 @@ would mean a column, a migration, a lock entry and a write on every chunk, for a
 operator reads once with the page open. The rescan handler no longer reads the status back
 afterwards: `onRun` reloads the list, which carries the state, and the extra round trip's only
 effect was overwriting `stoppedBy` with `null`.
+
+## The Danger Zone is a page, two gates, and a number the operator can see
+
+`/settings` carries `DangerZoneCard`: a row per library plus one global row, each behind
+`TypeToConfirmModal`. Four decisions, and each is a place the obvious implementation is wrong.
+
+- **It is its own route, not a section on the libraries page.** A drop's blast radius is not the
+  index: a large one spends the deployment's whole daily row-write allowance, and past that D1
+  refuses **every** query until midnight UTC — reads included, so streaming goes down too. That
+  does not belong on the page an operator opens to look at their music. `/settings` is in
+  `SPA_ROUTES` in `EdgeSonicWorker.ts` as well as in `SpaViewRouter`, and the two lists are
+  compared as source text by `test/worker.int.test.ts`.
+- **The button arms; the phrase destroys.** Every destructive button on this surface used to be
+  one click — including `deleteLibrary`, which cascades a whole index away — and a click cannot
+  be the gate for an irreversible action, because the click is what happens by accident. The
+  confirm button is **disabled** rather than hidden until the phrase matches: hidden would
+  remove the affordance and leave the operator hunting, disabled says the requirement and
+  leaves it visible.
+- **The phrase is the slug for one library and the literal `drop-all-index` for all of them.**
+  The slug because it is unique (`idx_libraries_slug_ci`) and the display name is
+  operator-chosen text two libraries can both carry — a phrase two libraries satisfy is not a
+  confirmation of anything. The literal because nothing in a global request names what is
+  destroyed, so the operator types the **scope** instead.
+- **The cost is rendered above the input, from the server's figure.** `GET /user/index/stats`
+  projects it with the same `billedRowsForTable` that will charge the delete, so the estimate
+  and the bill cannot drift. Reading it off `songCount` instead would mean multiplying by ten in
+  the browser — a copy of a per-table table this layer cannot see, in the one place nothing would
+  catch it being wrong. A number an operator must open a modal to see is a number they consent to
+  without, so the row also shows the current track count.
+
+**There is no server-side confirmation, and that is a decision.** Every caller of `/user/*` is
+already an operator — Cloudflare Access *is* the authorization boundary, and `users.is_admin` is
+written but read only to render a badge — so a token here would be a second gate with no second
+authority behind it. `test/web-danger-zone.test.tsx` asserts the browser half, and every case
+there exists because a server test could delete the whole file and stay green.
+
+**A failed projection read leaves the page up and the figures blank.** `stats` stays `null`,
+which renders as "reading what this would cost…" rather than as a zero — a zero there reads as
+"this costs nothing", and an operator would confirm a 50,000-row drop having been told it was
+free. The rows and the controls are still correct, so blanking the page would take away the one
+thing the operator can still read. This is the one deliberate silent `catch` on this surface,
+and `lib/probe.ts` makes the same call for the same reason.
+
+**The dialog says what survives, because the operator cannot infer it.** Stars, play counts and
+playlists have no foreign key to `songs` and are kept — a rescan recreates the identical ids, so
+they re-attach. A dialog that overstates its own cost trains operators to confirm without
+reading, which defeats both gates above it. The outage sentence is **unconditional**: it reads as
+alarmist on a library of nine tracks and is still true, since the allowance is per account and
+other libraries share it.
 
 ## `stalled` is a status the client was unable to represent
 

@@ -34,6 +34,7 @@ import type { ArtSource, ChunkResult, ResolvedArt, ScanDailyBudget } from '@edge
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { ScanPauseStore, isDailyLimitRefusal, SCAN_ALARM_DELAY_MS } from './scanPause';
+import { chargeForIndexDrop, stopForIndexDrop } from './scanIndexDrop';
 import { createScanWorkerScope } from './ScanWorkerFactory';
 
 /**
@@ -118,6 +119,36 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
     await this.pause.record(pause);
     await this.pause.arm(pause);
     return pause;
+  }
+
+  /**
+   * Stop this library's scan and forget its pause, without advancing the walk.
+   *
+   * The Danger Zone's index drop calls this **before** it deletes `songs`, `nodes` and
+   * `scan_state`, and the ordering is the entire reason the RPC exists: a live alarm fires
+   * every second, and one that fires between the two deletes walks the origin and writes the
+   * index back. The reasoning — and why a held pause is cleared while the day's row count is
+   * kept — is in `scanIndexDrop.ts`, beside the storage it touches rather than in this router.
+   *
+   * `libraryId` is accepted and ignored. One object per library means the id is always the one
+   * this object already holds, and re-pointing it here would be a drop's job that `startScan`
+   * already owns.
+   */
+  public async reset(libraryId: string): Promise<void> {
+    void libraryId;
+    await stopForIndexDrop(this.ctx, this.pause);
+  }
+
+  /**
+   * Add billed rows to this object's count of today's D1 writes.
+   *
+   * The drop calls this **after** its deletes, with what they measured rather than with the
+   * projection the operator confirmed against. `scanIndexDrop.ts` carries why the figure goes
+   * through `ScanPauseStore`'s own accumulation instead of a second writer of the `memory` key.
+   */
+  public async charge(libraryId: string, billedRows: number): Promise<void> {
+    void libraryId;
+    await chargeForIndexDrop(this.pause, billedRows);
   }
 
   /**
