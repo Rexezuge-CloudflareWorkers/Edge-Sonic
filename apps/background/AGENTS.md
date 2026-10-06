@@ -48,6 +48,33 @@ object was never started would be cached and never re-run, and the walk would si
 happen. The object's name **is** the run id, so a repeated call reaches the same object rather than
 starting a second walk over the same albums.
 
+Two facts about that call, and both shipped broken:
+
+- **The payload is the run id, and the stub's type is the class's own.** It called
+  `stub.start()` with no argument while `PlayCountImportWorker.start` read `request.runId` off
+  the first parameter, which arrives `undefined` over RPC — so the object got no run id and **no
+  alarm**, and the walk never began. The throw landed before the first `put`, so there was
+  nothing to retry and nothing to resume. `stub.start()` is now `stub.start({ runId })` against
+  `DurableObjectStub & PlayCountImportWorker`, the `scanStubs.ts` pattern: a hand-written
+  `{ start(): Promise<unknown> }` declared *no* parameter, so the call that was wrong typechecked
+  and the class was the only party that disagreed. A Durable Object's name is a routing
+  decision; nothing turns it into an argument.
+- **A start that fails settles the run `failed`, and the walk outcome is three answers.** A
+  boolean could not carry it: "no binding configured" and "the start threw" both read `false`,
+  so the throw escaped, `settle` never ran, and the run sat `running` with `last_error` **null**
+  for ever with nothing scheduled to advance it — the wedge `runWorkflow` exists to prevent,
+  arriving through the one call it cannot see. `WalkOutcome` is
+  `not-configured | outstanding | failed`, one per terminal state, and the catch wraps `stub.start()`
+  **alone**: `settle` sits outside it, so a fault in settling still reaches the engine. The
+  recorded reason is a **literal** (`WALK_START_FAILED`) with the error logged beside it, for the
+  same reason `runWorkflow` logs one.
+
+The test double for that call reads `request.runId` rather than closing over the namespace's name,
+which is what makes it a guard: the previous one took no argument and returned `{ runId: name }`,
+so it agreed with the broken caller instead of the class. Both regressions are asserted in
+`test/import-execution.test.ts` — reverting the payload fails the test with the production
+`TypeError`, and removing the catch fails the other.
+
 ## Two meters would have been the whole defect
 
 `PlayCountImportWorker` bounds a batch, so it needs a narrower ceiling than the invocation's 50 —

@@ -27,7 +27,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlayCountImportWorker } from '../apps/background/src/PlayCountImportWorker';
-import { LibraryImportWorkflow } from '../apps/background/src/LibraryImportWorkflow';
+import { LibraryImportWorkflow, WALK_START_FAILED } from '../apps/background/src/LibraryImportWorkflow';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { ImportRunDAO, ImportSourceDAO, LibraryDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
@@ -541,6 +541,7 @@ describe('LibraryImportWorkflow', () => {
     const { runId, sourceId, userId } = await seedRun();
     const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
     const started: string[] = [];
+    const received: string[] = [];
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })),
@@ -551,10 +552,23 @@ describe('LibraryImportWorkflow', () => {
       // A DO namespace stub that records the `start`, which is the whole point of the step: it
       // must happen **once**, outside `step.do`, because a step that "completed" but whose object
       // was never started would be cached and never re-run.
+      //
+      // `start` reads `request.runId` rather than closing over `name`, because the double's job
+      // is to be the class. The first version took no argument and returned `{ runId: name }`, so
+      // it agreed with a caller that passed **nothing** — and `stub.start()` with no payload threw
+      // `Cannot read properties of undefined (reading 'runId')` on a real Durable Object, before
+      // the `put` and before the alarm. A double that shares the caller's assumption is not a
+      // guard on the call; it is a second copy of the bug.
       IMPORT_DO: {
         getByName: (name: string) => {
           started.push(name);
-          return { start: async () => ({ runId: name }) };
+          return {
+            start: async (request: { readonly runId: string }) => {
+              // Throws exactly as `PlayCountImportWorker.start` does when the payload is absent.
+              received.push(request.runId);
+              return { runId: request.runId };
+            },
+          };
         },
       },
     } as never);
@@ -572,7 +586,63 @@ describe('LibraryImportWorkflow', () => {
     // And the object's name **is** the run, so a retried call reaches the same object rather than
     // starting a second walk over the same albums.
     expect(started).toEqual([runId]);
+    // **And the payload carries it**, because a name is a routing decision and nothing turns a
+    // Durable Object's name into an argument. This is the assertion the first version could not
+    // have made: its double never read the request.
+    expect(received).toEqual([runId]);
     expect(run?.play_count_worker).toBe(runId);
+    vi.unstubAllGlobals();
+  });
+
+  it('settles the run failed, naming the walk, when the play-count object cannot be started', async () => {
+    // The failure this guards: `start` throwing out of `startPlayCountWorker`, so `settle` never
+    // ran and the run stayed `running` with `last_error` **null** for ever, with nothing scheduled
+    // to advance it. The Workflow instance was recorded errored in the Cloudflare dashboard and the
+    // operator's own page said the import was still going. That is the wedge `runWorkflow` exists
+    // to prevent, arriving through the one call it cannot see.
+    const { runId, sourceId, userId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok', starred2: {} } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+    );
+
+    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, {
+      ...envFor(handle),
+      // The DO refuses the start. The other phases still ran, and their report lines must survive.
+      IMPORT_DO: {
+        getByName: () => ({
+          start: async () => {
+            throw new Error('Durable Object storage is unavailable.');
+          },
+        }),
+      },
+    } as never);
+
+    await workflow.run({ payload: { runId, sourceId, userId, libraryId, phases: ['stars', 'playCounts'], playlistIds: [] } } as never, fakeStep() as never);
+
+    const runs = new ImportRunDAO(handle.db);
+    const run = await runs.findById(runId);
+    // **Terminal**, not `running`. A run with nothing scheduled to advance it is the defect.
+    expect(run?.status).toBe('failed');
+    expect(run?.finished_at).toBeTypeOf('number');
+    // And it names the phase, rather than leaving the operator to work out which of five is
+    // missing. The literal — not the thrown error's text, which carries whatever the runtime put
+    // in it — because this is what the operator page renders.
+    expect(run?.last_error).toBe(WALK_START_FAILED);
+    expect(run?.last_error).toContain('play-count');
+    expect(run?.play_count_worker).toBeNull();
+
+    const stored = parseReport(await runs.readReport(runId));
+    // The walk named `failed`, not `partial` and not `imported`: `partial` promises numbers are
+    // still arriving, and nothing is arriving.
+    expect(stored?.phases.find((entry) => entry.phase === 'playCounts')?.status).toBe('failed');
+    // A terminal run is finished. `finishedAt: null` here would render a run that is definitively
+    // over as one still in progress.
+    expect(stored?.finishedAt).toBeTypeOf('number');
+    // **The phases that did work are still in the report.** Four of five succeeding is not a
+    // reason to discard them, and the operator's next step is re-running the counts alone.
+    expect(stored?.phases.find((entry) => entry.phase === 'stars')?.status).toBe('imported');
     vi.unstubAllGlobals();
   });
 
