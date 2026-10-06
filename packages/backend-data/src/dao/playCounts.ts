@@ -87,12 +87,11 @@ class PlayCountDAO extends BaseDAO {
     if (counts.length === 0) return 0;
     const timestamp = nowSeconds();
     const statements = counts.map((entry) =>
-      this.database
-        .prepare(
-          `INSERT INTO play_counts (user_id, song_id, play_count, last_played_at)
+      this.prepare(
+        `INSERT INTO play_counts (user_id, song_id, play_count, last_played_at)
            VALUES (?, ?, ?, ?)
            ON CONFLICT (user_id, song_id) DO UPDATE SET play_count = excluded.play_count`,
-        )
+      )
         // `last_played_at` is written on the insert and **not** on the update: the remote published
         // no play *time* for a count it read back, so setting it would claim the import is when the
         // listener last played the track. `last_played_at` is what "last played" surfaces as.

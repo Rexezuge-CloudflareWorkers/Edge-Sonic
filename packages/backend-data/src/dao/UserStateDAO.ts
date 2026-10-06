@@ -153,21 +153,17 @@ class AnnotationDAO extends BaseDAO {
    */
   public async savePlayQueue(input: { userId: string; songIds: readonly string[]; currentSongId: string | null; positionMs: number; changed: string }): Promise<void> {
     const timestamp = nowSeconds();
-    const statements = [this.database.prepare('DELETE FROM play_queue_entries WHERE user_id = ?').bind(input.userId)];
+    const statements = [this.prepare('DELETE FROM play_queue_entries WHERE user_id = ?').bind(input.userId)];
     input.songIds.forEach((songId, position) => {
       statements.push(
-        this.database
-          .prepare('INSERT INTO play_queue_entries (user_id, position, song_id) VALUES (?, ?, ?)')
-          .bind(input.userId, position, songId),
+        this.prepare('INSERT INTO play_queue_entries (user_id, position, song_id) VALUES (?, ?, ?)').bind(input.userId, position, songId),
       );
     });
     statements.push(
-      this.database
-        .prepare(
-          `INSERT INTO play_queue (user_id, current_song_id, position_ms, changed, updated_at) VALUES (?, ?, ?, ?, ?)
+      this.prepare(
+        `INSERT INTO play_queue (user_id, current_song_id, position_ms, changed, updated_at) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT (user_id) DO UPDATE SET current_song_id = excluded.current_song_id, position_ms = excluded.position_ms, changed = excluded.changed, updated_at = excluded.updated_at`,
-        )
-        .bind(input.userId, input.currentSongId, input.positionMs, input.changed, timestamp),
+      ).bind(input.userId, input.currentSongId, input.positionMs, input.changed, timestamp),
     );
     // All-or-nothing, and this is the case the option exists for. A play queue saved halfway
     // is a *shorter queue* — a wrong answer rather than an unfinished one, and

@@ -143,6 +143,9 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
   const db: D1Queryable = {
     prepare(sql: string): D1PreparedStatement {
       const statement = raw.prepare(sql);
+      // The bound values live in **this** cell, shared by every object the factory hands
+      // out — because Cloudflare's re-binding *overwrites* a statement's values rather than
+      // accumulating them, so a per-object copy would be a second, wrong answer.
       let values: unknown[] = [];
 
       const run = (): D1Result => {
@@ -156,15 +159,38 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
         }
       };
 
-      return {
-        // Carried so `billedRowsFor` can read which table a write bills against. Required rather
-        // than optional because a statement that cannot name its own target is charged the
-        // schema's worst case on every write: the right *direction*, and a large silent loss of
-        // measured accuracy in the one place this repository decided to measure.
-        sql,
+      /**
+       * A statement, modelled on the platform's shape and **not one member wider**.
+       *
+       * ### There is deliberately no `sql` on this object
+       *
+       * Because workerd's `D1PreparedStatement` has none: `types/defines/d1.d.ts` declares
+       * `bind`, `first`, `run`, `all` and `raw`, and Cloudflare's reference for `prepare()`
+       * describes the return value as *"an object which only contains methods"*. This double
+       * used to add one, and that single invented property is why `billedRowsFor` could read
+       * `statement.sql` for so long — it was `undefined` on every real write, so every write
+       * that measured its cost threw `Cannot read properties of undefined (reading 'replace')`
+       * and the whole write half of the product was down through an entirely green suite.
+       *
+       * So the SQL travels **beside** the statement, from `BaseDAO.prepare`, and this object
+       * models the platform exactly. `test/schema.int.test.ts` asserts that member list in
+       * both directions, so adding a property here to satisfy a caller fails a test instead
+       * of quietly re-hiding the defect the suite once shared.
+       */
+      const view = (): D1PreparedStatement => ({
+        /**
+         * Bind, and return a **new** statement.
+         *
+         * Cloudflare's `bind()` returns a new statement rather than mutating and returning
+         * the same one, so this must too. It used to `return this`, and that difference
+         * hides a whole class of fix: anything that hangs the SQL off the statement object
+         * (a `WeakMap`, a `defineProperty`) resolves before `bind()` and misses after it, so
+         * it would have passed here and failed in production — which is precisely how the
+         * `sql` member survived a deploy.
+         */
         bind(...next: unknown[]): D1PreparedStatement {
           values = next;
-          return this;
+          return view();
         },
         async first<T>(): Promise<T | null> {
           log.push(sql);
@@ -214,7 +240,8 @@ function sqliteQueryable(path = ':memory:'): SqliteQueryable {
           }
           return run();
         },
-      };
+      });
+      return view();
     },
     /**
      * D1's `batch()` is atomic. Node's `DatabaseSync` has no multi-statement

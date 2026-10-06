@@ -168,6 +168,51 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   found it was `test/schema.int.test.ts` reading `PRAGMA table_info`. So the import's tables now
   have an assertion naming **every** column a DAO writes — written out rather than derived from
   the DAOs, because a list derived from the code cannot detect a disagreement the code is part of.
+- **A member that is real to the code and absent from the platform is the same defect, one
+  level out.** The rule above is about a **column**; this is about a property of a platform
+  object, and it shipped through the same door for the same reason. `billedRowsFor` took a
+  `D1PreparedStatement` and read `statement.sql` off it to work out which table a write bills
+  against. **workerd's statement has no `sql`** — `types/defines/d1.d.ts` declares `bind`,
+  `first`, `run`, `all`, `raw`, and Cloudflare's `prepare()` reference calls the return value
+  *"an object which only contains methods"* — so `sql` was `undefined` on every real write and
+  `stripLeadingNoise` threw `TypeError: Cannot read properties of undefined (reading 'replace')`.
+  Every write that measured its cost died: the frontier seed, the index write, enrichment, the
+  derived-grouping backfill, playlist totals, play counts, the play queue. The scan could not
+  seed or advance a chunk, and `scan_state` kept reporting `scanning` throughout — because
+  `markScanning` goes through `withRetry`, which does not bill, so the status write the operator
+  reads was the one write that still worked. **Reads were entirely unaffected**, which is why
+  the library browsed fine and nothing had ever been indexed. Three things, and each is how the
+  other two would have collapsed:
+  - **A structural type that claims the platform satisfies it is a claim about the platform, and
+    nothing was checking.** `D1PreparedStatement` declared `sql: string` as **required**, under
+    a comment asserting *"Real D1Database satisfies these structurally"* — which was false.
+    `requestScope.ts`'s `env.DB as D1Queryable` is what let it compile: the local type is a
+    **superset** of the platform's, so a cast is legal in that direction and the disagreement
+    is never reported. `wrangler types` is the instrument, and it says so in
+    `worker-configuration.d.ts` in this very repository.
+  - **The one double in the suite modelled the type this repository wrote, not the one it runs
+    against.** `test/helpers/sqlite.ts` returned a statement *with* a `sql`, which is why 1,270
+    tests were green while the entire write half of the product was down. The double now carries
+    exactly the platform's four members, and `test/schema.int.test.ts` asserts that list **both
+    ways** against a written-out copy of workerd's declaration — derived from the double, it
+    would compare the double with itself. See the testing guide for the second half of this:
+    the double's `bind()` returned `this` while Cloudflare's returns a new statement, so *any*
+    fix that hung the SQL off the statement object (a `WeakMap`, a `defineProperty`) would have
+    passed the suite and failed in production.
+  - **The SQL travels beside the statement, from the one place that has it.** `BaseDAO.prepare`
+    mints a `TrackedStatement` — `{ sql, statement }` — and `runWriteStatement`/`runWriteBatch`
+    take it. That is what makes "the SQL and the statement cannot be different facts"
+    structural rather than a convention, and it is why the write helpers are handed a pair
+    rather than an extra argument: a helper taking two arguments is two literals for one
+    statement, which is the shape this repository has now paid for three times. Reads keep
+    calling `this.database.prepare` directly, because nothing reads a read's SQL.
+
+  The missing case is then handled in the direction this file is written in throughout:
+  `statementTable` answers `null` for a non-string, which charges the schema's **worst** case.
+  Over-charging costs throughput; the `TypeError` cost every write in the product. Asserted —
+  and the assertion is on `nodes`, not `songs`, for a reason worth stating: `songs` bills ten
+  and `MAX_BILLED_ROWS_PER_ROW` **is** ten, so on the dominant write path a lost SQL and a
+  correct one are the same number and every `songs` assertion stays green against it.
 
 ## See also
 

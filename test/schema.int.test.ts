@@ -332,7 +332,7 @@ describe('the billed-row model is the schema, not a number typed beside a query'
   it('charges the worst case in the schema for a statement whose table cannot be read', () => {
     // The pessimistic fallback, asserted because it is the direction the whole module is
     // written in. A default of 1 is the defect this module exists to remove.
-    const unknown = billedRowsFor({ sql: 'PRAGMA optimize' }, 1);
+    const unknown = billedRowsFor('PRAGMA optimize', 1);
     expect(unknown).toBe(MAX_BILLED_ROWS_PER_ROW);
     // `>=` the most expensive real table, not `>`: `songs` *is* the most expensive table in
     // this schema, so today the fallback and `songs` coincide and asserting a strict inequality
@@ -346,7 +346,65 @@ describe('the billed-row model is the schema, not a number typed beside a query'
 
     // And a read is not a write at all, so it costs nothing — `runWriteStatement` is never
     // handed one, and a double that reached it must not invent a charge.
-    expect(billedRowsFor({ sql: 'SELECT * FROM songs' }, 0)).toBe(0);
+    expect(billedRowsFor('SELECT * FROM songs', 0)).toBe(0);
+  });
+
+  it('charges the worst case for a statement whose SQL never arrived, and that case is real', () => {
+    // The paired case for the defect this module's own signature once shipped.
+    //
+    // `billedRowsFor` took a *statement* and read `statement.sql` off it. Workerd's
+    // `D1PreparedStatement` has no such member — `types/defines/d1.d.ts` declares `bind`,
+    // `first`, `run`, `all`, `raw` — so `sql` was `undefined` on every real write and
+    // `stripLeadingNoise` threw `Cannot read properties of undefined (reading 'replace')`.
+    // The scan could neither seed its frontier nor advance a chunk, so every write in the
+    // product was down, through a green suite: `test/helpers/sqlite.ts` returned a statement
+    // **with** a `sql` the platform does not have.
+    //
+    // So this asserts both halves, because either alone passes against the defect. The
+    // arithmetic: an absent SQL is charged the schema's worst case — over-charging costs
+    // throughput, a `TypeError` cost the write half of the product, and that asymmetry is
+    // why it is `null` rather than a throw. And the shape: the double's statement carries
+    // **no** `sql`, which is the model the platform imposes and the one thing a future
+    // caller must not be able to lean on.
+    expect(billedRowsFor(undefined, 1)).toBe(MAX_BILLED_ROWS_PER_ROW);
+    expect(billedRowsFor(undefined, 50)).toBe(50 * MAX_BILLED_ROWS_PER_ROW);
+    expect(billedRowsFor(undefined, 0)).toBe(0);
+    // The pessimistic direction, stated as a relationship rather than a numeral, for the
+    // same reason the case above is.
+    expect(billedRowsFor(undefined, 1)).toBeGreaterThanOrEqual(billedRowsForTable('songs', 1));
+    expect(billedRowsFor(undefined, 1)).toBeGreaterThan(billedRowsForTable('nodes', 1));
+  });
+
+  it('is a statement with no `sql` on it, which is what the platform hands back', () => {
+    // The double's own shape, asserted in both directions, because a list derived from the
+    // double cannot detect the double being the thing that is wrong.
+    //
+    // **Written out, not derived.** `workerd/types/defines/d1.d.ts` declares exactly
+    // `bind`, `first`, `run`, `all` and `raw` on `D1PreparedStatement`, and Cloudflare's
+    // `prepare()` reference calls the return value *"an object which only contains
+    // methods"*. Reading the member list off the adapter would compare the adapter with
+    // itself, which is the `UPSERT_FILE_FACTS` / `derived_version` mistake this repository
+    // has now made twice.
+    const PLATFORM_STATEMENT_MEMBERS = ['all', 'bind', 'first', 'run'];
+
+    const statement = handle.db.prepare('DELETE FROM songs WHERE id = ?');
+    expect(Object.keys(statement).sort()).toEqual(PLATFORM_STATEMENT_MEMBERS);
+
+    // The inverse direction, which is the one a defect arrives through: a member the
+    // platform does not have cannot be added here to satisfy a caller. Read through an
+    // index view deliberately — `D1PreparedStatement` no longer *declares* `sql`, so a
+    // direct read would not compile, and that is the type doing the guarding. The runtime
+    // check is here because the type cannot see what the double chose to return.
+    const members = statement as unknown as Record<string, unknown>;
+    expect(Object.keys(statement)).not.toContain('sql');
+    expect(members['sql']).toBeUndefined();
+
+    // And `bind()` returns a **new** statement, as Cloudflare's does — the difference that
+    // hides any fix which hangs the SQL off the statement object, because such a lookup
+    // resolves before `bind()` and misses after it.
+    const bound = statement.bind('s1');
+    expect(bound).not.toBe(statement);
+    expect(Object.keys(bound).sort()).toEqual(PLATFORM_STATEMENT_MEMBERS);
   });
 
   it('is what makes a chunk of songs cost ten times what its row count says', () => {
@@ -415,7 +473,20 @@ describe('the billed-row model is the schema, not a number typed beside a query'
     const result = await bound.run();
 
     expect(result.meta?.changes).toBe(1);
-    expect(billedRowsFor(bound, result.meta?.changes ?? 0)).toBe(billedRowsForTable('songs', 1));
+    // The SQL is **passed in**, not read off the statement: the platform's statement carries
+    // none, which is the whole reason this signature exists. So the assertion states the
+    // string the DAO passed, beside the statement it built from it.
+    const sql =
+      'INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, suffix, duration, bitrate, created_at, updated_at) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, 0, 0, 0, 0)';
+    expect(billedRowsFor(sql, result.meta?.changes ?? 0)).toBe(billedRowsForTable('songs', 1));
+    // The paired negative, and it is what makes the case above mean anything: the same
+    // statement object, measured with the SQL it does *not* carry, is charged the worst
+    // case — so a caller that lost the SQL is measurably wrong rather than silently
+    // equivalent.
+    expect(billedRowsFor((bound as unknown as Record<string, unknown>)['sql'] as string, result.meta?.changes ?? 0)).toBe(
+      MAX_BILLED_ROWS_PER_ROW,
+    );
     expect(billedRowsForTable('songs', 1)).toBeGreaterThan(result.meta?.changes ?? 0);
   });
 
@@ -455,6 +526,57 @@ describe('the billed-row model is the schema, not a number typed beside a query'
     // And the relationship, which is what makes the number usable by a caller that has no idea
     // what the table's index count is.
     expect(written.billedRows).toBe(written.changes * (1 + TABLE_INDEX_COUNTS['songs']!));
+  });
+
+  it('bills the frontier seed as `nodes`, which is the one write where the two answers differ', async () => {
+    // The assertion that makes a **lost** SQL visible rather than merely wrong.
+    //
+    // Every other case in this file measures `songs`, and `songs` bills ten — which is
+    // exactly `MAX_BILLED_ROWS_PER_ROW`, so a statement whose SQL failed to arrive is charged
+    // the *same number* as a correct one. On the dominant write path the pessimistic fallback
+    // and the right answer are indistinguishable, which is the same coincidence this file
+    // already records above and the reason it asserts a relationship rather than a numeral.
+    // So the guard has to be a table the fallback does not coincide with, and `nodes` is the
+    // one the scan writes on every chunk.
+    //
+    // It is also the write that was actually failing: `ScanService.start` seeds the frontier
+    // with `nodes.upsertMany` before anything else, so a `TypeError` here is what stopped the
+    // scan dead while `scan_state` kept reporting `scanning`.
+    const userId = await seedUser('BilledNodes');
+    const libraryId = await seedLibrary(userId, 'LBN');
+    const nodes = new NodeDAO(handle.db);
+
+    const seeded = await nodes.upsertMany([
+      { libraryId, path: '', parentPath: '', name: '', mtimeMs: 1, etag: null, depth: 0, isScanned: false },
+    ]);
+
+    expect(seeded.changes).toBe(1);
+    // The table's own factor — four — and *not* the schema's worst case, which is ten.
+    expect(seeded.billedRows).toBe(billedRowsForTable('nodes', 1));
+    expect(seeded.billedRows).toBe(4);
+    // The negative in one line, so the numeral above cannot be satisfied by the fallback.
+    expect(seeded.billedRows).not.toBe(MAX_BILLED_ROWS_PER_ROW);
+  });
+
+  it('bills a subtree prune as the table it deletes from, not the schema\'s worst case', async () => {
+    // The second `nodes` write, and the one that caught the `TrackedStatement` regression when
+    // this was written: `BaseDAO.prepare` handing the pair a lost SQL turns every assertion
+    // about `songs` green and this one red, which is the whole argument for having a table
+    // whose factor differs from the fallback.
+    const userId = await seedUser('BilledPrune');
+    const libraryId = await seedLibrary(userId, 'LBP');
+    const nodes = new NodeDAO(handle.db);
+    await nodes.upsertMany([
+      { libraryId, path: 'A', parentPath: '', name: 'A', mtimeMs: 1, etag: null, depth: 0, isScanned: true },
+      { libraryId, path: 'A/01.flac', parentPath: 'A', name: '01.flac', mtimeMs: 1, etag: null, depth: 1, isScanned: true },
+      { libraryId, path: 'Ab', parentPath: '', name: 'Ab', mtimeMs: 1, etag: null, depth: 0, isScanned: true },
+    ]);
+
+    const pruned = await nodes.deleteSubtree(libraryId, 'A');
+
+    expect(pruned.changes).toBe(2);
+    expect(pruned.billedRows).toBe(billedRowsForTable('nodes', 2));
+    expect(pruned.billedRows).not.toBe(MAX_BILLED_ROWS_PER_ROW * 2);
   });
 
   it('is what a single-statement write reports, since that path bypasses the batch', async () => {

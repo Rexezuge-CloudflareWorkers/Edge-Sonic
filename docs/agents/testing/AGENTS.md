@@ -31,9 +31,12 @@ What replaced it is better for the assertions that matter:
 - **D1 is SQLite, so the DAOs run against `node:sqlite`** through a `D1Queryable`
   adapter (`test/helpers/sqlite.ts`). Same engine, real collation, real
   `ON DELETE CASCADE`, real `PRAGMA foreign_key_check`, and a real planner — so
-  `EXPLAIN QUERY PLAN` is an assertion rather than a hope. The adapter preserves the
-  SQL and is honest about what it does not emulate: D1's `bind()` coercion, and
-  anything that depends on `meta.changes` beyond what SQLite reports.
+  `EXPLAIN QUERY PLAN` is an assertion rather than a hope. The adapter is honest about
+  what it does not emulate: D1's `bind()` coercion, and anything that depends on
+  `meta.changes` beyond what SQLite reports. It is **also** held to the platform's
+  *shape* — `prepare()` returns exactly workerd's four members and `bind()` returns a
+  new statement — because an adapter one member wider than the platform is what made the
+  whole write half of this product throw for a deployment, through a green suite.
 - **The Worker is driven through its own `fetch`** (`test/helpers/harness.ts`) with a
   real D1 and a real KV double. That covers route order, the envelope, and HTTP status —
   the three things that only exist in the composition and that every isolated test
@@ -207,7 +210,7 @@ answered `ping` and authenticated correctly.
 
 ## Invariants
 
-Four cross-cutting rules, split out of the root guide. Each is a defect this repository
+Five cross-cutting rules, split out of the root guide. Each is a defect this repository
 shipped with a green suite, so each names the test that now holds it.
 
 - **A double that cannot observe a failure is worse than no double.** 423 tests were green
@@ -261,6 +264,43 @@ shipped with a green suite, so each names the test that now holds it.
   the column entirely. So the *fix* for the first occurrence was applied to the doubles
   only, agreeing with a statement that did not exist. Which platform a double models
   matters as much as whether it models one.
+- **A double with a member the platform does not have is not a double, it is a bug with a
+  green suite.** `test/helpers/sqlite.ts`'s `prepare()` returned a statement carrying a
+  `sql`. **workerd's `D1PreparedStatement` has no such member** — `types/defines/d1.d.ts`
+  declares `bind`, `first`, `run`, `all`, `raw`, and Cloudflare's `prepare()` reference
+  calls the return value *"an object which only contains methods"* — so `billedRowsFor`
+  read `undefined`, `stripLeadingNoise` threw `TypeError: Cannot read properties of
+  undefined (reading 'replace')`, and **every write in the product died**: the frontier
+  seed, the index write, enrichment, the derived-grouping backfill, playlist totals, play
+  counts, the play queue. The scan could neither seed nor advance a chunk, and
+  `scan_state` kept reporting `scanning` because `markScanning` does not bill. Reads were
+  entirely unaffected, so the library browsed fine and nothing had ever been indexed. 1,270
+  tests were green throughout.
+  - **The same double also returned `this` from `bind()`, where Cloudflare returns a new
+    statement.** That is the second half and it is the reason the obvious fix was not
+    available: anything that hangs the SQL off the statement object — a `WeakMap`, a
+    `defineProperty` — resolves *before* `bind()` and misses *after* it, so it would have
+    passed this suite and failed in production. **A double's object identity is part of the
+    platform's contract**, and nothing about a method's return value announces that it
+    matters.
+  - **The repository's own type asserted the platform had it.** `D1PreparedStatement`
+    declared `sql: string` as *required*, under a comment claiming *"Real D1Database
+    satisfies these structurally"* — false — and `env.DB as D1Queryable` is what let it
+    compile, because the local type is a **superset** so the cast is legal in that
+    direction. So the double was written to satisfy a type that was itself a claim, and
+    `wrangler types` — which emits the platform's real declaration into
+    `worker-configuration.d.ts`, in this repository, today — was never consulted.
+  - **The guard asserts the member list in both directions**, against a written-out copy of
+    workerd's declaration rather than one derived from the adapter, which would compare the
+    adapter with itself. Adding a property to the double to satisfy a caller now fails a
+    test instead of re-hiding the defect the suite once shared. And the SQL reaches
+    `billedRowsFor` beside the statement, from `BaseDAO.prepare`.
+  - **One coincidence has to be stated, or the guard looks stronger than it is**: `songs`
+    bills ten rows and `MAX_BILLED_ROWS_PER_ROW` *is* ten, so on the dominant write path a
+    statement whose SQL was lost and a correct one are charged **the same number**. Every
+    `songs` assertion stays green against a lost SQL. The assertions that catch it are on
+    `nodes` (four), and that is why they are on `nodes` — not because `nodes` is the more
+    interesting table.
 
 ## Suites
 

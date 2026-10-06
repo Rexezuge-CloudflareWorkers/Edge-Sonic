@@ -18,6 +18,7 @@
  */
 import { UUIDUtil } from '@edge-sonic/shared/utils';
 import { BaseDAO } from './BaseDAO';
+import type { TrackedStatement } from '../utils/D1Types';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
 import { nowSeconds } from './identity';
@@ -280,9 +281,12 @@ class PlaylistDAO extends BaseDAO {
     let position = (current?.max_position ?? -1) + 1;
     const timestamp = nowSeconds();
     const statements = songIds.map((songId) =>
-      this.database
-        .prepare('INSERT INTO playlist_entries (playlist_id, position, song_id, created_at) VALUES (?, ?, ?, ?)')
-        .bind(playlistId, position++, songId, timestamp),
+      this.prepare('INSERT INTO playlist_entries (playlist_id, position, song_id, created_at) VALUES (?, ?, ?, ?)').bind(
+        playlistId,
+        position++,
+        songId,
+        timestamp,
+      ),
     );
     await this.refreshTotals(playlistId, statements);
     return songIds.length;
@@ -299,7 +303,7 @@ class PlaylistDAO extends BaseDAO {
     const unique = [...new Set(positions)].filter((position) => Number.isInteger(position) && position >= 0).sort((a, b) => b - a);
     if (unique.length === 0) return 0;
     const statements = unique.map((position) =>
-      this.database.prepare('DELETE FROM playlist_entries WHERE playlist_id = ? AND position = ?').bind(playlistId, position),
+      this.prepare('DELETE FROM playlist_entries WHERE playlist_id = ? AND position = ?').bind(playlistId, position),
     );
     await this.refreshTotals(playlistId, statements);
     return unique.length;
@@ -308,9 +312,9 @@ class PlaylistDAO extends BaseDAO {
   /**
   Recompute `song_count`/`duration` from the surviving entries.
   */
-  private async refreshTotals(playlistId: string, statements: ReturnType<BaseDAO['database']['prepare']>[]): Promise<void> {
+  private async refreshTotals(playlistId: string, statements: readonly TrackedStatement[]): Promise<void> {
     const timestamp = nowSeconds();
-    const totals = this.database
+    const totals = this
       .prepare(
         `UPDATE playlists SET
            song_count = (SELECT COUNT(*) FROM playlist_entries WHERE playlist_id = ?),

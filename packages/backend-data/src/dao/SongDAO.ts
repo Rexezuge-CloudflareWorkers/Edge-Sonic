@@ -146,34 +146,32 @@ class SongDAO extends BaseDAO {
     // called from here. See `pathConvention.ts`.
     const statements = inputs.map((input) => {
       const { artist, album } = deriveFromPath(input.dirPath, this.derivedMarker);
-      return this.database
-        .prepare(UPSERT_FILE_FACTS)
-        .bind(
-          input.id,
-          input.libraryId,
-          input.path,
-          input.dirPath,
-          input.name,
-          input.name.toLowerCase(),
-          input.size,
-          input.mtimeMs,
-          input.contentType,
-          input.suffix,
-          // Derived names, each with its `_ci` twin, because a `_ci` column that
-          // drifts from its counterpart is an ungroupable row and the drift is
-          // invisible until somebody browses by artist.
-          artist,
-          artist?.toLowerCase() ?? null,
-          album,
-          album?.toLowerCase() ?? null,
-          // `album_artist` mirrors the derived artist: `getArtist` groups on it, and an
-          // album with a NULL album artist does not appear under the artist a client
-          // navigated to. The same value, so a compilation's tracks group consistently.
-          artist,
-          artist?.toLowerCase() ?? null,
-          timestamp,
-          timestamp,
-        );
+      return this.prepare(UPSERT_FILE_FACTS).bind(
+        input.id,
+        input.libraryId,
+        input.path,
+        input.dirPath,
+        input.name,
+        input.name.toLowerCase(),
+        input.size,
+        input.mtimeMs,
+        input.contentType,
+        input.suffix,
+        // Derived names, each with its `_ci` twin, because a `_ci` column that
+        // drifts from its counterpart is an ungroupable row and the drift is
+        // invisible until somebody browses by artist.
+        artist,
+        artist?.toLowerCase() ?? null,
+        album,
+        album?.toLowerCase() ?? null,
+        // `album_artist` mirrors the derived artist: `getArtist` groups on it, and an
+        // album with a NULL album artist does not appear under the artist a client
+        // navigated to. The same value, so a compilation's tracks group consistently.
+        artist,
+        artist?.toLowerCase() ?? null,
+        timestamp,
+        timestamp,
+      );
     });
     return await this.runWriteBatch(statements, 'songs.upsertFileFacts');
   }
@@ -204,10 +202,9 @@ class SongDAO extends BaseDAO {
     // `runWriteStatement` rather than `withRetry`, so the cost is **measured** rather than
     // declared by the caller — `songs` bills ten rows here, and reporting it as one is how a scan
     // enriched track by track spent ten times the allowance it believed it respected.
+    const sql = `UPDATE songs SET ${[...assignments, 'enriched_at = ?', 'updated_at = ?'].join(', ')} WHERE id = ?`;
     return await this.runWriteStatement(
-      this.database
-        .prepare(`UPDATE songs SET ${[...assignments, 'enriched_at = ?', 'updated_at = ?'].join(', ')} WHERE id = ?`)
-        .bind(...values, timestamp, timestamp, id),
+      this.prepare(sql).bind(...values, timestamp, timestamp, id),
       'songs.applyMetadata',
     );
   }
@@ -357,7 +354,7 @@ class SongDAO extends BaseDAO {
     const keep = new Set(keepPaths);
     const doomed = (all.results ?? []).map((row) => row.path).filter((path) => !keep.has(path));
     if (doomed.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
-    const statements = doomed.map((path) => this.database.prepare('DELETE FROM songs WHERE library_id = ? AND path = ?').bind(libraryId, path));
+    const statements = doomed.map((path) => this.prepare('DELETE FROM songs WHERE library_id = ? AND path = ?').bind(libraryId, path));
     // Handed to the batch rather than counted here: a folder that lost 200 tracks is another
     // statement group that can exceed the ceiling on its own. A prune that stops halfway is
     // idempotent, so the rows it did not reach are simply still there for the next chunk — and
@@ -382,9 +379,11 @@ class SongDAO extends BaseDAO {
   public async deleteSubtree(libraryId: string, dirPath: string): Promise<WriteBatchResult> {
     const escaped = `${dirPath.replaceAll(/[%_]/g, (char) => `\\${char}`)}/%`;
     const result = await this.runWriteStatement(
-      this.database
-        .prepare(String.raw`DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\')`)
-        .bind(libraryId, dirPath, escaped),
+      this.prepare(String.raw`DELETE FROM songs WHERE library_id = ? AND (dir_path = ? OR dir_path LIKE ? ESCAPE '\')`).bind(
+        libraryId,
+        dirPath,
+        escaped,
+      ),
       'songs.deleteSubtree',
     );
     // One statement, so never truncated. `billedRows` is what makes this shape worth the change: a
