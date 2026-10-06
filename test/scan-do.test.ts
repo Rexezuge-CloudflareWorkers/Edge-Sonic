@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScanWorker } from '@edge-sonic/background';
+import { dailyRowWriteShare } from '@edge-sonic/backend-runtime/config';
 import { getScanStub, hasScanBinding } from '../apps/api/src/workers/scanStubs';
 import { createHarness } from './helpers/harness';
 import type { Harness } from './helpers/harness';
@@ -423,16 +424,52 @@ describe('a spent D1 daily allowance', () => {
     await worker.startScan('L1');
 
     const before = harness.dav.propfinds.length;
-    // A budget already spent: the chunk must issue no request at all. The figures are in
-    // **billed** rows, which is the unit the platform's allowance is in — `billedRowsWrittenToday`,
-    // not a row count. Deliberately not the shipped constants: this case is about the guard
-    // refusing, and reusing the real numbers would make it depend on a platform value.
-    const paused = await worker.stepOnce('L1', () => ({ billedRowsWrittenToday: 5000, limit: 4000, now: Date.now }));
+    // A budget already spent, seeded into the **object's own storage** rather than passed as an
+    // argument. That is where production reads it from and the only store that can hold it: the
+    // count has to outlive the chunk that wrote it because metering D1 writes must not itself
+    // spend D1 writes.
+    //
+    // `stepOnce` used to take this as a parameter — a *function*, which RPC cannot serialize, so
+    // no production caller could ever have supplied one and only this test could. Reading it from
+    // storage instead means the case exercises the path that runs rather than a seam beside it.
+    //
+    // Seeded past the **derived** share rather than past a typed one, and the assertion is the
+    // relationship: the figure in the message is `dailyRowWriteShare` of the registered library
+    // count, so pinning `4_000` here would pin a platform number the guard does not own.
+    const share = dailyRowWriteShare((await harness.db.db.prepare('SELECT COUNT(*) AS n FROM libraries').first<{ n: number }>())?.n ?? 1);
+    await storage.store.set('memory', { day: new Date().toISOString().slice(0, 10), rows: share + 1, pause: null });
+    const paused = await worker.stepOnce('L1');
 
     expect(paused.status).toBe('paused');
-    expect(paused.lastError).toContain('4000-row share');
+    expect(paused.lastError).toContain(`${share}-row share`);
     expect(harness.dav.propfinds, 'a paced scan must not open the origin').toHaveLength(before);
     expect(storage.alarmAt).toBe(paused.resumeAt);
+  });
+
+  it('advances normally with the same seed one row below the share, so the seed is what stops it', async () => {
+    // The teeth for the case above. Without this pair, a `paused` could be reached by anything
+    // that refuses to walk — a bad library id, a spent allowance surfacing as a refusal, a guard
+    // that refuses for a different reason entirely — and the assertion above would be green for
+    // the wrong cause. One row under the same derived share, the same object, the same origin:
+    // the chunk runs and the origin is opened. So the difference between the two cases is the
+    // guard and nothing else.
+    vi.stubGlobal('fetch', harness.dav.fetch);
+    const { ctx, storage } = fakeState();
+    const worker = workerFor(ctx);
+    await worker.startScan('L1');
+
+    const share = dailyRowWriteShare((await harness.db.db.prepare('SELECT COUNT(*) AS n FROM libraries').first<{ n: number }>())?.n ?? 1);
+    // `0` rather than `share - 1`: `startScan` above already billed this object's pending
+    // count, so the headroom left is the share *less what the seeding itself cost*, and pinning
+    // that number here would pin a figure the harness's fixture decides rather than the guard.
+    await storage.store.set('memory', { day: new Date().toISOString().slice(0, 10), rows: 0, pause: null });
+    expect(share).toBeGreaterThan(0);
+
+    const before = harness.dav.propfinds.length;
+    const result = await worker.stepOnce('L1');
+
+    expect(result.status).not.toBe('paused');
+    expect(harness.dav.propfinds.length, 'a scan with headroom must open the origin').toBeGreaterThan(before);
   });
 });
 
