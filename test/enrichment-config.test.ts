@@ -525,6 +525,11 @@ describe('EnrichmentService', () => {
     // Enrichment never `PROPFIND`s; it `GET`s the path it was given. So the `404` is
     // staged by serving an origin that has no such file, which is also what a file
     // deleted between the scan's listing and its enrichment looks like.
+    //
+    // This is now the **only** status that stamps, and the `413` test below is the pair
+    // that says why: the old list was `400`, `404` and `413`, described as "the ones
+    // that are deterministic". All three are deterministic about the *request*. Only one
+    // is about the file.
     const gone = fakeDav({});
     const applied: Array<{ id: string; metadata: Record<string, unknown> }> = [];
     const { library } = makeEnrichment();
@@ -548,6 +553,45 @@ describe('EnrichmentService', () => {
     expect(tags).toBeNull();
     expect(applied).toHaveLength(1);
     expect(applied[0]!.metadata.duration).toBe(0);
+  });
+
+  it('does not record a 413 on the prefix read, so a library of them is not stamped empty', async () => {
+    // The live shape this shipped as. An origin that ignores `Range` answers `200` with
+    // the whole file; `readBounded` refuses it as over its own bound and raises `413`.
+    //
+    // `413` was on the "deterministic, therefore about the file" list, so every track was
+    // stamped `enriched_at` with `duration: 0`, no tags and no sample rate — and
+    // `shouldEnrich` then declined the row for ever. A Subsonic client saw a library where
+    // every album and artist still carried the path-derived `(derived)` name and every
+    // song had a null duration, with no error anywhere and nothing on the operator's page.
+    // No `getSong` and no rescan could undo it, because the file really had not moved.
+    //
+    // The whole library is the point: this is not one bad track, it is every track on an
+    // origin that does not do ranges, and it arrives in a single scan.
+    const { service, applied, dav, library } = makeEnrichment();
+    // A body over the bound `readBounded` enforces for a prefix read, so the `413` is
+    // real rather than incidental: the service asks for 128 KiB and gets the whole file.
+    const oversized = new Uint8Array(300_000);
+    oversized.set(flacPrefix(180));
+    dav.setTree({
+      '/dav/A/01.flac': [{ path: '/dav/A/01.flac', size: 30_000_000, contentType: 'audio/flac', body: oversized }],
+    });
+    dav.setIgnoreRange(true);
+
+    const tags = await service.enrich(library, makeSong() as never);
+
+    expect(tags).toBeNull();
+    // Nothing written, so nothing claims to have been read.
+    expect(applied).toHaveLength(0);
+
+    // And the recovery, which is the half that matters: an origin that starts honouring
+    // ranges is enriched normally on the next call, with no rescan and no `startScan`.
+    dav.setIgnoreRange(false);
+    const recovered = await service.enrich(library, makeSong() as never);
+
+    expect(recovered?.durationSeconds).toBe(180);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]!.metadata.duration).toBe(180);
   });
 
   it('survives a cache that throws, and still writes to D1', async () => {
@@ -910,6 +954,84 @@ describe('a row enriched by an older reader', () => {
     await service.enrich(library, staleSong(file.length) as never);
 
     expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+  });
+
+  it('does not let a cached null duration skip the read it never resolved', async () => {
+    // The cache's half of the same defect, and it is the half that outlives a fix to the
+    // row: a `songMeta` entry recording `durationSeconds: null` matches on `mtime_ms` and
+    // `readerVersion`, neither of which changes when the thing that made it null goes
+    // away. So the entry answered "no duration" to every future `getSong` for a file that
+    // never moved — the negative cache, written *before* anybody knew the answer was
+    // incomplete.
+    //
+    // `readTailBytes: 0` is how a deployment produces one: the prefix read reports no
+    // duration for an Ogg stream by design, and with no tail read there is no second
+    // chance. Raise the setting and the entry is still there, still matching.
+    const file = opusFile();
+    const { service, applied, library, cache } = makeOggEnrichment(file, { readTailBytes: 0 });
+    await service.enrich(library, opusSong(file.length) as never);
+
+    expect(applied[0]?.metadata.duration).toBe(0);
+    // The tags are real and were written — the row is not empty, it is *incomplete*, and
+    // that is the distinction this entry used to erase.
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+    expect(await new KvCache(cache.ns).getJson('songMeta', ['s1'])).toBeNull();
+
+    // And the read is not skipped for it, so a deployment that fixes the setting gets the
+    // duration on the next call rather than serving the recorded absence for ever.
+    const repaired = makeOggEnrichment(file);
+    await repaired.service.enrich(library, opusSong(file.length) as never);
+
+    expect(repaired.applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+  });
+
+  it('re-reads a row whose cached entry records an absence, because the writer no longer writes one', async () => {
+    // The reader's half, and the only one that repairs a deployment that already holds
+    // the entries the writer no longer produces. Guarding the writer alone leaves every
+    // `songMeta` entry written before this version in place, matching on `mtime_ms` and
+    // `readerVersion` and answering "no duration" for the life of the file — and the fix
+    // would be one that only helps libraries created after it shipped.
+    //
+    // So the entry is placed by hand, the way the old writer left it, and the current
+    // reader is on both sides of the match. Written through `KvCache` rather than as a
+    // literal key, so the test does not encode the key layout.
+    const file = opusFile();
+    const { service, applied, dav, library, cache } = makeOggEnrichment(file);
+    // The mtime and reader version both **match**, which is the whole difficulty: an entry
+    // that missed on either would be skipped by the existing guards and this test would
+    // pass with the reader's guard removed. A hard-coded timestamp here would be one more
+    // thing to keep in step with `makeSong`, so it is read off the row it has to match.
+    const song = opusSong(file.length);
+    await new KvCache(cache.ns).putJson('songMeta', ['s1'], {
+      mtimeMs: song.mtime_ms,
+      readerVersion: song.reader_version,
+      durationSeconds: null,
+      bitrateKbps: null,
+      sampleRate: 48_000,
+      channels: 2,
+      container: 'ogg-opus',
+    });
+
+    await service.enrich(library, song as never);
+
+    expect(dav.gets.length).toBeGreaterThan(0);
+    expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
+  });
+
+  it('still skips the read for a complete cached answer, which is the cache doing its job', async () => {
+    // The pair, without which the guard above could be satisfied by never consulting the
+    // cache at all — and that would cost one ranged read per `getSong`, for ever, on the
+    // path this cache exists to make free.
+    const file = opusFile();
+    const { service, dav, library } = makeOggEnrichment(file);
+
+    await service.enrich(library, opusSong(file.length) as never);
+    expect(dav.gets.length).toBeGreaterThan(0);
+
+    const replay = await service.enrich(library, { ...opusSong(file.length), mtime_ms: 1000 } as never);
+
+    expect(dav.gets).toHaveLength(2); // prefix + tail, and neither repeated
+    expect(replay).toBeNull();
   });
 });
 

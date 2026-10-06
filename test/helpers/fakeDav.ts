@@ -64,6 +64,27 @@ export interface FakeDavOptions {
    * it mid-test, which is how the recovery is expressed.
    */
   getStatus?: number;
+  /**
+   * Answer every media `GET` with `200` and the **whole file**, ignoring the `Range`
+   * header.
+   *
+   * ### Why this exists
+   *
+   * Because a real WebDAV server does it, and because the shape it produces is the one
+   * this repository shipped a permanent fault on. A server that has not heard of ranges
+   * does not answer `416` or `206`; it answers `200` with everything, which is a
+   * perfectly valid response to the request as written. `WebDavClient.readBounded` then
+   * refuses it — the body is over the bound it asked for — and raises `413`.
+   *
+   * Which used to be classified as a *definitive* answer about the file, so enrichment
+   * stamped `enriched_at` and wrote `duration: 0` with no tags: one origin like this
+   * stamped an entire library "already read" without reading any of it, and no `getSong`
+   * or rescan could undo it. See `isTransientEnrichmentFailure`.
+   *
+   * Mutable for the same reason as `setGetStatus`: the fault is only visible across the
+   * moment the origin changes, and a knob fixed at construction cannot express it.
+   */
+  ignoreRange?: boolean;
 }
 
 export interface FakeDav {
@@ -106,6 +127,10 @@ export interface FakeDav {
    * express a recovery.
    */
   setGetStatus(status: number | null): void;
+  /**
+   * Start or stop ignoring `Range` on media `GET`s. See `FakeDavOptions.ignoreRange`.
+   */
+  setIgnoreRange(ignore: boolean): void;
   reset(): void;
 }
 
@@ -239,6 +264,7 @@ function withReceiverCheck(inner: typeof fetch): typeof fetch {
 function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOptions = {}): FakeDav {
   let tree = initialTree;
   let getStatus: number | null = options.getStatus ?? null;
+  let ignoreRange = options.ignoreRange ?? false;
   const propfinds: string[] = [];
   const gets: Array<{ path: string; range: string | null }> = [];
   const credentials: string[] = [];
@@ -283,7 +309,11 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
       gets.push({ path, range });
       if (getStatus !== null) return new Response('', { status: getStatus });
       const entry = Object.values(tree).flat().find((candidate) => candidate.path === path);
-      return entry === undefined ? new Response('', { status: 404 }) : serveEntry(entry, range);
+      if (entry === undefined) return new Response('', { status: 404 });
+      // `null` range: the whole body with a `200`, which is what a server without range
+      // support actually sends. Deliberately *not* a `206` claiming a prefix — that would
+      // model a server lying about what it served, which this file already stopped doing.
+      return serveEntry(entry, ignoreRange ? null : range);
     }
 
     return new Response('', { status: 405 });
@@ -303,6 +333,9 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
     },
     setGetStatus: (next: number | null) => {
       getStatus = next;
+    },
+    setIgnoreRange: (next: boolean) => {
+      ignoreRange = next;
     },
     reset: () => {
       propfinds.length = 0;

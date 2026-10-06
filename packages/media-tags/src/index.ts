@@ -46,8 +46,23 @@ const DEFAULT_PREFIX_BYTES = 128 * 1024;
  * Any change to what `readAudioTags` or `readOggTailDuration` can extract from the same
  * bytes — a fixed packet walk, a corrected granule rule, a newly supported container.
  * Bumping it costs one re-read per track, so it is not a thing to do for a refactor.
+ *
+ * ### Version 2: the *answer* changed, not the reader
+ *
+ * A stamp says "already read", and `shouldEnrich` trusts it. Version 1 wrote that stamp
+ * over any read failure whose status was not a timeout, a `429` or a `5xx` — which
+ * included `413`, and `413` is this repo's own body bound in
+ * `WebDavClient.readBounded`: an origin that answers a `Range` request with `200` and the
+ * whole file trips it on every track. Such an origin therefore stamped an entire library
+ * `duration: 0`, no tags and `reader_version: 1`, which is a claim about the file that was
+ * never established, and no `getSong` or rescan could repair it.
+ *
+ * So this is the `reader_version` invariant applying to **what counts as an answer**: a row
+ * stamped by the old rule is a wrong value, and the repair mechanism for a wrong value
+ * written by an earlier reader is this counter. One bump re-reads every row the old rule
+ * touched, which is also what invalidates the `songMeta` entries holding the same answer.
  */
-const READER_VERSION = 1;
+const READER_VERSION = 2;
 
 function startsWith(bytes: Uint8Array, magic: readonly number[], offset = 0): boolean {
   return offset + magic.length > bytes.length ? false : magic.every((byte, index) => bytes[offset + index] === byte);
