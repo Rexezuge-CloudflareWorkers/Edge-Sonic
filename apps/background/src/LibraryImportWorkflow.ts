@@ -59,8 +59,33 @@ import {
   runStarsPhase,
   serializeReport,
 } from '@edge-sonic/backend-services/import';
-import type { PhaseContext, PhaseReport, PhaseStore } from '@edge-sonic/backend-services/import';
+import type { PhaseContext, PhaseReport } from '@edge-sonic/backend-services/import';
+import type { PlayCountImportWorker } from './PlayCountImportWorker';
+import { importPhaseStore } from './importPhaseStore';
 import { createScanWorkerScope } from './ScanWorkerFactory';
+
+/**
+ * The play-count Durable Object's stub, typed by **the class itself**.
+ *
+ * The `scanStubs.ts` pattern, for the same reason it is used there: a hand-written signature is
+ * free to disagree with the class, and it shipped disagreeing. `{ start(): Promise<unknown> }`
+ * declared **no** parameter, so `stub.start()` typechecked while `PlayCountImportWorker.start`
+ * read `request.runId` off the first argument — which arrives `undefined` over RPC, so the
+ * object got no run id and no alarm and the walk never began. The class is the statement; a
+ * signature beside it is a second claim, and nothing measured the two.
+ */
+type ImportStub = DurableObjectStub & PlayCountImportWorker;
+
+/**
+ * What the play-count half did, which is **three** answers and not two.
+ *
+ * `not-configured` and `failed` both mean "no walk is outstanding", and collapsing them into one
+ * boolean is what left a run saying `running` with nothing scheduled to advance it: a `false` from
+ * a start that *threw* is indistinguishable from a `false` from no binding, so the run settled
+ * `completed` over a play-count phase that never started. Each kind maps to exactly one terminal
+ * state in {@link LibraryImportWorkflow.settle}.
+ */
+type WalkOutcome = { readonly kind: 'not-configured' } | { readonly kind: 'outstanding' } | { readonly kind: 'failed'; readonly reason: string };
 
 /**
 The event payload. Serializable, so it crosses the Workflow's storage as JSON.
@@ -90,6 +115,17 @@ const STEP_TIMEOUT = '5 minutes';
  * enough to ride out a dropped connection and not enough to turn a dead remote into a long loop.
  */
 const STEP_RETRIES = { limit: 3, delay: '10 seconds', backoff: 'exponential' } as const;
+
+/**
+ * What the operator is told when the play-count object cannot be started.
+ *
+ * A **literal**, for the reason `runWorkflow` logs one: the text reaches an operator's page
+ * through `import_runs.last_error`, so it must say what is true about this repository and nothing
+ * about a fault's own contents. What it does not do is hide the cause — the error is logged beside
+ * it, and the literal names the phase, because "the import failed" is the one sentence that
+ * leaves an operator with no next step.
+ */
+const WALK_START_FAILED = 'The play-count walk could not be started, so no play counts were read. The other phases in this report are unaffected.';
 
 class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWorkflowPayload> {
   public async run(event: Readonly<WorkflowEvent<ImportWorkflowPayload>>, step: WorkflowStep): Promise<{ readonly runId: string }> {
@@ -135,10 +171,24 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
     }
 
     // Play counts are **started** here and **walked** in the Durable Object.
-    let walkStarted = false;
+    let walk: WalkOutcome = { kind: 'not-configured' };
     if (phases.includes('playCounts')) {
-      walkStarted = await this.startPlayCountWorker(runId);
-      if (walkStarted) {
+      walk = await this.startPlayCountWorker(runId);
+      if (walk.kind === 'failed') {
+        // `failed`, and named — the walk never began, so there is nothing partial about it and
+        // nothing an operator can wait for. The literal is the whole message: the run's
+        // `last_error` is what the operator page renders, and the cause behind it is a fault in
+        // this repository's own binding rather than anything about the remote.
+        await this.recordPhase(runId, {
+          phase: 'playCounts',
+          status: 'failed',
+          imported: 0,
+          rowsWritten: 0,
+          unresolvedCount: 0,
+          unresolved: [],
+          lastError: walk.reason,
+        });
+      } else if (walk.kind === 'outstanding') {
         await this.recordPhase(
           runId,
           {
@@ -157,7 +207,10 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
       }
     }
 
-    await this.settle(runId, walkStarted);
+    // Outside the `catch` that produced `walk`, deliberately: a fault in *settling* still has to
+    // reach the engine, because a `run` that returns normally reports success and the run row is
+    // the only thing that would have said otherwise.
+    await this.settle(runId, walk);
   }
 
   /**
@@ -191,7 +244,7 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
       runId: context.runId,
       userId: context.userId,
       libraryId: context.libraryId,
-      store: this.phaseStore(scope, context.userId),
+      store: importPhaseStore(scope, context.userId),
       // No cast: the client satisfies the phase's reader port structurally, and the cast that used
       // to be here was a hole in the compiler where a divergence would have gone unread.
       remote: opened.client,
@@ -199,68 +252,6 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
       matchArtist: (libraryId, artists) => scope.get(Tokens.MatchRemoteArtists)(libraryId, artists),
       albumPageSize: 500,
     };
-  }
-
-  /**
-   * The store the phases write through.
-   *
-   * Every method is a **delegation and nothing else** — no arithmetic, no filtering, no
-   * ordering. That is deliberate: a port that quietly reorders a playlist or drops an entry is a
-   * second implementation of the DAO, and a second implementation is free to disagree about the
-   * exact thing the DAO was written to get right.
-   */
-  private phaseStore(scope: ReturnType<typeof createScanWorkerScope>, userId: string): PhaseStore {
-    return {
-      findByPaths: async (libraryId, paths) => await (await scope.get(Tokens.SongMatchDAO)()).findByPaths(libraryId, paths),
-      findByAlbumTitle: async (libraryId, pairs) => await (await scope.get(Tokens.SongMatchDAO)()).findByAlbumTitle(libraryId, pairs),
-
-      grantedLibraryIds: async (id) => {
-        const granted = await scope.get(Tokens.LibraryService).listForUser(id);
-        return new Set(granted.map((row: { readonly id: string }) => row.id));
-      },
-
-      songsByIds: async (ids) => await (await scope.get(Tokens.SongDAO)()).listIdsAcrossLibraries(ids),
-      findPlaylistById: async (id) => await (await scope.get(Tokens.PlaylistDAO)()).findById(id),
-
-      createPlaylistWithId: async (input) => {
-        await (await scope.get(Tokens.PlaylistDAO)()).createWithId(input);
-      },
-      replacePlaylistEntries: async (playlistId, songIds, totalDuration) => {
-        // The DAO returns the entry count; the allowance is spent on **statements**, and the
-        // header recompute is one of them, so the reported figure is the count plus that one.
-        const written = await (await scope.get(Tokens.PlaylistDAO)()).replaceEntries(playlistId, songIds, totalDuration);
-        return { written: written + 1 };
-      },
-
-      upsertStar: async (input) => {
-        await (await scope.get(Tokens.AnnotationDAO)()).star(input.userId, input.itemId, input.itemType, input.starredAt);
-        return { written: 1 };
-      },
-      upsertRating: async (input) => {
-        await (await scope.get(Tokens.AnnotationDAO)()).setRating(input.userId, input.itemId, input.itemType, input.rating);
-        return { written: 1 };
-      },
-      upsertBookmark: async (input) => {
-        await (await scope.get(Tokens.AnnotationDAO)()).createBookmark(userId, input.songId, input.positionMs, input.comment);
-        return { written: 1 };
-      },
-      savePlayQueue: async (input) => {
-        await (await scope.get(Tokens.AnnotationDAO)()).savePlayQueue({ ...input, changed: input.changed });
-        return { written: input.songIds.length + 2 };
-      },
-      setPlayCounts: async (input) => {
-        // Absolute, never additive — see `PlayCountDAO.setPlayCounts`. An import re-run would
-        // otherwise inflate every count, and unlike a playlist there is no observable difference
-        // between "played twice" and "imported twice".
-        const written = await (await scope.get(Tokens.PlayCountDAO)()).setPlayCounts(userId, input.counts);
-        return { written };
-      },
-    };
-  }
-
-  private allowPrivateHosts(): boolean {
-    const config = createScanWorkerScope(this.env).get(Tokens.AppConfig);
-    return config.getAllowPrivateWebdavHosts() ?? config.isBypassAllowed();
   }
 
   /**
@@ -303,32 +294,55 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
    * **is** the run id, so calling this twice reaches the same object rather than starting a
    * second walk over the same albums.
    *
-   * `false` when no binding is configured — tests and local dev — so the run can report the walk
-   * as unavailable rather than as started.
+   * The **payload is the run id**, and it is not derivable inside the object: the name is a
+   * routing decision, and nothing about a Durable Object turns its own name into an argument.
+   * The first version called `stub.start()` with none, so `PlayCountImportWorker.start` read
+   * `request.runId` off `undefined` — which threw *before* the `put` and before the alarm, so the
+   * walk never ran, the instance was recorded errored, and the run stayed `running` with no error
+   * for ever.
+   *
+   * ### A start that fails is recorded, not thrown
+   *
+   * `failed` rather than a rethrow, and it is the narrowest catch in the class. Letting the fault
+   * escape is how the run above ended up `running` with nothing scheduled to advance it, visible
+   * only in the Cloudflare dashboard — the wedge `runWorkflow` exists to prevent, arriving through
+   * the one call it cannot see. The reason is a **literal**, with the error logged beside it: a
+   * `RemoteSubsonicError` carries a URL, and this string is what the operator page renders.
    */
-  private async startPlayCountWorker(runId: string): Promise<boolean> {
+  private async startPlayCountWorker(runId: string): Promise<WalkOutcome> {
     const namespace = (this.env as unknown as { IMPORT_DO?: DurableObjectNamespace }).IMPORT_DO;
-    if (namespace === undefined) return false;
-    const stub = namespace.getByName(runId) as unknown as { start(): Promise<unknown> };
-    await stub.start();
+    if (namespace === undefined) return { kind: 'not-configured' };
+    const stub = namespace.getByName(runId) as unknown as ImportStub;
+    try {
+      await stub.start({ runId });
+    } catch (err: unknown) {
+      console.error('[LibraryImportWorkflow] the play-count walk could not be started; the run is recorded as failed');
+      console.error(err);
+      return { kind: 'failed', reason: WALK_START_FAILED };
+    }
     const scope = createScanWorkerScope(this.env);
     await (await scope.get(Tokens.ImportRunDAO)()).update(runId, { playCountWorker: runId });
-    return true;
+    return { kind: 'outstanding' };
   }
 
   /**
-   * Close the run — **unless** a play-count walk is still going.
+   * Close the run — unless a play-count walk is still going.
    *
    * An operator told "imported" with half the play counts walking has no way to know, and the
    * Durable Object is the only thing that can finish them. So the run stays `running` and names
    * the worker, and the worker's own completion settles it.
+   *
+   * The three kinds are three answers because they ask the operator for three different things.
+   * `outstanding` needs a poll. `failed` needs a look. `not-configured` needs nothing — there was
+   * no walk to run — and settling it `completed` is the only honest reading, since a deployment
+   * with no binding cannot fail an import the operator asked for.
    */
-  private async settle(runId: string, walkOutstanding: boolean): Promise<void> {
+  private async settle(runId: string, walk: WalkOutcome): Promise<void> {
     const scope = createScanWorkerScope(this.env);
     const runs = await scope.get(Tokens.ImportRunDAO)();
     const run = await runs.findById(runId);
     if (run === null) return;
-    if (walkOutstanding) {
+    if (walk.kind === 'outstanding') {
       await runs.update(runId, { status: 'running', lastError: null });
       return;
     }
@@ -341,14 +355,21 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
           sourceName: existing?.sourceName ?? '',
           targetUsername: existing?.targetUsername ?? '',
           phases: existing?.phases ?? [],
+          // `finished: true` for a **failed** run too. It means nothing further will be written,
+          // which is true of a terminal failure, and leaving it null would render a run that is
+          // definitively over as one still in progress.
           finished: true,
         }),
       ),
     );
+    if (walk.kind === 'failed') {
+      await runs.update(runId, { status: 'failed', lastError: walk.reason, finishedAt: Math.floor(Date.now() / 1000) });
+      return;
+    }
     await runs.update(runId, { status: 'completed', lastError: null, finishedAt: Math.floor(Date.now() / 1000) });
   }
 }
 
-export { LibraryImportWorkflow, STEP_RETRIES, STEP_TIMEOUT };
-export type { ImportWorkflowPayload,  };
-export {type RequestScopeEnv} from '@edge-sonic/backend-services/composition';
+export { LibraryImportWorkflow, STEP_RETRIES, STEP_TIMEOUT, WALK_START_FAILED };
+export type { ImportWorkflowPayload, ImportStub, WalkOutcome };
+export { type RequestScopeEnv } from '@edge-sonic/backend-services/composition';

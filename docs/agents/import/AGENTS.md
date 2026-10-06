@@ -31,6 +31,26 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   precondition that passes when it should fail looks exactly like a guard.
   Three answers rather than two, and each asks the operator for something different: `paused`
   resumes without a poll, `failed` needs a look, and `stalled` is neither.
+- **A boolean outcome is a claim, and a claim nothing measures is not an invariant.** What the
+  play-count half did was a `boolean` — `startPlayCountWorker` answered `false` for both "no
+  `IMPORT_DO` binding is configured" and "the start threw". The two lead to different terminal
+  states and ask the operator for different things, and the second one shipped: `stub.start()`
+  was called with no payload, so `PlayCountImportWorker.start` read `request.runId` off
+  `undefined` and threw *before* its `put` and *before* its `setAlarm`. The fault escaped, so
+  `settle` never ran, and the run stayed `running` with `last_error` **null** for ever with
+  nothing scheduled to advance it — the operator's page said the import was still going, and the
+  only record of the fault was the Workflow instance in the Cloudflare dashboard. `WalkOutcome`
+  is `not-configured | outstanding | failed`, one per terminal state, and a start that fails is
+  **caught and recorded** rather than thrown, because the catch has to wrap the one call
+  `runWorkflow` cannot see while leaving `settle` outside it — a fault in settling must still
+  reach the engine, or a `run` that returns normally reports success.
+  The same failure reached the compiler too: the stub was hand-typed
+  `{ start(): Promise<unknown> }`, declaring **no** parameter, so the wrong call typechecked. It
+  is now `DurableObjectStub & PlayCountImportWorker` — the `scanStubs.ts` pattern — because a
+  signature beside a class is a second claim and nothing compared the two. Asserted in both
+  directions in `test/import-execution.test.ts`, and the double it holds reads `request.runId`
+  rather than closing over the namespace's name, because a double that shares the caller's
+  assumption is a second copy of the bug.
 - **Two refusals that mean different things must not be one answer, and a caller must not be
   left to guess.** `ImportSourceService.clientFor` returns `{ok:true, client}` or
   `{ok:false, reason}` because there are **two** refusals — the row is gone, or the host is no
