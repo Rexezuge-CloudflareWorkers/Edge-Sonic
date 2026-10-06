@@ -38,7 +38,6 @@ import { LibraryService } from '@edge-sonic/backend-services/library';
 import { readAudioTags } from '@edge-sonic/media-tags';
 import { UUIDUtil } from '@edge-sonic/shared/utils';
 import { BUNDLES } from '@edge-sonic/shared/i18n';
-import { DEMO_USER_EMAIL } from '@edge-sonic/shared/constants';
 import { elList } from '@edge-sonic/subsonic';
 import { WebDavClient } from '@edge-sonic/webdav';
 import { NotFoundError } from '@edge-sonic/backend-errors';
@@ -72,7 +71,6 @@ describe('the shared alias table', () => {
       'media-tags': readAudioTags,
       'shared/utils': UUIDUtil,
       'shared/i18n': BUNDLES,
-      'shared/constants': DEMO_USER_EMAIL,
       subsonic: elList,
       webdav: WebDavClient,
       'cloudflare:workers': DurableObject,

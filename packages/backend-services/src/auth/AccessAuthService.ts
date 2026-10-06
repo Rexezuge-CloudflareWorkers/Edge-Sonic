@@ -59,8 +59,6 @@ interface AccessAuthEnv {
   ACCESS?: AccessBinding;
 }
 
-const DEMO_USER_EMAIL = 'demo@edge-sonic.invalid';
-
 function trimTrailingSlashes(value: string): string {
   let end = value.length;
   while (end > 0 && value.codePointAt(end - 1) === 47) end -= 1;
@@ -114,7 +112,9 @@ class AccessAuthService {
     // allow-list is deliberately not `!== 'production'`: a deny-list would enable
     // the bypass for `staging`, `Preview`, and a misspelled `prodcution`.
     if (bypassAllowed) {
-      if (config.isDemoMode()) return DEMO_USER_EMAIL;
+      // Through the config, never a literal here: the value is a variable, so a second
+      // copy of it is a second answer to "who is the demo user".
+      if (config.isDemoMode()) return config.getDemoUserEmail();
       // Read through the config, never `env.DEV_AUTH_EMAIL` inline: the config is the
       // only place that knows how a variable is parsed and defaulted.
       const dev = config.getDevAuthEmail()?.trim() ?? '';
@@ -188,5 +188,5 @@ class AccessAuthService {
   }
 }
 
-export { AccessAuthService, DEMO_USER_EMAIL };
+export { AccessAuthService };
 export type { AccessAuthEnv, AccessBinding, AccessIdentity };

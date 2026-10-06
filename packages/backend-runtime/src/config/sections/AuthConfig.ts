@@ -1,5 +1,5 @@
 import { EnvParser } from '../EnvParser';
-import { DEFAULT_ENVIRONMENT } from '../ConfigurationDefaults';
+import { DEFAULT_DEMO_USER_EMAIL, DEFAULT_ENVIRONMENT } from '../ConfigurationDefaults';
 
 /**
  * The only ENVIRONMENT values that may honor an authentication bypass.
@@ -42,9 +42,14 @@ class AuthConfig {
     return value === '' ? null : value;
   }
 
-  public getDemoUserEmail(): string | null {
-    const value = EnvParser.string(this.env, 'DEMO_USER_EMAIL', '');
-    return value === '' ? null : value;
+  /**
+   * Never null: `DEMO_MODE` needs an identity to answer with, so the default *is* the
+   * answer rather than an absence of one. A default is not an absence — see the
+   * `Authorized` tri-state in the SPA for the same rule on the other side.
+   */
+  public getDemoUserEmail(): string {
+    const value = EnvParser.string(this.env, 'DEMO_USER_EMAIL', DEFAULT_DEMO_USER_EMAIL).trim();
+    return value === '' ? DEFAULT_DEMO_USER_EMAIL : value.toLowerCase();
   }
 
   public getTeamDomain(): string | null {

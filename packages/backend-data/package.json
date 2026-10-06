@@ -18,7 +18,8 @@
   },
   "dependencies": {
     "@edge-sonic/backend-errors": "workspace:*",
-    "@edge-sonic/shared": "workspace:*"
+    "@edge-sonic/shared": "workspace:*",
+    "@edge-sonic/subsonic": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "5.20261001.1",

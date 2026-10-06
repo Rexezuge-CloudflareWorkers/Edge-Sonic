@@ -18,7 +18,8 @@
  *    authenticate.** The binding is trusted; what it contains is not, until it says so.
  */
 import { describe, expect, it } from 'vitest';
-import { AccessAuthService, DEMO_USER_EMAIL } from '@edge-sonic/backend-services/auth';
+import { AccessAuthService } from '@edge-sonic/backend-services/auth';
+import { DEFAULT_DEMO_USER_EMAIL } from '@edge-sonic/backend-runtime/config';
 import type { AccessBinding, AccessIdentity } from '@edge-sonic/backend-services/auth';
 import { UnauthorizedError } from '@edge-sonic/backend-errors';
 
@@ -54,7 +55,7 @@ describe('the dev bypass', () => {
     // so a public demo can be tried without provisioning, which is exactly why it must
     // be impossible to turn on in production.
     const service = new AccessAuthService({ ENVIRONMENT: 'development', DEMO_MODE: 'true' });
-    expect(await service.getAuthenticatedUserEmail(userRequest())).toBe(DEMO_USER_EMAIL);
+    expect(await service.getAuthenticatedUserEmail(userRequest())).toBe(DEFAULT_DEMO_USER_EMAIL);
   });
 
   it('lowercases the configured address, because the user API keys on it', async () => {

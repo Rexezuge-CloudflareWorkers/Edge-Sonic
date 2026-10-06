@@ -1,7 +1,8 @@
 # scripts/
 
-Repo tooling, grouped by **who runs it**. Every script is TypeScript and is covered by
-`pnpm run lint` and `pnpm run typecheck:scripts`.
+Repo tooling, grouped by **who runs it**. Every script is TypeScript except
+`check-god-files.mjs`, and all of them are covered by `pnpm run lint` and
+`pnpm run typecheck:scripts`.
 
 | Directory     | Runs from             | Purpose                                                                              |
 | ------------- | --------------------- | ------------------------------------------------------------------------------------ |
@@ -9,7 +10,9 @@ Repo tooling, grouped by **who runs it**. Every script is TypeScript and is cove
 | `build/`      | `pnpm install`, CI    | Keeps a fresh clone typecheckable, and checks the built shell before it is deployed. |
 | `deploy/`     | `deploy-worker` job   | Materialize `wrangler.jsonc` and provision its resources and secrets.                 |
 | `i18n/`       | a human, or CI        | Web locale validation (also in `pnpm run checks` and the `locales` CI job).           |
-| `migrations/` | a human, or CI        | The migration checksum lock. See `../docs/agents/runtime/AGENTS.md`.                  |
+| `migrations/` | a human, or CI        | The migration checksum lock. See `../docs/agents/indexing/AGENTS.md`.                 |
+| `backup/`     | `backup-d1` job       | Export, encrypt, upload and prune the nightly dump. The preflight fails a configured
+  destination with no `BACKUP_ENCRYPTION_KEY`. See `../docs/db-backup-recovery.md`.          |
 
 `check-god-files.mjs` and `compare-reference.ts` sit at the root: the first is run by
 `node` from three places and has no siblings, the second is an operator tool for

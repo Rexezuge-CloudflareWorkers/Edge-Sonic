@@ -328,7 +328,7 @@ describe('the header', () => {
     // `brand.rest` held `"-Sonic"` while this markup rendered its own `-` between two spans,
     // so the header read `Edge--Sonic`. Every individual surface was defensible — the bundle
     // had one well-formed key, the inline default said "Sonic", the markup was correct — which
-    // is why `scripts/validate_locales.mjs` now compares each default against the bundle. This
+    // is why `scripts/i18n/validate_locales.ts` now compares each default against the bundle. This
     // is the render-level assertion that the separator is markup and not vocabulary.
     render(
       <MemoryRouter>

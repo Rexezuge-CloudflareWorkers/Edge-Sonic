@@ -159,8 +159,8 @@ function childToJsonValue(node: ElementNode): unknown {
   // `{}` (or `[{}]`, since the flag also forces the array), and a client reading
   // `response.openSubsonicExtensions.length` got `undefined` — a throw on the capability
   // call, which is the one call whose failure mode is a client deciding the server is
-  // broken. It is the same rule as the `listKey` seeding below, one level out: an absent
-  // value is a value.
+  // broken. It is the *exception* to the rule below, not the same rule: `array: true` is a
+  // bare list at a key rather than a record wrapping one, so its "no items" answer is `[]`.
   if (node.array === true && children.length === 0 && attributeEntries.length === 0) return [];
 
   const result: Record<string, unknown> = {};

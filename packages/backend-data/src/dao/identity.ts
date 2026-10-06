@@ -10,7 +10,7 @@
  *
  * This is easy to get backwards because a D1 test double that lowercases *both*
  * sides in JavaScript returns identical rows either way — the predicate is wrong,
- * the answers match, and only the query plan differs. `test/integration` asserts
+ * the answers match, and only the query plan differs. `test/schema.int.test.ts` asserts
  * `EXPLAIN QUERY PLAN` for that reason.
  */
 import { BaseDAO } from './BaseDAO';

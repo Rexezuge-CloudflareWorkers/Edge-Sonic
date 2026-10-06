@@ -29,14 +29,11 @@ Access — it has no Subsonic credential and could not use one.
   (inflight-deduped `GET /user/me`, `authorized` tri-state), `useSpaLanguage`
   (detection precedence, `<html lang>` sync, manual-change flow; English-only, but
   the shape a second locale plugs into).
-- `src/lib/api.ts` — generic transport primitives only (`apiGet/Post/Patch/Put/
-  Delete`, `BackendError`, `buildQuery`, `unwrapList`). Domain calls live in
-  `src/services/*` (`libraryService`, `userService`); no component reaches for
-  `fetch` directly.
+- `src/lib/api.ts` — generic transport primitives only (`apiGet/Post/Patch/
+  Delete`, `BackendError`, `buildQuery`). Domain calls live in `src/services/*`
+  (`libraryService`, `userService`); no component reaches for `fetch` directly.
 - `src/types.ts` — thin facade over `libraryTypes.ts` + `userTypes.ts` (plus
   `CurrentUser` and `Notice`), so existing `from '../types'` imports keep working.
-- `src/lib/locale.ts` — `normalizeLocale`/`resolveLocale` delegating to the single
-  `i18n` canonicalizer (no duplicated logic).
 - `src/lib/probe.ts`, `src/lib/libraryDraft.ts`, `src/lib/signInLoop.ts` — the decisions,
   not the markup. See below for why they are not in a component.
 - `src/lib/constants.ts` — `NOTICE_TIMEOUT_MS` and `ZERO_TRUST_AUTHENTICATION_PATH`
@@ -213,7 +210,7 @@ sign-in — a guard that reads back its own arrangement is not a guard.
 
 **There is no lint rule that catches a missing cancellation guard.** This file claimed one
 was on. `eslint.config.mjs` applies `react-hooks.configs['recommended-latest']`, which is
-`exhaustive-deps`, `rules-of-hooks` and `set-state-in-effect` — **none** of which detects an
+17 rules including `exhaustive-deps`, `rules-of-hooks` and `set-state-in-effect` — **none** of which detects an
 un-guarded `setState` after an `await` in an event handler. The two `useEffect` guards above
 are correct because they were written that way, not because something enforces it.
 
@@ -317,7 +314,7 @@ Four decisions, each a place the obvious implementation is wrong:
 - **Polling stops, and the stop is a `stalled` case.** `/user/*` is limited to **60 requests
   per minute** keyed on the Access identity — the same bucket probe and rescan spend — so a
   timer that never stops spends the budget an operator needs for the actions they want to take.
-  `isAdvancingStatus` is the guard, and `idle`, `stalled` and `null` are all terminal. Each is
+  `isAdvancingStatus` is the guard, and `idle`, `stalled`, `paused` and `null` are all terminal. Each is
   asserted, because a guard written as `status === 'scanning'` gets `null` wrong and a newly
   registered library is the most common state a new deployment is in.
 - **A failed poll keeps the list on screen.** It does *not* reuse `load`'s documented
@@ -383,7 +380,7 @@ the author meant, and the markup was correct — which is why it survived review
 to somebody who already knows the product is called "Edge-Sonic".
 
 So `scripts/i18n/validate_locales.ts` now captures the optional second argument of `t('key',
-'default')` and **fails** when it disagrees with the bundle, across all 88 call sites. Everything
+'default')` and **fails** when it disagrees with the bundle, across all 130 call sites. Everything
 else in that script compares two bundles or checks that a key exists; nothing in it read what a
 value *is*, and with one shipped language the per-tag body is skipped entirely. Verified by
 mutation: restoring `"-Sonic"` fails both the validator and the render assertion in

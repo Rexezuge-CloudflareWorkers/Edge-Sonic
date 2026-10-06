@@ -57,25 +57,27 @@ export default defineConfig({
         // Raise these as coverage grows. Never lower them to excuse a regression in
         // code that is already covered.
         //
-        // Set from a measurement of 85.95/73.96/90.98/89.61, floored to whole
+        // Set from a measurement of 87.24/76.94/90.32/90.57, floored to whole
         // percent (statements/branches/functions/lines).
-        // The branch floor is the closest to its measured value because branch coverage
-        // is the one that moves most when code is added, and a floor that a routine PR
-        // trips is a floor people learn to ignore.
+        // The function floor is the one left behind, because 91 would sit above the
+        // measurement. Branch coverage is what moves most when code is added, so a floor a
+        // routine PR trips is a floor people learn to ignore.
         //
-        // Raised from 78/65/79/80, then 79/66/81/82, which were each the previous
-        // *measured* value rather than numbers chosen to be comfortable. The last raise is
-        // the largest, and most of it came from **deleting** code: `Container`'s factory
-        // tier, `Provider`, `memoizeAsync`, ten orphaned DAO methods and `UpdateClause` were
-        // all uncovered, and removing them removed their statements from the denominator.
-        // That is the intended way for this number to move — a floor that has to be lowered
+        // Raised from 78/65/79/80, then 79/66/81/82, then 85/73/90/89 — each the previous
+        // *measured* value rather than numbers chosen to be comfortable. The 85/73/90/89
+        // step was the largest, and most of it came from **deleting** code: `Container`'s
+        // factory tier, `Provider`, `memoizeAsync`, ten orphaned DAO methods and
+        // `UpdateClause` were all uncovered, and removing them removed their statements
+        // from the denominator. This step is the same shape on a smaller scale: a dead
+        // constant, its duplicate, and three declared dependencies nothing imported. That
+        // is the intended way for this number to move — a floor that has to be *lowered*
         // to admit code that nobody calls is a floor measuring the wrong thing. The floors
         // are whole percentages *below* the measurement rather than rounded to it, so a
         // tenth of a point of jitter does not turn the gate red.
-        statements: 85,
-        branches: 73,
+        statements: 87,
+        branches: 76,
         functions: 90,
-        lines: 89,
+        lines: 90,
       },
     },
   },
