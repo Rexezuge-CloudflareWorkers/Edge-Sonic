@@ -394,7 +394,12 @@ describe('a D1 statement is a subrequest', () => {
     const handle = seeded();
     const meter = new SubrequestCounter(4);
     const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER, meter);
-    const writes: DerivationWrite[] = Array.from({ length: 10 }, (_, index) => ({ id: `s${index}`, album: `Album ${index}`, artist: null }));
+    const writes: DerivationWrite[] = Array.from({ length: 10 }, (_, index) => ({
+      id: `s${index}`,
+      title: `Track ${index}`,
+      album: `Album ${index}`,
+      artist: null,
+    }));
 
     await expect(dao.applyDerivation(writes)).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
     expect(meter.spent).toBeLessThanOrEqual(WORKER_SUBSREQUEST_CEILING);

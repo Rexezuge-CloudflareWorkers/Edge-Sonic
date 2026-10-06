@@ -208,13 +208,30 @@ async function matchRemoteSongs(
   }
 
   // --- Strategy two: the metadata key, which is a guess and is reported as one. ---
-  const pairs = new Map<string, MatchCandidate>();
+  //
+  // **Bucketed, not keyed to one candidate**, because two remote songs can share an
+  // `(album, title)` pair — a compilation crediting one title twice, two cuts of a song.
+  // This was a `Map<string, MatchCandidate>` whose second `set` **overwrote the first**:
+  // the overwritten candidate never entered `pendingByKey`, was therefore never looked
+  // up, and was then labelled `not-found` by the catch-all below. A verdict for an item
+  // this function never searched, which is the one failure the module exists to
+  // prevent — and it is measured, not theoretical: an import reported both copies of one
+  // track as `not-found` while the row was indexed under exactly that name.
+  //
+  // One representative per key still drives the statement, so the batch is unchanged: two
+  // candidates sharing a key share a query, and asking twice spends a statement to
+  // re-ask the same question.
+  const pairs = new Map<string, MatchCandidate[]>();
   for (const candidate of unresolved) {
     const key = metadataKeyOf(candidate);
-    if (key !== null) pairs.set(`${key[0]} ${key[1]}`, candidate);
+    if (key === null) continue;
+    const composite = `${key[0]} ${key[1]}`;
+    const bucket = pairs.get(composite);
+    if (bucket) bucket.push(candidate);
+    else pairs.set(composite, [candidate]);
   }
 
-  const pendingByKey = [...pairs.values()];
+  const pendingByKey = [...pairs.values()].map((bucket) => bucket[0]);
   const rowsByKey = new Map<string, SongRow[]>();
   for (const chunk of chunkArray(pendingByKey, PAIRS_PER_STATEMENT)) {
     const rows = await store.findByAlbumTitle(libraryId, chunk.map(metadataKeyOf).filter((key): key is readonly [string, string] => key !== null));
@@ -226,19 +243,23 @@ async function matchRemoteSongs(
     }
   }
 
-  for (const candidate of pendingByKey) {
-    const key = metadataKeyOf(candidate);
-    if (key === null) {
-      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'not-found' });
-      continue;
-    }
-    const rows = narrow(rowsByKey.get(`${key[0]} ${key[1]}`) ?? [], candidate);
-    if (rows.length === 1) {
-      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: rows[0].id, strategy: 'metadata', reason: null });
-    } else if (rows.length > 1) {
-      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'ambiguous' });
-    } else {
-      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'not-found' });
+  // **Every** candidate in a bucket, not just its representative. The representative chose
+  // the query; it does not get to answer for its twin, because `narrow` reads the
+  // candidate's own `discNumber`/`track` and two candidates sharing an `(album, title)`
+  // are exactly the pair that can be told apart by those. Resolving the bucket once and
+  // copying the outcome would also report `ambiguous` for a pair the narrowing separates,
+  // which is the recoverable information this module exists to preserve.
+  for (const [composite, bucket] of pairs) {
+    const candidates = rowsByKey.get(composite) ?? [];
+    for (const candidate of bucket) {
+      const rows = narrow(candidates, candidate);
+      if (rows.length === 1) {
+        outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: rows[0].id, strategy: 'metadata', reason: null });
+      } else if (rows.length > 1) {
+        outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'ambiguous' });
+      } else {
+        outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'not-found' });
+      }
     }
   }
 

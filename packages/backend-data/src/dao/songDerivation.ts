@@ -46,7 +46,7 @@ import type { WriteBatchResult } from './BaseDAO';
 import type { D1Queryable } from '../utils/D1Types';
 import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
 import type { SubrequestMeter } from '@edge-sonic/shared';
-import { deriveFromPath, DERIVED_VERSION } from './pathConvention';
+import { deriveFromPath, deriveTitleFromFileName, DERIVED_VERSION } from './pathConvention';
 import { GROUPING_SOURCE_DERIVED } from './groupingSource';
 import { nowSeconds } from './identity';
 
@@ -60,6 +60,15 @@ import { nowSeconds } from './identity';
 interface DerivableRow {
   readonly id: string;
   readonly dir_path: string;
+  /**
+   * The file's own name, suffix included.
+   *
+   * Read because `title` is derived from it rather than from `dir_path` — the directory
+   * answers "which album", and only the file answers "which track". A `DerivableRow`
+   * without it could not derive a title, which is the field this backfill exists to
+   * repair on the library the version bump was measured against.
+   */
+  readonly name: string;
 }
 
 /**
@@ -70,6 +79,7 @@ interface DerivableRow {
  */
 interface DerivationWrite {
   readonly id: string;
+  readonly title: string;
   readonly artist: string | null;
   readonly album: string | null;
 }
@@ -124,6 +134,8 @@ interface DerivationWrite {
  * configured value reaching the same statement.
  */
 const APPLY_DERIVATION = `UPDATE songs SET
+  title = CASE WHEN grouping_source = ? OR title IS NULL THEN ? ELSE title END,
+  title_ci = CASE WHEN grouping_source = ? OR title_ci IS NULL THEN ? ELSE title_ci END,
   artist = CASE WHEN grouping_source = ? OR artist IS NULL THEN ? ELSE artist END,
   artist_ci = CASE WHEN grouping_source = ? OR artist_ci IS NULL THEN ? ELSE artist_ci END,
   album = CASE WHEN grouping_source = ? OR album IS NULL THEN ? ELSE album END,
@@ -131,7 +143,7 @@ const APPLY_DERIVATION = `UPDATE songs SET
   album_artist = CASE WHEN grouping_source = ? OR album_artist IS NULL THEN ? ELSE album_artist END,
   album_artist_ci = CASE WHEN grouping_source = ? OR album_artist_ci IS NULL THEN ? ELSE album_artist_ci END,
   grouping_source = CASE
-    WHEN grouping_source = ? OR (artist IS NULL AND album IS NULL AND album_artist IS NULL) THEN ?
+    WHEN grouping_source = ? OR (title IS NULL AND artist IS NULL AND album IS NULL AND album_artist IS NULL) THEN ?
     ELSE NULL END,
   derived_version = ?,
   updated_at = ?
@@ -162,7 +174,7 @@ class SongDerivationDAO extends BaseDAO {
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare('SELECT id, dir_path FROM songs WHERE library_id = ? AND derived_version < ? ORDER BY id LIMIT ?')
+          .prepare('SELECT id, dir_path, name FROM songs WHERE library_id = ? AND derived_version < ? ORDER BY id LIMIT ?')
           .bind(libraryId, version, limit)
           .all<DerivableRow>(),
       'songs.listNeedingDerivation',
@@ -188,6 +200,14 @@ class SongDerivationDAO extends BaseDAO {
       return this
         .prepare(APPLY_DERIVATION)
         .bind(
+          // `title` first, in the same order as the `SET` list above it. Positional
+          // binding is why the two are one fact: every `?` below has exactly one
+          // counterpart there, and a pair that drifts is a statement that writes one
+          // column's guard with another's value.
+          GROUPING_SOURCE_DERIVED,
+          write.title,
+          GROUPING_SOURCE_DERIVED,
+          write.title.toLowerCase(),
           GROUPING_SOURCE_DERIVED,
           write.artist,
           GROUPING_SOURCE_DERIVED,
@@ -236,7 +256,7 @@ class SongDerivationDAO extends BaseDAO {
   public deriveFor(rows: readonly DerivableRow[]): DerivationWrite[] {
     return rows.map((row) => {
       const { artist, album } = deriveFromPath(row.dir_path, this.derivedMarker);
-      return { id: row.id, artist, album };
+      return { id: row.id, title: deriveTitleFromFileName(row.name), artist, album };
     });
   }
 }

@@ -461,6 +461,26 @@ because publishing it leaks the storage layout of someone's WebDAV bucket. So pa
 against third-party sources and **never** against another Edge-Sonic, and the fallback is what
 carries a same-product migration.
 
+**The fallback is a guess about a *stored* value, so it is only as good as what the row holds.**
+Its key is `(album_ci, title_ci)` and both halves are read in SQL, which makes two requirements
+that no test of the decision itself would catch:
+
+- **`title_ci` must be populated on an unenriched row**, or the key matches nothing. It was not:
+  `title` had no path derivation, so `title_ci`'s only writer was an enrichment read, and
+  `album_ci = ? AND title_ci = NULL` matches no row at all. A measured import reported **113 of
+  118** starred tracks `not-found` on a library where 102 were present under the title the
+  mapper was displaying to the user throughout. Fixed in `pathConvention.ts`; this is why the
+  import's own guide can say "a claim nothing measures is not an invariant" and mean the column.
+- **A `(album, title)` pair is not one candidate.** Two remote songs can share one — a
+  compilation crediting a title twice, two cuts of a song — and the candidates were keyed
+  `Map<string, MatchCandidate>` on the composite, so the second `set` **overwrote** the first.
+  The overwritten candidate never entered the lookup and was then labelled `not-found` by the
+  catch-all: **a verdict for an item this function never searched**, which sends an operator to
+  re-index a library that already holds the album. It is bucketed now, one representative per
+  key driving the statement, and **every** candidate in a bucket resolved — because `narrow`
+  reads each candidate's own disc and track, so a pair sharing an `(album, title)` is exactly
+  what it can separate. Asserted in `test/import-matching.test.ts` in all three directions.
+
 ### An ambiguous match is refused, not resolved
 
 Two local songs can share an artist, album and title: a compilation, a live cut beside the studio

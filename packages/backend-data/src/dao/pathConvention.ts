@@ -22,7 +22,7 @@
  * index time means the aggregates are answerable from the first scan, and a real tag
  * read only ever *refines* what the path already said.
  *
- * ### Two rules, and each one is a bug that shipped without them
+ * ### Three rules, and each one is a bug that shipped without them
  *
  * 1. **It never overwrites a real tag.** `COALESCE(column, derived)` in the same
  *    `ON CONFLICT` clause as the rest of the upsert, so a derived value can only ever
@@ -32,6 +32,12 @@
  *    name so the string is stable across scans — the same path always derives the same
  *    value, so a rescan rewrites nothing and the incrementality guarantee holds — and so
  *    a guess is not published as though it were a release name.
+ * 3. **`title` is not marked**, unlike the grouping. The marker exists so a client can
+ *    tell a *release name* from a folder name, and a title is not a release name: the
+ *    `X (derived)` album and the tagged `X` are deliberately two albums, whereas the
+ *    derived `Title` and the tagged `Title` are one track by any reading, and marking it
+ *    would put two spellings of the same song into `search3`. This is why the marker is a
+ *    parameter to {@link deriveFromPath} and not to {@link deriveTitleFromFileName}.
  *
  * ### Why deriving at index time was not enough on its own
  *
@@ -53,8 +59,24 @@
  *
  * `genre`. There is no path convention for it that is not a guess, and a guessed
  * genre is worse than an absent one — it is offered to the user as though it were
- * real. `track` and `year` are the same. `title` is derived elsewhere, from the
- * filename, because that one is unambiguous and the convention is universal.
+ * real. `track` and `year` are the same.
+ *
+ * ### And why `title` is derived here now, when it was not
+ *
+ * `title` was derived only at **read** time, in `apps/api`'s `mappers.ts`, into the HTTP
+ * response — so `title_ci`'s only writer was `applyMetadata`, i.e. an enrichment read.
+ * Every row the scan had not range-read therefore held `title = NULL` **and
+ * `title_ci = NULL`**, and the absence is invisible per-track for the same reason the rest
+ * of this file's absence was: the mapper's filename fallback *displays* a correct title,
+ * so the row looks right everywhere it is read one row at a time.
+ *
+ * It is not right anywhere that reads in SQL. `search3` filters on `title_ci`, so a track
+ * was unsearchable by its own title, and `SongMatchDAO.findByAlbumTitle` — how an import
+ * resolves a foreign song id — matches on `(album_ci, title_ci)`, where a NULL `title_ci`
+ * makes `album_ci = ? AND title_ci = NULL`, which matches no row at all. A measured import
+ * reported **113 of 118** starred tracks `not-found` on a library where 102 of them were
+ * present under exactly the name it displayed. The metadata fallback is a guess, and a
+ * guess that cannot be expressed in the row it guesses *about* is not a fallback.
  */
 
 /**
@@ -83,8 +105,16 @@
  * column calls derived is rewritten with the configured marker, and a row holding a tag is
  * selected, declined, and stamped. Without it the deployment would run two conventions at
  * once and the aggregates would answer from whichever one happened to be nearer.
+ *
+ * ### Version 3 exists because `title` joined the derivation
+ *
+ * Version 2 derived `artist`/`album`/`album_artist` and not `title`, so a row the indexer
+ * wrote held no title at all and the backfill had nothing to correct. Bumping is what
+ * re-derives the 88 unenriched rows of the library this was measured on; without the bump
+ * those rows would keep `title_ci = NULL` for ever and stay invisible to `search3` and to
+ * every import, because the selection is on the stamp rather than on the value.
  */
-const DERIVED_VERSION = 2;
+const DERIVED_VERSION = 3;
 
 /**
  * Whitespace, as the engine defines it.
@@ -223,5 +253,133 @@ function mark(name: string, marker: string): string {
   return `${name}${marker}`;
 }
 
-export { DERIVED_VERSION, deriveFromPath };
+/**
+ * A leading track number and its separator: `01 - `, `01. `, `01_ `, `01) `.
+ *
+ * Three digits because that is the widest a track number is written in practice, and a
+ * wider class would eat the leading digits of a title that is *only* digits — `2001` is a
+ * film, and `2001 - ` would otherwise leave it looking like a track number.
+ */
+const TRACK_PREFIX = /^\d{1,3}\s*[-._)]\s*/;
+
+/**
+ * How many prefixes are stripped, and it is **two** rather than "until it stops".
+ *
+ * `02-03 - Koi Yuki.opus` is disc 2 track 3 written the way a multi-disc release numbers
+ * itself, and one strip leaves `03 - Koi Yuki` — which is what five files on the library
+ * this was measured on display, and which matches nothing: the remote publishes `Koi Yuki`.
+ *
+ * A bound rather than a loop to fixpoint because a loop keeps eating a title that is
+ * itself numbered: `01 - 02 - Intro` is two prefixes, and `1 - 2 - 3 - 4` is a title. Two
+ * is the widest the convention needs, and the loop cannot be trusted to notice the
+ * difference — it cannot tell a second prefix from a title that begins with a number.
+ */
+const MAX_TRACK_PREFIXES = 2;
+
+/**
+ * The non-breaking space, U+00A0.
+ *
+ * Normalized because it is the **same glyph** with the same width, and a library that has
+ * one is not a library whose titles differ from the tags: seven files on the measured
+ * library carry `MAdEaR …`, `N'o …` and `(-火-)`, while every tag and every
+ * remote publishes an ordinary space. Left alone it is a title no query can match, and it
+ * is a difference no user can see — which is the worst of both.
+ *
+ * Normalized on **both** columns rather than on the `_ci` twin alone, because a `_ci` that
+ * disagrees with its display value is the drift `SongDAO`'s upsert comment warns about: the
+ * row displays one string and answers a different question about another.
+ */
+const NO_BREAK_SPACE = ' ';
+
+/**
+ * What a file's **name** says its title is, or the name itself when that says nothing.
+ *
+ * The filename, not the path — the directory is {@link deriveFromPath}'s input and this is
+ * separate, because the two answer different questions and a track's title is the one thing
+ * a WebDAV origin states unconditionally.
+ *
+ * ### Why this is here and not in the mapper
+ *
+ * It was in `apps/api`'s `mappers.ts`, applied to the response. That made it invisible to
+ * every query: `search3` filters on `title_ci` and the import's `findByAlbumTitle` matches on
+ * `(album_ci, title_ci)`, so a row this function "knew" the title of was a row nothing could
+ * find. A display fallback that never reaches the row is a comment about a feature.
+ *
+ * ### The rules, in order
+ *
+ * 1. **Drop the suffix.** `name` is `basename(path)` and carries it; `suffix` is the column
+ *    for it, so the string does not stop at one.
+ * 2. **Strip up to {@link MAX_TRACK_PREFIXES} track prefixes.**
+ * 3. **Normalize {@link NO_BREAK_SPACE} to a space**, and trim.
+ *
+ * An empty result falls back to the **name with its suffix**, which is a worse title and a
+ * true one: `01.opus` derives to nothing, and `''` is the defect this package has twice
+ * already declined to write.
+ */
+function deriveTitleFromFileName(name: string): string {
+  // **The extension, and only when there is one.** The last dot alone is not enough: a stem
+  // may contain a dot of its own — `01 - Mr. Lonely.opus` titles as `Mr. Lonely`, not `Mr` —
+  // so the suffix is whatever follows the *final* dot **and the name must actually have
+  // that suffix**. `Mr. Lonely` has no extension, and cutting it at its dot derives `Mr`.
+  //
+  // This is also what makes the function idempotent, which the "unchanged rescan costs zero
+  // rows" guarantee needs: the second pass is handed `Mr. Lonely`, and a rule that cut at
+  // any dot turned it into `Mr` and then into `Mr` for ever.
+  const known = KNOWN_SUFFIXES.has(extensionOf(name));
+  const stem = known ? name.slice(0, name.lastIndexOf('.')) : name;
+
+  let title = stem;
+  for (let stripped = 0; stripped < MAX_TRACK_PREFIXES; stripped += 1) {
+    const next = title.replace(TRACK_PREFIX, '').trim();
+    if (next === title) break;
+    title = next;
+  }
+
+  const normalized = title.split(NO_BREAK_SPACE).join(' ').trim();
+  return normalized.length > 0 ? normalized : name;
+}
+
+/**
+ * The last dot's tail, or `''` when there is no dot.
+ */
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+/**
+ * The containers this product indexes.
+ *
+ * A **closed** list rather than "cut at the last dot", and it is a **transcribed copy** of
+ * the `AUDIO_SUFFIXES` that `libraryNames.ts` decides which files to index by. A copy, not
+ * an import: `backend-data` is layer 0 and that module is layer 3 above it, and importing it
+ * upward would invert the layering this package is below everything else to enforce.
+ *
+ * The copy is the risk, so it is bounded and asserted rather than assumed: a suffix in one
+ * list and not the other costs a title a suffix, and the set below is pinned by
+ * `test/schema.int.test.ts` against the same literals. Adding a container means adding it in
+ * both places, which is the point — a silent divergence would be the defect.
+ */
+const KNOWN_SUFFIXES: ReadonlySet<string> = new Set([
+  'mp3',
+  'flac',
+  'ogg',
+  'oga',
+  'opus',
+  'm4a',
+  'mp4',
+  'aac',
+  'wav',
+  'wma',
+  'aiff',
+  'aif',
+  'ape',
+  'wv',
+  'mpc',
+  'dsf',
+  'dff',
+  'alac',
+]);
+
+export { DERIVED_VERSION, deriveFromPath, deriveTitleFromFileName };
 export type { DerivedNames };

@@ -157,6 +157,84 @@ describe('an ambiguous match is refused, not resolved', () => {
   });
 });
 
+describe('two remote songs sharing an album and title are two answers', () => {
+  /**
+   * A compilation crediting one title to two artists, or two cuts of one song.
+   *
+   * The measured case is a real one: an album carried two local rows called `Étoile`, and
+   * the import reported **both** remote copies as `not-found` while the rows sat in the
+   * library under exactly that name.
+   */
+  const ETOILE = 'MementoMori (メメントモリ)';
+
+  function etoile(partial: Partial<SongRow> & { readonly id: string }): SongRow {
+    return song({
+      album: ETOILE,
+      album_ci: ETOILE.toLowerCase(),
+      album_artist: '霜月はるか',
+      album_artist_ci: '霜月はるか',
+      title: 'Étoile',
+      title_ci: 'étoile',
+      ...partial,
+    });
+  }
+
+  it('reports both as ambiguous rather than dropping one', async () => {
+    // The defect: the candidates were keyed `Map<string, MatchCandidate>` on the composite, so
+    // the second `set` **overwrote** the first. The overwritten candidate never entered the
+    // lookup, and the catch-all at the end labelled it `not-found` — a verdict for an item the
+    // matcher never searched. `not-found` sends an operator to re-index a library that already
+    // holds the album.
+    const store = storeAnswering([etoile({ id: 'local-1' }), etoile({ id: 'local-2' })]);
+    const first = { remoteId: 'r1', path: null, artist: '霜月はるか', album: ETOILE, title: 'Étoile', discNumber: null, track: null };
+    const second = { ...first, remoteId: 'r2' };
+
+    const outcomes = await matchRemoteSongs(store, 'L1', [first, second]);
+
+    expect(outcomes).toHaveLength(2);
+    for (const outcome of outcomes) {
+      expect(outcome.reason).toBe('ambiguous');
+      expect(outcome.songId).toBeNull();
+    }
+  });
+
+  it('separates them by track number, which is the pair the key cannot tell apart', async () => {
+    // The reason every candidate in a bucket is resolved rather than the bucket resolved once
+    // and the outcome copied: `narrow` reads each candidate's **own** `discNumber`/`track`, so
+    // two candidates sharing an `(album, title)` are exactly the pair it can separate.
+    const store = storeAnswering([etoile({ id: 'local-1', track: 1 }), etoile({ id: 'local-2', track: 5 })]);
+    const first = { remoteId: 'r1', path: null, artist: '霜月はるか', album: ETOILE, title: 'Étoile', discNumber: null, track: 1 };
+    const second = { ...first, remoteId: 'r2', track: 5 };
+
+    const outcomes = await matchRemoteSongs(store, 'L1', [first, second]);
+
+    // Each resolved to its own track. A single shared outcome would have written both stars
+    // onto one row — the wrong answer this module exists to refuse.
+    expect(outcomes.map((outcome) => outcome.songId)).toEqual(['local-1', 'local-2']);
+    expect(outcomes.every((outcome) => outcome.strategy === 'metadata')).toBe(true);
+  });
+
+  it('asks the question once, because a shared key shares a query', async () => {
+    // The batching guarantee, asserted because the fix could have spent one statement per
+    // candidate: 113 unmatched tracks is 3 statements at `PAIRS_PER_STATEMENT`, and a
+    // duplicate-heavy library would quietly multiply that.
+    const store = storeAnswering([etoile({ id: 'local-1' })]);
+    const candidates = Array.from({ length: 8 }, (_, index) => ({
+      remoteId: `r${index}`,
+      path: null,
+      artist: '霜月はるか',
+      album: ETOILE,
+      title: 'Étoile',
+      discNumber: null,
+      track: null,
+    }));
+
+    await matchRemoteSongs(store, 'L1', candidates);
+
+    expect(store.findByAlbumTitle).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('the path strategy is tried first, and reported honestly', () => {
   it('prefers the path, skips the metadata lookup, and says it matched by path', async () => {
     const store = storeAnswering([song({ id: 'by-path', path: 'A/x.flac' })]);

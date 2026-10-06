@@ -35,6 +35,7 @@ import {
   billedRowsFor,
   billedRowsForTable,
   deriveFromPath,
+  deriveTitleFromFileName,
   statementTable,
   SongMatchDAO,
   ImportSourceDAO,
@@ -1229,6 +1230,101 @@ describe('every hot lookup uses an index', () => {
  * `COALESCE` is the safety argument: a derived value fills a NULL and *only* a NULL, so
  * a real tag is never rolled back to a guess, and a rescan rewrites nothing.
  */
+describe('the derived title', () => {
+  /**
+   * The names, from the files of the library this was measured on rather than from
+   * examples chosen to pass. Every one of these was a row the indexer wrote with no
+   * `title` and no `title_ci`, invisible to `search3` and to every import.
+   */
+  const CASES: ReadonlyArray<readonly [string, string]> = [
+    // The ordinary convention, and the shape 106 of 117 files took.
+    ['01 - Holocene.opus', 'Holocene'],
+    ['12. Lotus.opus', 'Lotus'],
+    ['03) Beatrix.opus', 'Beatrix'],
+    ['07_Kerala.opus', 'Kerala'],
+    // **Disc-track.** One strip leaves `03 - Koi Yuki`, which matches nothing — the remote
+    // publishes `Koi Yuki`. Five files took this form, and they were the five the import
+    // could not resolve by name.
+    ['02-03 - Koi Yuki.opus', 'Koi Yuki'],
+    ['02-06 - KAKUMEI.opus', 'KAKUMEI'],
+    ['02-01 - MAdEaR MAdEaR.opus', 'MAdEaR MAdEaR'],
+    // The non-breaking space. Seven files carried U+00A0 where every tag and every remote
+    // publishes an ordinary space: the same glyph, invisible to a user and unmatched by
+    // every query. `Guil-me N'o sinruits` is one of them.
+    ['02-02 - Guil-me\u00A0N\'o\u00A0sinruits\u00A0(-\u706B-).opus', "Guil-me N'o sinruits (-火-)"],
+    ['19 - EmA\u00A0(-\u5E38-).opus', 'EmA (-常-)'],
+    // No prefix at all — the title is the whole stem, and a number-only title keeps it.
+    ['Kerala.opus', 'Kerala'],
+    // **A title that is itself numeric.** The bound is two prefixes rather than "until it
+    // stops changing", because a loop cannot tell a second prefix from a title that begins
+    // with a number, and it would eat this one.
+    ['2001.opus', '2001'],
+    ['01 - 2001.opus', '2001'],
+    // A stem that is **only** a track number keeps it: the prefix rule requires a separator,
+    // and `01` has none, so there is nothing to say the digits are a number rather than the
+    // name. It titles as `01` — which is a worse title and a true one, and `''` is the
+    // defect this package has twice already declined to write.
+    ['01.opus', '01'],
+    // A dot inside the stem. The suffix is the **last** dot, so a title with an abbreviation
+    // in it keeps the abbreviation rather than being truncated at the first one.
+    ['01 - Mr. Lonely.opus', 'Mr. Lonely'],
+    // **A bare space is not a separator**, and this is a decision rather than an oversight.
+    // A *bare* leading number followed by whitespace is a title that begins with a number —
+    // `2001 A Space Odyssey` is the canonical case, and a rule that ate its `2001` would
+    // silently rename a film. A dash, a dot, an underscore and a paren are conventions; a
+    // space is not, and the separator character is what makes the strip a convention rather
+    // than a guess.
+    ['01 Kerala.opus', '01 Kerala'],
+    ['2001 A Space Odyssey.opus', '2001 A Space Odyssey'],
+  ];
+
+  it.each(CASES)('derives %s as %s', (name, expected) => {
+    expect(deriveTitleFromFileName(name)).toBe(expected);
+  });
+
+  it('is idempotent, because a rescan writes it again', () => {
+    // The "unchanged rescan costs zero rows" guarantee rests on the same path deriving the
+    // same string twice. `COALESCE` covers the second write, and this covers the first.
+    for (const [name] of CASES) {
+      expect(deriveTitleFromFileName(deriveTitleFromFileName(name))).toBe(deriveTitleFromFileName(name));
+    }
+  });
+
+  it('carries no marker, because a title is not a release name', () => {
+    // `deriveFromPath` appends the configured marker so a client can tell a folder-name guess
+    // from a real release — and under `DERIVED_MARKER = ' (derived)'` that produces two *albums*
+    // for one release, deliberately. A title is the opposite case: the derived `Title` and the
+    // tagged `Title` are one track by any reading, so a marked title would put two spellings of
+    // the same song into `search3` and make the derived one unmatchable, which is the whole
+    // defect this derivation exists to remove.
+    expect(deriveTitleFromFileName('01 - Holocene.opus')).toBe('Holocene');
+    expect(deriveTitleFromFileName('01 - Holocene.opus')).not.toContain('derived');
+    // And the marker is not a parameter at all, so there is no deployment that can ask for one.
+    expect(deriveTitleFromFileName).toHaveLength(1);
+  });
+
+  it('strips two prefixes and no more', () => {
+    // The bound, asserted directly rather than through an example that happens to have two.
+    expect(deriveTitleFromFileName('1 - 2 - Intro.opus')).toBe('Intro');
+    expect(deriveTitleFromFileName('1 - 2 - 3 - 4.opus')).toBe('3 - 4');
+  });
+
+  it('strips the suffix only when it is one this server indexes', () => {
+    // The transcribed `AUDIO_SUFFIXES`, pinned against the literals `libraryNames.ts` holds.
+    // Two copies of one vocabulary is a divergence waiting to happen, and the cost of a
+    // missing entry is a title **with its extension on it** — which reads as a bug in the
+    // client rather than in the server. Asserted as a list so an addition to either side
+    // fails here instead of shipping.
+    const indexed = ['mp3', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'mp4', 'aac', 'wav', 'wma', 'aiff', 'aif', 'ape', 'wv', 'mpc', 'dsf', 'dff', 'alac'];
+    for (const suffix of indexed) {
+      expect(deriveTitleFromFileName(`01 - Kerala.${suffix}`)).toBe('Kerala');
+    }
+    // And a dot that is **not** one of them is part of the title.
+    expect(deriveTitleFromFileName('Mr. Lonely')).toBe('Mr. Lonely');
+    expect(deriveTitleFromFileName('Part 1.5')).toBe('Part 1.5');
+  });
+});
+
 describe('path-derived grouping', () => {
   async function indexSong(libraryId: string, path: string): Promise<void> {
     const songs = new SongDAO(handle.db, DERIVED_MARKER);
@@ -1252,9 +1348,9 @@ describe('path-derived grouping', () => {
     // written them down.
     const userId = await seedUser('DerivedNested');
     const libraryId = await seedLibrary(userId, 'LDN');
-    await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+    await indexSong(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
-    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'));
     // **Both** names carry the marker, and that is load-bearing rather than cosmetic: it
     // is the only provenance a derived value has, so it is the only thing that lets a
     // later version of this convention tell a guess it wrote from a tag a file supplied.
@@ -1311,7 +1407,7 @@ describe('path-derived grouping', () => {
     // would be a library that loses its tags every time a file's mtime moves.
     const userId = await seedUser('DerivedNoClobber');
     const libraryId = await seedLibrary(userId, 'LDN2');
-    const path = 'Bonobo/Black Sands/01 Kerala.opus';
+    const path = 'Bonobo/Black Sands/01 - Kerala.opus';
     const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const id = songId(libraryId, path);
 
@@ -1320,7 +1416,7 @@ describe('path-derived grouping', () => {
 
     // Re-index the same file with a changed mtime, which is what a rescan does.
     await songs.upsertFileFacts([
-      { id, libraryId, path, dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 2000, mtimeMs: 2000, contentType: 'audio/ogg', suffix: 'ogg' },
+      { id, libraryId, path, dirPath: 'Bonobo/Black Sands', name: '01 - Kerala.opus', size: 2000, mtimeMs: 2000, contentType: 'audio/ogg', suffix: 'ogg' },
     ]);
 
     const row = await songs.findById(id);
@@ -1359,9 +1455,9 @@ describe('path-derived grouping', () => {
     // year that is not a guess, so none is derived.
     const userId = await seedUser('DerivedNoGenre');
     const libraryId = await seedLibrary(userId, 'LDG');
-    await indexSong(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+    await indexSong(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
-    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'));
     expect(row?.genre).toBeNull();
     expect(row?.genre_ci).toBeNull();
     expect(row?.track).toBeNull();
@@ -1437,17 +1533,26 @@ describe('path-derived grouping', () => {
       // answering `[]`.
       const userId = await seedUser('BackfillBasic');
       const libraryId = await seedLibrary(userId, 'LDB');
-      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
       // Before: absent from the aggregate, not shown with a blank name.
       expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI })).toEqual([]);
 
       await drain(libraryId);
 
-      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'));
       expect(row?.album).toBe(`Black Sands${DERIVED_MARKER}`);
       expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
       expect(row?.album_artist).toBe(`Bonobo${DERIVED_MARKER}`);
+      // The title, from the **filename** rather than the directory — and this is the half
+      // that shipped missing. `title_ci`'s only writer was `applyMetadata`, so every row the
+      // indexer wrote held NULL in both columns until something range-read the file, and
+      // both of those readers are SQL: `search3` filters on `title_ci`, and an import's
+      // `findByAlbumTitle` matches on `(album_ci, title_ci)`, where NULL matches no row.
+      // 113 of 118 starred tracks reported `not-found` on a library indexed under exactly
+      // the titles it was displaying, and none of the per-track assertions could see it.
+      expect(row?.title).toBe('Kerala');
+      expect(row?.title_ci).toBe('kerala');
 
       // The aggregate answers. This is the assertion the whole change exists for.
       const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
@@ -1475,17 +1580,22 @@ describe('path-derived grouping', () => {
     it('never overwrites a real tag, and stamps it so it is never reconsidered', async () => {
       const userId = await seedUser('BackfillNoClobber');
       const libraryId = await seedLibrary(userId, 'LDNC');
-      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+      // `title` is seeded as a **tag** here, not as a guess, which is what makes it the
+      // paired case for the one above: the title is now derived too, so a tag's title has
+      // real provenance to clear, and leaving `title` out of `GROUPING_FIELDS` would let a
+      // tag's title keep `grouping_source = 'derived'` and be overwritten by the next bump.
       await handle.raw
         .prepare(
           `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
-                              duration, bitrate, artist, artist_ci, album, album_ci, album_artist, album_artist_ci,
+                              duration, bitrate, title, title_ci, artist, artist_ci, album, album_ci, album_artist, album_artist_ci,
                               created_at, updated_at)
-           VALUES (?, ?, ?, 'Bonobo/Black Sands', '01 Kerala.opus', '01 kerala.opus', 1000, 1000, 'audio/ogg', 'opus',
-                   0, 0, 'Bonobo', 'bonobo', 'Black Sands (Remastered)', 'black sands (remastered)',
+           VALUES (?, ?, ?, 'Bonobo/Black Sands', '01 - Kerala.opus', '01 - kerala.opus', 1000, 1000, 'audio/ogg', 'opus',
+                   0, 0, 'Kerala (Live)', 'kerala (live)',
+                   'Bonobo', 'bonobo', 'Black Sands (Remastered)', 'black sands (remastered)',
                    'Bonobo', 'bonobo', 0, 0)`,
         )
-        .run(id, libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+        .run(id, libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
       await drain(libraryId);
 
@@ -1497,6 +1607,10 @@ describe('path-derived grouping', () => {
       // album list.
       expect(row?.album_ci).toBe('black sands (remastered)');
       expect(row?.artist_ci).toBe('bonobo');
+      // And the title, which is the one the filename would otherwise have overwritten. The
+      // filename says `01 - Kerala.opus`, so a derived title is `Kerala` — and it holds.
+      expect(row?.title).toBe('Kerala (Live)');
+      expect(row?.title_ci).toBe('kerala (live)');
       // And it is stamped, so a later version bump does not even reconsider it.
       expect(row?.derived_version).toBe(DERIVED_VERSION);
     });
@@ -1514,20 +1628,21 @@ describe('path-derived grouping', () => {
       // wrong by the time somebody bumps the version it names.
       const userId = await seedUser('BackfillVersion');
       const libraryId = await seedLibrary(userId, 'LDV');
-      const id = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      const id = songId(libraryId, 'Blur/Holocene/01 - Holocene.opus');
       // `grouping_source` is seeded too, because it is now what says "this row is a guess".
       // The marker on the value alone would no longer be enough — the guard is a column
       // comparison — so seeding one without the other is a row no correction could reach.
       await handle.raw
         .prepare(
           `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
-                              duration, bitrate, artist, artist_ci, album, album_ci, created_at, updated_at,
+                              duration, bitrate, title, title_ci, artist, artist_ci, album, album_ci, created_at, updated_at,
                               derived_version, grouping_source)
-           VALUES (?, ?, ?, 'Blur/Holocene', '01 Holocene.opus', '01 holocene.opus', 1000, 1000, 'audio/ogg', 'opus',
-                   0, 0, 'Wrong Artist (derived)', 'wrong artist (derived)', 'Wrong Album (derived)', 'wrong album (derived)', 0, 0,
+           VALUES (?, ?, ?, 'Blur/Holocene', '01 - Holocene.opus', '01 - holocene.opus', 1000, 1000, 'audio/ogg', 'opus',
+                   0, 0, 'Wrong Title (derived)', 'wrong title (derived)',
+                   'Wrong Artist (derived)', 'wrong artist (derived)', 'Wrong Album (derived)', 'wrong album (derived)', 0, 0,
                    ?, ?)`,
         )
-        .run(id, libraryId, 'Blur/Holocene/01 Holocene.opus', DERIVED_VERSION, GROUPING_SOURCE_DERIVED);
+        .run(id, libraryId, 'Blur/Holocene/01 - Holocene.opus', DERIVED_VERSION, GROUPING_SOURCE_DERIVED);
 
       // At the current version the row is caught up, so nothing is selected.
       const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
@@ -1542,7 +1657,41 @@ describe('path-derived grouping', () => {
       const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
       expect(row?.artist).toBe(`Blur${DERIVED_MARKER}`);
       expect(row?.album).toBe(`Holocene${DERIVED_MARKER}`);
+      // The title is corrected by the same stamp and the same guard, and it is the field the
+      // bump was actually for: version 2 derived no title at all, so the 88 unenriched rows
+      // of the library this was measured on kept `title_ci = NULL` for ever.
+      expect(row?.title).toBe('Holocene');
+      expect(row?.title_ci).toBe('holocene');
       expect(row?.derived_version).toBe(DERIVED_VERSION + 1);
+    });
+
+    it('finds the derived title by the one query that could not see it before', async () => {
+      // The assertion the whole change exists for, and it is a **query** rather than a
+      // column read: `findByAlbumTitle` is how an import resolves a foreign song id, and it
+      // matched on `(album_ci, title_ci)`. With `title_ci` NULL it matched nothing, so 113
+      // of 118 starred tracks reported `not-found` on a library where 102 were present
+      // under the name the server had been displaying to the user all along.
+      const userId = await seedUser('BackfillMatchable');
+      const libraryId = await seedLibrary(userId, 'LDM');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+
+      // Drained under the **empty** marker, because the marker is appended to the derived
+      // album and a remote publishes the plain name — and this fixture is about the *title*,
+      // so it must not be about the marker at the same time. `EMPTY_DERIVED_MARKER` is the
+      // deployment default, and this is the configuration the reported import ran under.
+      const albumCi = 'black sands';
+      const titleCi = 'kerala';
+
+      // Before the drain: the row is indexed, and invisible to the matcher. This is the
+      // assertion that would have caught the defect — a present row, correctly named, that
+      // no query can reach.
+      const matcher = new SongMatchDAO(handle.db);
+      expect(await matcher.findByAlbumTitle(libraryId, [[albumCi, titleCi]])).toEqual([]);
+
+      await drain(libraryId, DERIVED_VERSION, EMPTY_DERIVED_MARKER);
+
+      const found = await matcher.findByAlbumTitle(libraryId, [[albumCi, titleCi]]);
+      expect(found.map((row) => row.path)).toEqual(['Bonobo/Black Sands/01 - Kerala.opus']);
     });
 
     it('terminates: a second pass selects nothing and writes nothing', async () => {
@@ -1551,9 +1700,9 @@ describe('path-derived grouping', () => {
       // guard costing more than the thing it guards.
       const userId = await seedUser('BackfillConverges');
       const libraryId = await seedLibrary(userId, 'LDC');
-      await seedUngrouped(libraryId, 'Blur/Holocene/01 Holocene.opus');
-      await seedUngrouped(libraryId, 'Blur/Holocene/02 Lotus.opus');
-      await seedUngrouped(libraryId, 'Blur/For Emma/03 Beatrix.opus');
+      await seedUngrouped(libraryId, 'Blur/Holocene/01 - Holocene.opus');
+      await seedUngrouped(libraryId, 'Blur/Holocene/02 - Lotus.opus');
+      await seedUngrouped(libraryId, 'Blur/For Emma/03 - Beatrix.opus');
 
       const dao = new SongDerivationDAO(handle.db, DERIVED_MARKER);
       expect(await drain(libraryId)).toBe(3);
@@ -1570,7 +1719,7 @@ describe('path-derived grouping', () => {
       // enrichment, which is the trade this is least willing to make.
       const userId = await seedUser('BackfillNoEnriched');
       const libraryId = await seedLibrary(userId, 'LDNE');
-      const id = await seedUngrouped(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      const id = await seedUngrouped(libraryId, 'Blur/Holocene/01 - Holocene.opus');
 
       await drain(libraryId);
 
@@ -1636,7 +1785,7 @@ describe('path-derived grouping', () => {
       const libraryId = await seedLibrary(userId, 'LDIS');
 
       const written = await new SongDAO(handle.db, DERIVED_MARKER).upsertFileFacts([
-        { id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+        { id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 - Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
       ]);
       expect(written.written).toBe(1);
 
@@ -1647,7 +1796,7 @@ describe('path-derived grouping', () => {
 
       // The grouping is still there — the stamp is not a way of skipping the derivation,
       // it is a record that the index path already did it.
-      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'));
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'));
       expect(row?.artist).toBe(`Bonobo${DERIVED_MARKER}`);
       expect(row?.derived_version).toBe(DERIVED_VERSION);
     });
@@ -1661,11 +1810,11 @@ describe('path-derived grouping', () => {
       const libraryId = await seedLibrary(userId, 'LDCS');
       const dao = new SongDAO(handle.db, DERIVED_MARKER);
       const facts = {
-        id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'),
+        id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'),
         libraryId,
         path: 'Bonobo/Black Sands/01 Kerala.opus',
         dirPath: 'Bonobo/Black Sands',
-        name: '01 Kerala.opus',
+        name: '01 - Kerala.opus',
         contentType: 'audio/ogg',
         suffix: 'opus',
       };
@@ -1689,7 +1838,7 @@ describe('path-derived grouping', () => {
       const userId = await seedUser('BackfillStampIsNotFinal');
       const libraryId = await seedLibrary(userId, 'LDSNF');
       await new SongDAO(handle.db, DERIVED_MARKER).upsertFileFacts([
-        { id: songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+        { id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 - Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
       ]);
 
       // At the current version: caught up, so nothing is selected and nothing is written.
@@ -1760,7 +1909,7 @@ describe('path-derived grouping', () => {
       // one and fails every case that asserts a grouping was filled.
       const userId = await seedUser('BackfillEmptyMarker');
       const libraryId = await seedLibrary(userId, 'LDEM');
-      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
       await seedTaggedRow(id, libraryId, 'Bonobo/Black Sands', 'Bonobo', 'Black Sands (Remastered)');
 
       // A version up, so the row is selected at all: the index write already stamped it at
@@ -1787,7 +1936,7 @@ describe('path-derived grouping', () => {
       // identically for a marker that kept them apart.
       const userId = await seedUser('BackfillEmptyFills');
       const libraryId = await seedLibrary(userId, 'LDEF');
-      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
       expect(await drain(libraryId, DERIVED_VERSION, EMPTY_DERIVED_MARKER)).toBe(1);
 
@@ -1820,7 +1969,7 @@ describe('path-derived grouping', () => {
       const userId = await seedUser(`BackfillLike${suffix}`);
       const libraryId = await seedLibrary(userId, `LDL${suffix}`);
 
-      const guessId = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      const guessId = songId(libraryId, 'Blur/Holocene/01 - Holocene.opus');
       await seedStaleGuess(guessId, libraryId, 'Blur/Holocene', DERIVED_MARKER);
       const tagId = songId(libraryId, 'Radiohead/OK Computer/01 Airbag.opus');
       await seedTaggedRow(tagId, libraryId, 'Radiohead/OK Computer', 'Radiohead', 'OK Computer', DERIVED_MARKER);
@@ -1845,7 +1994,7 @@ describe('path-derived grouping', () => {
       // left alone. Without it, "the guard never writes" passes this file.
       const userId = await seedUser('BackfillMarkerChange');
       const libraryId = await seedLibrary(userId, 'LDMC');
-      const id = songId(libraryId, 'Blur/Holocene/01 Holocene.opus');
+      const id = songId(libraryId, 'Blur/Holocene/01 - Holocene.opus');
       await seedStaleGuess(id, libraryId, 'Blur/Holocene', DERIVED_MARKER);
 
       expect(await drain(libraryId, DERIVED_VERSION + 1, ' (guess)')).toBe(1);
@@ -1869,8 +2018,8 @@ describe('path-derived grouping', () => {
       // because the column is an implementation of the guard and the guard is the requirement.
       const userId = await seedUser('BackfillTagClearsFlag');
       const libraryId = await seedLibrary(userId, 'LDTC');
-      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
-      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
       // The index write stamped `'derived'` and filled the grouping. (A direct
       // `INSERT` does neither, so the backfill runs first — the row has to *hold* a guess
@@ -1900,8 +2049,8 @@ describe('path-derived grouping', () => {
       // from the folder they are filed under, which no correction of a separator rule changes.
       const userId = await seedUser('BackfillPartialTag');
       const libraryId = await seedLibrary(userId, 'LDPT');
-      const id = songId(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
-      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 Kerala.opus');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+      await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
       await drain(libraryId);
       await new SongDAO(handle.db, DERIVED_MARKER).applyMetadata(id, { artist: 'Bonobo', album: 'Black Sands' });
 
