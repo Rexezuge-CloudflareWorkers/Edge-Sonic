@@ -17,7 +17,7 @@
  * at the index. What is *not* acceptable is silently shipping a full-table scan
  * across every library, which is what dropping the `library_id` predicate would do.
  */
-import { albumChildElement, albumElement, artistIdOf, el, elList, encodeId, IdKind, songElement } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, artistIdOf, el, elList, songElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';

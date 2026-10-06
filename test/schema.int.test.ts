@@ -38,6 +38,7 @@ import {
   deriveTitleFromFileName,
   statementTable,
   SongMatchDAO,
+  libraryScope,
   ImportSourceDAO,
   ImportRunDAO,
   ImportPlayCountProgressDAO,
@@ -3028,6 +3029,90 @@ describe('album identity by grouping', () => {
     );
     expect(coerced).not.toContain('album_artist_ci=?');
     expect(coerced).not.toBe(plan);
+  });
+
+  /**
+   * A **scope** of several libraries, and the plans it produces.
+   *
+   * ### Why this is here rather than trusted
+   *
+   * Every aggregate's `WHERE` changed from `library_id = ?` to a scope, so
+   * `library_id IN (?, ?, …)`. Those two return **identical rows** — the same library either
+   * way — and this file already records the general form of that trap twice: a coercion that
+   * returns the same rows and silently drops `idx_songs_album`, and a `LIKE` where `=` was meant.
+   * A wrong predicate and a right one are indistinguishable from the result, so `EXPLAIN QUERY
+   * PLAN` is the only instrument that tells them apart.
+   *
+   * The union is what makes it matter: a scan that is invisible at one library is a scan of
+   * **every** library's rows, on the endpoints a player draws its album list and its search from.
+   *
+   * And the SQL is built by `libraryScope` rather than written out here, because a transcription
+   * of the predicate tests the transcription. If the two ever disagree, this is the assertion
+   * that has to notice — and it would not, which is why the fragment is imported.
+   */
+  it('keeps every aggregate on its index when the scope is a union', async () => {
+    const userId = await seedUser('ScopePlan');
+    const first = await seedLibrary(userId, 'LSCOPEA');
+    const second = await seedLibrary(userId, 'LSCOPEB');
+    const scope = libraryScope([first, second]);
+
+    // One library and several: the same fragment shape, one element or two.
+    const single = libraryScope(first);
+    expect(single.sql).toBe('library_id = ?');
+    expect(scope.sql).toBe('library_id IN (?, ?)');
+    // And an empty scope selects **nothing**, as a predicate rather than as SQL that would be
+    // true of every row: dropping the clause is how "this user can see no library" would become
+    // "every library".
+    expect(libraryScope([]).sql).toBe('0 = 1');
+
+    // `listAlbums`' key page. All three columns constrained, not the leading one alone.
+    const albums = queryPlan(
+      handle,
+      `SELECT album_ci, album_artist_ci FROM songs WHERE ${scope.sql} AND album_ci IS NOT NULL
+        GROUP BY album_ci, album_artist_ci`,
+      [...scope.values],
+    );
+    expect(albums).toContain('idx_songs_album');
+    expect(albums).not.toContain('SCAN');
+
+    // The row fetch behind it, which is `songsForAlbumKeys`.
+    const rows = queryPlan(handle, `SELECT * FROM songs WHERE ${scope.sql} AND ((album_ci = ? AND album_artist_ci IS ?))`, [
+      ...scope.values,
+      'ex-otogibanashi',
+      null,
+    ]);
+    expect(rows).toContain('idx_songs_album');
+    expect(rows).not.toContain('SCAN');
+
+    // `listArtists`.
+    const artists = queryPlan(handle, `SELECT artist_ci FROM songs WHERE ${scope.sql} AND artist_ci IS NOT NULL GROUP BY artist_ci`, [
+      ...scope.values,
+    ]);
+    expect(artists).toContain('idx_songs_artist');
+    expect(artists).not.toContain('SCAN');
+
+    // `listGenres`.
+    const genres = queryPlan(handle, `SELECT genre_ci FROM songs WHERE ${scope.sql} AND genre_ci IS NOT NULL GROUP BY genre_ci`, [
+      ...scope.values,
+    ]);
+    expect(genres).toContain('idx_songs_genre');
+    expect(genres).not.toContain('SCAN');
+
+    // **And the singleton is not a regression.** Every plan pinned above in this file was written
+    // against `library_id = ?`, so the single-library form has to keep using the index too —
+    // which is why `libraryScope` renders `=` rather than `IN (?)` for one element. The two plans
+    // are not compared for **equality**: they are not the same query and SQLite is entitled to
+    // plan them differently (here the union form also avoids a temp b-tree for the `GROUP BY`).
+    // What must hold for both is the property that costs a library its index — the index is used
+    // and the rows are not scanned.
+    const singleton = queryPlan(
+      handle,
+      'SELECT album_ci, album_artist_ci FROM songs WHERE library_id = ? AND album_ci IS NOT NULL GROUP BY album_ci, album_artist_ci',
+      [first],
+    );
+    expect(singleton).toContain('idx_songs_album');
+    expect(singleton).not.toContain('SCAN');
+    expect(albums).not.toContain('SCAN');
   });
 
   it('pages a release split across folders without repeating or dropping it', async () => {

@@ -35,7 +35,7 @@
  * wildcard merges every untagged album sharing a name into every tagged one — the defect
  * `albumKey.ts` documents and `test/schema.int.test.ts` asserts with `EXPLAIN QUERY PLAN`.
  */
-import { albumKeySpec, artistIdOf, encodeAlbumKey, IdKind, encodeId, AlbumGrouping, SPANNING_LIBRARY_ID } from '@edge-sonic/subsonic';
+import { albumKeySpec, artistIdOf, encodeAlbumKey, AlbumGrouping, SPANNING_LIBRARY_ID } from '@edge-sonic/subsonic';
 import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
 import { libraryIds } from '@edge-sonic/backend-data/dao';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';

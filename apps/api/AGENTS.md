@@ -309,12 +309,73 @@ before this change keeps working. It is authorized by the same grant check, so i
 second **spelling** rather than a second way past it, and only a canonical position
 *in range* is read as one — otherwise `"00"` would shadow a library whose id is `"00"`.
 
+## The default is the **union**, and a folder still narrows
+
+`resolveLibraries` answers **every** library the caller was granted when no
+`musicFolderId` is sent; an explicit one narrows it to that library, so the
+protocol's scope-selector model is intact. `resolveLibrary` is the first element
+and stays for the per-library callers (`getMusicDirectory`, which browses one
+origin).
+
+The reason is a measurement rather than a preference. A release whose track 01 is
+in one library and track 03 in another was browsable from **no** `musicFolderId`
+at all: folder 0 held half the album, folder 1 the other half, so a client
+listed it at `songCount: 1` and never opened the track it was missing. There was
+no client view that showed both — so "a user with two libraries is not a user with
+a preference between them" was the only reading that made the data reachable.
+
+**And the cost, which is a decision with a witness in
+`test/library-union.test.ts`:** `getMusicFolders` still publishes the individual
+libraries, so a client with a folder picker can choose one and will then see
+*less* than the default. A synthetic "All" entry would fix the incoherence and
+shift every published position, and the stored `musicFolderId`s depend on those
+positions — so the default carries the union and the list carries the parts.
+
+**`librariesForId` is the only way an endpoint turns an id into a scope**, and it
+has two answers because an id names a group or a file. A **song** or **directory**
+id names one library, because `path` only means something inside one; the grant
+check is `requireForUser`, so an id for a library the caller cannot see is
+`code=70` and never `code=50`. An **album** or **artist** id names every granted
+library, and that is the branch the union lives on. The union is still
+grant-scoped, so the oracle rule holds on it too — a key existing only in an
+invisible library resolves to nothing, because the lookup is restricted to the
+granted set rather than widened to everything and filtered afterwards.
+
 ## Ids
 
 `kind:base64url(libraryId \n path)`, kinds `s:`/`al:`/`alk:`/`ar:`/`dir:`/`vid:`/`mf:`/`dira:`.
 Artist ids derive from the artist grouping's **name**. Album ids derive from the album's
 **grouping key** — `ALBUM_GROUP_BY`, owned by `subsonic/albumKey.ts` and carried per request by
 `./albumIdentity` — and never from the album name, which is the part that changes.
+
+### An album or artist id names **no** library, and a song id still does
+
+`decodeId` requires a library half (`separator <= 0` is `code=70`), so "this id
+names no particular library" is not a payload this repository could otherwise
+express — and branching a validator that every id on every surface passes through
+is far larger than the feature. So the library half is
+`SPANNING_LIBRARY_ID`: a value that satisfies `LIBRARY_ID_PATTERN` and that
+`LibraryDAO` never mints, and the all-zeros UUID `wrangler.template.jsonc` already
+carries for "no particular library". `decodeId` is untouched.
+
+**Only the two ids that name a *group* carry it.** A song id still names its
+library, because the same relative path in two libraries is two files and
+collapsing them would point a star at whichever was written last. `al:`
+(`ALBUM_GROUP_BY=folder`) also keeps its library — under that grouping an album
+*is* a directory, and directories are per-source — so **folder grouping is not
+unioned**, and that asymmetry is stated in `albumIdOf` rather than left to be
+inferred.
+
+The minting sites were five for an artist and one for an album, so they are
+`artistIdOf` and `albumIdOf` now: an id minted two ways is two ids for one group,
+and nothing in the response says which is stale.
+
+**A stored annotation survives the re-key**, and `test/library-union.test.ts`
+asserts it rather than assuming it — because `resolveAlbumId` decodes to a *key*,
+which the widened lookup then finds. An album star written by a client before the
+change names a real library and still resolves, attached to the whole release. A
+migration to re-point stored ids would have been written on the belief that it did
+not, which is why the belief was measured instead.
 
 **An album's year and genre come from the first track that *has* one, not from track 1.**
 `year` and `genre` are the two columns `pathConvention` deliberately never derives, so a row the

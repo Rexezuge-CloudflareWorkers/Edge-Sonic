@@ -16,7 +16,7 @@
  *   folder).
  */
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { artistElement, artistIdOf, elList, encodeId, IdKind } from '@edge-sonic/subsonic';
+import { artistElement, artistIdOf, elList } from '@edge-sonic/subsonic';
 import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
 import type { AlbumIdentity } from './albumIdentity';
 

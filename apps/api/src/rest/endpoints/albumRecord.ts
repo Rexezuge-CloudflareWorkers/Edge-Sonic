@@ -15,7 +15,7 @@
  * whole rows, and the record is built only from whole rows. Keeping them in one file makes it
  * visible that `getAlbum` cannot skip a step the lists do not.
  */
-import { artistIdOf, decodeId, encodeId, ErrorCode, IdKind, resolveAlbumId, SubsonicError } from '@edge-sonic/subsonic';
+import { artistIdOf, decodeId, ErrorCode, IdKind, resolveAlbumId, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album } from '@edge-sonic/subsonic';
 import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import { librariesForId } from './libraries';

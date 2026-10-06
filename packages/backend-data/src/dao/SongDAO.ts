@@ -214,12 +214,13 @@ class SongDAO extends BaseDAO {
   /**
   Distinct albums, for `getArtists`/`getAlbumList2`.
   */
-  public async listByGenre(libraryId: string, genreCi: string, limit: number, offset: number): Promise<SongRow[]> {
+  public async listByGenre(scope: LibraryScope, genreCi: string, limit: number, offset: number): Promise<SongRow[]> {
+    const libraries = libraryScope(scope);
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare('SELECT * FROM songs WHERE library_id = ? AND genre_ci = ? ORDER BY name_ci ASC LIMIT ? OFFSET ?')
-          .bind(libraryId, genreCi, limit, offset)
+          .prepare(`SELECT * FROM songs WHERE ${libraries.sql} AND genre_ci = ? ORDER BY name_ci ASC LIMIT ? OFFSET ?`)
+          .bind(...libraries.values, genreCi, limit, offset)
           .all<SongRow>(),
       'songs.listByGenre',
     );
@@ -227,11 +228,12 @@ class SongDAO extends BaseDAO {
   }
 
   public async listRandom(
-    libraryId: string,
+    scope: LibraryScope,
     options: { genreCi?: string | null; fromYear?: number; toYear?: number; limit: number },
   ): Promise<SongRow[]> {
-    const where: string[] = ['library_id = ?'];
-    const values: unknown[] = [libraryId];
+    const libraries = libraryScope(scope);
+    const where: string[] = [libraries.sql];
+    const values: unknown[] = [...libraries.values];
     if (options.genreCi) {
       where.push('genre_ci = ?');
       values.push(options.genreCi);

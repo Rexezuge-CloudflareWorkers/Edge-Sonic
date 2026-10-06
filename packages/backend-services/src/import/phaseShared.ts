@@ -19,7 +19,6 @@
  * them from `phases.ts` would make one of the two files the place to look for a thing both own —
  * which is the inverse of the split and re-creates the god file the split removed.
  */
-import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import type { MatchCandidate, MatchOutcome, MatchStore } from './matchRemoteIds';
 import type { RemoteSong } from './remoteClient';
 import type { UnresolvedItem } from './report';

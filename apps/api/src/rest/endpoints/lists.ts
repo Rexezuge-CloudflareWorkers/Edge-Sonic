@@ -202,7 +202,7 @@ async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
   const genre = context.params.get('genre');
   const fromYear = context.params.int('fromYear', Number.MIN_SAFE_INTEGER);
   const toYear = context.params.int('toYear', Number.MAX_SAFE_INTEGER);
-  const rows = await context.songs.listRandom(library.id, {
+  const rows = await context.songs.listRandom(scope, {
     genreCi: genre ? genre.toLowerCase() : null,
     ...((fromYear !== Number.MIN_SAFE_INTEGER) && { fromYear }),
     ...((toYear !== Number.MAX_SAFE_INTEGER) && { toYear }),
@@ -218,7 +218,7 @@ async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> 
   const genre = context.params.require('genre');
   const count = context.pageSize(context.params.optionalInt('count'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
-  const rows = await context.songs.listByGenre(library.id, genre.toLowerCase(), count + offset, 0);
+  const rows = await context.songs.listByGenre(scope, genre.toLowerCase(), count + offset, 0);
   return respond(context, elList('songsByGenre', 'song', {}, await songNodes(context, library, rows.slice(offset, offset + count))));
 }
 
@@ -232,9 +232,7 @@ async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> 
  * nothing to do with the library.
  */
 async function getGenres(context: RestContext): Promise<EnvelopeResponse> {
-  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
-  const scope = libraries.map((row) => row.id);
+  const scope = (await resolveLibraries(context, context.params.get('musicFolderId'))).map((row) => row.id);
   const rows = await context.songIndex.listGenres(scope);
   const nodes = rows
     .filter((row) => row.value.trim().length > 0)
@@ -293,7 +291,6 @@ async function getStarred2(context: RestContext): Promise<EnvelopeResponse> {
 async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, undefined);
   const library = libraries[0];
-  const scope = libraries.map((row) => row.id);
   const identity = context.albumsFor(library);
   const entries = await context.annotations.listNowPlaying();
   const nodes: ElementNode[] = [];

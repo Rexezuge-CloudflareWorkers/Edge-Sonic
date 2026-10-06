@@ -23,7 +23,7 @@ import { bindChunkSize } from './sqlLimits';
 import { albumKeySpec, specFromKey } from '@edge-sonic/subsonic';
 import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
 import { albumGroupsPerStatement, albumKeyProjection } from './albumKeySql';
-import { libraryIds, libraryReserve, libraryScope } from './libraryScope';
+import { libraryReserve, libraryScope } from './libraryScope';
 import type { LibraryScope } from './libraryScope';
 import type { AlbumKeyRowOut } from './albumKeySql';
 import type { SongRow } from './rows';
