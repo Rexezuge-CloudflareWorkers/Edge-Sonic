@@ -219,15 +219,30 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
    *
    * The operator `POST .../scan/step` and `alarm()` share this: a manual step
    * is one chunk of the same loop, not a second implementation.
+   *
+   * ### There is no `dailyBudget` parameter here, and there was
+   *
+   * It was `dailyBudget?: () => ScanDailyBudget` — **a function on an RPC method**. Durable
+   * Object RPC serializes its arguments, and a function is not serializable, so no caller could
+   * ever have supplied one: `user/routes.ts` passes the library id and nothing else, and the
+   * parameter was reachable from exactly one place in this repository, a test that called the
+   * method in-process.
+   *
+   * So the signature advertised an injection point the platform does not have, and the test that
+   * used it asserted a budget nothing in production could substitute — a double agreeing with the
+   * broken caller rather than with the class. The budget is read from `ScanPauseStore`, which is
+   * where production reads it from and the only store that can hold it; a test that needs a
+   * spent allowance now seeds that storage, which is a measurement of the real path rather than
+   * a second one.
    */
-  public async stepOnce(libraryId: string, dailyBudget?: () => ScanDailyBudget): Promise<ChunkResult> {
+  public async stepOnce(libraryId: string): Promise<ChunkResult> {
     const libraries = await this.librariesOrPause();
     if (libraries === null) return await this.pauseAndArm(await this.pause.pauseForRefusal());
 
     const library = libraries.find((candidate) => candidate.id === libraryId);
     if (library === undefined) throw new Error(`Unknown library "${libraryId}".`);
     await this.rememberLibrary(libraryId);
-    return await this.runChunk(library, dailyBudget ?? (await this.pause.budget(libraries.length)));
+    return await this.runChunk(library, await this.pause.budget(libraries.length));
   }
 
   public override async alarm(): Promise<void> {
