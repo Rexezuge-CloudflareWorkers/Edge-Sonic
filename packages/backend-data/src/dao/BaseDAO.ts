@@ -1,7 +1,7 @@
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
 import type { SubrequestMeter } from '@edge-sonic/shared';
-import type { D1Queryable, D1Result } from '../utils/D1Types';
+import type { D1PreparedStatement, D1Queryable, D1Result, TrackedStatement } from '../utils/D1Types';
 import { executeD1WithRetry } from '../utils/D1Utils';
 import { billedRowsFor } from './billedRows';
 
@@ -127,6 +127,36 @@ abstract class BaseDAO {
   }
 
   /**
+   * A statement paired with the SQL it was prepared from.
+   *
+   * The platform's `D1PreparedStatement` does not expose its SQL — see
+   * {@link TrackedStatement} — and something in this layer has to know which table a write
+   * bills against, because D1 charges a write as the row *plus every index entry it
+   * rewrote*. So the SQL is carried beside the statement instead of being read off it.
+   *
+   * This is the only place a statement becomes a {@link TrackedStatement}, which is what
+   * makes "the SQL and the statement cannot be different facts" structural rather than a
+   * convention: the pair is minted once, here, from the one string both come from. A
+   * write helper handed two arguments would be two literals for one statement, which is
+   * the shape of defect this repository has paid for three times.
+   *
+   * Reads deliberately keep calling `this.database.prepare` directly. Nothing reads a
+   * read's SQL, and routing 100 read sites through a wrapper to carry a field no reader
+   * wants is the other kind of wrong.
+   */
+  protected prepare(query: string): TrackedStatement {
+    const track = (statement: D1PreparedStatement): TrackedStatement => ({
+      sql: query,
+      statement,
+      // A **new** pair, mirroring the platform: Cloudflare's `bind()` returns a new
+      // statement rather than mutating and returning the same one, so a pair that
+      // mutated in place would model a statement the runtime does not have.
+      bind: (...values: unknown[]): TrackedStatement => track(statement.bind(...values)),
+    });
+    return track(this.database.prepare(query));
+  }
+
+  /**
    * How many more subrequests this DAO could issue, or `Infinity` when unmetered.
    *
    * Exposed for the paging loops that page over *groups* rather than rows: they must stop
@@ -192,12 +222,12 @@ abstract class BaseDAO {
    * can bound anything.
    */
   protected async runWriteStatement(
-    statement: ReturnType<D1Queryable['prepare']>,
+    tracked: TrackedStatement,
     context: string,
   ): Promise<{ changes: number; billedRows: number }> {
-    const result: D1Result = await this.withRetry(async () => await statement.run(), context);
+    const result: D1Result = await this.withRetry(async () => await tracked.statement.run(), context);
     const changes = result?.meta?.changes ?? 0;
-    return { changes, billedRows: billedRowsFor(statement, changes) };
+    return { changes, billedRows: billedRowsFor(tracked.sql, changes) };
   }
 
   /**
@@ -223,7 +253,7 @@ abstract class BaseDAO {
    * @param options.requireComplete Refuse rather than truncate. See `SubrequestBudgetExhaustedError`.
    */
   protected async runWriteBatch(
-    statements: ReturnType<D1Queryable['prepare']>[],
+    statements: readonly TrackedStatement[],
     context: string,
     options?: { requireComplete?: boolean },
   ): Promise<WriteBatchResult> {
@@ -253,19 +283,24 @@ abstract class BaseDAO {
       written += group.length;
 
       if (this.database.batch) {
-        const results: D1Result[] = await executeD1WithRetry(async () => await this.database.batch!(group), context);
+        // The **raw** statements, never the wrappers: `batch()` is the platform's, and it
+        // takes `D1PreparedStatement[]`. A wrapper reaching it is the object it does not
+        // know how to execute.
+        const raw = group.map((entry) => entry.statement);
+        const results: D1Result[] = await executeD1WithRetry(async () => await this.database.batch!(raw), context);
         changes += (results ?? []).reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
         // Zipped against `group` rather than summed on its own, because `billedRowsFor`
-        // needs the *statement* to know which table's index entries the change rewrote.
-        // `batch()` preserves order, so index `i` of the results is index `i` of the group;
-        // a mismatch here would silently attribute a folder's songs to its nodes.
-        billedRows += group.reduce((total, statement, at) => total + billedRowsFor(statement, results[at]?.meta?.changes ?? 0), 0);
+        // needs the *SQL* to know which table's index entries the change rewrote, and only
+        // the pair carries it. `batch()` preserves order, so index `i` of the results is
+        // index `i` of the group; a mismatch here would silently attribute a folder's
+        // songs to its nodes.
+        billedRows += group.reduce((total, entry, at) => total + billedRowsFor(entry.sql, results[at]?.meta?.changes ?? 0), 0);
       } else {
-        for (const statement of group) {
-          const result: D1Result = await executeD1WithRetry(async () => await statement.run(), context);
+        for (const entry of group) {
+          const result: D1Result = await executeD1WithRetry(async () => await entry.statement.run(), context);
           const changed = result.meta?.changes ?? 0;
           changes += changed;
-          billedRows += billedRowsFor(statement, changed);
+          billedRows += billedRowsFor(entry.sql, changed);
         }
       }
       offset += fits;

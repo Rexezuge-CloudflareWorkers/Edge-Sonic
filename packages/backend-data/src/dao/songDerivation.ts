@@ -185,7 +185,7 @@ class SongDerivationDAO extends BaseDAO {
     const statements = writes.map((write) => {
       const artistCi = write.artist?.toLowerCase() ?? null;
       const albumCi = write.album?.toLowerCase() ?? null;
-      return this.database
+      return this
         .prepare(APPLY_DERIVATION)
         .bind(
           GROUPING_SOURCE_DERIVED,

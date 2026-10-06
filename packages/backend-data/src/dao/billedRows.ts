@@ -169,8 +169,26 @@ function stripLeadingNoise(sql: string): string {
  * `null` rather than a default table, because the caller's next question is "how much does
  * this cost" and a fabricated answer to that is worse than admitting ignorance. Every
  * caller turns `null` into the pessimistic charge.
+ *
+ * ### A non-string is `null`, not a `TypeError`
+ *
+ * This function is the reason `sql` has to travel beside the statement rather than be read
+ * off it — the platform's `D1PreparedStatement` has no `sql` member at all, so reading
+ * `statement.sql` produced `undefined` and `stripLeadingNoise` threw
+ * `Cannot read properties of undefined (reading 'replace')` on **every** write that
+ * measured its cost. It shipped that way: the scan could neither seed its frontier nor
+ * advance a chunk while `scan_state` kept reporting `scanning`, and the suite was green
+ * because the one D1 double in it returned a `sql` the platform does not have.
+ *
+ * So the missing case is a *typed* one rather than a runtime accident, and it is handled in
+ * the direction this file is written in throughout: an unreadable table charges the
+ * schema's worst case, which costs throughput. Throwing cost the whole write half of the
+ * product. That asymmetry is the argument, and it is why the guard is here in addition to
+ * the type — the type catches the mistake at compile time, and this catches the *class* of
+ * it, wherever a future statement arrives from somewhere nobody thought to type.
  */
-function statementTable(sql: string): string | null {
+function statementTable(sql: string | undefined): string | null {
+  if (typeof sql !== 'string') return null;
   const stripped = stripLeadingNoise(sql);
   const verb = LEADING_WRITE_VERB.exec(stripped);
   if (verb === null) return null;
@@ -199,14 +217,14 @@ function billedRowsForTable(table: string, logicalRows: number): number {
 /**
  * Billed rows for a statement that changed `logicalRows` table rows.
  *
- * `statement` is a `D1PreparedStatement`, narrowed to the one field this reads: the SQL is
- * the only place the table is written down, and every statement this repository issues
- * names its own target. Taking the whole statement rather than a table name keeps the
- * caller from having to *know* the table — a caller-supplied table is a claim about a
- * statement, and a claim about a statement is wrong exactly when the statement is.
+ * @param sql The SQL the statement was prepared from, **passed in** rather than read off
+ *   the statement. Cloudflare's `D1PreparedStatement` carries no `sql` member, so reading it
+ *   there returned `undefined` and charged every write a `TypeError` instead of a number.
+ *   The SQL reaches this function from `BaseDAO.prepare`, which is the one place that has
+ *   it — see `TrackedStatement`.
  */
-function billedRowsFor(statement: { readonly sql: string }, logicalRows: number): number {
-  const table = statementTable(statement.sql);
+function billedRowsFor(sql: string | undefined, logicalRows: number): number {
+  const table = statementTable(sql);
   return table === null ? logicalRows * MAX_BILLED_ROWS_PER_ROW : billedRowsForTable(table, logicalRows);
 }
 

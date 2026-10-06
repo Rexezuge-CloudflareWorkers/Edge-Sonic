@@ -177,21 +177,19 @@ class NodeDAO extends BaseDAO {
     if (inputs.length === 0) return { changes: 0, written: 0, truncated: false, billedRows: 0 };
     const timestamp = nowSeconds();
     const statements = inputs.map((input) =>
-      this.database
-        .prepare(UPSERT)
-        .bind(
-          input.libraryId,
-          input.path,
-          input.parentPath,
-          input.name,
-          input.name.toLowerCase(),
-          input.mtimeMs,
-          input.etag,
-          input.depth,
-          input.isScanned ? 1 : 0,
-          timestamp,
-          timestamp,
-        ),
+      this.prepare(UPSERT).bind(
+        input.libraryId,
+        input.path,
+        input.parentPath,
+        input.name,
+        input.name.toLowerCase(),
+        input.mtimeMs,
+        input.etag,
+        input.depth,
+        input.isScanned ? 1 : 0,
+        timestamp,
+        timestamp,
+      ),
     );
     return await this.runWriteBatch(statements, 'nodes.upsertMany');
   }
@@ -201,9 +199,11 @@ class NodeDAO extends BaseDAO {
     // a folder literally named `100%` does not match everything.
     const escaped = `${path.replaceAll(/[%_]/g, (char) => `\\${char}`)}/%`;
     const result = await this.runWriteStatement(
-      this.database
-        .prepare(String.raw`DELETE FROM nodes WHERE library_id = ? AND (path = ? OR path LIKE ? ESCAPE '\')`)
-        .bind(libraryId, path, escaped),
+      this.prepare(String.raw`DELETE FROM nodes WHERE library_id = ? AND (path = ? OR path LIKE ? ESCAPE '\')`).bind(
+        libraryId,
+        path,
+        escaped,
+      ),
       'nodes.deleteSubtree',
     );
     // `truncated: false` and `written` from the statement's own change count, because a delete
