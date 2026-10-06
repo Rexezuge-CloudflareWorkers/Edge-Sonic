@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./ScanWorker": "./src/ScanWorker.ts",
+    "./MediaWorker": "./src/MediaWorker.ts",
     "./LibraryImportWorkflow": "./src/LibraryImportWorkflow.ts",
     "./PlayCountImportWorker": "./src/PlayCountImportWorker.ts",
     "./scanPause": "./src/scanPause.ts"

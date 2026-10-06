@@ -37,6 +37,18 @@
         "name": "IMPORT_DO",
         "class_name": "PlayCountImportWorker",
       },
+      {
+        // The request-path media offload: tag parsing (`getSong`) and artwork (`getCoverArt`).
+        //
+        // A **third** namespace for the same reason as `IMPORT_DO`, and with more force. A
+        // Durable Object handles one event at a time, so sharing this namespace with the scan
+        // would mean a chunk walking the origin blocks every artwork request behind it — up to
+        // `SCAN_CHUNK_DEADLINE_MS` (20 s) of a 30 s `streamTimeoutMs` spent before the request
+        // began. Background work must not serialize behind a user-facing request, and no
+        // arrangement of methods on one object can prevent that; only a second object can.
+        "name": "MEDIA_DO",
+        "class_name": "MediaWorker",
+      },
     ],
   },
   "migrations": [
@@ -47,6 +59,15 @@
     {
       "tag": "v1000000001",
       "new_sqlite_classes": ["PlayCountImportWorker"],
+    },
+    {
+      // `MediaWorker` holds no state — no alarm, no library id, no pause — so this is the
+      // first tag whose class could be reconstructed from scratch without loss. It is still
+      // `new_sqlite_classes` because that is the backend the `DurableObject` base expects, and
+      // a future field would otherwise be a migration to change the backend rather than to add
+      // a column.
+      "tag": "v1000000002",
+      "new_sqlite_classes": ["MediaWorker"],
     },
   ],
   "workflows": [

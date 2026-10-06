@@ -102,29 +102,11 @@ describe('ScanWorker', () => {
     expect(harness.dav.propfinds).toHaveLength(before);
   });
 
-  it('enriches a known track and answers null for an unknown one', async () => {
-    vi.stubGlobal('fetch', harness.dav.fetch);
-    const { ctx } = fakeState();
-    const worker = workerFor(ctx);
-    const enriched = await worker.enrichSong('L1', harness.ids.skinnyLove);
-    expect(enriched?.id).toBe(harness.ids.skinnyLove);
-    await expect(worker.enrichSong('L1', 's:bm8=')).resolves.toBeNull();
-  });
-
-  it('answers no artwork for an empty candidate list without touching the origin', async () => {
-    const { ctx } = fakeState();
-    const worker = workerFor(ctx);
-    const before = harness.dav.propfinds.length;
-    await expect(worker.coverArt('L1', 'Bon Iver/For Emma', [], 10_000)).resolves.toBeNull();
-    expect(harness.dav.propfinds).toHaveLength(before);
-  });
-
   it('refuses an unknown library on every RPC', async () => {
     const { ctx } = fakeState();
     const worker = workerFor(ctx);
     await expect(worker.startScan('L-nope')).rejects.toThrow();
     await expect(worker.stepOnce('L-nope')).rejects.toThrow();
-    await expect(worker.enrichSong('L-nope', harness.ids.skinnyLove)).rejects.toThrow();
   });
 
   it('clears the alarm when the library is gone', async () => {

@@ -1,13 +1,32 @@
 /**
- * One Durable Object per library: the scan loop and the heavy tag-picture CPU.
+ * One Durable Object per library: the **alarm-driven scan loop**, and nothing else.
  *
  * Facade (Git `RepoWorker` pattern): routing + composition only. The folder walk
- * lives in `ScanService`, tag parsing in `EnrichmentService`/`media-tags`, picture
- * extraction in `embeddedAlbumArt` — this class only decides *where* they run and
- * chains the alarm that advances the scan without a client polling. The pause and
- * the day's write budget live in `scanPause.ts`, for the same reason the walk lives
- * in `ScanService`: this file is a router, and a decision with a state machine in it
- * does not belong in one.
+ * lives in `ScanService`, and this class decides *where* it runs and chains the alarm
+ * that advances the scan without a client polling. The pause and the day's write budget
+ * live in `scanPause.ts`, for the same reason the walk lives in `ScanService`: this file
+ * is a router, and a decision with a state machine in it does not belong in one.
+ *
+ * ### The request-path media work is `MediaWorker`, and the reason is the input gate
+ *
+ * Tag parsing and artwork were three methods here, and moving them is not tidiness. A Durable
+ * Object handles one event at a time, so an alarm invocation walking the origin — up to
+ * `SCAN_CHUNK_FOLDERS` folders inside `SCAN_CHUNK_DEADLINE_MS` — blocks every RPC to *this*
+ * object. `getSong` and `getCoverArt` therefore waited for the chunk before they started, and
+ * `coverArt` is handed `streamTimeoutMs` (30 s): a scan in flight could spend two thirds of an
+ * artwork request's budget before the request began. Background work must not serialize behind a
+ * user-facing request, so the media half has its own object and its own namespace. See
+ * `MediaWorker.ts`, and the same argument already made for `IMPORT_DO` in the wrangler template.
+ *
+ * ### There is no `fetch` handler, and there was one
+ *
+ * It answered `GET /status?libraryId=…`, and **nothing ever called it** — every caller reached
+ * `getStatus` over RPC, which is what `scanStubs.ts` hands out. So the class carried a second
+ * route to one question, unreachable from any code path in this repository and covered by
+ * nothing, and a DO handler answering a *status* is the one surface where a second
+ * implementation of the pause overlay would stay invisible until the two disagreed. It is gone
+ * rather than kept as a convenience: the RPC is the surface, and a second spelling of it is a
+ * second answer waiting for a second caller.
  *
  * D1 stays authoritative; DO storage holds the library id, the alarm, the day's row-write count and
  * any pause. KV stays a non-load-bearing cache. That is what makes a DO restart safe: the frontier
@@ -29,10 +48,9 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { d1AllowancePause, embeddedAlbumArt, pausedResult } from '@edge-sonic/backend-services/index';
-import type { ArtSource, ChunkResult, ResolvedArt, ScanDailyBudget } from '@edge-sonic/backend-services/index';
-import type { AudioTags } from '@edge-sonic/media-tags';
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import { d1AllowancePause, pausedResult } from '@edge-sonic/backend-services/index';
+import type { ChunkResult, ScanDailyBudget } from '@edge-sonic/backend-services/index';
+import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { ScanPauseStore, isDailyLimitRefusal, SCAN_ALARM_DELAY_MS } from './scanPause';
 import { chargeForIndexDrop, stopForIndexDrop } from './scanIndexDrop';
 import { createScanWorkerScope } from './ScanWorkerFactory';
@@ -53,13 +71,6 @@ import { createScanWorkerScope } from './ScanWorkerFactory';
  */
 const RETRY_ARM_DELAY_MS = SCAN_ALARM_DELAY_MS;
 
-interface EnrichFactsInput {
-  readonly id: string;
-  readonly path: string;
-  readonly size: number;
-  readonly mtimeMs: number;
-}
-
 class ScanWorker extends DurableObject<Cloudflare.Env> {
   private readonly pause: ScanPauseStore;
 
@@ -70,11 +81,6 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
 
   private scope(): ReturnType<typeof createScanWorkerScope> {
     return createScanWorkerScope(this.env);
-  }
-
-  private async libraryFor(libraryId: string): Promise<LibraryRow | null> {
-    const libraries = await this.libraries();
-    return libraries.find((candidate) => candidate.id === libraryId) ?? null;
   }
 
   /**
@@ -303,79 +309,7 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
     const current = await this.ctx.storage.get<string>('libraryId');
     if (current !== libraryId) await this.ctx.storage.put('libraryId', libraryId);
   }
-
-  /**
-   * Enrich one track by id: the `getSong` hot path, run in the DO isolate so
-   * the prefix/tail range reads and the container parse do not spend the
-   * fetch isolate's subrequest budget or CPU.
-   */
-  public async enrichSong(libraryId: string, songId: string): Promise<SongRow | null> {
-    const library = await this.libraryFor(libraryId);
-    if (library === null) throw new Error(`Unknown library "${libraryId}".`);
-    const scope = this.scope();
-    const songs = await scope.get(Tokens.SongDAO)();
-    const song = await songs.findById(songId);
-    if (!song) return null;
-    await scope.get(Tokens.EnrichmentService).enrich(library, song);
-    return (await songs.findById(songId)) ?? song;
-  }
-
-  /**
-   * Enrich from file facts without a row in hand. The scan calls this path
-   * in-process already; this RPC exists for callers outside the DO that hold
-   * facts rather than rows.
-   *
-   * Projects the outcome to its tags rather than carrying it over the wire: an RPC whose
-   * reason to exist is "enrich this track" has no caller that needs the row count, and the
-   * scan — the one caller that does — reaches `EnrichmentService` in-process through the
-   * composition root, where `rowsWritten` is preserved. A second shape for the same
-   * operation across a boundary that only one caller uses is a second answer waiting for a
-   * second caller.
-   */
-  public async enrichFacts(libraryId: string, facts: EnrichFactsInput): Promise<AudioTags | null> {
-    const library = await this.libraryFor(libraryId);
-    if (library === null) throw new Error(`Unknown library "${libraryId}".`);
-    const scope = this.scope();
-    return (await scope.get(Tokens.EnrichmentService).enrichFacts(library, facts)).tags;
-  }
-
-  /**
-   * Artwork for an album directory: the `getCoverArt` hot path, run in the DO
-   * isolate so the up-to-two ranged reads per probed track and the picture
-   * parse do not spend the fetch isolate's budget.
-   */
-  public async coverArt(
-    libraryId: string,
-    dirPath: string,
-    candidates: readonly ArtSource[],
-    timeoutMs: number,
-  ): Promise<ResolvedArt | null> {
-    const library = await this.libraryFor(libraryId);
-    if (library === null) throw new Error(`Unknown library "${libraryId}".`);
-    const scope = this.scope();
-    return await embeddedAlbumArt(
-      library,
-      dirPath,
-      candidates,
-      {
-        clientFor: (row) => scope.get(Tokens.LibraryService).clientFor(row),
-        cache: scope.get(Tokens.KvCache),
-      },
-      timeoutMs,
-    );
-  }
-
-  public override async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname === '/status' && request.method === 'GET') {
-      const libraryId = url.searchParams.get('libraryId');
-      if (!libraryId) return new Response('Missing libraryId', { status: 400 });
-      return Response.json(await this.getStatus(libraryId));
-    }
-    return new Response('Not Found', { status: 404 });
-  }
 }
 
-export { ScanWorker,  };
-export type { EnrichFactsInput };
-export {SCAN_ALARM_DELAY_MS} from './scanPause';
+export { ScanWorker };
+export { SCAN_ALARM_DELAY_MS } from './scanPause';

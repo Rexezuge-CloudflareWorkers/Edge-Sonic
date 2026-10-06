@@ -193,9 +193,11 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
  * "one per song the client actually opens" rather than "one per indexed track" —
  * which is the only way it fits under the subrequest limit.
  *
- * With the `SCAN` binding the parse runs in the library's DO isolate
- * (`ScanWorker.enrichSong`); without it the direct service runs in-fetch, which
- * is the path the suite exercises.
+ * With the `MEDIA_DO` binding the parse runs in the library's own media object
+ * (`MediaWorker.enrichSong`); without it the direct service runs in-fetch, which
+ * is the path the suite exercises. It is deliberately **not** the scan's object:
+ * one event at a time per object, and a chunk walking the origin would sit on
+ * this request's critical path.
  */
 async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   const id = requireMediaId(context, 'Song');
@@ -206,7 +208,10 @@ async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   let song = await context.songs.findById(id);
   if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
 
-  const stub = context.scanStubFor(library.id);
+  // Through the **media** object, not the scan's. A Durable Object handles one event at a
+  // time, so resolving the scan stub here would put this request behind whatever chunk that
+  // library's scan happened to be running — up to `SCAN_CHUNK_DEADLINE_MS` of a client's wait.
+  const stub = context.mediaStubFor(library.id);
   if (stub) {
     const updated = await stub.enrichSong(library.id, id);
     if (updated) song = updated;

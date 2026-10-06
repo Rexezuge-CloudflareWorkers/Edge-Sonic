@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { LibraryImportWorkflow, PlayCountImportWorker, ScanWorker } from '@edge-sonic/background';
+import { LibraryImportWorkflow, MediaWorker, PlayCountImportWorker, ScanWorker } from '@edge-sonic/background';
 import { deriveFromPath } from '@edge-sonic/backend-data/dao';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { executeD1WithRetry } from '@edge-sonic/backend-data/utils';
@@ -80,6 +80,10 @@ describe('the shared alias table', () => {
       // else — so the import that must work is the one they did *not* know they were making.
       'background/LibraryImportWorkflow': LibraryImportWorkflow,
       'background/PlayCountImportWorker': PlayCountImportWorker,
+      // Resolved for the same reason as the two above: `apps/api/src/index.ts` re-exports
+      // `MediaWorker` so the `MEDIA_DO` binding resolves, and an unresolvable class there is a
+      // **startup** error in whichever job runs the worker first.
+      'background/MediaWorker': MediaWorker,
     })) {
       expect(value, `${name} must resolve`).toBeDefined();
     }
