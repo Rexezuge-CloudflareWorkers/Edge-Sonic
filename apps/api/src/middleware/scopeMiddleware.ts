@@ -5,6 +5,7 @@ import type { SubrequestMeter } from '@edge-sonic/shared';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
+import { resolveScanDriver } from '../workers/scanDriver';
 
 type ScopeContext = UserContext;
 
@@ -27,12 +28,29 @@ type ScopeContext = UserContext;
  * closed over at construction: the scope holding it does not exist yet on the line above.
  * Reading it per call is also what keeps a fallback scope from handing this a budget of its
  * own — the same argument `meterOf` makes in `user/routes.ts`.
+ *
+ * ### The `ScanDriver` is resolved **here**, once, for the same reason
+ *
+ * Because "is a Durable Object carrying this scan?" is a property of the deployment and was
+ * being asked at seven sites — two of which disagreed about what the same question meant. This is
+ * the one place both halves are visible, so it is the one place the answer is decided.
+ *
+ * It is passed rather than left to `createRequestScope`'s default because the default is the
+ * **in-process** strategy, which is right for a scope with no binding and wrong for this one: the
+ * default is chosen by Layer 3, which cannot see whether a binding exists.
  */
 async function scopeMiddleware(c: ScopeContext, next: Next): Promise<Response | void> {
   const meterOf = (): SubrequestMeter => BaseRoute.getScope(c).get(Tokens.SubrequestMeter);
   setRequestScope(
     asScopedContext(c),
-    createRequestScope(c.env, (libraryId) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId, meterOf()) : null)),
+    createRequestScope(
+      c.env,
+      (libraryId) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId, meterOf()) : null),
+      // Built here, because this is the one place both halves are visible. The `ScanService` is a
+      // thunk read out of the scope being constructed, so the driver and the scope cannot end up on
+      // different graphs — and two graphs would mean two `SubrequestCounter`s.
+      resolveScanDriver(c.env, () => BaseRoute.getScope(c).get(Tokens.ScanService), meterOf()),
+    ),
   );
   await next();
 }

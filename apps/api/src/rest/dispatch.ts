@@ -25,7 +25,7 @@ import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
 import { albumIdentity } from './albumIdentity';
-import { getScanStub, getMediaStub, hasScanBinding, hasMediaBinding } from '../workers/scanStubs';
+import { getMediaStub, hasMediaBinding } from '../workers/scanStubs';
 import { ENDPOINTS } from './endpoints';
 import { openSubsonicExtensionsPayload } from './endpoints/system';
 import type { RestHandler } from './endpoints';
@@ -220,13 +220,15 @@ async function buildContext(
     clientIp: clientIpOf(c.req.raw),
     libraries: scope.get(Tokens.LibraryService),
     tree: scope.get(Tokens.TreeService),
-    scan: scope.get(Tokens.ScanService),
+    // The scan driver is resolved **once**, from the scope — not per handler asking whether a
+    // Durable Object exists, which is a question about the deployment that seven call sites were
+    // each answering, two of them differently. Charged through the scope's own counter, so the DO
+    // RPC is inside the same 50 as the D1 statements and the WebDAV reads this same request makes.
+    scan: scope.get(Tokens.ScanDriver),
     enrichment: scope.get(Tokens.EnrichmentService),
-    // Charged through the scope's own counter, so the DO RPC is inside the same 50 as the D1
-    // statements and the WebDAV reads this same request makes. Two resolvers rather than one:
-    // the objects are two objects, and resolving them apart is what keeps a scan chunk off the
-    // critical path of `getSong` and `getCoverArt`.
-    scanStubFor: (libraryId: string) => (hasScanBinding(c.env) ? getScanStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null),
+    // The media object is resolved separately and deliberately: a Durable Object handles one event
+    // at a time, so routing this through the scan's object would put a chunk walking the origin on
+    // the critical path of `getSong` and `getCoverArt`.
     mediaStubFor: (libraryId: string) => (hasMediaBinding(c.env) ? getMediaStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null),
     songs: await scope.get(Tokens.SongDAO)(),
     songIndex: await scope.get(Tokens.SongIndexDAO)(),

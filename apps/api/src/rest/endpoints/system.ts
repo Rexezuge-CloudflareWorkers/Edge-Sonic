@@ -67,13 +67,18 @@ async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> 
 }
 
 /**
- * `getScanStatus` — read-only when the scan worker is bound, advancing otherwise.
+ * `getScanStatus` — read-only when the scan is on an object, advancing otherwise.
  *
- * With the `SCAN` binding the DO alarm advances the scan, so this is a passive
- * read (`getStatus`): polling never does work, and a client that backs off
- * keeps observing progress instead of stopping it. Without the binding (tests,
- * local dev) it advances one chunk (`step`), which is the legacy client-driven
- * path the suite exercises directly.
+ * With the `SCAN` binding the object's alarm advances the scan, so this is a passive read and
+ * polling never does work — a client that backs off keeps observing progress instead of stopping
+ * it. Without the binding (tests, local dev) there is nothing advancing the scan except a poll,
+ * so it does a chunk: the legacy client-driven path.
+ *
+ * Those are two different behaviours behind one protocol element, so they are two **named
+ * methods** on `ScanDriver` (`pollStatus` and `readState`) rather than a ternary at this call
+ * site. They used to be a ternary, and so was the *same* question on the operator surface with
+ * the opposite answer — `GET /user/libraries/:id/scan` read where this one advanced — which is a
+ * disagreement between two sites that both compiled and both returned a `ChunkResult`.
  *
  * ### A poll that returns is a poll that succeeded
  *
@@ -111,8 +116,7 @@ async function getMusicFolders(context: RestContext): Promise<EnvelopeResponse> 
 async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
-  const stub = context.scanStubFor(library.id);
-  const result = stub ? await stub.getStatus(library.id) : await context.scan.step(library);
+  const result = await context.scan.pollStatus(library);
   const count = await context.songs.countByLibrary(library.id);
   return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count }));
 }
@@ -134,8 +138,7 @@ async function getScanStatus(context: RestContext): Promise<EnvelopeResponse> {
 async function startScan(context: RestContext): Promise<EnvelopeResponse> {
   const library = await resolveSingleLibrary(context);
   if (library === null) return respond(context, scanStatusElement({ scanning: false, count: 0 }));
-  const stub = context.scanStubFor(library.id);
-  const result = stub ? await stub.startScan(library.id) : await context.scan.start(library);
+  const result = await context.scan.start(library);
   return respond(context, scanStatusElement({ scanning: isAdvancing(result.status), count: result.scanned }));
 }
 

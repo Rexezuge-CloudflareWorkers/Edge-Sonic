@@ -12,28 +12,41 @@ import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import { AnnotationDAO, AuthThrottleDAO, ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, NodeDAO, PlayCountDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, SongMatchDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
-import type { LibraryRow, LibraryScope } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
 import type { ScanControl } from '../library/IndexDropService';
-import { matchRemoteAlbums, matchRemoteArtists, resolveGrouping } from '../import/albumIdentity';
-import { ImportSourceService } from '../import/sourceService';
+import type { ScanDriver } from '../library/ScanDriver';
 import { ScanService } from '../index/ScanService';
 import { TreeService } from '../index/TreeService';
 import { EnrichmentService } from '../index/EnrichmentService';
 import { resolveKey } from './serviceFactory';
 import type { RequestScopeEnv } from './serviceFactory';
+import { bindImport } from './bindImport';
 import { bindIndexDrop } from './bindIndexDrop';
+import { bindScanDriver } from './bindScanDriver';
 import { Tokens } from './tokens';
 
 /**
+ * The composition root's one scope per invocation.
+ *
  * @param scanFor Resolves the scan Durable Object for one library, or `null` when there is
  *   none. See the `IndexDropService` binding below for why this is a parameter and why it is
  *   optional. Typed loosely on purpose — the interface this must satisfy is declared by the
  *   service, and re-declaring it here would be a second definition that could disagree.
+ *
+ * @param scanDriver How this deployment advances an index. Supplied by the app for the same
+ *   reason as `scanFor` — both need a Durable Object namespace stub, which Layer 3 cannot see.
+ *   Both are optional and both **degrade rather than throw**: a scope with no binding is the
+ *   ordinary state in tests, in local dev and in every background class, so "no object" has to
+ *   mean *client-driven* rather than an error.
  */
-function createRequestScope(env: RequestScopeEnv, scanFor?: (libraryId: string) => ScanControl | null): Container {
+function createRequestScope(
+  env: RequestScopeEnv,
+  scanFor?: (libraryId: string) => ScanControl | null,
+  scanDriver?: ScanDriver,
+): Container {
   const scope = new Container();
   const config = AppConfiguration.fromEnv(env);
 
@@ -328,49 +341,8 @@ function createRequestScope(env: RequestScopeEnv, scanFor?: (libraryId: string) 
   // binding off `env` — the one place that binding is visible at Layer 3.
   scope.bindValue(Tokens.AccessAuthService, new AccessAuthService(env, config));
 
-  /**
-   * The two album/artist matchers, bound once and shared by every caller.
-   *
-   * They live here rather than in the import feature because they are a function of the
-   * **grouping configuration** — `ALBUM_GROUP_BY` decides which key an album has — and the
-   * configuration is read once per scope. A matcher built per call site would be free to read
-   * a different grouping from the id that `getAlbum` mints, and a star on an album id nothing
-   * resolves is invisible to every client.
-   *
-   * `libraryId` is threaded through rather than read from a scope-level field because an import
-   * resolves against **one** library: the song phase runs once per library so a song id can
-   * never be matched against the wrong grant, and the album and artist phases follow it.
-   */
-  /**
-   * The remote-instance service, and the one place a stored Subsonic password becomes a client.
-   *
-   * `onRequest` charges the **same** meter the DAOs write to, passed as a function rather than
-   * the counter itself — so this module holds no counter of its own. Two counters would be two
-   * numbers that disagree, which is the defect the whole budget mechanism was rebuilt to remove.
-   *
-   * `allowPrivateHosts` is the *same expression* `LibraryService` is built with, deliberately
-   * rather than by extraction: a WebDAV library and a remote Subsonic server are different
-   * things that happen to share one operator-supplied-host policy, and two copies of the policy
-   * would be two answers to whether a private origin may be used.
-   */
-  const importAllowPrivateHosts = (): boolean => config.getAllowPrivateWebdavHosts() ?? config.isBypassAllowed();
-  scope.bindValue(
-    Tokens.ImportSourceService,
-    new ImportSourceService({
-      sources: () => scope.get(Tokens.ImportSourceDAO)().then(async (dao) => await dao),
-      resolveKey: scope.get(Tokens.RemoteKey),
-      allowPrivateHosts: importAllowPrivateHosts,
-      onRequest: () => subrequests.charge(1, 'fetch'),
-    }),
-  );
-
-  const albumGrouping = resolveGrouping(config.getAlbumGroupBy());
-  scope.bindValue(Tokens.MatchRemoteAlbums, async (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
-    await matchRemoteAlbums(await scope.get(Tokens.SongMatchDAO)(), libraryId, albumGrouping, albums),
-  );
-  scope.bindValue(Tokens.MatchRemoteArtists, async (libraryId: LibraryScope, artists: ReadonlyArray<{ id: string; name: string | null }>) =>
-    await matchRemoteArtists(await scope.get(Tokens.SongMatchDAO)(), libraryId, artists),
-  );
+  // The import feature's wiring, with its reasoning beside the code it is about. See `bindImport.ts`.
+bindImport(scope, config, subrequests);
 
   scope.bindValue(
     Tokens.SubsonicAuthService,
@@ -389,6 +361,9 @@ function createRequestScope(env: RequestScopeEnv, scanFor?: (libraryId: string) 
       windowSeconds: config.getAuthFailureWindowSeconds(),
     }),
   );
+
+  // Last, and in its own module because it depends on everything above it. See `bindScanDriver.ts`.
+bindScanDriver(scope, scanDriver);
 
   return scope;
 }
