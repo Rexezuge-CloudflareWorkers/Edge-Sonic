@@ -39,7 +39,7 @@
  * fail differently: a key is derived from a row this server read, and never parsed out of anything
  * untrusted, while a payload here is a string a client sent.
  */
-import { decodeId, encodeId, IdKind } from './ids';
+import { decodeId, encodeId, IdKind, SPANNING_LIBRARY_ID } from './ids';
 import { albumKeySpec } from './albumKey';
 import type { AlbumGroupingValue, AlbumKeyRow } from './albumKey';
 
@@ -78,7 +78,10 @@ function decodeSegment(segment: string): string | null {
  */
 function albumIdOf(row: AlbumKeyRow, libraryId: string, grouping: AlbumGroupingValue): string | undefined {
   if (grouping !== 'folder' && (row.album_ci === null || row.album_ci === '')) return undefined;
-  return encodeAlbumKey(libraryId, albumKeySpec(row, grouping).string);
+  // `folder` keeps the real library: an album under that grouping **is** a directory, and a
+  // directory is per-source by nature, so unioning it would merge two unrelated trees. The
+  // tag groupings name a release, and a release is what two libraries can share.
+  return encodeAlbumKey(grouping === 'folder' ? libraryId : SPANNING_LIBRARY_ID, albumKeySpec(row, grouping).string);
 }
 
 /**
@@ -87,6 +90,23 @@ function albumIdOf(row: AlbumKeyRow, libraryId: string, grouping: AlbumGroupingV
  * A **new kind** for the tag groupings and the original kind for `folder` — see the module header
  * for why both, and why the folder form is byte-identical to what this server used to mint.
  */
+/**
+ * An artist's protocol id, minted the same way from every publisher.
+ *
+ * Here beside {@link albumIdOf} because it is **the same decision**: an artist is a group, and
+ * a group is not owned by one library. `Silent Siren` with an album in each of two libraries is
+ * one artist, and an id carrying one library's identity would publish them as two — so a
+ * client browsing the union would see each artist's discography split, and could not open the
+ * other half from the id it was given.
+ *
+ * Five call sites minted this inline before, each passing a `library.id` that is now
+ * deliberately unused. One function, because an id minted two ways is two ids for one artist
+ * and nothing in the response says which is stale.
+ */
+function artistIdOf(name: string): string {
+  return encodeId(IdKind.Artist, SPANNING_LIBRARY_ID, name);
+}
+
 function encodeAlbumKey(libraryId: string, key: string): string {
   const separator = key.indexOf(':');
   const tag = separator === -1 ? '' : key.slice(0, separator);
@@ -172,6 +192,6 @@ async function resolveAlbumId(
   return rows.length === 0 ? null : albumKeySpec(rows[0], grouping).string;
 }
 
-export { albumIdOf, encodeAlbumKey, decodeAlbumKey, resolveAlbumId };
+export { albumIdOf, artistIdOf, encodeAlbumKey, decodeAlbumKey, resolveAlbumId };
 
-export {type AlbumKeySpec} from './albumKey';
+export { type AlbumKeySpec } from './albumKey';

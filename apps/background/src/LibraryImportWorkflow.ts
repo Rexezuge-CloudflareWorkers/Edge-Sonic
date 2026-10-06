@@ -94,7 +94,12 @@ interface ImportWorkflowPayload {
   readonly runId: string;
   readonly sourceId: string;
   readonly userId: string;
-  readonly libraryId: string;
+  /**
+   * Every library the target user was granted, so one lookup resolves a foreign id against all
+   * of them. A list rather than an id because narrowing it to the first is how a track in the
+   * second library came to be reported `not-found` — see `importRoutes.ts`.
+   */
+  readonly libraryIds: readonly string[];
   readonly phases: readonly ImportPhase[];
   /**
   The remote's playlist ids, so the workflow does not re-list just to learn its step names.
@@ -136,8 +141,8 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
   }
 
   private async onWorkflow(event: Readonly<WorkflowEvent<ImportWorkflowPayload>>, step: WorkflowStep): Promise<void> {
-    const { runId, sourceId, userId, libraryId, phases, playlistIds } = event.payload;
-    const context = { runId, sourceId, userId, libraryId };
+    const { runId, sourceId, userId, libraryIds, phases, playlistIds } = event.payload;
+    const context = { runId, sourceId, userId, libraryIds };
 
     if (phases.includes('playlists')) {
       for (const remotePlaylistId of playlistIds) {
@@ -221,7 +226,7 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
    * and a Workflow instance hibernates between steps. A field would carry that password through
    * storage the platform does not encrypt for us.
    */
-  private async phaseContext(context: { runId: string; sourceId: string; userId: string; libraryId: string }): Promise<PhaseContext> {
+  private async phaseContext(context: { runId: string; sourceId: string; userId: string; libraryIds: readonly string[] }): Promise<PhaseContext> {
     const scope = createScanWorkerScope(this.env);
     // The **same** service the route used to list the remote's playlists, for the same row and
     // therefore the same key. Two readers of one stored credential is two implementations of
@@ -243,7 +248,7 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
     return {
       runId: context.runId,
       userId: context.userId,
-      libraryId: context.libraryId,
+      libraryId: context.libraryIds,
       store: importPhaseStore(scope, context.userId),
       // No cast: the client satisfies the phase's reader port structurally, and the cast that used
       // to be here was a hole in the compiler where a divergence would have gone unread.

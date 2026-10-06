@@ -44,6 +44,7 @@ import {
   PlayCountDAO,
 } from '@edge-sonic/backend-data/dao';
 import { ImportSourceService } from '@edge-sonic/backend-services/import';
+import { AUDIO_SUFFIXES } from '@edge-sonic/backend-services/index';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import { NotFoundError, SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import {
@@ -559,7 +560,7 @@ describe('the billed-row model is the schema, not a number typed beside a query'
     expect(seeded.billedRows).not.toBe(MAX_BILLED_ROWS_PER_ROW);
   });
 
-  it('bills a subtree prune as the table it deletes from, not the schema\'s worst case', async () => {
+  it("bills a subtree prune as the table it deletes from, not the schema's worst case", async () => {
     // The second `nodes` write, and the one that caught the `TrackedStatement` regression when
     // this was written: `BaseDAO.prepare` handing the pair a lost SQL turns every assertion
     // about `songs` green and this one red, which is the whole argument for having a table
@@ -734,7 +735,11 @@ describe('schema', () => {
     // omits them, so the drops that used to clean them up are gone too. Asserting
     // their absence still matters — it is what would catch a future squash or a
     // hand-written migration reintroducing them.
-    const tables = (handle.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map((row) => row.name);
+    const tables = (
+      handle.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name);
 
     expect(tables).not.toContain('router_backends');
     expect(tables).not.toContain('namespaces');
@@ -1106,7 +1111,11 @@ describe('cascades', () => {
     expect(await nodes.countByLibrary(libraryId)).toBe(0);
     expect(await songs.countByLibrary(libraryId)).toBe(0);
     expect(await scanState.find(libraryId)).toBeNull();
-    expect((await handle.db.prepare('SELECT COUNT(*) AS cnt FROM user_libraries WHERE library_id = ?').bind(libraryId).first()) as { cnt: number }).toEqual({
+    expect(
+      (await handle.db.prepare('SELECT COUNT(*) AS cnt FROM user_libraries WHERE library_id = ?').bind(libraryId).first()) as {
+        cnt: number;
+      },
+    ).toEqual({
       cnt: 0,
     });
     // The parent survives, which is the whole point of never rebuilding it.
@@ -1145,10 +1154,18 @@ describe('every hot lookup uses an index', () => {
     ['prefix search', String.raw`SELECT * FROM songs WHERE library_id = ? AND title_ci LIKE ? ESCAPE '\'`, ['L', 'ab%']],
     ['starred items', 'SELECT item_id FROM stars WHERE user_id = ? AND item_type = ? ORDER BY starred_at DESC', ['u', 'song']],
     ['play counts', 'SELECT song_id, play_count FROM play_counts WHERE user_id = ?', ['u']],
-    ['auth failures in window', 'SELECT COALESCE(SUM(failures), 0) AS cnt FROM auth_failures WHERE identity = ? AND bucket >= ? AND bucket <= ?', ['x', 1, 2]],
+    [
+      'auth failures in window',
+      'SELECT COALESCE(SUM(failures), 0) AS cnt FROM auth_failures WHERE identity = ? AND bucket >= ? AND bucket <= ?',
+      ['x', 1, 2],
+    ],
     ['scan frontier', 'SELECT * FROM nodes WHERE library_id = ? AND is_scanned = 0 ORDER BY depth ASC, path ASC LIMIT ?', ['L', 40]],
     ['play queue', 'SELECT song_id FROM play_queue_entries WHERE user_id = ? ORDER BY position ASC', ['u']],
-    ['granted libraries', 'SELECT l.id AS id FROM libraries l INNER JOIN user_libraries ul ON ul.library_id = l.id WHERE ul.user_id = ? ORDER BY l.slug_ci ASC', ['u']],
+    [
+      'granted libraries',
+      'SELECT l.id AS id FROM libraries l INNER JOIN user_libraries ul ON ul.library_id = l.id WHERE ul.user_id = ? ORDER BY l.slug_ci ASC',
+      ['u'],
+    ],
   ];
 
   for (const [label, sql, args] of PLANS) {
@@ -1165,9 +1182,13 @@ describe('every hot lookup uses an index', () => {
     // One row per user, so the scan is bounded by the user count, and the query needs
     // every row anyway to compute `minutes_ago`. An index here would cost more than it
     // saves and would need maintaining on every scrobble.
-    expect(queryPlan(handle, 'SELECT username, CAST((? - updated_at) / 60 AS INTEGER) AS minutes_ago FROM now_playing ORDER BY updated_at DESC', [0])).toContain(
-      'SCAN now_playing',
-    );
+    expect(
+      queryPlan(
+        handle,
+        'SELECT username, CAST((? - updated_at) / 60 AS INTEGER) AS minutes_ago FROM now_playing ORDER BY updated_at DESC',
+        [0],
+      ),
+    ).toContain('SCAN now_playing');
   });
 
   it('scans the library for an infix search, which is the documented limit', () => {
@@ -1202,7 +1223,11 @@ describe('every hot lookup uses an index', () => {
     // existing `(library_id, album_ci)` cannot serve `derived_version < ?`, and once a
     // library is caught up every row sits at the current version, so the predicate is a
     // range over a column nothing else filters by.
-    const plan = queryPlan(handle, 'SELECT id, dir_path FROM songs WHERE library_id = ? AND derived_version < ? ORDER BY id LIMIT ?', ['L', 1, 200]);
+    const plan = queryPlan(handle, 'SELECT id, dir_path FROM songs WHERE library_id = ? AND derived_version < ? ORDER BY id LIMIT ?', [
+      'L',
+      1,
+      200,
+    ]);
     expect(plan).toMatch(/SEARCH songs USING (?:COVERING )?INDEX idx_songs_derived/);
     expect(plan).not.toMatch(/SCAN songs/);
   });
@@ -1251,7 +1276,7 @@ describe('the derived title', () => {
     // The non-breaking space. Seven files carried U+00A0 where every tag and every remote
     // publishes an ordinary space: the same glyph, invisible to a user and unmatched by
     // every query. `Guil-me N'o sinruits` is one of them.
-    ['02-02 - Guil-me\u00A0N\'o\u00A0sinruits\u00A0(-\u706B-).opus', "Guil-me N'o sinruits (-火-)"],
+    ["02-02 - Guil-me\u00A0N'o\u00A0sinruits\u00A0(-\u706B-).opus", "Guil-me N'o sinruits (-火-)"],
     ['19 - EmA\u00A0(-\u5E38-).opus', 'EmA (-常-)'],
     // No prefix at all — the title is the whole stem, and a number-only title keeps it.
     ['Kerala.opus', 'Kerala'],
@@ -1310,15 +1335,43 @@ describe('the derived title', () => {
   });
 
   it('strips the suffix only when it is one this server indexes', () => {
-    // The transcribed `AUDIO_SUFFIXES`, pinned against the literals `libraryNames.ts` holds.
-    // Two copies of one vocabulary is a divergence waiting to happen, and the cost of a
-    // missing entry is a title **with its extension on it** — which reads as a bug in the
-    // client rather than in the server. Asserted as a list so an addition to either side
-    // fails here instead of shipping.
-    const indexed = ['mp3', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'mp4', 'aac', 'wav', 'wma', 'aiff', 'aif', 'ape', 'wv', 'mpc', 'dsf', 'dff', 'alac'];
-    for (const suffix of indexed) {
-      expect(deriveTitleFromFileName(`01 - Kerala.${suffix}`)).toBe('Kerala');
+    // The transcribed `AUDIO_SUFFIXES`, **read from the one that decides which files are
+    // indexed** rather than written out a third time. The copy in `pathConvention.ts` is
+    // forced by layering — `backend-data` is layer 0 and `libraryNames.ts` is layer 3 above
+    // it — and a copy pinned against a *transcription of the copy* pins nothing: adding a
+    // container to `AUDIO_SUFFIXES` failed every assertion here while the derived title kept
+    // that container's extension. This suite already imports `@edge-sonic/backend-services`,
+    // so the real set is in reach and the claim this comment used to make is now measured.
+    expect(deriveTitleFromFileName).toBeTypeOf('function');
+    for (const suffix of AUDIO_SUFFIXES) {
+      expect(deriveTitleFromFileName(`01 - Kerala.${suffix}`), suffix).toBe('Kerala');
     }
+    // And the two sets are asserted equal, so the copy cannot drift without this failing.
+    // Without it, a suffix added to `AUDIO_SUFFIXES` alone is invisible here — the assertion
+    // above iterates the same list the copy would have to match, and iterating one set
+    // cannot detect that another is larger.
+    expect([...AUDIO_SUFFIXES].sort()).toEqual(
+      [
+        'mp3',
+        'flac',
+        'ogg',
+        'oga',
+        'opus',
+        'm4a',
+        'mp4',
+        'aac',
+        'wav',
+        'wma',
+        'aiff',
+        'aif',
+        'ape',
+        'wv',
+        'mpc',
+        'dsf',
+        'dff',
+        'alac',
+      ].sort(),
+    );
     // And a dot that is **not** one of them is part of the title.
     expect(deriveTitleFromFileName('Mr. Lonely')).toBe('Mr. Lonely');
     expect(deriveTitleFromFileName('Part 1.5')).toBe('Part 1.5');
@@ -1371,7 +1424,12 @@ describe('path-derived grouping', () => {
     expect(row?.album_artist_ci).toBe(`bonobo${DERIVED_MARKER.toLowerCase()}`);
 
     // And the aggregate that filters on those columns now answers.
-    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
+    const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, {
+      grouping: ALBUM_GROUPING,
+      limit: 10,
+      offset: 0,
+      orderBy: MIN_ALBUM_CI,
+    });
     expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
     const artists = await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0);
     expect(artists.map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
@@ -1395,7 +1453,9 @@ describe('path-derived grouping', () => {
     const libraryId = await seedLibrary(userId, 'LDD');
     await indexSong(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus');
 
-    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(songId(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus'));
+    const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(
+      songId(libraryId, 'Mahler - Symphony No. 5 - 1949 Recording/01 I.opus'),
+    );
     expect(row?.album).toBe(`Symphony No. 5 - 1949 Recording${DERIVED_MARKER}`);
     expect(row?.artist).toBe(`Mahler${DERIVED_MARKER}`);
   });
@@ -1416,7 +1476,17 @@ describe('path-derived grouping', () => {
 
     // Re-index the same file with a changed mtime, which is what a rescan does.
     await songs.upsertFileFacts([
-      { id, libraryId, path, dirPath: 'Bonobo/Black Sands', name: '01 - Kerala.opus', size: 2000, mtimeMs: 2000, contentType: 'audio/ogg', suffix: 'ogg' },
+      {
+        id,
+        libraryId,
+        path,
+        dirPath: 'Bonobo/Black Sands',
+        name: '01 - Kerala.opus',
+        size: 2000,
+        mtimeMs: 2000,
+        contentType: 'audio/ogg',
+        suffix: 'ogg',
+      },
     ]);
 
     const row = await songs.findById(id);
@@ -1536,7 +1606,9 @@ describe('path-derived grouping', () => {
       await seedUngrouped(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
 
       // Before: absent from the aggregate, not shown with a blank name.
-      expect(await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI })).toEqual([]);
+      expect(
+        await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI }),
+      ).toEqual([]);
 
       await drain(libraryId);
 
@@ -1555,9 +1627,16 @@ describe('path-derived grouping', () => {
       expect(row?.title_ci).toBe('kerala');
 
       // The aggregate answers. This is the assertion the whole change exists for.
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, {
+        grouping: ALBUM_GROUPING,
+        limit: 10,
+        offset: 0,
+        orderBy: MIN_ALBUM_CI,
+      });
       expect(albums.map((song) => song.album)).toEqual([`Black Sands${DERIVED_MARKER}`]);
-      expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual([`Bonobo${DERIVED_MARKER}`]);
+      expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual([
+        `Bonobo${DERIVED_MARKER}`,
+      ]);
     });
 
     it('splits a flat "Artist - Album" row, which is the layout this deployment uses', async () => {
@@ -1581,10 +1660,10 @@ describe('path-derived grouping', () => {
       const userId = await seedUser('BackfillNoClobber');
       const libraryId = await seedLibrary(userId, 'LDNC');
       const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
-      // `title` is seeded as a **tag** here, not as a guess, which is what makes it the
-      // paired case for the one above: the title is now derived too, so a tag's title has
-      // real provenance to clear, and leaving `title` out of `GROUPING_FIELDS` would let a
-      // tag's title keep `grouping_source = 'derived'` and be overwritten by the next bump.
+      // `title` is seeded as a **tag** here, and it is the paired case for the one above. This
+      // row seeds `grouping_source` at its `DEFAULT`, i.e. NULL, because that is what
+      // `applyMetadata` leaves behind when a tag supplied *every* grouping column — so it is
+      // the row the guarded `title` handled correctly, and the row below is the one it did not.
       await handle.raw
         .prepare(
           `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
@@ -1608,11 +1687,83 @@ describe('path-derived grouping', () => {
       expect(row?.album_ci).toBe('black sands (remastered)');
       expect(row?.artist_ci).toBe('bonobo');
       // And the title, which is the one the filename would otherwise have overwritten. The
-      // filename says `01 - Kerala.opus`, so a derived title is `Kerala` — and it holds.
+      // filename says `01 - Kerala.opus`, so a derived title is `Kerala` — and it holds,
+      // because `title_source` is NULL here and NULL means "a tag wrote this".
       expect(row?.title).toBe('Kerala (Live)');
       expect(row?.title_ci).toBe('kerala (live)');
       // And it is stamped, so a later version bump does not even reconsider it.
       expect(row?.derived_version).toBe(DERIVED_VERSION);
+    });
+
+    it('never overwrites a real tag title on a row the flag calls derived, which is the shape no migration can tell apart', async () => {
+      // The defect the guarded `title` shipped. `title` joined `GROUPING_FIELDS`, which
+      // widened `'derived'` from three columns to four — and every row stamped under the old
+      // definition is then read under the new one. A file whose tags carry a `TITLE` and no
+      // `ARTIST`/`ALBUM`/`ALBUMARTIST` was enriched by a build that cleared the flag only for
+      // the three, so it holds a **real tag title** *and* `grouping_source = 'derived'`.
+      //
+      // A tagless-but-enriched file holds a **derived** title and `'derived'` too, so no
+      // statement can repair the first selectively — which is why the fix is that `title` is
+      // fill-once rather than a migration. Seeded exactly as such a row looks: the grouping
+      // still says `'derived'`, and `enriched_at` is set, so the file is never re-read.
+      const userId = await seedUser('BackfillTaggedTitle');
+      const libraryId = await seedLibrary(userId, 'LDTT');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+      await handle.raw
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                              duration, bitrate, title, title_ci, artist, artist_ci, album, album_ci, album_artist, album_artist_ci,
+                              enriched_at, grouping_source, created_at, updated_at)
+           VALUES (?, ?, ?, 'Bonobo/Black Sands', '01 - Kerala.opus', '01 - kerala.opus', 1000, 1000, 'audio/ogg', 'opus',
+                   0, 0, 'Kerala (Live)', 'kerala (live)',
+                   'Bonobo', 'bonobo', 'Black Sands', 'black sands',
+                   'Bonobo', 'bonobo', 1700000000, 'derived', 0, 0)`,
+        )
+        .run(id, libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+
+      // The precondition, asserted rather than assumed: the row presents as "derived, with a
+      // title", which is the state a `grouping_source`-guarded title misreads. The grouping
+      // holds the **path-derived** names, because `'derived'` says so, and the title holds a
+      // tag — which is the whole asymmetry this file is about.
+      const before = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
+      expect(before?.grouping_source).toBe('derived');
+      expect(before?.title).toBe('Kerala (Live)');
+
+      await drain(libraryId);
+
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
+      // The tag title and its twin survive. The filename would have derived `Kerala`, so an
+      // overwrite here is not a formatting difference — it is a deleted tag, and because
+      // `enriched_at` is set nothing will ever read the file again to restore it.
+      expect(row?.title).toBe('Kerala (Live)');
+      expect(row?.title_ci).toBe('kerala (live)');
+      // The grouping is still corrected: the flag owns those three, and that is what it is for.
+      expect(row?.album).toBe(`Black Sands${DERIVED_MARKER}`);
+      expect(row?.derived_version).toBe(DERIVED_VERSION);
+    });
+
+    it('still fills a NULL title on a derived row, which is the fix the backfill exists for', async () => {
+      // The other direction, and the reason `title` is derived at all: the paired case is only
+      // safe because a row with **no** title is filled. Without this, "never overwrite" would
+      // be satisfiable by never writing, and the 88 unenriched rows of the measured library
+      // would keep `title_ci = NULL` — invisible to `search3` and to every import.
+      const userId = await seedUser('BackfillNullTitle');
+      const libraryId = await seedLibrary(userId, 'LDNT');
+      const id = songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+      await handle.raw
+        .prepare(
+          `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
+                              duration, bitrate, created_at, updated_at, grouping_source)
+           VALUES (?, ?, ?, 'Bonobo/Black Sands', '01 - Kerala.opus', '01 - kerala.opus', 1000, 1000, 'audio/ogg', 'opus',
+                   0, 0, 0, 0, 'derived')`,
+        )
+        .run(id, libraryId, 'Bonobo/Black Sands/01 - Kerala.opus');
+
+      await drain(libraryId);
+
+      const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
+      expect(row?.title).toBe('Kerala');
+      expect(row?.title_ci).toBe('kerala');
     });
 
     it('re-derives what an earlier convention guessed, which is what the version is for', async () => {
@@ -1657,11 +1808,22 @@ describe('path-derived grouping', () => {
       const row = await new SongDAO(handle.db, DERIVED_MARKER).findById(id);
       expect(row?.artist).toBe(`Blur${DERIVED_MARKER}`);
       expect(row?.album).toBe(`Holocene${DERIVED_MARKER}`);
-      // The title is corrected by the same stamp and the same guard, and it is the field the
-      // bump was actually for: version 2 derived no title at all, so the 88 unenriched rows
-      // of the library this was measured on kept `title_ci = NULL` for ever.
-      expect(row?.title).toBe('Holocene');
-      expect(row?.title_ci).toBe('holocene');
+      // The title is **not** corrected, and that is the cost the fill-once rule accepts.
+      //
+      // The grouping above is corrected by the bump because `grouping_source` proves the row
+      // owns those three guesses. Nothing proves the same of a **title**: a file tagged `TITLE`
+      // but not `ARTIST`/`ALBUM`/`ALBUMARTIST` was enriched by a build that cleared the flag
+      // only for the three, so it carries a real tag title *and* `'derived'` — byte-for-byte
+      // the same shape as this row. Guarding the title on the flag would therefore delete a
+      // real tag, for ever, since `enriched_at` is set and the file is never re-read.
+      //
+      // So a wrong derived title is uncorrectable by a bump, and this asserts that rather than
+      // leaving it to be discovered. Correcting it needs a `songs.title_source` column, which
+      // the schema rules forbid: SQLite has no `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
+      // (measured on 3.53.4) and the baseline is locked. `songMetadata.ts` carries the same
+      // argument; a correction is a deliberate decision, not a side effect of a version bump.
+      expect(row?.title).toBe('Wrong Title (derived)');
+      expect(row?.title_ci).toBe('wrong title (derived)');
       expect(row?.derived_version).toBe(DERIVED_VERSION + 1);
     });
 
@@ -1723,7 +1885,10 @@ describe('path-derived grouping', () => {
 
       await drain(libraryId);
 
-      const row = await handle.raw.prepare('SELECT enriched_at, duration FROM songs WHERE id = ?').get(id) as { enriched_at: number | null; duration: number };
+      const row = (await handle.raw.prepare('SELECT enriched_at, duration FROM songs WHERE id = ?').get(id)) as {
+        enriched_at: number | null;
+        duration: number;
+      };
       expect(row.enriched_at).toBeNull();
       expect(row.duration).toBe(0);
     });
@@ -1785,7 +1950,17 @@ describe('path-derived grouping', () => {
       const libraryId = await seedLibrary(userId, 'LDIS');
 
       const written = await new SongDAO(handle.db, DERIVED_MARKER).upsertFileFacts([
-        { id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 - Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+        {
+          id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'),
+          libraryId,
+          path: 'Bonobo/Black Sands/01 Kerala.opus',
+          dirPath: 'Bonobo/Black Sands',
+          name: '01 - Kerala.opus',
+          size: 1000,
+          mtimeMs: 1000,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
       ]);
       expect(written.written).toBe(1);
 
@@ -1838,7 +2013,17 @@ describe('path-derived grouping', () => {
       const userId = await seedUser('BackfillStampIsNotFinal');
       const libraryId = await seedLibrary(userId, 'LDSNF');
       await new SongDAO(handle.db, DERIVED_MARKER).upsertFileFacts([
-        { id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'), libraryId, path: 'Bonobo/Black Sands/01 Kerala.opus', dirPath: 'Bonobo/Black Sands', name: '01 - Kerala.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+        {
+          id: songId(libraryId, 'Bonobo/Black Sands/01 - Kerala.opus'),
+          libraryId,
+          path: 'Bonobo/Black Sands/01 Kerala.opus',
+          dirPath: 'Bonobo/Black Sands',
+          name: '01 - Kerala.opus',
+          size: 1000,
+          mtimeMs: 1000,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
       ]);
 
       // At the current version: caught up, so nothing is selected and nothing is written.
@@ -1867,7 +2052,17 @@ describe('path-derived grouping', () => {
      */
     async function seedStaleGuess(id: string, libraryId: string, dirPath: string, marker: string): Promise<void> {
       await new SongDAO(handle.db, marker).upsertFileFacts([
-        { id, libraryId, path: `${dirPath}/01 track.opus`, dirPath, name: '01 track.opus', size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' },
+        {
+          id,
+          libraryId,
+          path: `${dirPath}/01 track.opus`,
+          dirPath,
+          name: '01 track.opus',
+          size: 1000,
+          mtimeMs: 1000,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
       ]);
     }
 
@@ -1880,7 +2075,14 @@ describe('path-derived grouping', () => {
      * seeded with `grouping_source` NULL and no derivation behind it is a state production never
      * produces, and it would let a guard pass that cannot distinguish the two.
      */
-    async function seedTaggedRow(id: string, libraryId: string, dirPath: string, artist: string, album: string, marker = DERIVED_MARKER): Promise<void> {
+    async function seedTaggedRow(
+      id: string,
+      libraryId: string,
+      dirPath: string,
+      artist: string,
+      album: string,
+      marker = DERIVED_MARKER,
+    ): Promise<void> {
       await seedStaleGuess(id, libraryId, dirPath, marker);
       await new SongDAO(handle.db, marker).applyMetadata(id, { artist, album, albumArtist: artist });
     }
@@ -1940,7 +2142,12 @@ describe('path-derived grouping', () => {
 
       expect(await drain(libraryId, DERIVED_VERSION, EMPTY_DERIVED_MARKER)).toBe(1);
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 10, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, {
+        grouping: ALBUM_GROUPING,
+        limit: 10,
+        offset: 0,
+        orderBy: MIN_ALBUM_CI,
+      });
       expect(albums.map((song) => song.album)).toEqual(['Black Sands']);
       expect((await new SongIndexDAO(handle.db).listArtists(libraryId, 10, 0)).map((song) => song.artist)).toEqual(['Bonobo']);
     });
@@ -2117,7 +2324,12 @@ describe('path-derived grouping', () => {
       expect(() => handle.raw.prepare(sql).all(...many)).not.toThrow();
       // The D1 limit, which the double adds. Without this assertion the line above
       // documents the hole instead of the guard, and deleting the guard stays green.
-      await expect(handle.db.prepare(sql).bind(...many).all()).rejects.toThrow(/too many SQL variables/);
+      await expect(
+        handle.db
+          .prepare(sql)
+          .bind(...many)
+          .all(),
+      ).rejects.toThrow(/too many SQL variables/);
     });
 
     it('derives every batch size from it, and the derived sizes straddle the measured edge', () => {
@@ -2142,7 +2354,12 @@ describe('path-derived grouping', () => {
       const ALBUMS = 500;
       for (let index = 0; index < ALBUMS; index += 1) await seedAlbum(libraryId, index);
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: ALBUMS, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, {
+        grouping: ALBUM_GROUPING,
+        limit: ALBUMS,
+        offset: 0,
+        orderBy: MIN_ALBUM_CI,
+      });
 
       // Every album, complete. A silent truncation would satisfy a "does not throw"
       // assertion and is the failure mode a chunked fetch actually has.
@@ -2167,7 +2384,12 @@ describe('path-derived grouping', () => {
         album: 'Album 0049',
       });
 
-      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, { grouping: ALBUM_GROUPING, limit: 60, offset: 0, orderBy: MIN_ALBUM_CI });
+      const albums = await new SongIndexDAO(handle.db).listAlbums(libraryId, {
+        grouping: ALBUM_GROUPING,
+        limit: 60,
+        offset: 0,
+        orderBy: MIN_ALBUM_CI,
+      });
 
       expect(albums).toHaveLength(61);
       expect(new Set(albums.map((song) => song.id)).size).toBe(61);
@@ -2290,9 +2512,12 @@ describe('path-derived grouping', () => {
       // with the test above: without the batching, this one goes red; without the ceiling,
       // nothing does.
       const tooMany = Array.from({ length: D1_MAX_BIND_PARAMETERS + 1 }).fill('x');
-      await expect(handle.db.prepare(`SELECT ? AS v WHERE ? IN (${tooMany.map(() => '?').join(',')})`).bind(1, ...tooMany).all()).rejects.toThrow(
-        /too many SQL variables/,
-      );
+      await expect(
+        handle.db
+          .prepare(`SELECT ? AS v WHERE ? IN (${tooMany.map(() => '?').join(',')})`)
+          .bind(1, ...tooMany)
+          .all(),
+      ).rejects.toThrow(/too many SQL variables/);
     });
   });
 
@@ -2317,7 +2542,17 @@ describe('DAO round-trips', () => {
     const libraryId = await seedLibrary(userId, 'LRT');
     const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const id = songId(libraryId, 'A/01.flac');
-    const facts = { id, libraryId, path: 'A/01.flac', dirPath: 'A', name: '01.flac', size: 100, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' };
+    const facts = {
+      id,
+      libraryId,
+      path: 'A/01.flac',
+      dirPath: 'A',
+      name: '01.flac',
+      size: 100,
+      mtimeMs: 1,
+      contentType: 'audio/flac',
+      suffix: 'flac',
+    };
 
     await songs.upsertFileFacts([facts]);
     await songs.applyMetadata(id, { title: 'Holocene', duration: 251, bitrate: 900, genre: 'Indie' });
@@ -2531,11 +2766,38 @@ describe('album identity by grouping', () => {
   async function seedSplitRelease(userId: string, libraryId: string, album = 'Ex-Otogibanashi'): Promise<void> {
     const songs = new SongDAO(handle.db, DERIVED_MARKER);
     const tracks = [
-      { dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi', name: '01 - Ex-Otogibanashi.opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 1 },
-      { dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi', name: '02 - Sekaijū wa Mine [Remix].opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 2 },
-      { dir: 'ryo (supercell) & Kagura - Ex-Otogibanashi', name: '03 - Melt (Kagura ver.) [Remix].opus', artist: 'ryo (supercell) & Kagura', track: 3 },
+      {
+        dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi',
+        name: '01 - Ex-Otogibanashi.opus',
+        artist: 'ryo (supercell), Kagura & Tsukimi',
+        track: 1,
+      },
+      {
+        dir: 'ryo (supercell), Kagura & Tsukimi - Ex-Otogibanashi',
+        name: '02 - Sekaijū wa Mine [Remix].opus',
+        artist: 'ryo (supercell), Kagura & Tsukimi',
+        track: 2,
+      },
+      {
+        dir: 'ryo (supercell) & Kagura - Ex-Otogibanashi',
+        name: '03 - Melt (Kagura ver.) [Remix].opus',
+        artist: 'ryo (supercell) & Kagura',
+        track: 3,
+      },
     ];
-    await songs.upsertFileFacts(tracks.map((t) => ({ id: songId(libraryId, `${t.dir}/${t.name}`), libraryId, path: `${t.dir}/${t.name}`, dirPath: t.dir, name: t.name, size: 1000, mtimeMs: 1000, contentType: 'audio/ogg', suffix: 'opus' })));
+    await songs.upsertFileFacts(
+      tracks.map((t) => ({
+        id: songId(libraryId, `${t.dir}/${t.name}`),
+        libraryId,
+        path: `${t.dir}/${t.name}`,
+        dirPath: t.dir,
+        name: t.name,
+        size: 1000,
+        mtimeMs: 1000,
+        contentType: 'audio/ogg',
+        suffix: 'opus',
+      })),
+    );
     for (const t of tracks) {
       await songs.applyMetadata(songId(libraryId, `${t.dir}/${t.name}`), {
         title: t.name.replace(/^\d+ - /, '').replace('.opus', ''),
@@ -2584,8 +2846,29 @@ describe('album identity by grouping', () => {
     ];
     for (const [dir, track] of halves) {
       const path = `${dir}/0${track}.opus`;
-      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: `0${track}.opus`, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
-      await songs.applyMetadata(songId(libraryId, path), { title: 'Track', artist: dir[0], album: 'Silent Siren Selection', albumArtist: null, disc: 1, track, duration: 1, readerVersion: 1 });
+      await songs.upsertFileFacts([
+        {
+          id: songId(libraryId, path),
+          libraryId,
+          path,
+          dirPath: dir,
+          name: `0${track}.opus`,
+          size: 1,
+          mtimeMs: 1,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
+      ]);
+      await songs.applyMetadata(songId(libraryId, path), {
+        title: 'Track',
+        artist: dir[0],
+        album: 'Silent Siren Selection',
+        albumArtist: null,
+        disc: 1,
+        track,
+        duration: 1,
+        readerVersion: 1,
+      });
     }
 
     // `album_artist` groups on `(album_artist_ci, album_ci)` and both rows' album artist is
@@ -2626,8 +2909,28 @@ describe('album identity by grouping', () => {
       ['B - Greatest Hits', 'Artist B'],
     ]) {
       const path = `${dir}/01 Track.opus`;
-      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: '01 Track.opus', size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
-      await songs.applyMetadata(songId(libraryId, path), { title: 'Track', artist, album: 'Greatest Hits', albumArtist: artist, track: 1, duration: 1, readerVersion: 1 });
+      await songs.upsertFileFacts([
+        {
+          id: songId(libraryId, path),
+          libraryId,
+          path,
+          dirPath: dir,
+          name: '01 Track.opus',
+          size: 1,
+          mtimeMs: 1,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
+      ]);
+      await songs.applyMetadata(songId(libraryId, path), {
+        title: 'Track',
+        artist,
+        album: 'Greatest Hits',
+        albumArtist: artist,
+        track: 1,
+        duration: 1,
+        readerVersion: 1,
+      });
     }
 
     // The mirror of the case above, and the reason `album_artist` exists as a mode: two
@@ -2657,8 +2960,28 @@ describe('album identity by grouping', () => {
       ['02 - Two.opus', 'Artist B'],
     ]) {
       const path = `${dir}/${file}`;
-      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: file, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
-      await songs.applyMetadata(songId(libraryId, path), { title: file, artist: albumArtist, album: 'Split Release', albumArtist, track: Number(file[0]), duration: 1, readerVersion: 1 });
+      await songs.upsertFileFacts([
+        {
+          id: songId(libraryId, path),
+          libraryId,
+          path,
+          dirPath: dir,
+          name: file,
+          size: 1,
+          mtimeMs: 1,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
+      ]);
+      await songs.applyMetadata(songId(libraryId, path), {
+        title: file,
+        artist: albumArtist,
+        album: 'Split Release',
+        albumArtist,
+        track: Number(file[0]),
+        duration: 1,
+        readerVersion: 1,
+      });
     }
 
     // Two albums, so two distinct keys, so two distinct ids. Asserted on the ids rather than
@@ -2682,7 +3005,11 @@ describe('album identity by grouping', () => {
     const libraryId = await seedLibrary(userId, 'LPLAN');
     await seedSplitRelease(userId, libraryId);
 
-    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND ((album_artist_ci IS ? AND album_ci = ?))', [libraryId, null, 'ex-otogibanashi']);
+    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND ((album_artist_ci IS ? AND album_ci = ?))', [
+      libraryId,
+      null,
+      'ex-otogibanashi',
+    ]);
     // All three columns constrained, not just the leading one: a plan that used the index for
     // `library_id` alone would still say `idx_songs_album` and still scan the library.
     expect(plan).toContain('idx_songs_album');
@@ -2694,7 +3021,11 @@ describe('album identity by grouping', () => {
     // `'' IS ''` — and the plan is the only place the difference exists: it falls back to
     // `idx_songs_album_title_ci`, which constrains the album name but not the album artist,
     // so every row sharing that name in the library is examined and then discarded.
-    const coerced = queryPlan(handle, "SELECT * FROM songs WHERE library_id = ? AND ((COALESCE(album_artist_ci, '') = ? AND album_ci = ?))", [libraryId, '', 'ex-otogibanashi']);
+    const coerced = queryPlan(
+      handle,
+      "SELECT * FROM songs WHERE library_id = ? AND ((COALESCE(album_artist_ci, '') = ? AND album_ci = ?))",
+      [libraryId, '', 'ex-otogibanashi'],
+    );
     expect(coerced).not.toContain('album_artist_ci=?');
     expect(coerced).not.toBe(plan);
   });
@@ -2709,8 +3040,28 @@ describe('album identity by grouping', () => {
       for (const half of [1, 2]) {
         const dir = `Artist ${half} - Album ${String(album).padStart(2, '0')}`;
         const path = `${dir}/0${half} Track.opus`;
-        await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: `0${half} Track.opus`, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
-        await songs.applyMetadata(songId(libraryId, path), { title: 'Track', artist: `Artist ${half}`, album: `Album ${String(album).padStart(2, '0')}`, track: half, disc: 1, duration: 1, readerVersion: 1 });
+        await songs.upsertFileFacts([
+          {
+            id: songId(libraryId, path),
+            libraryId,
+            path,
+            dirPath: dir,
+            name: `0${half} Track.opus`,
+            size: 1,
+            mtimeMs: 1,
+            contentType: 'audio/ogg',
+            suffix: 'opus',
+          },
+        ]);
+        await songs.applyMetadata(songId(libraryId, path), {
+          title: 'Track',
+          artist: `Artist ${half}`,
+          album: `Album ${String(album).padStart(2, '0')}`,
+          track: half,
+          disc: 1,
+          duration: 1,
+          readerVersion: 1,
+        });
       }
     }
 
@@ -2747,8 +3098,29 @@ describe('album identity by grouping', () => {
     ];
     for (const row of rows) {
       const path = `${dir}/${row.file}`;
-      await songs.upsertFileFacts([{ id: songId(libraryId, path), libraryId, path, dirPath: dir, name: row.file, size: 1, mtimeMs: 1, contentType: 'audio/ogg', suffix: 'opus' }]);
-      await songs.applyMetadata(songId(libraryId, path), { title: row.title, artist: 'A', album: 'Two Discs', albumArtist: 'A', disc: row.disc, track: row.track, duration: 1, readerVersion: 1 });
+      await songs.upsertFileFacts([
+        {
+          id: songId(libraryId, path),
+          libraryId,
+          path,
+          dirPath: dir,
+          name: row.file,
+          size: 1,
+          mtimeMs: 1,
+          contentType: 'audio/ogg',
+          suffix: 'opus',
+        },
+      ]);
+      await songs.applyMetadata(songId(libraryId, path), {
+        title: row.title,
+        artist: 'A',
+        album: 'Two Discs',
+        albumArtist: 'A',
+        disc: row.disc,
+        track: row.track,
+        duration: 1,
+        readerVersion: 1,
+      });
     }
 
     const fetched = await pages(libraryId, 'album');
@@ -2890,18 +3262,64 @@ describe('the import match predicates are seeks, not scans', () => {
     // `(album_ci, title_ci)` key and the `path` key cannot answer each other's question — a
     // fixture where they coincide would pass against a predicate on the wrong column.
     await songs.upsertFileFacts([
-      { id: songId(libraryId, 'Bon Iver/For Emma/re: Stacks.flac'), libraryId, path: 'Bon Iver/For Emma/re: Stacks.flac', dirPath: 'Bon Iver/For Emma', name: 're: Stacks.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
-      { id: songId(libraryId, 'Bon Iver/For Emma/holocene.flac'), libraryId, path: 'Bon Iver/For Emma/holocene.flac', dirPath: 'Bon Iver/For Emma', name: 'holocene.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      {
+        id: songId(libraryId, 'Bon Iver/For Emma/re: Stacks.flac'),
+        libraryId,
+        path: 'Bon Iver/For Emma/re: Stacks.flac',
+        dirPath: 'Bon Iver/For Emma',
+        name: 're: Stacks.flac',
+        size: 1,
+        mtimeMs: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
+      {
+        id: songId(libraryId, 'Bon Iver/For Emma/holocene.flac'),
+        libraryId,
+        path: 'Bon Iver/For Emma/holocene.flac',
+        dirPath: 'Bon Iver/For Emma',
+        name: 'holocene.flac',
+        size: 1,
+        mtimeMs: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
       // The same album, different folder: `ALBUM_GROUP_BY=album` says it is one album.
-      { id: songId(libraryId, 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac'), libraryId, path: 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac', dirPath: 'Bon Iver/For Emma (Deluxe)', name: 're: Stacks (live).flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      {
+        id: songId(libraryId, 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac'),
+        libraryId,
+        path: 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac',
+        dirPath: 'Bon Iver/For Emma (Deluxe)',
+        name: 're: Stacks (live).flac',
+        size: 1,
+        mtimeMs: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
     ]);
-    for (const path of ['Bon Iver/For Emma/re: Stacks.flac', 'Bon Iver/For Emma/holocene.flac', 'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac']) {
-      await songs.applyMetadata(songId(libraryId, path), { title: path.includes('live') ? 're: Stacks' : path.split('/').pop()!.replace('.flac', ''), artist: 'Bon Iver', album: 'For Emma', albumArtist: 'Bon Iver', track: 1, disc: 1, duration: 1, readerVersion: 1 });
+    for (const path of [
+      'Bon Iver/For Emma/re: Stacks.flac',
+      'Bon Iver/For Emma/holocene.flac',
+      'Bon Iver/For Emma (Deluxe)/re: Stacks (live).flac',
+    ]) {
+      await songs.applyMetadata(songId(libraryId, path), {
+        title: path.includes('live') ? 're: Stacks' : path.split('/').pop()!.replace('.flac', ''),
+        artist: 'Bon Iver',
+        album: 'For Emma',
+        albumArtist: 'Bon Iver',
+        track: 1,
+        disc: 1,
+        duration: 1,
+        readerVersion: 1,
+      });
     }
   });
 
   it('uses the path index for the exact-path lookup', async () => {
-    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND path IN (?)', [libraryId, 'Bon Iver/For Emma/holocene.flac']);
+    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND path IN (?)', [
+      libraryId,
+      'Bon Iver/For Emma/holocene.flac',
+    ]);
 
     // `(library_id, path)` — named for what it indexes, so the assertion is about the *pair*
     // being seekable and not about a path-only lookup being possible.
@@ -2910,18 +3328,29 @@ describe('the import match predicates are seeks, not scans', () => {
     // index, because there is a function on the column. It is named here because it is the
     // wrong answer that *looks* right — a Linux origin treats `Album/x` and `album/x` as two
     // files, so lowercasing merges them and a star lands on whichever came back first.
-    const coerced = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND lower(path) IN (lower(?))', [libraryId, 'Bon Iver/For Emma/holocene.flac']);
+    const coerced = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND lower(path) IN (lower(?))', [
+      libraryId,
+      'Bon Iver/For Emma/holocene.flac',
+    ]);
     expect(coerced).not.toContain('idx_songs_library_path');
     expect(coerced).not.toBe(plan);
   });
 
   it('uses idx_songs_album_title_ci for the metadata key', async () => {
-    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND (album_ci = ? AND title_ci = ?)', [libraryId, 'for emma', 'holocene']);
+    const plan = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND (album_ci = ? AND title_ci = ?)', [
+      libraryId,
+      'for emma',
+      'holocene',
+    ]);
 
     expect(plan).toContain('idx_songs_album_title_ci');
     // A `LIKE` on the same columns is the shape this layer forbids everywhere else: it cannot
     // use the index and it makes an import a scan of the library, hundreds of times.
-    const searched = queryPlan(handle, "SELECT * FROM songs WHERE library_id = ? AND album_ci LIKE ? AND title_ci LIKE ?", [libraryId, '%for emma%', '%holocene%']);
+    const searched = queryPlan(handle, 'SELECT * FROM songs WHERE library_id = ? AND album_ci LIKE ? AND title_ci LIKE ?', [
+      libraryId,
+      '%for emma%',
+      '%holocene%',
+    ]);
     expect(searched).not.toContain('idx_songs_album_title_ci');
   });
 
@@ -2929,9 +3358,7 @@ describe('the import match predicates are seeks, not scans', () => {
     // The remote's `re: Stacks` is the studio cut; the deluxe folder holds a **live** recording
     // under the same album and the same title. Both match, so this is the ambiguous case — and
     // the DAO returning both is what lets the caller report it instead of picking one.
-    const rows = await new SongMatchDAO(handle.db).findByAlbumTitle(libraryId, [
-      ['for emma', 're: stacks'],
-    ]);
+    const rows = await new SongMatchDAO(handle.db).findByAlbumTitle(libraryId, [['for emma', 're: stacks']]);
 
     expect(rows).toHaveLength(2);
   });
@@ -2965,7 +3392,11 @@ describe('the import match predicates are seeks, not scans', () => {
   });
 
   it('uses idx_songs_artist for the artist lookup', async () => {
-    const plan = queryPlan(handle, 'SELECT DISTINCT artist_ci, artist FROM songs WHERE library_id = ? AND artist_ci IS NOT NULL AND artist_ci IN (?)', [libraryId, 'bon iver']);
+    const plan = queryPlan(
+      handle,
+      'SELECT DISTINCT artist_ci, artist FROM songs WHERE library_id = ? AND artist_ci IS NOT NULL AND artist_ci IN (?)',
+      [libraryId, 'bon iver'],
+    );
 
     expect(plan).toContain('idx_songs_artist');
     // `artist_ci IS NOT NULL` is not decoration: an id minted for an artist `getArtists` does
@@ -3011,14 +3442,40 @@ describe('the import schema holds', () => {
    * of the two things under test.
    */
   it('has every column a DAO names, because a missing one fails the statement and nothing else', () => {
-    const columnsOf = (table: string): string[] => (handle.raw.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all() as Array<{ name: string }>).map((row) => row.name);
+    const columnsOf = (table: string): string[] =>
+      (handle.raw.prepare(`PRAGMA table_info(${JSON.stringify(table)})`).all() as Array<{ name: string }>).map((row) => row.name);
 
     // `import_sources`
-    for (const column of ['id', 'name', 'base_url', 'username', 'username_ci', 'password_ciphertext', 'password_iv', 'key_version', 'music_folder_id', 'created_at', 'updated_at']) {
+    for (const column of [
+      'id',
+      'name',
+      'base_url',
+      'username',
+      'username_ci',
+      'password_ciphertext',
+      'password_iv',
+      'key_version',
+      'music_folder_id',
+      'created_at',
+      'updated_at',
+    ]) {
       expect(columnsOf('import_sources'), `import_sources.${column}`).toContain(column);
     }
     // `import_runs` — including `report_json`, which was missing and which nothing else caught.
-    for (const column of ['id', 'source_id', 'target_user_id', 'status', 'workflow_id', 'play_count_worker', 'phases_json', 'report_json', 'last_error', 'started_at', 'updated_at', 'finished_at']) {
+    for (const column of [
+      'id',
+      'source_id',
+      'target_user_id',
+      'status',
+      'workflow_id',
+      'play_count_worker',
+      'phases_json',
+      'report_json',
+      'last_error',
+      'started_at',
+      'updated_at',
+      'finished_at',
+    ]) {
       expect(columnsOf('import_runs'), `import_runs.${column}`).toContain(column);
     }
     // `import_play_count_progress`
@@ -3029,14 +3486,16 @@ describe('the import schema holds', () => {
 
   it('resolves every foreign key, because D1 enforces them and SQLite does not by default', async () => {
     const userId = await seedUser('RunTarget');
-    const sourceId = (await new ImportSourceDAO(handle.db).create({
-      name: 'Old server',
-      baseUrl: 'https://music.example.com/sonic',
-      username: 'alice',
-      passwordCiphertext: 'c',
-      passwordIv: 'iv',
-      musicFolderId: null,
-    })).id;
+    const sourceId = (
+      await new ImportSourceDAO(handle.db).create({
+        name: 'Old server',
+        baseUrl: 'https://music.example.com/sonic',
+        username: 'alice',
+        passwordCiphertext: 'c',
+        passwordIv: 'iv',
+        musicFolderId: null,
+      })
+    ).id;
     await new ImportRunDAO(handle.db).create({ sourceId, targetUserId: userId, phases: ['playlists', 'stars'] });
 
     expect(handle.raw.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
@@ -3044,7 +3503,16 @@ describe('the import schema holds', () => {
 
   it('cascades a run with its user, because a report about rows that no longer exist is a lie', async () => {
     const userId = await seedUser('Doomed');
-    const sourceId = (await new ImportSourceDAO(handle.db).create({ name: 'S', baseUrl: 'https://m.example.com', username: 'bob', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null })).id;
+    const sourceId = (
+      await new ImportSourceDAO(handle.db).create({
+        name: 'S',
+        baseUrl: 'https://m.example.com',
+        username: 'bob',
+        passwordCiphertext: 'c',
+        passwordIv: 'iv',
+        musicFolderId: null,
+      })
+    ).id;
     const runs = new ImportRunDAO(handle.db);
     const run = await runs.create({ sourceId, targetUserId: userId, phases: ['playlists'] });
 
@@ -3057,22 +3525,52 @@ describe('the import schema holds', () => {
 
   it('refuses a second source with the same remote account, at the schema level', async () => {
     const sources = new ImportSourceDAO(handle.db);
-    await sources.create({ name: 'Old server', baseUrl: 'https://m.example.com', username: 'alice', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null });
+    await sources.create({
+      name: 'Old server',
+      baseUrl: 'https://m.example.com',
+      username: 'alice',
+      passwordCiphertext: 'c',
+      passwordIv: 'iv',
+      musicFolderId: null,
+    });
 
     // Same account, different label and host: still refused, because two sources sharing a
     // credential is what would quietly import one server's data into another's.
     await expect(
-      sources.create({ name: 'Another label', baseUrl: 'https://other.example.com', username: 'ALICE', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null }),
+      sources.create({
+        name: 'Another label',
+        baseUrl: 'https://other.example.com',
+        username: 'ALICE',
+        passwordCiphertext: 'c',
+        passwordIv: 'iv',
+        musicFolderId: null,
+      }),
     ).rejects.toThrow();
 
     // And two sources may share a *name*, because a staging server called "music" beside a
     // production one called "music" is ordinary.
-    await expect(sources.create({ name: 'Old server', baseUrl: 'https://other.example.com', username: 'bob', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null })).resolves.toBeDefined();
+    await expect(
+      sources.create({
+        name: 'Old server',
+        baseUrl: 'https://other.example.com',
+        username: 'bob',
+        passwordCiphertext: 'c',
+        passwordIv: 'iv',
+        musicFolderId: null,
+      }),
+    ).resolves.toBeDefined();
   });
 
   it('never selects a stored credential, so a list cannot carry one into a response', async () => {
     const sources = new ImportSourceDAO(handle.db);
-    await sources.create({ name: 'Old server', baseUrl: 'https://m.example.com', username: 'alice', passwordCiphertext: 'SUPER-SECRET', passwordIv: 'iv', musicFolderId: null });
+    await sources.create({
+      name: 'Old server',
+      baseUrl: 'https://m.example.com',
+      username: 'alice',
+      passwordCiphertext: 'SUPER-SECRET',
+      passwordIv: 'iv',
+      musicFolderId: null,
+    });
 
     // The projection, not a filter in the route: a caller that forgot to strip the ciphertext
     // would leak it, and a caller cannot forget to strip what was never selected.
@@ -3091,7 +3589,16 @@ describe('the import schema holds', () => {
     // goes **backwards** while the work is being done, and an operator watching progress fall
     // has no way to tell that from a fault.
     const userId = await seedUser('PlayCounts');
-    const sourceId = (await new ImportSourceDAO(handle.db).create({ name: 'S', baseUrl: 'https://m.example.com', username: 'c', passwordCiphertext: 'c', passwordIv: 'iv', musicFolderId: null })).id;
+    const sourceId = (
+      await new ImportSourceDAO(handle.db).create({
+        name: 'S',
+        baseUrl: 'https://m.example.com',
+        username: 'c',
+        passwordCiphertext: 'c',
+        passwordIv: 'iv',
+        musicFolderId: null,
+      })
+    ).id;
     const run = await new ImportRunDAO(handle.db).create({ sourceId, targetUserId: userId, phases: ['playCounts'] });
     const progress = new ImportPlayCountProgressDAO(handle.db);
     await progress.ensure(run.id);
@@ -3117,7 +3624,19 @@ describe('the import schema holds', () => {
   });
 
   it('replaces a phase line by name, so a retried step cannot list the same item twice', async () => {
-    const first = buildReport({ runId: 'r', sourceName: 'S', targetUsername: 'ann', finished: true, phases: [phase({ phase: 'stars', status: 'partial', unresolved: [{ category: 'star', context: 'starred', remoteId: 'r1', label: 'Track', reason: 'not-found' }] })] });
+    const first = buildReport({
+      runId: 'r',
+      sourceName: 'S',
+      targetUsername: 'ann',
+      finished: true,
+      phases: [
+        phase({
+          phase: 'stars',
+          status: 'partial',
+          unresolved: [{ category: 'star', context: 'starred', remoteId: 'r1', label: 'Track', reason: 'not-found' }],
+        }),
+      ],
+    });
     const second = buildReport({
       runId: 'r',
       sourceName: 'S',
@@ -3133,7 +3652,13 @@ describe('the import schema holds', () => {
     expect(parseReport(serializeReport(second))?.phases[0].imported).toBe(3);
     // And the cap holds: the count stays exact while the names are truncated, so an operator
     // learns the scale of the problem even when the list is summarised.
-    const many = Array.from({ length: MAX_REPORTED_UNRESOLVED + 50 }, (_, index) => ({ category: 'star', context: 'starred', remoteId: `r${index}`, label: `T${index}`, reason: 'not-found' as const }));
+    const many = Array.from({ length: MAX_REPORTED_UNRESOLVED + 50 }, (_, index) => ({
+      category: 'star',
+      context: 'starred',
+      remoteId: `r${index}`,
+      label: `T${index}`,
+      reason: 'not-found' as const,
+    }));
     const capped = phase({ phase: 'stars', status: 'partial', unresolvedCount: many.length, unresolved: collectUnresolved([], many) });
     expect(capped.unresolved).toHaveLength(MAX_REPORTED_UNRESOLVED);
     expect(capped.unresolvedCount).toBe(MAX_REPORTED_UNRESOLVED + 50);
@@ -3159,14 +3684,33 @@ describe('play counts: a scrobble increments, an import overwrites', () => {
     const libraryId = await seedLibrary(userId, 'LPLAYS');
     const songs = new SongDAO(handle.db, DERIVED_MARKER);
     await songs.upsertFileFacts([
-      { id: songId(libraryId, 'A/one.flac'), libraryId, path: 'A/one.flac', dirPath: 'A', name: 'one.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
-      { id: songId(libraryId, 'A/two.flac'), libraryId, path: 'A/two.flac', dirPath: 'A', name: 'two.flac', size: 1, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      {
+        id: songId(libraryId, 'A/one.flac'),
+        libraryId,
+        path: 'A/one.flac',
+        dirPath: 'A',
+        name: 'one.flac',
+        size: 1,
+        mtimeMs: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
+      {
+        id: songId(libraryId, 'A/two.flac'),
+        libraryId,
+        path: 'A/two.flac',
+        dirPath: 'A',
+        name: 'two.flac',
+        size: 1,
+        mtimeMs: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
     ]);
     return userId;
   }
 
-  const countsOf = async (userId: string): Promise<Map<string, number>> =>
-    await new PlayCountDAO(handle.db).listPlayCounts(userId);
+  const countsOf = async (userId: string): Promise<Map<string, number>> => await new PlayCountDAO(handle.db).listPlayCounts(userId);
 
   it('adds one per scrobble, and keeps the last-played instant', async () => {
     const userId = await seeded();
@@ -3227,7 +3771,9 @@ describe('play counts: a scrobble increments, an import overwrites', () => {
     await plays.recordPlay(userId, 'one');
 
     await plays.setPlayCounts(userId, [{ songId: 'one', playCount: 40 }]);
-    const row = handle.raw.prepare('SELECT last_played_at FROM play_counts WHERE user_id = ? AND song_id = ?').get(userId, 'one') as { last_played_at: number | null };
+    const row = handle.raw.prepare('SELECT last_played_at FROM play_counts WHERE user_id = ? AND song_id = ?').get(userId, 'one') as {
+      last_played_at: number | null;
+    };
     expect(row.last_played_at).not.toBeNull();
   });
 

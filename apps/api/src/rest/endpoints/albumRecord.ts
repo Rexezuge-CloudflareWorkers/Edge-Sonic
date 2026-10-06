@@ -15,9 +15,10 @@
  * whole rows, and the record is built only from whole rows. Keeping them in one file makes it
  * visible that `getAlbum` cannot skip a step the lists do not.
  */
-import { decodeId, encodeId, ErrorCode, IdKind, resolveAlbumId, SubsonicError } from '@edge-sonic/subsonic';
+import { artistIdOf, decodeId, encodeId, ErrorCode, IdKind, resolveAlbumId, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album } from '@edge-sonic/subsonic';
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
+import { librariesForId } from './libraries';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { albumNameOf, artistNameOf, toIso } from '../mappers';
@@ -110,7 +111,7 @@ function albumModel(songs: readonly SongRow[], library: LibraryRow, identity: Al
     // Absent when the name is synthesized — `albumArtistOf`, rule 3. Not dropped
     // unconditionally: an album whose artist really is one name stays drillable, and the key
     // set `getAlbum` and `getArtist` publish has to match for both.
-    ...(artist.drillable && { artistId: encodeId(IdKind.Artist, library.id, artist.name) }),
+    ...(artist.drillable && { artistId: artistIdOf(artist.name) }),
     songCount: songs.length,
     duration: songs.reduce((total, song) => total + song.duration, 0),
     // **The first row that has one, not `songs[0]`.** `year` and `genre` are the two columns
@@ -173,7 +174,7 @@ function annotationFor(lookup: ReadonlyMap<string, number>, ids: readonly string
  * library the caller cannot see is `code=70` and not `code=50`, or the endpoint becomes an
  * oracle for which paths exist. See `apps/api/AGENTS.md`.
  */
-async function libraryForAlbumId(context: RestContext, id: string): Promise<LibraryRow> {
+async function libraryForAlbumId(context: RestContext, id: string): Promise<{ library: LibraryRow; scope: LibraryScope }> {
   let libraryId: string;
   let path: string | null;
   try {
@@ -186,9 +187,15 @@ async function libraryForAlbumId(context: RestContext, id: string): Promise<Libr
   } catch {
     throw new SubsonicError(ErrorCode.NotFound, 'Album not found.');
   }
-  const library = await context.libraries.requireForUser(context.user.id, libraryId);
+  // A **tag** album id carries the sentinel and resolves across every granted library, so a
+  // release whose tracks are split between two of them opens whole. A **folder** id (`al:`)
+  // names a directory, which is per-source by nature, so it stays with one library — and the
+  // grant check below is what keeps an id for a library the caller cannot see at `code=70`
+  // rather than `code=50`, which would make the endpoint an oracle for which paths exist.
+  const libraries = await librariesForId(context, libraryId);
+  const library = libraries[0];
   if (path !== null) TreeService.assertPath(path);
-  return library;
+  return { library, scope: libraries.map((row) => row.id) };
 }
 
 /**

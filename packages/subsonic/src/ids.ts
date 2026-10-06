@@ -111,6 +111,38 @@ const SEPARATOR = '\n';
  */
 const LIBRARY_ID_PATTERN = /^[\w-]{1,64}$/i;
 
+/**
+ * The library id an **album or artist** id carries when that release spans every library the
+ * caller can see, rather than one of them.
+ *
+ * ### Why a sentinel rather than dropping the library half
+ *
+ * Every id is `<kind>:base64url(<libraryId>\n<path>)`, and `decodeId` **requires** a library
+ * half: a missing one is `separator <= 0`, which is a `code=70`. So "an album id that names no
+ * library" is not a payload this repository can currently express, and adding a branch to a
+ * validator that every id on every surface passes through is a much larger change than the
+ * feature needs.
+ *
+ * The sentinel is therefore a value that is a legal library id and **not a library**:
+ * `LIBRARY_ID_PATTERN` accepts it, and `LibraryDAO` mints v4 UUIDs, so it is never assigned.
+ * All-zeros is the same placeholder `wrangler.template.jsonc` already carries for an
+ * unconfigured `database_id`, which is the point — it reads as "no particular library" rather
+ * than as a fourth library somebody forgot to delete. Asserted unforgeable-and-unassignable in
+ * `test/music-folder-index.test.ts`.
+ *
+ * ### And why albums and artists need it at all
+ *
+ * Two libraries can hold one album — the measured case is a release whose track 01 is in one
+ * library and track 03 in another. Under a per-library id they are **two** albums, so a union
+ * lists the release twice at a `songCount` of 1 each, and a client that opened one cannot see
+ * the other's track. The id is what says "one album", so it cannot name one library.
+ *
+ * A **song** id still carries a real library, because `path` is only meaningful inside one: the
+ * same relative path in two libraries is two files, and collapsing them would point a star at
+ * whichever was written last. So the sentinel is scoped to the two ids that name a *group*.
+ */
+const SPANNING_LIBRARY_ID = '00000000-0000-0000-0000-000000000000';
+
 function toBase64Url(bytes: Uint8Array): string {
   let binary = '';
   // Chunked to stay clear of the argument-count limit on large payloads.
@@ -160,7 +192,7 @@ function normalizeRelativePath(path: string): string | null {
 
   const segments = path.split('/');
   for (const segment of segments) {
-    if ((segment.length === 0) || segment === '.' || segment === '..') return null;
+    if (segment.length === 0 || segment === '.' || segment === '..') return null;
   }
   return segments.join('/');
 }
@@ -261,5 +293,16 @@ function decodeId(raw: string, expected?: IdKindValue): DecodedId {
   return { kind: kind as IdKindValue, libraryId, path: normalized };
 }
 
-export { IdKind, encodeId, decodeId, normalizeRelativePath, decodeAndNormalizePath, LIBRARY_ID_PATTERN, SEPARATOR, toBase64Url, fromBase64Url };
+export {
+  IdKind,
+  encodeId,
+  decodeId,
+  normalizeRelativePath,
+  decodeAndNormalizePath,
+  LIBRARY_ID_PATTERN,
+  SPANNING_LIBRARY_ID,
+  SEPARATOR,
+  toBase64Url,
+  fromBase64Url,
+};
 export type { IdKindValue, DecodedId };

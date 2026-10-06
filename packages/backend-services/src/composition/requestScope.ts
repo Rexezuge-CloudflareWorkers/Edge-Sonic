@@ -12,7 +12,7 @@ import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import { AnnotationDAO, AuthThrottleDAO, ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, NodeDAO, PlayCountDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, SongMatchDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
-import type { LibraryRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, LibraryScope } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
@@ -363,10 +363,10 @@ function createRequestScope(env: RequestScopeEnv, scanFor?: (libraryId: string) 
   );
 
   const albumGrouping = resolveGrouping(config.getAlbumGroupBy());
-  scope.bindValue(Tokens.MatchRemoteAlbums, async (libraryId: string, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
+  scope.bindValue(Tokens.MatchRemoteAlbums, async (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
     await matchRemoteAlbums(await scope.get(Tokens.SongMatchDAO)(), libraryId, albumGrouping, albums),
   );
-  scope.bindValue(Tokens.MatchRemoteArtists, async (libraryId: string, artists: ReadonlyArray<{ id: string; name: string | null }>) =>
+  scope.bindValue(Tokens.MatchRemoteArtists, async (libraryId: LibraryScope, artists: ReadonlyArray<{ id: string; name: string | null }>) =>
     await matchRemoteArtists(await scope.get(Tokens.SongMatchDAO)(), libraryId, artists),
   );
 

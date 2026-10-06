@@ -121,6 +121,25 @@ interface DerivationWrite {
  * `NULL` rather than as `grouping_source` because that is provably what it is: reaching
  * the `ELSE` means the column was not `'derived'` *and* some column held a value.
  *
+ * ### `title` is the one column with no guard, and the one that must not have one
+ *
+ * Every other assignment above is guarded by `grouping_source`, so a bump *replaces* a value
+ * the flag owns and *fills* one it does not. `title` is guarded by `IS NULL` alone, and the
+ * flag's own definition below counts three columns rather than four. Both are the same fix:
+ * a file whose tags carry a `TITLE` but no `ARTIST`/`ALBUM`/`ALBUMARTIST` was written by a
+ * build that cleared the flag only for the three, so it holds a **real tag title** *and*
+ * `'derived'` at once — while a tagless enriched file holds a **derived** title *and*
+ * `'derived'` at once. Nothing on the row distinguishes the two, so a guarded `title` reads
+ * the first as the second's filename guess and overwrites a real tag, permanently, because
+ * `enriched_at` is set and the file is then never re-read.
+ *
+ * Fill-once is the direction to be wrong in. The grouping pays nothing for it; the title
+ * pays with a rule that is *not* versioned, so a correction to `deriveTitleFromFileName`
+ * cannot reach a title this derivation already wrote and has to be a deliberate decision. A
+ * deleted tag is worse than either. `songMetadata.ts` carries the same argument where
+ * `GROUPING_FIELDS` is declared, because the flag's meaning is a fact both statements share.
+ *
+ *
  * `derived_version` is stamped in all three cases, including when the values did not
  * change. That is the backfill's only termination condition: a row that keeps
  * re-selecting because its stamp never moved is a backfill that never converges.
@@ -134,8 +153,8 @@ interface DerivationWrite {
  * configured value reaching the same statement.
  */
 const APPLY_DERIVATION = `UPDATE songs SET
-  title = CASE WHEN grouping_source = ? OR title IS NULL THEN ? ELSE title END,
-  title_ci = CASE WHEN grouping_source = ? OR title_ci IS NULL THEN ? ELSE title_ci END,
+  title = CASE WHEN title IS NULL THEN ? ELSE title END,
+  title_ci = CASE WHEN title_ci IS NULL THEN ? ELSE title_ci END,
   artist = CASE WHEN grouping_source = ? OR artist IS NULL THEN ? ELSE artist END,
   artist_ci = CASE WHEN grouping_source = ? OR artist_ci IS NULL THEN ? ELSE artist_ci END,
   album = CASE WHEN grouping_source = ? OR album IS NULL THEN ? ELSE album END,
@@ -143,7 +162,7 @@ const APPLY_DERIVATION = `UPDATE songs SET
   album_artist = CASE WHEN grouping_source = ? OR album_artist IS NULL THEN ? ELSE album_artist END,
   album_artist_ci = CASE WHEN grouping_source = ? OR album_artist_ci IS NULL THEN ? ELSE album_artist_ci END,
   grouping_source = CASE
-    WHEN grouping_source = ? OR (title IS NULL AND artist IS NULL AND album IS NULL AND album_artist IS NULL) THEN ?
+    WHEN grouping_source = ? OR (artist IS NULL AND album IS NULL AND album_artist IS NULL) THEN ?
     ELSE NULL END,
   derived_version = ?,
   updated_at = ?
@@ -204,9 +223,23 @@ class SongDerivationDAO extends BaseDAO {
           // binding is why the two are one fact: every `?` below has exactly one
           // counterpart there, and a pair that drifts is a statement that writes one
           // column's guard with another's value.
-          GROUPING_SOURCE_DERIVED,
+          //
+          // **Fill-once, and deliberately unguarded.** `grouping_source` cannot guard these
+          // two without widening what it means from three columns to four, and every row
+          // already stamped under the old definition would then be read under the new one.
+          // A file tagged `TITLE` but not `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag
+          // title *and* `'derived'`, and a tagless enriched file holds a derived title *and*
+          // `'derived'` — indistinguishable on the row, so a guard here deletes the first,
+          // for ever, because `enriched_at` is set.
+          //
+          // A dedicated provenance column is the shape that would hold both, and the schema
+          // rules are what stop it: SQLite has no `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
+          // (measured on 3.53.4), a migration may not `ALTER`, and editing the locked
+          // baseline is the `songs.reader_version` defect. So the title pays for its safety
+          // with a rule that is **not versioned**: a corrected `deriveTitleFromFileName`
+          // cannot reach a title this derivation already wrote. Asserted in
+          // `test/schema.int.test.ts`, so the cost is a claim and not a surprise.
           write.title,
-          GROUPING_SOURCE_DERIVED,
           write.title.toLowerCase(),
           GROUPING_SOURCE_DERIVED,
           write.artist,

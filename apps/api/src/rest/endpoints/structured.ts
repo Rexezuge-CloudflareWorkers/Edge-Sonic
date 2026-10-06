@@ -21,7 +21,7 @@ import { artistIndexGroups, artistNameOf, groupArtistRows, IGNORED_ARTICLES, son
 import type { AnnotationLookup } from '../mappers';
 import { compareAlbumTracks } from '../albumIdentity';
 import { albumModel, groupAlbumsOf, libraryForAlbumId, resolveAlbumKey } from './albumRecord';
-import { resolveLibrary } from './libraries';
+import { librariesForId, resolveLibraries } from './libraries';
 
 /**
  * This user's annotations, for the ids about to be rendered.
@@ -65,12 +65,14 @@ async function annotationsFor(context: RestContext, renderingAnything: boolean):
  * whom.
  */
 async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
-  const library = await resolveLibrary(context, context.params.get('musicFolderId'));
+  const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const identity = context.albumsFor(library);
   const limit = context.pageSize(context.params.optionalInt('size'), 500);
   const offset = context.params.int('offset', 0, { min: 0 });
 
-  const rows = await context.songIndex.listArtists(library.id, limit + offset, 0);
+  const rows = await context.songIndex.listArtists(scope, limit + offset, 0);
 
   const groups = groupArtistRows(rows, identity).slice(offset, offset + limit);
   const annotations = await annotationsFor(context, groups.length > 0);
@@ -114,11 +116,17 @@ function requireMediaId(context: RestContext, what: string): string {
 async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const id = requireMediaId(context, 'Artist');
   const decoded = decodeId(id, IdKind.Artist);
-  const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+  // An artist id names a group, so it carries the sentinel and resolves across every library the
+  // caller was granted — an artist with an album in two of them is one artist, and an id scoped
+  // to one would publish the discography in halves. `getSong` below keeps the single-library
+  // form, because a path only means something inside one.
+  const libraries = await librariesForId(context, decoded.libraryId);
+  const library = libraries[0];
+  const scope = libraries.map((row) => row.id);
   const artistName = decoded.path;
   const identity = context.albumsFor(library);
 
-  const all = await context.songIndex.listArtists(library.id, 5000, 0);
+  const all = await context.songIndex.listArtists(scope, 5000, 0);
   const mine = all.filter((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === artistName.toLowerCase());
   if (mine.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Artist not found.');
 
@@ -146,7 +154,7 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
 */
 async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   const id = requireMediaId(context, 'Album');
-  const library = await libraryForAlbumId(context, id);
+  const { library, scope } = await libraryForAlbumId(context, id);
   const identity = context.albumsFor(library);
 
   // Both id kinds, because both are in the wild. `alk:` is what this server mints; `al:` is
@@ -158,7 +166,7 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   const key = await resolveAlbumKey(context, id, library);
   if (key === null) throw new SubsonicError(ErrorCode.NotFound, 'Album not found.');
 
-  const songs = await context.songIndex.listForAlbumKeys(library.id, [key], identity.grouping);
+  const songs = await context.songIndex.listForAlbumKeys(scope, [key], identity.grouping);
   if (songs.length === 0) throw new SubsonicError(ErrorCode.NotFound, 'Album not found.');
 
   const annotations = await annotationsFor(context, songs.length > 0);

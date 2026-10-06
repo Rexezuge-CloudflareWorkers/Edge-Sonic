@@ -8,6 +8,7 @@
 import { decodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
+import { librariesForId } from './libraries';
 import type { EnvelopeResponse } from '../respond';
 
 /**
@@ -46,8 +47,13 @@ async function collectTargets(context: RestContext): Promise<Array<{ id: string;
   for (const [param, itemType] of ID_PARAMS) {
     for (const raw of context.params.ids(param)) {
       const decoded = decodeId(raw);
-      // Awaited, before anything is written: a forged library id fails here.
-      await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+      // Awaited, before anything is written: a forged library id fails here. And it goes
+      // through `librariesForId` rather than straight to `requireForUser`, because an album or
+      // artist id carries the **sentinel** — it names a group, not one library — and asking
+      // `requireForUser` for it would refuse every album star on a multi-library user. The
+      // union it returns is still only the caller's grants, so a forged id names nothing that
+      // is not already visible.
+      await librariesForId(context, decoded.libraryId);
       targets.push({ id: raw, itemType });
     }
   }

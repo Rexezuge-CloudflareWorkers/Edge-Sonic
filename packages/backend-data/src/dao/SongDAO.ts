@@ -28,11 +28,12 @@ import type { SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { SongIdLookupDAO } from './songIdLookup';
 import { SongCountDAO } from './songCounts';
+import { libraryScope } from './libraryScope';
+import type { LibraryScope } from './libraryScope';
 import { UPSERT_FILE_FACTS, bindFileFacts } from './songSql';
 import type { SongMetadataInput, SongUpsertInput } from './songSql';
 import { buildMetadataPatch, NO_METADATA_WRITE } from './songMetadata';
 import type { MetadataWriteResult } from './songMetadata';
-
 
 /**
  * Library ids per statement: one variable each, and nothing else.
@@ -67,7 +68,11 @@ class SongDAO extends BaseDAO {
    * An empty marker is a supported value and not a fallback — it is what makes a derived
    * `X` and a tagged `X` the same album. See `pathConvention.ts`.
    */
-  constructor(database: D1Queryable, private readonly derivedMarker: string, subrequests: SubrequestMeter = UNMETERED_SUBREQUESTS) {
+  constructor(
+    database: D1Queryable,
+    private readonly derivedMarker: string,
+    subrequests: SubrequestMeter = UNMETERED_SUBREQUESTS,
+  ) {
     super(database, subrequests);
   }
 
@@ -91,7 +96,10 @@ class SongDAO extends BaseDAO {
    * be `DISTINCT` over the album key, which is a job for the database.
    */
   public async findById(id: string): Promise<SongRow | null> {
-    return await this.withRetry(async () => await this.database.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first<SongRow>(), 'songs.findById');
+    return await this.withRetry(
+      async () => await this.database.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first<SongRow>(),
+      'songs.findById',
+    );
   }
 
   public async listByDirectory(libraryId: string, dirPath: string): Promise<SongRow[]> {
@@ -160,10 +168,7 @@ class SongDAO extends BaseDAO {
     // declared by the caller — `songs` bills ten rows here, and reporting it as one is how a scan
     // enriched track by track spent ten times the allowance it believed it respected.
     const sql = `UPDATE songs SET ${[...assignments, 'enriched_at = ?', 'updated_at = ?'].join(', ')} WHERE id = ?`;
-    return await this.runWriteStatement(
-      this.prepare(sql).bind(...values, timestamp, timestamp, id),
-      'songs.applyMetadata',
-    );
+    return await this.runWriteStatement(this.prepare(sql).bind(...values, timestamp, timestamp, id), 'songs.applyMetadata');
   }
 
   /**
@@ -243,7 +248,10 @@ class SongDAO extends BaseDAO {
 
     const result = await this.withRetry(
       async () =>
-        await this.database.prepare(`SELECT * FROM songs WHERE ${where.join(' AND ')} ORDER BY RANDOM() LIMIT ?`).bind(...values).all<SongRow>(),
+        await this.database
+          .prepare(`SELECT * FROM songs WHERE ${where.join(' AND ')} ORDER BY RANDOM() LIMIT ?`)
+          .bind(...values)
+          .all<SongRow>(),
       'songs.listRandom',
     );
     return result.results ?? [];
@@ -261,7 +269,7 @@ class SongDAO extends BaseDAO {
    * hidden, with FTS5 named as the fix.
    */
   public async search(
-    libraryId: string,
+    scope: LibraryScope,
     term: string,
     options: { limit: number; offset: number; field?: 'any' | 'title' | 'artist' | 'album' },
   ): Promise<SongRow[]> {
@@ -276,12 +284,19 @@ class SongDAO extends BaseDAO {
             ? String.raw`album_ci LIKE ? ESCAPE '\'`
             : String.raw`(title_ci LIKE ? ESCAPE '\' OR artist_ci LIKE ? ESCAPE '\' OR album_ci LIKE ? ESCAPE '\' OR genre_ci LIKE ? ESCAPE '\')`;
 
-    const values: unknown[] = field === 'any' ? [libraryId, like, like, like, like, options.limit, options.offset] : [libraryId, like, options.limit, options.offset];
+    // The scope's own variables come first so the bind order is the SQL's order — the library
+    // predicate precedes the term, and a `LIKE` list that followed it would be bound to the
+    // wrong placeholders.
+    const libraries = libraryScope(scope);
+    const values: unknown[] = [...libraries.values];
+    if (field === 'any') values.push(like, like, like, like);
+    else values.push(like);
+    values.push(options.limit, options.offset);
 
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare(`SELECT * FROM songs WHERE library_id = ? AND ${predicate} ORDER BY name_ci ASC LIMIT ? OFFSET ?`)
+          .prepare(`SELECT * FROM songs WHERE ${libraries.sql} AND ${predicate} ORDER BY name_ci ASC LIMIT ? OFFSET ?`)
           .bind(...values)
           .all<SongRow>(),
       'songs.search',
@@ -349,9 +364,6 @@ class SongDAO extends BaseDAO {
   }
 }
 
-
-
 export { SongDAO };
 
-
-export {type SongUpsertInput} from './songSql';
+export { type SongUpsertInput } from './songSql';

@@ -35,15 +35,17 @@
  * wildcard merges every untagged album sharing a name into every tagged one — the defect
  * `albumKey.ts` documents and `test/schema.int.test.ts` asserts with `EXPLAIN QUERY PLAN`.
  */
-import { albumKeySpec, IdKind, encodeId, AlbumGrouping } from '@edge-sonic/subsonic';
+import { albumKeySpec, artistIdOf, encodeAlbumKey, IdKind, encodeId, AlbumGrouping, SPANNING_LIBRARY_ID } from '@edge-sonic/subsonic';
 import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
+import { libraryIds } from '@edge-sonic/backend-data/dao';
+import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 
 /**
 What the matchers need from the data layer. Kept structural so a test answers only this.
 */
 interface AlbumMatchStore {
-  findPresentAlbumKeys(libraryId: string, keys: readonly string[], grouping: AlbumGroupingValue): Promise<Set<string>>;
-  findPresentArtists(libraryId: string, names: readonly string[]): Promise<Map<string, string>>;
+  findPresentAlbumKeys(libraryId: LibraryScope, keys: readonly string[], grouping: AlbumGroupingValue): Promise<Set<string>>;
+  findPresentArtists(libraryId: LibraryScope, names: readonly string[]): Promise<Map<string, string>>;
 }
 
 /**
@@ -93,7 +95,7 @@ function resolveGrouping(value: string | undefined): AlbumGroupingValue {
  */
 async function matchRemoteAlbums(
   store: AlbumMatchStore,
-  libraryId: string,
+  libraryId: LibraryScope,
   grouping: AlbumGroupingValue,
   albums: ReadonlyArray<{ readonly id: string; readonly name: string | null; readonly artist: string | null }>,
 ): Promise<Map<string, string>> {
@@ -108,7 +110,10 @@ async function matchRemoteAlbums(
 
   const present = await store.findPresentAlbumKeys(libraryId, [...new Set(keyByRemoteId.values())], grouping);
   for (const [remoteId, key] of keyByRemoteId) {
-    if (present.has(key)) byRemoteId.set(remoteId, encodeId(IdKind.AlbumKey, libraryId, key));
+    // Minted through the product's own encoder rather than `encodeId` directly, so an imported
+    // album star lands on the **same id** `getAlbumList2` publishes. A second minting site is a
+    // second id for one album, and a star on an id nothing resolves is a star no client can see.
+    if (present.has(key)) byRemoteId.set(remoteId, encodeAlbumKey(spanningLibraryIdFor(libraryId, grouping), key));
   }
   return byRemoteId;
 }
@@ -123,7 +128,7 @@ async function matchRemoteAlbums(
  */
 async function matchRemoteArtists(
   store: AlbumMatchStore,
-  libraryId: string,
+  libraryId: LibraryScope,
   artists: ReadonlyArray<{ readonly id: string; readonly name: string | null }>,
 ): Promise<Map<string, string>> {
   const byRemoteId = new Map<string, string>();
@@ -138,10 +143,24 @@ async function matchRemoteArtists(
   const present = await store.findPresentArtists(libraryId, [...new Set(ciByRemoteId.values())]);
   for (const [remoteId, artistCi] of ciByRemoteId) {
     const display = present.get(artistCi);
-    if (display !== undefined) byRemoteId.set(remoteId, encodeId(IdKind.Artist, libraryId, display));
+    if (display !== undefined) byRemoteId.set(remoteId, artistIdOf(display));
   }
   return byRemoteId;
 }
 
-export { ci, albumKeyFor, resolveGrouping, matchRemoteAlbums, matchRemoteArtists };
+/**
+ * The library half an imported album id carries, which is the **sentinel** for a tag grouping —
+ * the same rule `albumIdOf` applies, because an imported star has to land on the exact id this
+ * server publishes and a second minting site is a second id for one album.
+ *
+ * `folder` is the exception and takes the first library of the scope: under that grouping an
+ * album *is* a directory, so there is no id that spans sources, and a scope of one is the only
+ * shape representable. A star written under the wrong one would be reported by nothing, so the
+ * narrowing is stated here rather than left to the reader.
+ */
+function spanningLibraryIdFor(scope: LibraryScope, grouping: AlbumGroupingValue): string {
+  return grouping === 'folder' ? (libraryIds(scope)[0] ?? SPANNING_LIBRARY_ID) : SPANNING_LIBRARY_ID;
+}
+
+export { ci, albumKeyFor, resolveGrouping, matchRemoteAlbums, matchRemoteArtists, spanningLibraryIdFor };
 export type { AlbumMatchStore };

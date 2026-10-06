@@ -203,12 +203,25 @@ async function startImport(c: UserContext): Promise<Response> {
     return BaseRoute.jsonError(c, 'An import is already running for that user. Wait for it to finish before starting another.', 409);
   }
 
-  // The library is resolved against one library's grants. A user granted two gets their imports
-  // matched against one, and the unmatched tracks appear in the report rather than silently
-  // resolving somewhere else — which is stated rather than hidden because `matchRemoteSongs`
-  // scopes every lookup to one library by design.
-  const libraryId = BaseRoute.optionalString(body, 'libraryId', 64) ?? (await scope.get(Tokens.LibraryService).listForUser(targetUserId))[0]?.id;
-  if (libraryId === undefined) {
+  // The scope is **every** library the target user was granted, not the first. This used to be
+  // `listForUser(...)[0]`, and a user with two libraries had their import matched against one:
+  // a track that lived in the second was reported `not-found` and the operator was told to
+  // re-index a library that already held it. That is the same narrowing `SongIdLookupDAO`
+  // documents for the play queue — a per-user record resolved against `libraries[0]`, where
+  // every entry from the second silently vanished — and the same fix.
+  //
+  // An explicit `libraryId` still narrows it, so an operator can import into one library on
+  // purpose. It is a **scope**, not a single id: the payload carries the list because every
+  // lookup below is scoped to it, and a single-library import is the one-element case.
+  const granted = await scope.get(Tokens.LibraryService).listForUser(targetUserId);
+  const requested = BaseRoute.optionalString(body, 'libraryId', 64);
+  // `== null` rather than `=== undefined`: `optionalString` answers **null** for an absent
+  // field, and testing only for `undefined` makes `[null]` the scope — so a target with no
+  // granted library skipped the refusal below and was told the deployment had no workflow
+  // bound. A `null` id is a silent widening of the scope to nothing, which is the one answer
+  // here that would be a lie.
+  const libraryIds = requested == null ? granted.map((row) => row.id) : [requested];
+  if (libraryIds.length === 0 || libraryIds[0] == null) {
     return BaseRoute.jsonError(c, 'The target user has no granted library, so no imported song could be matched.', 409);
   }
 
@@ -228,7 +241,7 @@ async function startImport(c: UserContext): Promise<Response> {
     id: run.id,
     // The **run id** and the ids the steps are named after. Never the password: a Workflow payload
     // is persisted by the platform, and the workflow re-reads the source through the same service.
-    params: { runId: run.id, sourceId, userId: targetUserId, libraryId, phases, playlistIds },
+    params: { runId: run.id, sourceId, userId: targetUserId, libraryIds, phases, playlistIds },
   });
   await runs.update(run.id, { workflowId: instance.id, status: 'running', lastError: null });
   return c.json({ id: run.id, workflowId: instance.id, phases }, 202);

@@ -27,7 +27,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { albumKeyFor, matchRemoteAlbums, matchRemoteArtists, matchRemoteSongs, resolveGrouping } from '@edge-sonic/backend-services/import';
 import type { AlbumMatchStore, MatchStore } from '@edge-sonic/backend-services/import';
 import type { SongRow } from '@edge-sonic/backend-data/dao';
-import { albumKeySpec, decodeId, IdKind } from '@edge-sonic/subsonic';
+import { albumKeySpec, decodeAlbumKey, decodeId, IdKind } from '@edge-sonic/subsonic';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SongMatchDAO } from '@edge-sonic/backend-data/dao';
 import { SubrequestCounter } from '@edge-sonic/shared';
@@ -318,7 +318,16 @@ describe('a remote album key is the same key this server publishes', () => {
     expect(localId).toBeDefined();
     // Decoding back to the key is the round trip that proves the two halves agree — the invariant
     // `packages/backend-data/AGENTS.md` states as structural.
-    expect(decodeId(localId as string, IdKind.AlbumKey).path).toBe(albumKeyFor('Bon Iver', 'For Emma', 'album'));
+    //
+    // It goes through `decodeAlbumKey`, **not** `decodeId(...).path`, and that is the point.
+    // The payload of an `alk:` id is `a/<base64url>` — three shapes, read by
+    // `decodeAlbumKey` — so a key written into it raw is a payload the decoder rejects: the
+    // import used to mint `encodeId(AlbumKey, libraryId, key)` with the bare key, which
+    // `decodeAlbumKey('album:for emma')` answers `null` for. An imported **album star** was
+    // therefore stored against an id `getStarred` and `getAlbum` could not resolve, which is
+    // the "a star on an unreadable id is invisible" defect `findPresentAlbumKeys` exists to
+    // prevent, reached through the encoder instead of the key.
+    expect(decodeAlbumKey(decodeId(localId as string, IdKind.AlbumKey).path)).toBe(albumKeyFor('Bon Iver', 'For Emma', 'album'));
   });
 
   it('reports an album this library does not hold rather than storing an unreadable star', async () => {
