@@ -3,7 +3,8 @@
  *
  * Its own module because it is not a `SongDAO` concern: `PlaylistDAO` and `SongIndexDAO`
  * need it too, and importing it *from* `SongDAO` would make the dependency point at the
- * wrong file. The chunk size is SQLite's variable count, not a batching preference.
+ * wrong file. The chunk size is D1's measured 100-parameter ceiling (see `sqlLimits.ts`),
+ * not SQLite's default and not a batching preference.
  */
 function chunkArray<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];

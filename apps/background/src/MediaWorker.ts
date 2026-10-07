@@ -138,7 +138,7 @@ class MediaWorker extends DurableObject<Cloudflare.Env> {
       dirPath,
       candidates,
       {
-        clientFor: (row) => scope.get(Tokens.LibraryService).clientFor(row),
+        clientFor: (row) => scope.get(Tokens.LibraryService).clientFor(row, () => scope.get(Tokens.SubrequestMeter).charge(1, 'fetch')),
         cache: scope.get(Tokens.KvCache),
       },
       timeoutMs,
