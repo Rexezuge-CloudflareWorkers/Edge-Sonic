@@ -4,10 +4,11 @@ import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { LibraryForm } from './LibraryForm';
-import { probeLibrary, startLibraryScan, stepLibraryScan } from '../../services/libraryService';
+import { probeLibrary, startLibraryEnrich, startLibraryScan, stepLibraryEnrich, stepLibraryScan } from '../../services/libraryService';
 import type { LibraryDraft } from '../../lib/libraryDraft';
 import { describeProbe, describeScan, describeStopReason } from '../../lib/probe';
 import { describeScanState } from '../../lib/scanStatus';
+import { describeEnrichState } from '../../lib/enrichStatus';
 import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../../types';
 
 /**
@@ -139,6 +140,33 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
     );
   };
 
+  /**
+   * Enrich: tag-read every track still owing one, a bounded chunk at a time.
+   *
+   * Both halves are needed for the scan's reason. `start` begins the run and advances
+   * one chunk on the object's alarm; `step` is the operator's manual single-chunk
+   * trigger — and without the `ENRICH` binding it is the only thing that moves the run
+   * at all. Nothing is read back afterwards: `onRun` reloads the list, which carries
+   * the enrichment state, so a third round trip would only discard the chunk's
+   * diagnosis.
+   *
+   * While the scan is advancing the server refuses with `409`, and that refusal arrives
+   * as the error notice — the operator asked, so the operator is told to wait.
+   */
+  const enrich = async () => {
+    await onRun(
+      library.id,
+      async () => {
+        await startLibraryEnrich(library.id);
+        if (!alive.current) return undefined;
+        await stepLibraryEnrich(library.id);
+        if (!alive.current) return undefined;
+        return undefined;
+      },
+      t('libraries.enrichStarted', 'Enrichment started.'),
+    );
+  };
+
   const presented = probe === null ? null : describeProbe(probe);
   // From the list, not from this row's own state: the poll is what keeps it current, and a
   // status held only here would be right until the operator happened to click something.
@@ -172,6 +200,25 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
     ),
     deadline: t('libraries.scanPausedDeadline', 'Paused at the per-chunk time limit. Raise SCAN_CHUNK_DEADLINE_MS, or expect more polls.'),
   });
+  // From the list, like the scan state: the poll is what keeps it current.
+  const enrichState = library.enrich;
+  const enrichPresented = describeEnrichState(enrichState, {
+    never: t('libraries.enrichNever', 'Not enriched yet.'),
+    idle: t('libraries.enrichIdle', 'Enriched.'),
+    partial: t(
+      'libraries.enrichPartial',
+      'Partially enriched. New tracks enrich on first play, or run the enrichment again.',
+    ),
+    enriching: t('libraries.enrichEnriching', 'Enriching.'),
+    failed: t('libraries.enrichFailed', 'Retrying after an error.'),
+    stalled: t('libraries.enrichStalled', 'Stopped retrying. Fix the cause, then enrich again.'),
+    paused: t(
+      'libraries.enrichPaused',
+      "D1's daily write allowance is spent. Paused until {{time}} UTC; the enrichment resumes itself.",
+    ),
+    tracksRemaining: t('libraries.enrichTracks', '{{count}} tracks remaining'),
+  });
+  const enrichFailure = describeScan(enrichState?.lastError);
 
   return (
     <li className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
@@ -188,6 +235,13 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
           this component and was only ever set by the Rescan button.
         */}
         <Badge variant={scanPresented.tone}>{scanPresented.label}</Badge>
+        {/*
+          The enrichment badge is unconditional for the scan badge's reason: enrichment is
+          a *state* that exists whether or not anyone is looking. A library whose tracks
+          still owe a tag read says so here, which is the row's second call to action
+          beside the scan's.
+        */}
+        <Badge variant={enrichPresented.tone}>{enrichPresented.label}</Badge>
         {library.isEnabled ? null : <Badge variant="warning">{t('libraries.disabled', 'disabled')}</Badge>}
       </div>
       {/*
@@ -235,6 +289,16 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
         */}
         {scanPaused !== null && <span className="ml-2 break-words">{scanPaused}</span>}
       </p>
+      {/*
+        The enrichment count and its diagnosis, from the list's enrichment state so the
+        poll updates them. Rendered on its own line because it answers a different
+        question from the scan's — "are the tags read" rather than "is the index caught
+        up" — and one line carrying both would read as one claim.
+      */}
+      <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+        {enrichPresented.detail}
+        {enrichFailure !== null && <span className="ml-2 break-words text-[var(--color-error-text)]">{enrichFailure}</span>}
+      </p>
       {editing && <LibraryForm library={library} busy={busy} onSubmit={(draft) => onEditSubmit(library.id, draft)} onCancel={onEditDone} />}
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button size="sm" loading={busy || probing} onClick={() => void test()}>
@@ -244,6 +308,15 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
         <Button size="sm" loading={busy} onClick={() => void rescan()}>
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
           {t('libraries.rescan', 'Rescan')}
+        </Button>
+        {/*
+          Tag-read every track still owing one. Separate from Rescan because the two do
+          different work — "has the index caught up" and "are the tags read" — and the
+          enrichment runs only while the scan is idle, so one button cannot do both.
+        */}
+        <Button size="sm" loading={busy} onClick={() => void enrich()}>
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+          {t('libraries.enrich', 'Enrich')}
         </Button>
         {/*
           The edit action is what makes a rejected credential fixable. It did not

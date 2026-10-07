@@ -6,6 +6,8 @@ import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';
 import { resolveScanDriver } from '../workers/scanDriver';
+import { resolveEnrichDriver } from '../workers/enrichDriver';
+import { READER_VERSION } from '@edge-sonic/media-tags';
 
 type ScopeContext = UserContext;
 
@@ -50,6 +52,15 @@ async function scopeMiddleware(c: ScopeContext, next: Next): Promise<Response | 
       // thunk read out of the scope being constructed, so the driver and the scope cannot end up on
       // different graphs — and two graphs would mean two `SubrequestCounter`s.
       resolveScanDriver(c.env, () => BaseRoute.getScope(c).get(Tokens.ScanService), meterOf()),
+      // The enrichment run's driver, decided the same way and for the same reason. A separate
+      // decision because the loops are separate: one predicate for both would let a deployment
+      // with a scan object and no enrich object advance an enrichment through the scan's.
+      resolveEnrichDriver(
+        c.env,
+        () => BaseRoute.getScope(c).get(Tokens.LibraryEnrichmentService),
+        async (libraryId) => (await BaseRoute.getScope(c).get(Tokens.SongEnrichmentDAO)()).countNeedingEnrichment(libraryId, READER_VERSION),
+        meterOf(),
+      ),
     ),
   );
   await next();

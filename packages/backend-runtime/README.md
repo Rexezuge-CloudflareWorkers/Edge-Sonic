@@ -13,6 +13,7 @@ in the package.
 | --- | --- |
 | `config/ConfigurationDefaults.ts` | every default, in one file, beside the limit it belongs to |
 | `config/subrequests.ts` | `WORKER_SUBSREQUEST_CEILING = 50` and **every bound derived from it** |
+| `config/enrichSubrequests.ts` | the library-wide enrich chunk's page, derived from the same ceiling (split out when `subrequests.ts` hit the god-file limit) |
 | `config/ServiceEnv.ts` | the declared shape of `env` |
 | `config/EnvParser.ts` | the parsers — `positiveInt`, `nonNegativeInt`, and why both |
 | `config/sections/` | `AuthConfig`, `LibraryLimits` |

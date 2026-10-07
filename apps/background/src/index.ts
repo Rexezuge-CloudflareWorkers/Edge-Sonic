@@ -6,6 +6,12 @@ export { createScanWorkerScope } from './ScanWorkerFactory';
 // behind up to `SCAN_CHUNK_DEADLINE_MS`. See `MediaWorker.ts`.
 export { MediaWorker } from './MediaWorker';
 export type { EnrichFactsInput } from './MediaWorker';
+// One Durable Object per library for the library-wide tag enrichment: bounded chunks off
+// the rows still owing a read, alarm-chained like the scan but on its own namespace — a
+// lifecycle is its alarm, so sharing the scan's would let one loop's terminal
+// `deleteAlarm` silently disarm the other. See `EnrichWorker.ts`.
+export { EnrichWorker } from './EnrichWorker';
+export type { EnrichProgress } from './EnrichWorker';
 // The import: a Workflow for the bounded phases, and a Durable Object for the play-count walk
 // that does not fit a step budget. Exported from here so `apps/api` can name both classes for
 // the wrangler bindings, which is how `ScanWorker` reaches `SCAN` today.

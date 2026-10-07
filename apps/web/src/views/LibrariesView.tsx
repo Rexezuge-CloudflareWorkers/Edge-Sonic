@@ -12,6 +12,7 @@ import type { ShowNotice } from '../hooks/useNotice';
 import { toPatch } from '../lib/libraryDraft';
 import type { LibraryDraft } from '../lib/libraryDraft';
 import { isAdvancingStatus } from '../lib/scanStatus';
+import { isEnrichAdvancingStatus } from '../lib/enrichStatus';
 import { SCAN_POLL_INTERVAL_MS } from '../lib/constants';
 import type { LibrarySummary } from '../types';
 
@@ -125,7 +126,9 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
    *   time rather than watched for changes, so a tab restored after an hour picks the
    *   schedule up from the next tick without a visibility listener to leak.
    */
-  const scanning = (libraries ?? []).some((library) => isAdvancingStatus(library.scan?.status));
+  const scanning = (libraries ?? []).some(
+    (library) => isAdvancingStatus(library.scan?.status) || isEnrichAdvancingStatus(library.enrich?.status),
+  );
   useEffect(() => {
     if (!scanning) return undefined;
     const timer = setInterval(() => {

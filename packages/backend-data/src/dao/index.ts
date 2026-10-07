@@ -9,6 +9,8 @@ export { UserDAO, LibraryDAO, nowSeconds } from './identity';
 export { NodeDAO } from './NodeDAO';
 export type { NodeInput } from './NodeDAO';
 export { SongDAO } from './SongDAO';
+export { SongEnrichmentDAO } from './songEnrichment';
+export type { EnrichableRow } from './songEnrichment';
 // What one metadata write cost against the daily row-write allowance, and the empty answer. They
 // live beside the patch builder rather than beside `SongDAO`, because both are about *that*
 // statement: the builder says which columns move and this says what they cost. `backend-services`

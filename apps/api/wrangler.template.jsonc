@@ -49,6 +49,19 @@
         "name": "MEDIA_DO",
         "class_name": "MediaWorker",
       },
+      {
+        // The library-wide tag enrichment: bounded chunks off the rows still owing a read,
+        // alarm-chained like the scan.
+        //
+        // A **fourth** namespace for the same lifecycle reason as `IMPORT_DO`: a Durable
+        // Object's lifecycle is its alarm, so sharing the scan's namespace would put two
+        // alarm-chained loops in one object, where one loop's terminal `deleteAlarm`
+        // silently disarms the other. The enrichment runs only while the scan is idle —
+        // both loops spend the same daily row-write allowance — but idleness is checked
+        // per chunk, not by sharing an object.
+        "name": "ENRICH",
+        "class_name": "EnrichWorker",
+      },
     ],
   },
   "migrations": [
@@ -68,6 +81,15 @@
       // a column.
       "tag": "v1000000002",
       "new_sqlite_classes": ["MediaWorker"],
+    },
+    {
+      // `EnrichWorker` holds a run's progress, the day's row-write count and any pause — the
+      // same split `ScanWorker` keeps, for the same reason metering D1 writes must not itself
+      // spend D1 writes. Losing it restarts the current run's counters from zero, which costs
+      // progress reporting rather than correctness: the remaining set is the `songs` rows
+      // themselves.
+      "tag": "v1000000003",
+      "new_sqlite_classes": ["EnrichWorker"],
     },
   ],
   "workflows": [

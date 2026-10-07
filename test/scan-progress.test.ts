@@ -33,9 +33,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { describeScanState, formatResumeAt, isAdvancingStatus, SCAN_LABELS } from '../apps/web/src/lib/scanStatus';
+import { describeEnrichState, isEnrichAdvancingStatus, ENRICH_LABELS } from '../apps/web/src/lib/enrichStatus';
 import { isAdvancing, storedStatus, willResumeWithoutAPoll } from '@edge-sonic/backend-services/index';
+import { isEnrichAdvancing, willEnrichResumeWithoutPoll } from '@edge-sonic/backend-services/index';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import type { LibraryScanSummary } from '../apps/web/src/types';
+import type { LibraryEnrichSummary } from '../apps/web/src/types';
 import type { ScanStateRow } from '@edge-sonic/backend-data/dao';
 
 /**
@@ -331,6 +334,124 @@ describe('describeScanState', () => {
       tracksIndexed: '{{count}} titles',
     });
     expect(presented.label).toBe('INDEXING');
+    expect(presented.detail).toBe('7 titles');
+  });
+});
+
+/**
+ * An enrichment state with everything defaulted, so each case states only the field
+ * under test.
+ */
+function enrichState(overrides: Partial<LibraryEnrichSummary> = {}): LibraryEnrichSummary {
+  return { status: 'idle', enriched: 0, remaining: 0, lastError: null, resumeAt: null, ...overrides };
+}
+
+describe('isEnrichAdvancingStatus', () => {
+  it.each(['enriching', 'failed'] as const)('treats %s as still worth polling', (status) => {
+    // `failed` is advancing and that is the load-bearing half: a failed run is retried
+    // within its bound, so stopping here strands the remaining set the run was draining.
+    expect(isEnrichAdvancingStatus(status)).toBe(true);
+  });
+
+  it.each(['idle', 'stalled'] as const)('treats %s as terminal', (status) => {
+    expect(isEnrichAdvancingStatus(status)).toBe(false);
+  });
+
+  it('treats a library whose enrichment never started as terminal too', () => {
+    expect(isEnrichAdvancingStatus(null)).toBe(false);
+    expect(isEnrichAdvancingStatus(undefined)).toBe(false);
+  });
+
+  it('treats a paused run as terminal, because polling cannot move a wall clock', () => {
+    expect(isEnrichAdvancingStatus('paused')).toBe(false);
+  });
+
+  /**
+   * The client cannot import the server's `isEnrichAdvancing` — `apps/web` ships zero
+   * `@edge-sonic/*` runtime dependencies — so this is a twin rather than a delegation,
+   * pinned against the server's function over the whole vocabulary.
+   */
+  it('agrees with the server function on every status, for the same reason', () => {
+    for (const status of ['idle', 'enriching', 'failed', 'stalled', 'paused'] as const) {
+      expect(isEnrichAdvancingStatus(status), status).toBe(isEnrichAdvancing(status));
+    }
+  });
+
+  it("keeps the alarm's answer out of the polling guard", () => {
+    expect(willEnrichResumeWithoutPoll('paused')).toBe(true);
+    expect(isEnrichAdvancing('paused')).toBe(false);
+    expect(isEnrichAdvancingStatus('paused')).toBe(false);
+  });
+});
+
+describe('describeEnrichState', () => {
+  it('says a library whose enrichment never started has never been enriched, and claims no count', () => {
+    const presented = describeEnrichState(null);
+    expect(presented.label).toBe(ENRICH_LABELS.never);
+    expect(presented.detail).toBeNull();
+    expect(presented.tone).not.toBe('success');
+  });
+
+  it('reports a running enrichment in an informational tone with the remaining count', () => {
+    const presented = describeEnrichState(enrichState({ status: 'enriching', enriched: 4, remaining: 12 }));
+    expect(presented.tone).toBe('info');
+    expect(presented.label).toBe(ENRICH_LABELS.enriching);
+    expect(presented.detail).toBe('12 tracks remaining');
+  });
+
+  it('reports a failed run as retrying, and raises no notice', () => {
+    const presented = describeEnrichState(enrichState({ status: 'failed', lastError: 'the origin refused the connection', remaining: 3 }));
+    expect(presented.tone).toBe('warning');
+    expect(presented.label).toBe(ENRICH_LABELS.failed);
+    expect(presented.notice).toBeUndefined();
+  });
+
+  it('names the operator’s own action for a stalled run', () => {
+    const presented = describeEnrichState(enrichState({ status: 'stalled', lastError: 'credentials rejected', remaining: 3 }));
+    expect(presented.tone).toBe('error');
+    expect(presented.label).toBe(ENRICH_LABELS.stalled);
+    expect(presented.label).toMatch(/enrich again/i);
+    expect(presented.notice).toEqual({ type: 'error', text: ENRICH_LABELS.stalled });
+  });
+
+  it('names the hour a paused run resumes and says it resumes itself', () => {
+    const shown = describeEnrichState(enrichState({ status: 'paused', resumeAt: Date.UTC(2026, 9, 6, 0, 0, 0), remaining: 5 }));
+    expect(shown.tone).toBe('warning');
+    expect(shown.label).toContain('00:00');
+    expect(shown.label).toContain('resumes itself');
+    expect(shown.notice).toBeUndefined();
+  });
+
+  it('reports a finished run as enriched, and never counts a never-enriched library as zero', () => {
+    const presented = describeEnrichState(enrichState({ status: 'idle', enriched: 16 }));
+    expect(presented.tone).toBe('success');
+    expect(presented.label).toBe(ENRICH_LABELS.idle);
+    expect(presented.detail).toBeNull();
+  });
+
+  it('calls an idle run with tracks still owing partially enriched rather than done', () => {
+    // The `empty`-case twin from the scan side, in the informational direction rather
+    // than the error one: tracks enrich lazily on first play regardless, so an idle run
+    // with a remaining count is not a failure — but rendering it as "Enriched." would
+    // claim work nobody did.
+    const presented = describeEnrichState(enrichState({ status: 'idle', remaining: 6 }));
+    expect(presented.label).toBe(ENRICH_LABELS.partial);
+    expect(presented.tone).not.toBe('success');
+    expect(presented.detail).toBe('6 tracks remaining');
+  });
+
+  it.each(['enriching', 'failed', 'stalled'] as const)('still shows the remaining count while a run is %s', (status) => {
+    const presented = describeEnrichState(enrichState({ status, remaining: 6 }));
+    expect(presented.detail).toBe('6 tracks remaining');
+  });
+
+  it('takes its labels as arguments, so the decision is testable without i18next', () => {
+    const presented = describeEnrichState(enrichState({ status: 'enriching', remaining: 7 }), {
+      ...ENRICH_LABELS,
+      enriching: 'TAGGING',
+      tracksRemaining: '{{count}} titles',
+    });
+    expect(presented.label).toBe('TAGGING');
     expect(presented.detail).toBe('7 titles');
   });
 });

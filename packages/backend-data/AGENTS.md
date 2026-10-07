@@ -18,6 +18,7 @@ concrete DAO.
 | `dao/rows.ts`    | every row type, plus the `CountRow` / `IndexVersionRow` shapes (a few aggregate
   shapes live beside the query that produces them, in `songIndex.ts`)                 |
 | `dao/SongDAO.ts` | one song row: its facts, its derived metadata, its lifecycle, its single-row reads |
+| `dao/songEnrichment.ts` | the tracks still owing a tag read: the staleness selection and remaining counts for the library-wide enrichment |
 | `dao/songIndex.ts`| the aggregate reads: a page of albums, a page of artists, the genres         |
 | `dao/albumKeySql.ts`| the album key as SQL: the `GROUP BY` per grouping, and the batch size |
 | `dao/NodeDAO.ts` | the folder tree, the scan frontier, the subtree prune                         |

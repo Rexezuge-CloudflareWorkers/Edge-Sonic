@@ -1225,6 +1225,11 @@ describe('every hot lookup uses an index', () => {
       ['x', 1, 2],
     ],
     ['scan frontier', 'SELECT * FROM nodes WHERE library_id = ? AND is_scanned = 0 ORDER BY depth ASC, path ASC LIMIT ?', ['L', 40]],
+    [
+      'tracks owing enrichment',
+      'SELECT id, path, size, mtime_ms FROM songs WHERE library_id = ? AND (enriched_at IS NULL OR reader_version != ?) ORDER BY path ASC LIMIT ?',
+      ['L', 2, 7],
+    ],
     ['play queue', 'SELECT song_id FROM play_queue_entries WHERE user_id = ? ORDER BY position ASC', ['u']],
     [
       'granted libraries',

@@ -18,11 +18,13 @@ import { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import { LibraryService } from '../library/LibraryService';
 import type { ScanControl } from '../library/IndexDropService';
 import type { ScanDriver } from '../library/ScanDriver';
+import type { EnrichDriver } from '../library/EnrichDriver';
 import { ScanService } from '../index/ScanService';
 import { TreeService } from '../index/TreeService';
 import { EnrichmentService } from '../index/EnrichmentService';
 import { resolveKey } from './serviceFactory';
 import type { RequestScopeEnv } from './serviceFactory';
+import { bindEnrichment } from './bindEnrichment';
 import { bindImport } from './bindImport';
 import { bindIndexDrop } from './bindIndexDrop';
 import { bindScanDriver } from './bindScanDriver';
@@ -46,6 +48,7 @@ function createRequestScope(
   env: RequestScopeEnv,
   scanFor?: (libraryId: string) => ScanControl | null,
   scanDriver?: ScanDriver,
+  enrichDriver?: EnrichDriver,
 ): Container {
   const scope = new Container();
   const config = AppConfiguration.fromEnv(env);
@@ -362,8 +365,10 @@ bindImport(scope, config, subrequests);
     }),
   );
 
-  // Last, and in its own module because it depends on everything above it. See `bindScanDriver.ts`.
-bindScanDriver(scope, scanDriver);
+  // Last, and in their own modules because they depend on everything above them. See
+  // `bindScanDriver.ts` and `bindEnrichment.ts`.
+  bindScanDriver(scope, scanDriver);
+  bindEnrichment(scope, db, subrequests, config, enrichDriver);
 
   return scope;
 }
