@@ -363,10 +363,6 @@ export default tseslint.config(
               message: 'backend-runtime must not import from webdav (higher layer)',
             },
             {
-              group: ['@edge-sonic/dav-store', '@edge-sonic/dav-store/*'],
-              message: 'backend-runtime must not import from dav-store (higher layer)',
-            },
-            {
               group: ['@edge-sonic/backend-services', '@edge-sonic/backend-services/*'],
               message: 'backend-runtime must not import from backend-services (higher layer)',
             },
@@ -460,7 +456,7 @@ export default tseslint.config(
     },
   },
   // Layer 5: apps/api — route through backend-services (proxy helpers + fetch),
-  // never backend-data values (type-only allowed). No DOs, no KV, no dav-store.
+  // never backend-data values (type-only allowed). No DOs, no KV.
   {
     files: ['apps/api/**/*.{ts,js}'],
     rules: {

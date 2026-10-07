@@ -20,31 +20,11 @@
 // client that 404s on every inner path used to exhaust a whole day's budget in
 // ~40 minutes while answering every request correctly.
 //
-// ### Two ways to do it, and **no live domain uses either one yet**
-//
-// The version-in-key rule — a domain that caches a *derived aggregate* takes the
-// library's `scan_state.index_version` as its first key part, so a completed scan
-// makes every entry written under the old version **structurally unreachable**
-// and invalidation costs zero writes at all — was implemented on two domains,
-// `libIndex` and `libTree`. Neither had a production caller, so the mechanism had
-// no surface: `index_version` is read nowhere in this file or in `KvCache`.
-//
-// Both domains are removed rather than left to imply a live strategy, and
-// `versionScoped` goes with them. What remains is the other rule, and it is the
-// one the two live domains use:
-//
-//   - **`songMeta`** — keyed by the file's `mtimeMs`+`size`, so a re-tagged track's
-//     entry becomes unreachable when the file moves.
-//   - **`albumArt`** — the same key, for the same reason: re-tagging changes the
-//     picture without moving anything else in the library, whereas a rescan that
-//     finds nothing new bumps `index_version` and would orphan every cached image
-//     for no reason.
-//
-// So the honest statement today is "invalidation is in the key", and the aggregate
-// case is a rule this codebase has *reasoned about* rather than one it exercises. A
-// domain that caches a derived aggregate must be `versionScoped: true` and take the
-// version as its first part — and `versionScoped` is asserted against the live set
-// rather than assumed, so adding a domain cannot quietly opt out of it.
+// Both live domains key on the file's own mtimeMs+size, so a re-tagged track's
+// entry becomes unreachable when the file moves, while a rescan that finds
+// nothing new leaves every entry valid. A future aggregate-caching domain must
+// take scan_state.index_version as its first key part so superseded entries go
+// structurally unreachable.
 
 const KV_KEY_VERSION = 'v1';
 const KV_MAX_KEY_LENGTH = 512;

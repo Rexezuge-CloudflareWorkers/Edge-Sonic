@@ -94,16 +94,11 @@ function albumModel(songs: readonly SongRow[], library: LibraryRow, identity: Al
   const first = songs[0];
   const id = identity.idOf(first) ?? '';
   const artist = albumArtistOf(songs);
-  // Every id this album has ever been published under: the current one, then the
-  // folder-shaped one each of its rows would have had. A star is stored under the id the album
-  // had *when the user starred it*, and an album whose identity moved from a folder to a tag is
-  // published under a new id while the `stars` row still holds the old one. Checking only the
-  // current id reports a correctly-stored star by nothing at all — the `starred: undefined`
-  // finding one layer up, where a field was dropped by both serializers because the lookup held
-  // nothing.
-  const legacy = songs.map((song) => identity.legacyFolderIdOf(song));
-  const starredAt = annotationFor(annotations.stars, [id, ...legacy]);
-  const rating = annotationFor(annotations.ratings, [id, ...legacy]);
+  // Annotations resolve under the current id only. A star stored under a
+  // previous folder-shaped id no longer resolves after a grouping re-key:
+  // accepted data loss (operator decision), keeps one id per album.
+  const starredAt = annotations.stars.get(id);
+  const rating = annotations.ratings.get(id);
   return {
     id,
     name: albumNameOf(first),
@@ -147,22 +142,6 @@ function firstWith<T>(songs: readonly SongRow[], read: (song: SongRow) => T | nu
   for (const song of songs) {
     const value = read(song);
     if (value !== null && value !== undefined) return value;
-  }
-  return undefined;
-}
-
-/**
- * The value stored under the first of `ids` that has one.
- *
- * Two annotations to answer over one set of ids is the shape of the problem and of the answer.
- * A helper rather than two inline `.has(...)`/`.get(...)` pairs because the pairs are what
- * diverge: `has` without `get` publishes `starred` with no timestamp, and both serializers drop
- * an absent field — so a correct star is reported by nothing.
- */
-function annotationFor(lookup: ReadonlyMap<string, number>, ids: readonly string[]): number | undefined {
-  for (const id of ids) {
-    const value = lookup.get(id);
-    if (value !== undefined) return value;
   }
   return undefined;
 }
