@@ -81,10 +81,17 @@ interface FlacOptions {
   totalSamples?: number;
   fileSize?: number;
   comments?: Record<string, string>;
+  /**
+   * Raw `KEY=value` comment entries appended after `comments`, in order.
+   *
+   * A record cannot hold a repeated key, and the reader's duplicate-key rule is
+   * exactly what this exists to stage.
+   */
+  extraComments?: string[];
 }
 
 function buildFlac(options: FlacOptions = {}): Uint8Array {
-  const { sampleRate = 44_100, channels = 2, bitDepth = 16, totalSamples = 44_100 * 180, fileSize, comments = {} } = options;
+  const { sampleRate = 44_100, channels = 2, bitDepth = 16, totalSamples = 44_100 * 180, fileSize, comments = {}, extraComments = [] } = options;
 
   // STREAMINFO is 34 bytes: min block size u16, max block size u16, min frame size
   // u24, max frame size u24, then one 64-bit run packing 20/3/5/36 bits, then a
@@ -115,7 +122,7 @@ function buildFlac(options: FlacOptions = {}): Uint8Array {
 
   // Vorbis comment block: vendor string, count, then length-prefixed pairs.
   const vendor = encoder.encode('edge-sonic-test');
-  const entries = Object.entries(comments).map(([key, value]) => encoder.encode(`${key}=${value}`));
+  const entries = [...Object.entries(comments).map(([key, value]) => encoder.encode(`${key}=${value}`)), ...extraComments.map((entry) => encoder.encode(entry))];
   let commentLength = 4 + vendor.length + 4;
   for (const entry of entries) commentLength += 4 + entry.length;
   const comment = new Uint8Array(commentLength);
@@ -208,6 +215,28 @@ describe('FLAC', () => {
     expect(tags.channels).toBe(1);
     expect(tags.bitDepth).toBe(24);
     expect(tags.durationSeconds).toBe(60);
+  });
+
+  it('drops whitespace-only values but keeps edge whitespace byte-identical', () => {
+    // `GENRE= ` is a real tag this library's files carry, and a blank genre with a
+    // song count beside it is worse than an absent one. Edge whitespace is kept as
+    // read: the reference server preserves it in place (`Holiday Holiday / Tragic
+    // Drops `), so trimming would trade agreement for tidiness.
+    const tags = readAudioTags(buildFlac({ comments: { TITLE: 'Holocene', ARTIST: 'Bon Iver ', ALBUM: 'For Emma ', GENRE: ' ' } }), 30_000_000);
+    expect(tags.artist).toBe('Bon Iver ');
+    expect(tags.album).toBe('For Emma ');
+    expect(tags.genre).toBeNull();
+  });
+
+  it('resolves a repeated key to its last value', () => {
+    // `Stella☆` carries `album artist=SILENT SIREN` ahead of `ALBUMARTIST=Silent
+    // Siren`. First-wins publishes the stale all-caps spelling against the file's own
+    // `ARTIST`; the reference server reads the canonical later write.
+    const tags = readAudioTags(
+      buildFlac({ comments: { ARTIST: 'Silent Siren' }, extraComments: ['ALBUMARTIST=SILENT SIREN', 'ALBUMARTIST=Silent Siren'] }),
+      30_000_000,
+    );
+    expect(tags.albumArtist).toBe('Silent Siren');
   });
 });
 

@@ -57,14 +57,10 @@
  *
  * `upsertFileFacts` writes all three or none, so a row is normally either wholly derived
  * or wholly tagged. The mixed case is a partial tag read — a file carrying `ALBUM` but no
- * `ALBUMARTIST` — where `applyMetadata` clears this column and the derivation-owned
- * `album_artist` remains. Under "any one" such a row stays flagged, so a later correction
- * of the convention rewrites columns a real tag supplied. Under "all three" it is not
- * flagged, so a correction may not reach it.
- *
- * The cost is stated rather than hidden: that row's derived `album_artist` becomes
- * permanent. That is the right way round — it is the artist's own name, derived from the
- * folder they are filed under, and no correction of a separator rule changes it.
+ * `ALBUMARTIST` — where `applyMetadata` clears this column. Enrichment refines that row's
+ * `album_artist` to its tag artist on the same write (see `effectiveAlbumArtist`), because
+ * the remaining derived value is the same name through filesystem sanitization and no
+ * correction of a separator rule reaches it; the backfill then has nothing to repair.
  * `test/schema.int.test.ts` asserts both directions.
  *
  * ### Why `derived_version` cannot do this as well

@@ -10,6 +10,7 @@
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import type { AudioTags } from '@edge-sonic/media-tags';
 import type { MetadataWriteResult } from '@edge-sonic/backend-data/dao';
+import { effectiveAlbumArtist } from './songMetaCache';
 
 type ApplyMetadata = (
   id: string,
@@ -36,6 +37,10 @@ type ApplyMetadata = (
  * Text tags are only written when the file supplied them, so a format with no comment
  * block does not blank out metadata a previous read found — and, more importantly, does
  * not overwrite the path-convention fallback the indexer derived.
+ *
+ * A file naming no album artist still gets one: its artist. The folder-derived album
+ * artist this replaces is the same name through filesystem sanitization, so without
+ * the mirror the row groups and displays under a spelling no tag ever held.
  */
 async function persistEnrichment(
   applyMetadata: ApplyMetadata,
@@ -46,6 +51,7 @@ async function persistEnrichment(
   channels: number | null,
   tags: AudioTags | null,
 ): Promise<MetadataWriteResult> {
+  const albumArtist = tags === null ? null : effectiveAlbumArtist(tags);
   return await applyMetadata(songId, {
     // `duration` and `bitrate` are NOT NULL columns, so an unreadable value is
     // 0 rather than null.
@@ -61,7 +67,7 @@ async function persistEnrichment(
       ...(tags.title && { title: tags.title }),
       ...(tags.artist && { artist: tags.artist }),
       ...(tags.album && { album: tags.album }),
-      ...(tags.albumArtist && { albumArtist: tags.albumArtist }),
+      ...(albumArtist && { albumArtist }),
       ...(tags.genre && { genre: tags.genre }),
       ...(tags.track !== null && { track: tags.track }),
       ...(tags.disc !== null && { disc: tags.disc }),

@@ -774,6 +774,9 @@ describe('an Ogg duration, which the prefix read cannot supply', () => {
     // across them by a page header. Nothing here was readable before.
     expect(applied[0]?.metadata.artist).toBe('Bon Iver');
     expect(applied[0]?.metadata.album).toBe('For Emma');
+    // The fixture names no album artist, so it mirrors the artist: the folder-derived
+    // album artist this replaces is the same name through filesystem sanitization.
+    expect(applied[0]?.metadata.albumArtist).toBe('Bon Iver');
   });
 
   it('reports no duration rather than a wrong one when the tail read is disabled', async () => {
@@ -813,6 +816,9 @@ describe('an Ogg duration, which the prefix read cannot supply', () => {
     expect(applied[0]?.id).toBe('s1');
     expect(applied[0]?.metadata.duration).toBe(DURATION_SECONDS);
     expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+    // Both write paths share one mapping: the facts path mirrors the artist onto the
+    // unnamed album artist exactly as the row-holding path does.
+    expect(applied[0]?.metadata.albumArtist).toBe('Bon Iver');
   });
 
   it('writes nothing when the tail read fails transiently, so the duration is retried', async () => {

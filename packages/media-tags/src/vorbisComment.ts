@@ -207,6 +207,18 @@ function walkVorbisCommentList(bytes: Uint8Array, offset: number, visit: (key: s
  *
  * A field whose value is past the end of the source is skipped rather than fatal, so a
  * bounded read of a file whose picture precedes a later tag keeps the tags it can reach.
+ *
+ * Two normalizations, both measured against files the reference server reads
+ * differently:
+ *
+ * - A whitespace-only value is absent. A `GENRE= ` tag is a junk genre the aggregates
+ *   would otherwise publish with a song count beside it. Values that merely carry
+ *   edge whitespace are kept byte-identical: the reference preserves them in place
+ *   (`Holiday Holiday / Tragic Drops `, `... Kotoha & megu `), so trimming would
+ *   trade agreement for tidiness.
+ * - A repeated key resolves to its **last** parsable value. `Stella☆` carries
+ *   `album artist=SILENT SIREN` ahead of `ALBUMARTIST=Silent Siren`, and first-wins
+ *   publishes the stale all-caps spelling against the file's own `ARTIST`.
  */
 function parseVorbisCommentSource(source: ByteSource, offset: number): CommentFields {
   const fields: CommentFields = {
@@ -221,41 +233,41 @@ function parseVorbisCommentSource(source: ByteSource, offset: number): CommentFi
   };
 
   walkVorbisCommentSource(source, offset, (key, value) => {
-    if (value === null) return;
+    if ((value === null) || (value.trim().length === 0)) return;
     switch (key) {
       case 'TITLE': {
-        fields.title ??= value;
+        fields.title = value;
         break;
       }
       case 'ARTIST': {
-        fields.artist ??= value;
+        fields.artist = value;
         break;
       }
       case 'ALBUM': {
-        fields.album ??= value;
+        fields.album = value;
         break;
       }
       case 'ALBUMARTIST':
       case 'ALBUMARTISTSORT': {
-        fields.albumArtist ??= value;
+        fields.albumArtist = value;
         break;
       }
       case 'GENRE': {
-        fields.genre ??= value;
+        fields.genre = value;
         break;
       }
       case 'DATE':
       case 'YEAR':
       case 'ORIGINALDATE': {
-        fields.year ??= parseYear(value);
+        fields.year = parseYear(value) ?? fields.year;
         break;
       }
       case 'TRACKNUMBER': {
-        fields.track ??= parseIndex(value);
+        fields.track = parseIndex(value) ?? fields.track;
         break;
       }
       case 'DISCNUMBER': {
-        fields.disc ??= parseIndex(value);
+        fields.disc = parseIndex(value) ?? fields.disc;
         break;
       }
       default: {
