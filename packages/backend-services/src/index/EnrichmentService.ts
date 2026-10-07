@@ -258,23 +258,18 @@ class EnrichmentService {
         ({ changes: rowsWritten, billedRows } = await this.persist(row, duration, bitrate, sampleRate, channels, tags));
         return;
       }
-      const written = await this.deps.songs.applyMetadata(facts.id, {
-        duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
-        bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
-        readerVersion: READER_VERSION,
-        ...(sampleRate !== null && { sampleRate }),
-        ...(channels !== null && { channels }),
-        ...(tags && {
-          ...(tags.title && { title: tags.title }),
-          ...(tags.artist && { artist: tags.artist }),
-          ...(tags.album && { album: tags.album }),
-          ...(tags.albumArtist && { albumArtist: tags.albumArtist }),
-          ...(tags.genre && { genre: tags.genre }),
-          ...(tags.track !== null && { track: tags.track }),
-          ...(tags.disc !== null && { disc: tags.disc }),
-          ...(tags.year !== null && { year: tags.year }),
-        }),
-      });
+      // The scan's entry point writes through the same mapping as the row-holding
+      // one rather than a parallel object: two spellings of which tags a file may
+      // overwrite are free to disagree about exactly one field, silently.
+      const written = await persistEnrichment(
+        (id, metadata) => this.deps.songs.applyMetadata(id, metadata),
+        facts.id,
+        duration,
+        bitrate,
+        sampleRate,
+        channels,
+        tags,
+      );
       rowsWritten = written.changes;
       billedRows = written.billedRows;
     };

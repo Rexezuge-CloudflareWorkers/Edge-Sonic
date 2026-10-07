@@ -72,8 +72,18 @@ const DEFAULT_PREFIX_BYTES = 128 * 1024;
  * and no `getSong`, rescan, or re-enrichment ever re-read it. Entries without tags are
  * therefore wrong values in exactly the version-1 sense, and the bump re-reads both
  * the rows they stranded and the entries themselves.
+ *
+ * ### Version 4: what a tag *is* changed, not just where it is remembered
+ *
+ * Three stored values change for the same bytes: whitespace-only tag values are absent
+ * (`GENRE= ` published a blank genre with a song count beside it), a repeated key
+ * resolves to its last value (`album artist=SILENT SIREN` ahead of
+ * `ALBUMARTIST=Silent Siren` published the stale spelling), and a file naming no
+ * album artist mirrors its artist instead of keeping the folder-derived guess (whose
+ * sanitized spelling no tag ever held). Rows and entries written before this version
+ * hold the old values, so the bump re-reads them once.
  */
-const READER_VERSION = 3;
+const READER_VERSION = 4;
 
 function startsWith(bytes: Uint8Array, magic: readonly number[], offset = 0): boolean {
   return offset + magic.length > bytes.length ? false : magic.every((byte, index) => bytes[offset + index] === byte);

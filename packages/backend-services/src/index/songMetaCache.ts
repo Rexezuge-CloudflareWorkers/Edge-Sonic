@@ -97,8 +97,24 @@ function isCompleteEnrichment(entry: CachedEnrichment): boolean {
 }
 
 /**
- * The cache entry for one successful read.
+ * The file's effective album artist: its `ALBUMARTIST` tag, or its `ARTIST` when it
+ * names none.
  *
+ * One function rather than two `??` sites because the cache entry and the D1 write
+ * must agree: an entry carrying the tag's `null` while the row carries the mirrored
+ * artist replays nothing for a row that lost its tags. A file with neither keeps
+ * neither, so the path-derived fallback it already holds is left alone.
+ *
+ * Without this, a file carrying `ARTIST` but no `ALBUMARTIST` keeps the folder-derived
+ * album artist — the same name through filesystem sanitization, so `/` becomes `_`
+ * and the row groups and displays under a spelling no tag ever held.
+ */
+function effectiveAlbumArtist(tags: AudioTags): string | null {
+  return tags.albumArtist ?? tags.artist;
+}
+
+/**
+ * The cache entry for one successful read.
  * Built here rather than inline in `EnrichmentService` because the shape and the
  * completeness test are one decision, and the entry is the third leg of it: what
  * is remembered decides what a replay can restore. The bitrate needs the resolved
@@ -122,7 +138,7 @@ function buildCacheEntry(mtimeMs: number, size: number, tags: AudioTags, duratio
     title: tags.title ?? null,
     artist: tags.artist ?? null,
     album: tags.album ?? null,
-    albumArtist: tags.albumArtist ?? null,
+    albumArtist: effectiveAlbumArtist(tags) ?? null,
     genre: tags.genre ?? null,
     year: tags.year ?? null,
     track: tags.track ?? null,
@@ -130,5 +146,5 @@ function buildCacheEntry(mtimeMs: number, size: number, tags: AudioTags, duratio
   };
 }
 
-export { isCompleteEnrichment, buildCacheEntry };
+export { isCompleteEnrichment, buildCacheEntry, effectiveAlbumArtist };
 export type { CachedEnrichment };

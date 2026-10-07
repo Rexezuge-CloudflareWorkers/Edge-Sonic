@@ -94,10 +94,10 @@ const GROUPING_FIELDS = ['artist', 'album', 'albumArtist'] as const;
  * with a folder name — silent, and correct in the tests that do not bump a version.
  *
  * It is cleared whenever *any* of the three moves, which is the conservative direction:
- * a partial tag read — a file with `ALBUM` and no `ALBUMARTIST` — leaves the row
- * un-flagged, so a later correction of the convention may not rewrite the derivation-owned
- * `album_artist`. That costs a correction reaching one column and buys a correction never
- * clobbering a tag. See `groupingSource.ts`.
+ * a tag write can never leave the row looking like a guess. A partial tag read — a file
+ * with `ALBUM` and no `ALBUMARTIST` — moves `artist` and mirrors it onto `album_artist`
+ * in the same write (see `effectiveAlbumArtist`), so no derivation-owned value survives
+ * for a later correction to reach. See `groupingSource.ts`.
  *
  * Cleared to SQL `NULL` rather than to the empty string, so the flag has exactly two
  * states and an absent one is not a third.

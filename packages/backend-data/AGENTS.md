@@ -348,10 +348,11 @@ is pinned there.
     also makes an operator-chosen `%` or `_` an ordinary character.
     `'derived'` means **all three** of `artist`/`album`/`album_artist` came from the path;
     anything else means a tag supplied at least one. "All three" is the conservative
-    direction — the permissive one lets a convention correction overwrite a real tag, and
-    the cost is only that a partially-tagged row's derived `album_artist` is never
-    corrected, which no change of separator rule would affect anyway. Asserted in both
-    directions in `test/schema.int.test.ts`.
+    direction — the permissive one lets a convention correction overwrite a real tag.
+    A partially-tagged row's `album_artist` is refined by enrichment rather than left
+    derived: a file naming no album artist mirrors its tag artist on write, because the
+    folder guess is the same name through filesystem sanitization and no separator
+    correction reaches it. Asserted in both directions in `test/schema.int.test.ts`.
   - **Three writers maintain that column and all three are required.** `UPSERT_FILE_FACTS`
     stamps `'derived'` on the `INSERT` and **preserves** it on conflict (absent from the
     `SET` list); `APPLY_DERIVATION` restates it in the same statement as the values;
