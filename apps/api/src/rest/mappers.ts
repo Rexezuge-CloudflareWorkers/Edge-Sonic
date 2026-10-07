@@ -192,6 +192,12 @@ function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], 
       id,
       name: group.name,
       albumCount: group.albums.size,
+      // A client draws one image per artist row from `coverArt` via `getCoverArt`.
+      // Omitting it leaves Navic and every other grid client with nothing to request,
+      // so the artist list renders as empty tiles even when every album has art.
+      // The id itself is the cover id: `getCoverArt` resolves it to the artist's
+      // representative album (sidecar first, then embedded tags).
+      coverArt: id,
       // The epoch second the artist was starred, or nothing. It used to be
       // `{ starred: undefined }`, which is *not* a decorated flag that decorates nothing —
       // `undefined` is dropped by both serializers, so the attribute did not exist at all
