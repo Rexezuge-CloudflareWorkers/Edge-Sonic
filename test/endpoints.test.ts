@@ -965,14 +965,18 @@ describe('media retrieval by id', () => {
 describe('getArtists and getArtist', () => {
   it('groups artists, and describes one on request', async () => {
     const grouped = await harness.rest('getArtists');
-    const artists = payload<{ index: Array<{ name: string; artist: Array<{ id: string; name: string; albumCount: number }> }> }>(grouped.body, 'artists').index;
+    const artists = payload<{ index: Array<{ name: string; artist: Array<{ id: string; name: string; albumCount: number; coverArt?: string }> }> }>(grouped.body, 'artists').index;
     const bonIver = artists.find((group) => group.name === 'B');
 
     expect(bonIver?.artist[0]).toMatchObject({ id: ARTIST, name: 'Bon Iver', albumCount: 1 });
+    // A client draws one image per artist row from `coverArt` via `getCoverArt`.
+    // Without it Navic renders empty tiles even when every album has art.
+    expect(bonIver?.artist[0]?.coverArt).toBe(ARTIST);
 
     const detail = await harness.rest('getArtist', { id: ARTIST });
-    const artist = payload<{ name: string; albumCount: number; album: Array<{ id: string }> }>(detail.body, 'artist');
+    const artist = payload<{ name: string; albumCount: number; coverArt?: string; album: Array<{ id: string }> }>(detail.body, 'artist');
     expect(artist.name).toBe('Bon Iver');
+    expect(artist.coverArt).toBe(ARTIST);
 
     // The album id is the one `getAlbumList2` publishes, not a literal: the property under
     // test is that every surface mints one id for one album, and pinning a spelling here

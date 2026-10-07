@@ -326,11 +326,14 @@ describe('getCoverArt', () => {
     }
 
     const response = await harness.fetch(harness.restUrl('getCoverArt', { id: subsonicId('ar', 'The Compilers') }));
-    // `code=70`, because after the album probes the lookup falls back to the artist's
-    // *name* as a directory — and this artist has no such folder, only `Compilers/1..40`.
-    // The fallback is what the bound protects: it is one more request, and a client
-    // drawing 40 album rows is 40 such lookups.
-    expect(await response.clone().json()).toMatchObject({ 'subsonic-response': { error: { code: 70 } } });
+    // An existing artist with no artwork anywhere answers the placeholder, like an
+    // album with no art does — not `code=70`. `code=70` is for no such artist (see the
+    // test above). The artist-directory fallback has no such folder here, only
+    // `Compilers/1..40`, and the embedded probe finds no picture either, so the valid
+    // 1x1 PNG is what a client draws as an empty tile rather than a broken image.
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect((await response.clone().arrayBuffer()).byteLength).toBeGreaterThan(0);
 
     // The claim. 120 rows, 40 directories, 3 album probes — and a 4th request for the
     // artist-directory fallback, which is one fixed cost rather than one per album. The

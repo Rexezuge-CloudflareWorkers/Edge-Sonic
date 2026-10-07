@@ -178,6 +178,23 @@ describe('getCoverArt with embedded artwork', () => {
     expect([...bytes]).toEqual([...COVER]);
   });
 
+  it('serves the representative album art for an artist id with no sidecar', async () => {
+    // The Navic report: artist tiles were empty while album covers loaded. Artist
+    // elements publish `coverArt` as their own id, so the client requests
+    // `getCoverArt` with it — and that id used to resolve to no rows at all, answering
+    // the placeholder even though the artist's album carries an embedded picture.
+    const artistId = harness.ids.artist;
+    const { body } = await harness.rest('getArtists');
+    const artists = (body['subsonic-response'] as Record<string, unknown>).artists as { index: Array<{ artist: Array<{ id: string; coverArt?: string }> }> };
+    const mine = artists.index.flatMap((group) => group.artist).find((entry) => entry.id === artistId);
+    expect(mine?.coverArt, 'getArtists publishes no coverArt for the artist').toBe(artistId);
+
+    const response = await coverFor(artistId);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/jpeg');
+    expect([...new Uint8Array(await response.arrayBuffer())]).toEqual([...COVER]);
+  });
+
   it('finds the picture from a song id as well as from an album id', async () => {
     // Clients pass whatever id they happen to be holding, and a track id resolves to its
     // album directory — the same directory the album id names.

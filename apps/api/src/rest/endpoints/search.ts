@@ -155,7 +155,12 @@ function groupArtists(rows: readonly SongRow[], library: LibraryRow, identity: A
   return [...counts.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
     .slice(offset, offset + limit)
-    .map((entry) => el('artist', { id: artistIdOf(entry.name), name: entry.name, albumCount: entry.albums.size }));
+    .map((entry) => {
+      const id = artistIdOf(entry.name);
+      // Same contract as `getArtists`/`getArtist`: the artist id is its own cover id,
+      // so a client can request `getCoverArt` without a second lookup.
+      return el('artist', { id, name: entry.name, albumCount: entry.albums.size, coverArt: id });
+    });
 }
 
 async function search2(context: RestContext): Promise<EnvelopeResponse> {

@@ -144,7 +144,7 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const complete = await context.songIndex.listForAlbumKeys(library.id, keys, identity.grouping);
   const annotations = await annotationsFor(context, true);
   const albums = groupAlbumsOf(complete, library, identity, annotations);
-  return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length }, albums.map((album) => albumElement(album))));
+  return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length, coverArt: id }, albums.map((album) => albumElement(album))));
 }
 
 
