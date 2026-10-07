@@ -47,10 +47,15 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import { SCAN_CHUNK_SUBSREQUEST_BUDGET } from '@edge-sonic/backend-runtime/config';
+import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
+import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { runPlayCountAlbumPhase } from '@edge-sonic/backend-services/import';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import { createScanWorkerScope } from './ScanWorkerFactory';
+import { createPlayCountStore, describeWalkFailure, retryDelayMs, dailyLimitWalkMessage } from './playCountRetry';
+import type { WalkProgress } from './playCountRetry';
 
 /**
 The alarm's own payload: the run to walk.
@@ -84,7 +89,7 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
    */
   public async start(request: WalkRequest): Promise<{ readonly runId: string }> {
     await this.ctx.storage.put('runId', request.runId);
-    await this.ctx.storage.put('alarm', { albums: 0, songs: 0, unresolved: 0, finished: false, lastError: null });
+    await this.ctx.storage.put<WalkProgress>('alarm', { albums: 0, songs: 0, unresolved: 0, finished: false, lastError: null, consecutiveFailures: 0 });
     await this.ctx.storage.setAlarm(Date.now());
     return { runId: request.runId };
   }
@@ -119,16 +124,71 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
     try {
       await this.runBatch();
     } catch (error) {
-      // Recorded, then re-armed. A throwing alarm is retried a bounded number of times by the
-      // platform and then **dropped**, so a fault that escapes here leaves the run saying
-      // `running` with nothing scheduled to advance it — the exact wedge
-      // `ScanWorker.alarm` was fixed for.
-      console.error('[PlayCountImportWorker] batch failed; the alarm stays armed for a bounded retry');
-      console.error(error);
-      const progress = (await this.ctx.storage.get<WalkProgress>('alarm')) ?? { albums: 0, songs: 0, unresolved: 0, finished: false, lastError: null };
-      await this.ctx.storage.put('alarm', { ...progress, lastError: 'The play-count walk could not read the import source.' });
-      await this.ctx.storage.setAlarm(Date.now() + ALARM_DELAY_MS);
+      // Recorded, then re-armed within a bound. A throwing alarm is retried a bounded number
+      // of times by the platform and then **dropped**, so a fault that escapes here leaves the
+      // run saying `running` with nothing scheduled to advance it — the exact wedge
+      // `ScanWorker.alarm` was fixed for. The re-arm below is bounded by
+      // `MAX_CONSECUTIVE_FAILURES` rather than left to run for ever, which is what turned one
+      // poison album's `requireComplete` refusal into a one-second loop in October 2026.
+      const daily = isD1DailyLimitError(error);
+      if (daily !== null) {
+        await this.pauseForDailyLimit(daily.kind, daily.resetsAt, error);
+        return;
+      }
+      const runId = await this.ctx.storage.get<string>('runId');
+      const progress = (await this.ctx.storage.get<WalkProgress>('alarm')) ?? {
+        albums: 0,
+        songs: 0,
+        unresolved: 0,
+        finished: false,
+        lastError: null,
+        consecutiveFailures: 0,
+      };
+      const consecutiveFailures = (progress.consecutiveFailures ?? 0) + 1;
+      const lastError = describeWalkFailure(error);
+      console.error(`[PlayCountImportWorker] batch failed (attempt ${consecutiveFailures} of ${MAX_CONSECUTIVE_FAILURES}): ${lastError}`, error);
+      if (runId !== undefined && consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        await this.settle(runId, { ...progress, consecutiveFailures, lastError }, lastError);
+        return;
+      }
+      await this.ctx.storage.put<WalkProgress>('alarm', { ...progress, consecutiveFailures, lastError });
+      await this.ctx.storage.setAlarm(Date.now() + retryDelayMs(consecutiveFailures, ALARM_DELAY_MS));
     }
+  }
+
+  /**
+   * Hold the walk until the daily allowance resets, without spending the retry bound.
+   *
+   * A spent allowance resolves at midnight UTC by itself, so it is neither counted as a
+   * fault (which would eventually settle a walk that needed no operator) nor re-armed in
+   * a second (which re-runs the whole failure path ~86,400 times before the reset). The
+   * run row update is best-effort: D1 is refusing writes on exactly this path, so a
+   * refusal there must not lose the alarm the walk resumes on.
+   */
+  private async pauseForDailyLimit(kind: 'read' | 'write', resetsAt: number, error: unknown): Promise<void> {
+    const runId = await this.ctx.storage.get<string>('runId');
+    const progress = (await this.ctx.storage.get<WalkProgress>('alarm')) ?? {
+      albums: 0,
+      songs: 0,
+      unresolved: 0,
+      finished: false,
+      lastError: null,
+      consecutiveFailures: 0,
+    };
+    const lastError = dailyLimitWalkMessage(kind);
+    console.error(`[PlayCountImportWorker] ${lastError}`, error);
+    await this.ctx.storage.put<WalkProgress>('alarm', { ...progress, lastError });
+    if (runId !== undefined) {
+      try {
+        const scope = createScanWorkerScope(this.env);
+        const runs = await scope.get(Tokens.ImportRunDAO)();
+        await runs.update(runId, { status: 'paused', lastError });
+      } catch {
+        // D1 is refusing: the DO pause above is the truth the walk resumes on, and the run
+        // row is reconciled when the allowance returns.
+      }
+    }
+    await this.ctx.storage.setAlarm(resetsAt);
   }
 
   /**
@@ -143,7 +203,14 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
   private async runBatch(): Promise<void> {
     const runId = await this.ctx.storage.get<string>('runId');
     if (runId === undefined) return;
-    const progress = (await this.ctx.storage.get<WalkProgress>('alarm')) ?? { albums: 0, songs: 0, unresolved: 0, finished: false, lastError: null };
+    const progress = (await this.ctx.storage.get<WalkProgress>('alarm')) ?? {
+      albums: 0,
+      songs: 0,
+      unresolved: 0,
+      finished: false,
+      lastError: null,
+      consecutiveFailures: 0,
+    };
     if (progress.finished) return;
 
     const scope = createScanWorkerScope(this.env);
@@ -187,8 +254,8 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
       // whose track lives in the second is matched rather than reported unmatched. The
       // alternative — `libraries[0]` — is the narrowing `SongIdLookupDAO` records for the play
       // queue, and it cost this walk every count outside the first library.
-      libraryId: await this.libraryIdsFor(run.target_user_id),
-      store: this.store(scope, run.target_user_id),
+      libraryId: await this.libraryIdsFor(scope, run.target_user_id),
+      store: createPlayCountStore(scope, run.target_user_id),
       remote: remote as never,
       matchAlbum: (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) =>
         scope.get(Tokens.MatchRemoteAlbums)(libraryId, albums),
@@ -209,33 +276,63 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
     let albumsThisBatch = 0;
     let songsThisBatch = 0;
     let unresolvedThisBatch = 0;
+    let deferredForBudget = false;
 
     for (const album of page) {
       // `canAfford` against the album's **whole** cost, checked before each one. A batch that
       // starts an album it cannot finish does not get a slow album \u2014 it gets a terminated
       // invocation with this batch's earlier rows written and the rest lost.
-      if (!meter.canAfford(SUBSREQUESTS_PER_ALBUM_BASE) || Date.now() >= deadline) break;
-      const outcome = await runPlayCountAlbumPhase(phaseContext, album);
-      albumsThisBatch += 1;
-      songsThisBatch += outcome.imported;
-      unresolvedThisBatch += outcome.unresolvedCount;
+      if (!meter.canAfford(SUBSREQUESTS_PER_ALBUM_BASE) || Date.now() >= deadline) {
+        deferredForBudget = true;
+        break;
+      }
+      try {
+        const outcome = await runPlayCountAlbumPhase(phaseContext, album);
+        albumsThisBatch += 1;
+        songsThisBatch += outcome.imported;
+        unresolvedThisBatch += outcome.unresolvedCount;
+      } catch (error) {
+        // `setPlayCounts` is `requireComplete`: an album whose counted tracks do not fit in
+        // what remains of this alarm refuses rather than writing half an album's absolute
+        // values. That refusal is about *this* alarm's remaining budget, not about the album,
+        // so the batch ends here and the album is retried on a fresh budget next alarm.
+        if (error instanceof SubrequestBudgetExhaustedError) {
+          deferredForBudget = true;
+          break;
+        }
+        throw error;
+      }
     }
 
     // A **short page** is the remote saying there is no next one. Recorded rather than left for
     // the operator to infer \u2014 a walk that ended for a reason nobody wrote down reads as a
     // walk that finished.
-    const exhausted = page.length < ALBUMS_PER_BATCH;
+    const exhausted = page.length < ALBUMS_PER_BATCH && !deferredForBudget;
     const next: WalkProgress = {
       albums: progress.albums + albumsThisBatch,
       songs: progress.songs + songsThisBatch,
       unresolved: progress.unresolved + unresolvedThisBatch,
       finished: exhausted,
       lastError: null,
+      consecutiveFailures: 0,
     };
-    await this.ctx.storage.put('alarm', next);
+    await this.ctx.storage.put<WalkProgress>('alarm', next);
+    if (run.status === 'paused') {
+      await runs.update(runId, { status: 'running', lastError: null });
+    }
 
     if (exhausted) {
       await this.settle(runId, next, null);
+      return;
+    }
+    // Deferred with nothing written this batch means even the first album on a near-fresh
+    // budget did not fit: no later alarm will have meaningfully more room, so re-arming
+    // would loop the same page for ever. Name the album and settle instead.
+    if (deferredForBudget && albumsThisBatch === 0) {
+      const first = page[0];
+      const name = first === undefined ? 'unknown album' : (first.name ?? first.id);
+      const reason = `The play-count walk stopped on album "${name}": it needs more database statements than one alarm can issue.`;
+      await this.settle(runId, { ...next, lastError: reason }, reason);
       return;
     }
     await this.ctx.storage.setAlarm(Date.now() + ALARM_DELAY_MS);
@@ -250,41 +347,14 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
    * granted two libraries has their counts matched against the first, and the rest appear in the
    * report rather than silently resolving somewhere else.
    */
-  private async libraryIdsFor(userId: string): Promise<readonly string[]> {
-    const scope = createScanWorkerScope(this.env);
+  private async libraryIdsFor(scope: ReturnType<typeof createScanWorkerScope>, userId: string): Promise<readonly string[]> {
+    // The batch's scope, not a fresh one: a second scope would hold a second meter, and the
+    // grant read would spend nothing the batch's budget could see.
     const granted = await scope.get(Tokens.LibraryService).listForUser(userId);
     // Every granted library, not the first: the walk resolves foreign ids against the scope, and
     // `libraries[0]` reported every count in the second library as unmatched — the same
     // narrowing `SongIdLookupDAO` records for the play queue.
     return granted.map((row) => row.id);
-  }
-
-  private store(scope: ReturnType<typeof createScanWorkerScope>, userId: string) {
-    return {
-      findByPaths: async (libraryId: string, paths: readonly string[]) => await (await scope.get(Tokens.SongMatchDAO)()).findByPaths(libraryId, paths),
-      findByAlbumTitle: async (libraryId: string, pairs: ReadonlyArray<readonly [string, string]>) =>
-        await (await scope.get(Tokens.SongMatchDAO)()).findByAlbumTitle(libraryId, pairs),
-      grantedLibraryIds: async (id: string) =>
-        new Set((await scope.get(Tokens.LibraryService).listForUser(id)).map((row: { readonly id: string }) => row.id)),
-      songsByIds: async (ids: readonly string[]) => await (await scope.get(Tokens.SongDAO)()).listIdsAcrossLibraries(ids),
-      findPlaylistById: async (id: string) => await (await scope.get(Tokens.PlaylistDAO)()).findById(id),
-      // The four below are unreachable from this phase, and say so by writing nothing. Returning
-      // `0` rather than throwing is the honest answer for a method no call site reaches; a stub
-      // that threw would turn a future caller of the wrong phase into a failure nobody could have
-      // predicted, and this store is a port rather than the phases themselves.
-      createPlaylistWithId: async () => undefined,
-      replacePlaylistEntries: async () => ({ written: 0 }),
-      upsertStar: async () => ({ written: 0 }),
-      upsertRating: async () => ({ written: 0 }),
-      upsertBookmark: async () => ({ written: 0 }),
-      savePlayQueue: async () => ({ written: 0 }),
-      setPlayCounts: async (input: { counts: ReadonlyArray<{ songId: string; playCount: number }> }) => ({
-        // Absolute, through the DAO's own `requireComplete` batch: a partially-applied page of
-        // counts is a set of numbers right in places and wrong in others, and nothing downstream
-        // can tell which is which.
-        written: await (await scope.get(Tokens.PlayCountDAO)()).setPlayCounts(userId, input.counts),
-      }),
-    };
   }
 
   /**
@@ -299,7 +369,7 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
   private async settle(runId: string, progress: WalkProgress, error: string | null): Promise<void> {
     const scope = createScanWorkerScope(this.env);
     const runs = await scope.get(Tokens.ImportRunDAO)();
-    await this.ctx.storage.put('alarm', { ...progress, finished: true, lastError: error });
+    await this.ctx.storage.put<WalkProgress>('alarm', { ...progress, finished: true, lastError: error });
     await runs.update(runId, {
       status: error === null ? 'completed' : 'failed',
       lastError: error,
@@ -311,16 +381,6 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
   }
 }
 
-interface WalkProgress {
-  readonly albums: number;
-  readonly songs: number;
-  /**
-  Tracked alongside the counts, because "imported 40 of 400" is not a number an operator can act on.
-  */
-  readonly unresolved: number;
-  readonly finished: boolean;
-  readonly lastError: string | null;
-}
-
 export { PlayCountImportWorker, ALBUMS_PER_BATCH, SUBSREQUESTS_PER_ALBUM_BASE };
-export type { WalkRequest, WalkProgress };
+export type { WalkRequest };
+export type { WalkProgress } from './playCountRetry';
