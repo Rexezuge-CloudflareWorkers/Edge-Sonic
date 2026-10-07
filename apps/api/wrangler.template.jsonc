@@ -110,6 +110,24 @@
       "database_name": "edge-sonic-db",
     },
   ],
+  // Two queues, never one: scan chunks and import batches have separate budgets
+  // for the same reason SCAN and IMPORT_DO are separate namespaces. Consumers
+  // run in this Worker (`queue` handler); producers enqueue via QueueService and
+  // fail soft when the bindings are absent.
+  "queues": {
+    "producers": [
+      { "binding": "SCAN_QUEUE", "queue": "edge-sonic-scan" },
+      { "binding": "IMPORT_QUEUE", "queue": "edge-sonic-import" },
+    ],
+    "consumers": [
+      { "queue": "edge-sonic-scan", "max_batch_size": 4, "max_retries": 3 },
+      { "queue": "edge-sonic-import", "max_retries": 3 },
+    ],
+  },
+  // Nightly maintenance fanout: enqueue one scan-chunk per library so idle
+  // deployments advance without a client poll. The alarm/poll paths remain the
+  // truth; cron only enqueues.
+  "triggers": { "crons": ["15 0 * * *"] },
   "kv_namespaces": [
     {
       "binding": "CACHE",

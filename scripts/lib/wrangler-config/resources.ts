@@ -158,14 +158,42 @@ export function ensureSecretStore(): string {
   return store.id;
 }
 
-export function ensureQueue(queueName: string): void {
+export function ensureQueue(queueName: string): boolean {
   try {
     runWrangler(['queues', 'info', queueName]);
     console.log(`Queue ${queueName} already exists.`);
+    return false;
   } catch {
     console.log(`Creating queue: ${queueName}`);
     runWrangler(['queues', 'create', queueName]);
+    return true;
   }
+}
+
+/**
+ * Queue names a deployment needs, in first-seen order.
+ *
+ * Pure so it is testable without wrangler: producers and consumers name the
+ * same queue twice (one queue, two roles), and a name appearing in both must
+ * be created once. Follows the `locale-checks`/`lock-check` rule — a rule
+ * module with no test is a rule nothing measures.
+ */
+export function queueNamesIn(config: WranglerConfig): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const producer of config.queues?.producers ?? []) {
+    if (producer.queue && !seen.has(producer.queue)) {
+      seen.add(producer.queue);
+      names.push(producer.queue);
+    }
+  }
+  for (const consumer of config.queues?.consumers ?? []) {
+    if (consumer.queue && !seen.has(consumer.queue)) {
+      seen.add(consumer.queue);
+      names.push(consumer.queue);
+    }
+  }
+  return names;
 }
 
 export function ensureVectorizeIndex(indexName: string, dimensions: number): void {
@@ -246,17 +274,13 @@ export function provisionWranglerResources(): string[] {
 
   writeFileSync(CONFIG_PATH, content.endsWith('\n') ? content : `${content}\n`);
 
-  // Queues — name-based, no config patching needed
+  // Queues — name-based, no config patching needed. Created names are reported
+  // like every other resource so a deploy log shows what appeared.
   config = parse(content) as WranglerConfig;
-  const queueNames = new Set<string>();
-  for (const producer of config.queues?.producers ?? []) {
-    queueNames.add(producer.queue);
-  }
-  for (const consumer of config.queues?.consumers ?? []) {
-    queueNames.add(consumer.queue);
-  }
-  for (const queueName of queueNames) {
-    ensureQueue(queueName);
+  for (const queueName of queueNamesIn(config)) {
+    if (ensureQueue(queueName)) {
+      created.push(`queue:${queueName}`);
+    }
   }
 
   // Vectorize indexes — name-based, no config patching needed

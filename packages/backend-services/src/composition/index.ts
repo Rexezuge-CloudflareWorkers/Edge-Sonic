@@ -2,6 +2,7 @@ export { Tokens } from './tokens';
 export { createRequestScope } from './requestScope';
 export { resolveKey } from './serviceFactory';
 export { bindKeys } from './bindKeys';
+export { bindQueue } from './bindQueue';
 export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider } from './serviceFactory';
 // Re-exported so the auth service is reachable from composition code without
 // reaching into `../auth/`, which is what makes `Tokens.AccessAuthService` bindable
