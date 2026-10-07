@@ -29,7 +29,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlayCountImportWorker } from '../apps/background/src/PlayCountImportWorker';
 import { LibraryImportWorkflow, WALK_START_FAILED } from '../apps/background/src/LibraryImportWorkflow';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { ImportRunDAO, ImportSourceDAO, LibraryDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { ImportRunDAO, ImportSourceDAO, LibraryDAO, PlayCountDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { DatabaseError, SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { REMOTE_TEST_KEY } from './helpers/harness';
 import { sqliteQueryable, execScript } from './helpers/sqlite';
@@ -382,6 +384,211 @@ describe('PlayCountImportWorker', () => {
     expect(ctx.alarms.at(-1)).not.toBeNull();
     expect((await worker.status()).finished).toBe(false);
     expect((await new ImportRunDAO(handle.db).findById(runId))?.status).toBe('running');
+    vi.unstubAllGlobals();
+  });
+
+  it('settles the run failed after consecutive batch faults, naming the fault', async () => {
+    // The October 2026 loop: every alarm threw at `setPlayCounts`, the catch recorded a
+    // generic message and re-armed in a second, and the run stayed `running` for ever. The
+    // catch is now bounded by `MAX_CONSECUTIVE_FAILURES` and records the thrown message.
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network error');
+      }),
+    );
+
+    for (let round = 0; round < MAX_CONSECUTIVE_FAILURES; round += 1) {
+      await worker.alarm();
+    }
+
+    const run = await new ImportRunDAO(handle.db).findById(runId);
+    expect(run?.status).toBe('failed');
+    // Named, not generic: the operator reads this, and "could not read the import source"
+    // never named the budget refusal behind the loop.
+    expect(run?.last_error).toMatch(/network error/);
+    expect((await worker.status()).finished).toBe(true);
+    expect(ctx.alarms.at(-1)).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('backs off between retries rather than re-arming every second', async () => {
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('network error');
+      }),
+    );
+
+    const before = Date.now();
+    await worker.alarm();
+    const firstDelay = (ctx.alarms.at(-1) as number) - before;
+    await worker.alarm();
+    const secondDelay = (ctx.alarms.at(-1) as number) - before;
+
+    // Exponential: the second wait is longer than the first, and both are at least the
+    // walk's one-second pacing rather than an immediate retry.
+    expect(firstDelay).toBeGreaterThanOrEqual(1000);
+    expect(secondDelay).toBeGreaterThan(firstDelay);
+    vi.unstubAllGlobals();
+  });
+
+  it('sleeps to midnight UTC on a spent D1 allowance instead of looping', async () => {
+    // Since 2026-09-01 an account over its daily row allowance has every query fail until
+    // midnight UTC. Re-arming in a second re-runs the whole failure path ~86,400 times; the
+    // scan learned this in `scanPause.ts`, and the walk paused the same way.
+    const { runId } = await seedRun();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    const refusal = new DatabaseError(
+      "Failed to importRuns.findById: Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.",
+      false,
+    );
+    const findByIdSpy = vi.spyOn(ImportRunDAO.prototype, 'findById').mockRejectedValue(refusal);
+
+    await worker.alarm();
+    expect(findByIdSpy).toHaveBeenCalled();
+    findByIdSpy.mockRestore();
+
+    const run = await new ImportRunDAO(handle.db).findById(runId);
+    expect(run?.status).toBe('paused');
+    expect((await worker.status()).finished).toBe(false);
+    expect((await worker.status()).lastError).toMatch(/00:00 UTC/);
+    // Armed for the reset, hours away — not a second from now.
+    expect((ctx.alarms.at(-1) as number) - Date.now()).toBeGreaterThan(60_000);
+    vi.unstubAllGlobals();
+  });
+
+  it('defers a budget-exhausted album to the next alarm instead of failing the batch', async () => {
+    // `setPlayCounts` is `requireComplete`: an album whose counted tracks do not fit in what
+    // remains of this alarm refuses. That refusal is about this alarm's remaining budget, so
+    // the batch banks what it walked and retries the album on a fresh budget — rather than
+    // throwing the cursor away and retrying the same offset for ever.
+    const { runId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    await handle.db
+      .prepare(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, album, album_ci, title, title_ci, artist, artist_ci, duration, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        'local-song-1',
+        libraryId,
+        'Music/AlbumX/Wanted.mp3',
+        'Music/AlbumX',
+        'Wanted.mp3',
+        'wanted.mp3',
+        'X',
+        'x',
+        'Wanted',
+        'wanted',
+        'Y',
+        'y',
+        100,
+        1,
+        1,
+      )
+      .run();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    const song = (id: string, title: string, playCount: number) => ({ id, title, album: 'X', artist: 'Y', playCount });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const json = (body: unknown): Response => Response.json(body, { status: 200, headers: { 'content-type': 'application/json' } });
+        if (/getAlbumList2/.test(url)) {
+          const offset = Number.parseInt(new URL(url).searchParams.get('offset') ?? '0', 10);
+          const size = Number.parseInt(new URL(url).searchParams.get('size') ?? '500', 10);
+          const albums = Array.from({ length: 8 }, (_, index) => ({ id: `a${index}`, name: `Album ${index}`, artist: 'Y', artistId: null, songCount: 1 }));
+          return json({ 'subsonic-response': { status: 'ok', albumList2: { album: albums.slice(offset, offset + size) } } });
+        }
+        if (/getAlbum\b/.test(url)) {
+          const id = new URL(url).searchParams.get('id') ?? '';
+          if (id === 'a2') return json({ 'subsonic-response': { status: 'ok', album: { song: [song('rs1', 'Wanted', 3)] } } });
+          return json({ 'subsonic-response': { status: 'ok', album: { song: [song('quiet', 'Unheard', 0)] } } });
+        }
+        return json({ 'subsonic-response': { status: 'ok' } });
+      }),
+    );
+    const setPlayCounts = vi
+      .spyOn(PlayCountDAO.prototype, 'setPlayCounts')
+      .mockRejectedValueOnce(new SubrequestBudgetExhaustedError('Writing 10 rows for playCounts.setPlayCounts needs 10 subrequests and 5 remain in this invocation.'));
+
+    await worker.alarm();
+
+    // Two albums banked (a0, a1 unplayed), the refused album deferred: still running, re-armed,
+    // and the cursor moved rather than wedged at zero.
+    const afterOne = await worker.status();
+    expect(afterOne.albums).toBe(2);
+    expect(afterOne.finished).toBe(false);
+    expect((await new ImportRunDAO(handle.db).findById(runId))?.status).toBe('running');
+    expect(ctx.alarms.at(-1)).not.toBeNull();
+    expect(setPlayCounts).toHaveBeenCalledTimes(1);
+
+    // A fresh budget takes the deferred album.
+    await worker.alarm();
+    const afterTwo = await worker.status();
+    expect(afterTwo.albums).toBeGreaterThan(afterOne.albums);
+    setPlayCounts.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it('settles failed, naming the album, when even the first album fits no alarm', async () => {
+    // The deterministic half of the same refusal: the first album on a near-fresh budget
+    // still does not fit, so no later alarm will have meaningfully more room and re-arming
+    // would loop the same page for ever.
+    const { runId } = await seedRun();
+    const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
+    await handle.db
+      .prepare(
+        `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, album, album_ci, title, title_ci, artist, artist_ci, duration, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        'local-song-9',
+        libraryId,
+        'Music/X/Track 0.mp3',
+        'Music/X',
+        'Track 0.mp3',
+        'track 0.mp3',
+        'X',
+        'x',
+        'Track 0',
+        'track 0',
+        'Y',
+        'y',
+        100,
+        1,
+        1,
+      )
+      .run();
+    const ctx = fakeCtx();
+    const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
+    await worker.start({ runId });
+    stubFetch(remoteAlbums([{ id: 'a0', name: 'Huge Album', songs: [{ id: 's0', title: 'Track 0', album: 'X', artist: 'Y' }] }]));
+    const setPlayCounts = vi
+      .spyOn(PlayCountDAO.prototype, 'setPlayCounts')
+      .mockRejectedValue(new SubrequestBudgetExhaustedError('Writing 40 rows for playCounts.setPlayCounts needs 40 subrequests and 38 remain in this invocation.'));
+
+    await worker.alarm();
+
+    const run = await new ImportRunDAO(handle.db).findById(runId);
+    expect(run?.status).toBe('failed');
+    expect(run?.last_error).toMatch(/Huge Album/);
+    expect((await worker.status()).finished).toBe(true);
+    expect(ctx.alarms.at(-1)).toBeNull();
+    setPlayCounts.mockRestore();
     vi.unstubAllGlobals();
   });
 
