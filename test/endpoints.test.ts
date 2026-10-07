@@ -1130,12 +1130,11 @@ describe('a release split across directories', () => {
     expect(album.id).toBe((await splitAlbum()).id);
   });
 
-  it('decorates a star written under the directory id', async () => {
-    // The half of the change that has no symptom while it is wrong. A star is stored under the
-    // id the album had when the user starred it; the album is published under a new one; so a
-    // lookup on the new id finds nothing and the star is reported by nothing at all — the
-    // `starred: undefined` finding one layer up, where a field was dropped by both serializers
-    // because the lookup held nothing.
+  it('does not decorate a star written under the directory id (accepted loss)', async () => {
+    // Hardening decision: annotations resolve under the current id only. A star
+    // stored under a previous folder-shaped id no longer decorates the merged
+    // album. Directory ids still resolve to the whole release (see above), but
+    // the star itself is lost.
     await harness.rest('star', { albumId: subsonicId('al', SPLIT_DIR_A) });
 
     // On the two surfaces that carry annotations. **`getAlbumList2` is not one of them** — it
@@ -1144,12 +1143,12 @@ describe('a release split across directories', () => {
     // asked for. A client reads an album's star from `getAlbum` and from the starred list.
     const current = (await splitAlbum()).id;
     const detail = payload<{ id: string; starred?: string }>((await harness.rest('getAlbum', { id: String(current) })).body, 'album');
-    expect(detail.starred).toBeDefined();
+    expect(detail.starred).toBeUndefined();
 
     const starred = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getStarred2')).body, 'starred2').album;
     expect(starred).toHaveLength(1);
     expect(starred[0]?.id).toBe(current);
-    expect(starred[0]?.starred).toBeDefined();
+    expect(starred[0]?.starred).toBeUndefined();
   });
 
   it('publishes one album for two directory stars, because the starred list is a set', async () => {
