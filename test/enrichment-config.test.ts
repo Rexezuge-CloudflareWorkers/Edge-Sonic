@@ -1035,6 +1035,62 @@ describe('a row enriched by an older reader', () => {
   });
 });
 
+describe('a cached enrichment carries the tags', () => {
+  it('stores the tags with the technical facts', async () => {
+    // The entry exists to skip a read, and a replay that carries only the duration
+    // strands a row whose tags were lost. So the write carries both halves.
+    const file = opusFile();
+    const { service, library, cache } = makeOggEnrichment(file);
+
+    await service.enrich(library, opusSong(file.length) as never);
+
+    const entry = await new KvCache(cache.ns).getJson<Record<string, unknown>>('songMeta', ['s1']);
+    expect(entry?.artist).toBe('Bon Iver');
+    expect(entry?.album).toBe('For Emma');
+  });
+
+  it('replays cached tags into a tagless row without a second origin read', async () => {
+    // An index drop deletes `songs` but not this cache; a re-index recreates the row
+    // with path-derived names under the same id and mtime. The facts caller has no row
+    // to consult, only the cache — and replaying just the duration would stamp those
+    // guesses current with a correct duration, never re-read. The visible form is a
+    // release named after its sanitized folder: `Avid _ Hands Up to the Sky` for
+    // `Avid / Hands Up to the Sky`, where `/` cannot live in a folder name.
+    const file = opusFile();
+    const { service, applied, library, dav } = makeOggEnrichment(file);
+
+    await service.enrichFacts(library, { id: 's1', path: 'A/01.opus', size: file.length, mtimeMs: 1000 });
+    expect(applied[0]?.metadata.artist).toBe('Bon Iver');
+    const reads = dav.gets.length;
+    expect(reads).toBeGreaterThan(0);
+
+    // The row is gone; only the cache answers.
+    await service.enrichFacts(library, { id: 's1', path: 'A/01.opus', size: file.length, mtimeMs: 1000 });
+
+    expect(dav.gets).toHaveLength(reads);
+    expect(applied[1]?.metadata.artist).toBe('Bon Iver');
+    expect(applied[1]?.metadata.album).toBe('For Emma');
+  });
+
+  it('replays cached tags on the getSong path too', async () => {
+    // The same stranding through the row-holding entry point, which replays through
+    // `persist` rather than the store. Both callers must agree by construction.
+    const file = opusFile();
+    const { service, applied, library, dav } = makeOggEnrichment(file);
+    const song = opusSong(file.length);
+
+    await service.enrich(library, song as never);
+    const reads = dav.gets.length;
+
+    // Recreated row: the id and mtime the cache matches on, but no stamp and no tags.
+    await service.enrich(library, { ...song, enriched_at: null, duration: 0, artist: null, album: null } as never);
+
+    expect(dav.gets).toHaveLength(reads);
+    expect(applied[1]?.metadata.artist).toBe('Bon Iver');
+    expect(applied[1]?.metadata.album).toBe('For Emma');
+  });
+});
+
 describe('AppConfiguration.validate', () => {
   it('is silent for a valid production environment', () => {
     const config = AppConfiguration.fromEnv({ ENVIRONMENT: 'production' });

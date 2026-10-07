@@ -36,7 +36,7 @@ export {
   willEnrichResumeWithoutPoll,
 } from './enrichRetry';
 export type { EnrichChunkResult, EnrichStatus } from './enrichRetry';
-export { isCompleteEnrichment } from './songMetaCache';
+export { isCompleteEnrichment, buildCacheEntry } from './songMetaCache';
 export type { CachedEnrichment } from './songMetaCache';
 export { resolveTailDuration, recordsLengthAtTheEnd, NO_TAIL_DURATION } from './oggTailDuration';
 export type { TailDuration } from './oggTailDuration';
