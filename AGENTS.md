@@ -74,26 +74,3 @@ one belongs to two areas, the guide that owns the *code* keeps it and the other 
 The single most repeated shape among them: **a claim nothing measures is not an
 invariant.** A comment, a default, a typed constant beside the code it bounds, and a double
 that shares the code's assumptions have all carried a defect through a green suite here.
-
-## Commit Policy
-
-Always commit changes after completing work unless explicitly told not to.
-
-## Git Commit Messages
-
-Format: `<TYPE>[optional scope]: <description>`
-
-- Type in UPPERCASE: `FIX`, `FEAT`, `DOCS`, `STYLE`, `REFACTOR`, `TEST`, `BUILD`, `CHORE`, `CI`, `PERF`.
-- Scope in lowercase: `FEAT(runtime): Add Scheduled Job State`.
-- Description: Title Case words — `DOCS: Latest Agents Context Reflection`.
-- When committing from `main`, first create a branch: `type/description` or `type/scope/description` in kebab-case (e.g. `feat/bootstrap/bootstrap-jqanywhere-v0.1-framework`).
-- Always include a Markdown body separated from the subject by a blank line.
-- Breaking changes: `!` after type/scope, or `BREAKING CHANGE: <description>` footer.
-
-```text
-<TYPE>[optional scope]: <description>
-
-[Markdown body]
-
-[optional footers]
-```
