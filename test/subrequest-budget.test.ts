@@ -59,6 +59,7 @@ import { Tokens } from '@edge-sonic/backend-services/composition';
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import { NodeDAO, SongDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 import {
+  ENRICH_TRACKS_PER_CHUNK,
   MAX_PAGE_SIZE_CEILING,
   PAGE_ALBUM_KEYS_PER_STATEMENT,
   PAGE_ALBUMS_PER_STATEMENT,
@@ -71,6 +72,7 @@ import {
   SCAN_ENRICH_MAX_PER_FOLDER,
   SUBSREQUESTS_PER_CHUNK_OVERHEAD,
   SUBSREQUESTS_PER_ENRICHED_TRACK,
+  SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD,
   SUBSREQUESTS_PER_FOLDER_BASE,
   SUBSREQUEST_INVOCATION_RESERVE,
   WORKER_SUBSREQUEST_CEILING,
@@ -315,6 +317,23 @@ describe('every bound is derived from the one platform number', () => {
     // prelude without being counted here — at which point the page is one statement too large
     // and the walk silently stops visiting folders.
     expect(SUBSREQUESTS_PER_CHUNK_OVERHEAD).toBe(4);
+  });
+
+  it('sizes the enrichment page so a chunk that spends it whole still fits the ceiling', () => {
+    // The relationship, not the numeral: the overhead (scan-state guard, selection page,
+    // remaining count) plus five subrequests per track must fit one chunk. A page typed
+    // beside the loop is the defect this file exists for — it is right until the ceiling
+    // moves, after which a chunk that spends its whole page is terminated by the runtime
+    // rather than slowed.
+    expect(ENRICH_TRACKS_PER_CHUNK).toBe(
+      Math.floor((SCAN_CHUNK_SUBSREQUEST_BUDGET - SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD) / SUBSREQUESTS_PER_ENRICHED_TRACK),
+    );
+    expect(
+      SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD + ENRICH_TRACKS_PER_CHUNK * SUBSREQUESTS_PER_ENRICHED_TRACK,
+    ).toBeLessThanOrEqual(SCAN_CHUNK_SUBSREQUEST_BUDGET);
+    // And the overhead counts what the chunk actually spends: the idle-only guard's read,
+    // the page itself, and the remaining count the progress display is built from.
+    expect(SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD).toBe(3);
   });
 });
 

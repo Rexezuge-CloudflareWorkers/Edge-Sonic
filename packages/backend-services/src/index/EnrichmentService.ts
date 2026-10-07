@@ -42,6 +42,8 @@ import type { WebDavClient } from '@edge-sonic/webdav';
 import { isTransientEnrichmentFailure, shouldEnrich } from './enrichmentRetry';
 import { isCompleteEnrichment } from './songMetaCache';
 import type { CachedEnrichment } from './songMetaCache';
+import { metadataFromCachedEnrichment } from './enrichCacheReplay';
+import { persistEnrichment } from './enrichPersist';
 import { resolveTailDuration } from './oggTailDuration';
 import type { TailDuration } from './oggTailDuration';
 
@@ -204,13 +206,23 @@ class EnrichmentService {
    * when a column is added, and the failure is a wrong answer rather than a type error.
    * Both entry points share `readAndPersist`, so a track enriched by a scan and a track
    * enriched on first play are enriched identically.
+   *
+   * A cache hit replays the entry into D1 rather than returning without writing, like the
+   * row-holding entry point does: the facts caller has no row to compare against, so a hit
+   * here means the row lost what the cache still holds (a restored backup, or a row
+   * written after the cache was populated) — and returning without writing would leave the
+   * row unstamped, re-selected by every future page, for ever. Measured, not declared: the
+   * replay is still a `songs` write.
    */
   public async enrichFacts(library: LibraryRow, facts: EnrichFacts, onRequest?: () => void): Promise<EnrichmentOutcome> {
     const cached = await this.deps.kv.getJson<CachedEnrichment>('songMeta', [facts.id]);
-    // A cache hit is `0` rows, not `1`, and that is why this reports rather than returning
-    // tags: on a library already enriched by `getSong` this branch is the common one, and
-    // reporting `1` would pace the scan off a write that never happened.
-    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION && isCompleteEnrichment(cached)) return NO_ENRICHMENT_WRITTEN;
+    // A replayed row is still a write: on a library already enriched by `getSong` the common
+    // case is a row that already holds what the cache holds, and `applyMetadata` reports its
+    // own `changes`, so a current row reports `0` by measurement rather than by declaration.
+    if (cached && cached.mtimeMs === facts.mtimeMs && cached.readerVersion === READER_VERSION && isCompleteEnrichment(cached)) {
+      const written = await this.deps.songs.applyMetadata(facts.id, metadataFromCachedEnrichment(cached));
+      return { tags: null, rowsWritten: written.changes, billedRows: written.billedRows };
+    }
     return await this.readAndPersist(library, null, facts, onRequest);
   }
 
@@ -289,7 +301,7 @@ class EnrichmentService {
     // otherwise skip the tail read and be written with no duration and no attempt to get
     // one.
     const tail = tags.durationSeconds === null || tags.durationSeconds === undefined
-      ? await this.resolveTailDuration(library, facts, tags, onRequest)
+      ? await this.tailDuration(library, facts, tags, onRequest)
       : { duration: tags.durationSeconds, transient: false };
     // A transient tail failure leaves no trace either — not even the good prefix tags, for the
     // same permanence as the prefix case above. The next call does both reads again.
@@ -328,13 +340,12 @@ class EnrichmentService {
   /**
    * The second read, for a container whose length is recorded at the **end** of the file.
    *
-   * A delegation rather than the implementation, and the split is by **decision**: the three
-   * answers and the distinction between them are what `oggTailDuration.ts` is for, and the
-   * one thing this method owns is the client — which the caller's request meter is threaded
-   * into, so a tail read is charged against the same subrequest ceiling as the `PROPFIND`
-   * that found the file.
+   * Thin delegation to `oggTailDuration.ts`, which owns the three answers and the
+   * distinction between them. The one thing owned here is the client — which the caller's
+   * request meter is threaded into, so a tail read is charged against the same subrequest
+   * ceiling as the `PROPFIND` that found the file.
    */
-  private async resolveTailDuration(
+  private async tailDuration(
     library: LibraryRow,
     facts: EnrichFacts,
     tags: AudioTags,
@@ -344,14 +355,6 @@ class EnrichmentService {
     return await resolveTailDuration(client, facts, tags, this.deps.readTailBytes, this.deps.timeoutMs);
   }
 
-  /**
-   * Write the result to D1.
-   *
-   * Text tags are only written when the file supplied them, so a format with no
-   * comment block does not blank out metadata a previous read found — and, more
-   * importantly, does not overwrite the path-convention fallback the indexer
-   * derived.
-   */
   private async persist(
     song: SongRow,
     duration: number | null,
@@ -360,28 +363,15 @@ class EnrichmentService {
     channels: number | null,
     tags: AudioTags | null,
   ): Promise<MetadataWriteResult> {
-    return await this.deps.songs.applyMetadata(song.id, {
-      // `duration` and `bitrate` are NOT NULL columns, so an unreadable value is
-      // 0 rather than null.
-      duration: duration === null ? 0 : Math.max(0, Math.round(duration)),
-      bitrate: bitrate === null ? 0 : Math.max(0, Math.round(bitrate)),
-      // Stamped even when every tag is null and only the "we tried" part of this write
-      // matters. A row that records the attempt must also record *who* attempted it, or
-      // the next reader has no way to tell a deliberate skip from a stale one.
-      readerVersion: READER_VERSION,
-      ...(sampleRate !== null && { sampleRate }),
-      ...(channels !== null && { channels }),
-      ...(tags && {
-            ...(tags.title && { title: tags.title }),
-            ...(tags.artist && { artist: tags.artist }),
-            ...(tags.album && { album: tags.album }),
-            ...(tags.albumArtist && { albumArtist: tags.albumArtist }),
-            ...(tags.genre && { genre: tags.genre }),
-            ...(tags.track !== null && { track: tags.track }),
-            ...(tags.disc !== null && { disc: tags.disc }),
-            ...(tags.year !== null && { year: tags.year }),
-          }),
-    });
+    return await persistEnrichment(
+      (id, metadata) => this.deps.songs.applyMetadata(id, metadata),
+      song.id,
+      duration,
+      bitrate,
+      sampleRate,
+      channels,
+      tags,
+    );
   }
 
 }

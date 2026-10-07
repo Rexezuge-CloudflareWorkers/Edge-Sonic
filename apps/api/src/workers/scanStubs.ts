@@ -6,17 +6,20 @@
  * the direct service when none is configured (tests, local dev without DO) — the fallback is what
  * keeps the suite green without workerd.
  *
- * ### Two resolvers, because the objects are two objects
+ * ### Three resolvers, because the objects are three objects
  *
- * `getScanStub` and `getMediaStub` are **not** one resolver over a union, and the split is the
+ * `getScanStub`, `getMediaStub` and `getEnrichStub` are **not** one resolver over a union, and the split is the
  * point rather than tidiness. A Durable Object handles one event at a time, so a scan chunk
  * walking the origin blocks every RPC to the same object — and `getCoverArt` is handed
  * `streamTimeoutMs` (30 s) against a chunk that may spend `SCAN_CHUNK_DEADLINE_MS` (20 s) of it.
  * Resolving them separately is what lets `getCoverArt` reach an object the scan cannot be holding.
+ * The enrich loop is separate for the same lifecycle reason the template states for `IMPORT_DO`:
+ * one namespace would let one loop's terminal `deleteAlarm` silently disarm the other.
  *
  * They are also independently absent. A deployment can carry `SCAN` without `MEDIA_DO`, and the
- * two answers differ: with no scan object the walk is client-driven, with no media object the
- * picture parse runs in-fetch.
+ * answers differ per object: with no scan object the walk is client-driven, with no media object the
+ * picture parse runs in-fetch, and with no enrich object a library-wide enrichment runs one
+ * chunk per operator step.
  *
  * ### The stub's type is **the class itself**
  *
@@ -26,11 +29,12 @@
  * that declared no parameter, while the class read `request.runId` off the first argument, which
  * arrives `undefined` over RPC. The class is the statement.
  */
-import type { MediaWorker, ScanWorker } from '@edge-sonic/background';
+import type { EnrichWorker, MediaWorker, ScanWorker } from '@edge-sonic/background';
 import type { SubrequestMeter } from '@edge-sonic/shared';
 
 type ScanStub = DurableObjectStub & ScanWorker;
 type MediaStub = DurableObjectStub & MediaWorker;
+type EnrichStub = DurableObjectStub & EnrichWorker;
 
 function hasScanBinding(env: unknown): env is { SCAN: DurableObjectNamespace } {
   return (env as { SCAN?: DurableObjectNamespace }).SCAN !== undefined;
@@ -38,6 +42,10 @@ function hasScanBinding(env: unknown): env is { SCAN: DurableObjectNamespace } {
 
 function hasMediaBinding(env: unknown): env is { MEDIA_DO: DurableObjectNamespace } {
   return (env as { MEDIA_DO?: DurableObjectNamespace }).MEDIA_DO !== undefined;
+}
+
+function hasEnrichBinding(env: unknown): env is { ENRICH: DurableObjectNamespace } {
+  return (env as { ENRICH?: DurableObjectNamespace }).ENRICH !== undefined;
 }
 
 /**
@@ -69,5 +77,20 @@ function getMediaStub(env: unknown, libraryId: string, meter?: SubrequestMeter):
   return ns.getByName(libraryId) as unknown as MediaStub;
 }
 
-export { getScanStub, getMediaStub, hasScanBinding, hasMediaBinding };
-export type { ScanStub, MediaStub };
+/**
+ * The enrichment loop's stub, charged the same single RPC the scan's is.
+ *
+ * A **separate namespace** rather than a second name on `SCAN`, for the reason the
+ * template states for `IMPORT_DO`: a Durable Object's lifecycle is its alarm, so one
+ * namespace would put a scan and an enrichment in the same object, where one loop's
+ * terminal `deleteAlarm` silently disarms the other.
+ */
+function getEnrichStub(env: unknown, libraryId: string, meter?: SubrequestMeter): EnrichStub {
+  const ns = (env as { ENRICH?: DurableObjectNamespace }).ENRICH;
+  if (!ns) throw new Error('ENRICH binding is not configured');
+  meter?.charge(1, 'rpc');
+  return ns.getByName(libraryId) as unknown as EnrichStub;
+}
+
+export { getScanStub, getMediaStub, getEnrichStub, hasScanBinding, hasMediaBinding, hasEnrichBinding };
+export type { ScanStub, MediaStub, EnrichStub };

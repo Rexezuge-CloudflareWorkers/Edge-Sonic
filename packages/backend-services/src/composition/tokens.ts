@@ -13,6 +13,7 @@ import type {
   ScanStateDAO,
   SongDAO,
   SongDerivationDAO,
+  SongEnrichmentDAO,
   SongIndexDAO,
   SongMatchDAO,
   UserDAO,
@@ -27,7 +28,9 @@ import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import type { LibraryService } from '../library/LibraryService';
 import type { IndexDropService } from '../library/IndexDropService';
 import type { ScanDriver } from '../library/ScanDriver';
+import type { EnrichDriver } from '../library/EnrichDriver';
 import type { ScanService } from '../index/ScanService';
+import type { LibraryEnrichmentService } from '../index/libraryEnrichment';
 import type { TreeService } from '../index/TreeService';
 import type { ImportSourceService } from '../import/sourceService';
 import type { EnrichmentService } from '../index/EnrichmentService';
@@ -60,6 +63,12 @@ const Tokens = {
    * write the scan makes that is not gated on a file having changed.
    */
   SongDerivationDAO: Symbol('SongDerivationDAO') as Token<() => Promise<SongDerivationDAO>>,
+  /**
+   * The tracks still owing a tag read. Separate from `SongDAO` because it is a *staleness*
+   * selection over many rows rather than one row by id — the same reason the derivation
+   * backfill is its own DAO — and folding it in put `SongDAO` over the god-file limit.
+   */
+  SongEnrichmentDAO: Symbol('SongEnrichmentDAO') as Token<() => Promise<SongEnrichmentDAO>>,
   /**
   The aggregate reads. Separate from `SongDAO` because they page over groups, not rows.
   */
@@ -155,6 +164,25 @@ const Tokens = {
    */
   ScanDriver: Symbol('ScanDriver') as Token<ScanDriver>,
   EnrichmentService: Symbol('EnrichmentService') as Token<EnrichmentService>,
+  /**
+   * One library's whole-library tag enrichment, chunked like the scan.
+   *
+   * Separate from `EnrichmentService` — which reads one file — because this answers a
+   * different question: which tracks still owe a read, and what did one bounded chunk of
+   * them cost. The scan's per-folder enrichment calls the same per-track service, so the
+   * three entry points cannot disagree about what a row holds.
+   */
+  LibraryEnrichmentService: Symbol('LibraryEnrichmentService') as Token<LibraryEnrichmentService>,
+  /**
+   * How this deployment advances a library's enrichment — one `EnrichDriver` strategy,
+   * chosen once.
+   *
+   * A token rather than a `hasEnrichBinding` call at each route, for the scan's reason:
+   * read-versus-advance asked at several sites is several places to disagree about what
+   * the same question meant. Supplied by the app, which is the only place that can see
+   * whether an `ENRICH` binding exists.
+   */
+  EnrichDriver: Symbol('EnrichDriver') as Token<EnrichDriver>,
 
   // Per-feature encryption keys, as memoized thunks. Resolving one never fetches
   // the other — see `resolveKey` in `requestScope.ts`.

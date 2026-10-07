@@ -45,8 +45,13 @@ function requireParam(c: UserContext, name: string): string {
 async function listLibraries(c: UserContext): Promise<Response> {
   const scope = BaseRoute.getScope(c);
   const driver = scope.get(Tokens.ScanDriver);
+  const enrich = scope.get(Tokens.EnrichDriver);
   return c.json({
-    libraries: await listLibrarySummaries(scope, (libraryId) => driver.stateForLibraryList(libraryId)),
+    libraries: await listLibrarySummaries(
+      scope,
+      (libraryId) => driver.stateForLibraryList(libraryId),
+      (libraryId) => enrich.stateForLibraryList(libraryId),
+    ),
   });
 }
 
@@ -159,6 +164,44 @@ async function stepScan(c: UserContext): Promise<Response> {
   const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   return c.json(await scope.get(Tokens.ScanDriver).advance(library));
+}
+
+async function startEnrich(c: UserContext): Promise<Response> {
+  const id = requireParam(c, 'id');
+  const scope = BaseRoute.getScope(c);
+  const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
+  if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  return c.json(await scope.get(Tokens.EnrichDriver).start(library));
+}
+
+/**
+ * The operator surface's read of one library's enrichment state.
+ *
+ * A read, and not a poll that advances: the page polls it every few seconds while a run
+ * proceeds on the object's alarm, and a poll that also ran a chunk would make reading an
+ * enrichment *be* one. The in-process fallback reports `null` until nothing remains for
+ * the same reason the scan's list overlay does — progress lives in Durable Object
+ * storage, so with no object there is no run to report.
+ */
+async function enrichStatus(c: UserContext): Promise<Response> {
+  const id = requireParam(c, 'id');
+  return c.json(await BaseRoute.getScope(c).get(Tokens.EnrichDriver).readState(id));
+}
+
+/**
+ * Advance one enrichment chunk.
+ *
+ * A `POST` for the same reason `stepScan` is: this performs live outbound requests with
+ * the stored credential, and a `GET` that can be triggered by a link is a `GET` that
+ * can be triggered by a prefetcher. Without the `ENRICH` binding this is the only thing
+ * that moves a run at all — the client-driven path, one bounded chunk per call.
+ */
+async function stepEnrich(c: UserContext): Promise<Response> {
+  const id = requireParam(c, 'id');
+  const scope = BaseRoute.getScope(c);
+  const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
+  if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  return c.json(await scope.get(Tokens.EnrichDriver).advance(library));
 }
 
 async function listUsers(c: UserContext): Promise<Response> {
@@ -291,6 +334,9 @@ function registerUserRoutes(app: {
   app.post('/user/libraries/:id/scan', startScan);
   app.get('/user/libraries/:id/scan', scanStatus);
   app.post('/user/libraries/:id/scan/step', stepScan);
+  app.post('/user/libraries/:id/enrich', startEnrich);
+  app.get('/user/libraries/:id/enrich', enrichStatus);
+  app.post('/user/libraries/:id/enrich/step', stepEnrich);
 
   /**
    * The Danger Zone, registered after the library routes so `/user/libraries/:id/index/drop`

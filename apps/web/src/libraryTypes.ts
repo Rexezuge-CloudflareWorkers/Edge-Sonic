@@ -62,6 +62,40 @@ interface LibraryScanSummary {
  */
 type ScanStatus = 'idle' | 'scanning' | 'failed' | 'stalled' | 'paused';
 
+/**
+ * The enrichment statuses the server reports.
+ *
+ * `enriching` is the run holding remaining work with its alarm armed; `failed` is retried
+ * within its bound and `stalled` has spent it; `paused` waits for midnight UTC by itself.
+ * The same four-way split the scan vocabulary makes, under the name the operator reads —
+ * collapsing the two loops into one status would let one loop's re-arm answer for the
+ * other.
+ */
+type EnrichStatus = 'idle' | 'enriching' | 'failed' | 'stalled' | 'paused';
+
+/**
+ * One library's enrichment state, as `GET /user/libraries` publishes it.
+ *
+ * Nullable on the summary rather than a defaulted `idle`: a library whose tracks still
+ * owe a tag read and whose run was never started is different from one whose run
+ * finished, and only the first needs an operator action. `null` says it; an invented
+ * `idle` would render a library nobody has enriched as a finished one.
+ *
+ * `enriched` is the current run's total and `remaining` the live count still owing, so
+ * the operator watches one number grow and one fall. Both are `0` for an `idle` library
+ * with nothing owing — a measurement, not an absence.
+ */
+interface LibraryEnrichSummary {
+  readonly status: EnrichStatus;
+  readonly enriched: number;
+  readonly remaining: number;
+  readonly lastError: string | null;
+  /**
+   * When a paused run resumes itself, epoch milliseconds; `null` otherwise.
+   */
+  readonly resumeAt: number | null;
+}
+
 interface LibrarySummary {
   readonly id: string;
   readonly slug: string;
@@ -87,6 +121,12 @@ interface LibrarySummary {
   `null` when the library has never been scanned. See `LibraryScanSummary`.
   */
   readonly scan: LibraryScanSummary | null;
+  /**
+  `null` when no enrichment run was ever started and tracks remain. A library whose
+  tracks were all enriched — by a run or lazily, on first play — reports `idle` with
+  `remaining: 0`, not `null`.
+  */
+  readonly enrich: LibraryEnrichSummary | null;
   readonly createdAt: number;
 }
 
@@ -149,6 +189,23 @@ interface ScanStateSummary {
 }
 
 /**
+ * One enrichment chunk, as the enrich routes report it.
+ *
+ * Mirrors `ScanStateSummary` field for field, because the two runs are the same shape of
+ * work — a bounded chunk with a bound that may have stopped it and a moment it resumes —
+ * and a client that renders one must render the other. `enriched` is the chunk's delta
+ * and `remaining` what is left after it; the run's total lives on `LibraryEnrichSummary`.
+ */
+interface EnrichStateSummary {
+  readonly status: EnrichStatus;
+  readonly enriched: number;
+  readonly remaining: number;
+  readonly lastError: string | null;
+  readonly stoppedBy: ChunkStopReason;
+  readonly resumeAt: number | null;
+}
+
+/**
  * What dropping one library's index would cost, as `GET /user/index/stats` projects it.
  *
  * `billedRows` is the field the Danger Zone's confirmation is built around, and it is the
@@ -200,9 +257,12 @@ interface IndexDropResult {
 export type {
   LibrarySummary,
   LibraryScanSummary,
+  LibraryEnrichSummary,
   ProbeResult,
   ScanStateSummary,
   ScanStatus,
+  EnrichStateSummary,
+  EnrichStatus,
   ChunkStopReason,
   LibraryIndexStats,
   IndexStats,

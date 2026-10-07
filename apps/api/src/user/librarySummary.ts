@@ -64,7 +64,7 @@
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import type { createRequestScope } from '@edge-sonic/backend-services/composition';
 import { storedStatus } from '@edge-sonic/backend-services/index';
-import type { ChunkResult } from '@edge-sonic/backend-services/index';
+import type { ChunkResult, EnrichChunkResult } from '@edge-sonic/backend-services/index';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 
 type Scope = ReturnType<typeof createRequestScope>;
@@ -95,6 +95,27 @@ interface LibraryScanSummary {
   readonly resumeAt: number | null;
 }
 
+/**
+ * The enrichment half of a library's wire shape.
+ *
+ * `enriched` is the current run's total — tracks stamped since the run started — and
+ * `remaining` is the live count still owing a tag read, so the operator watches one
+ * number grow and one fall rather than two numbers that have to agree. Both ride the
+ * same batched poll as the scan half, and neither is nullable inside the object: a
+ * library with nothing owing reports `remaining: 0`, which is a measurement rather than
+ * an absence.
+ */
+interface LibraryEnrichSummary {
+  readonly status: 'idle' | 'enriching' | 'failed' | 'stalled' | 'paused';
+  readonly enriched: number;
+  readonly remaining: number;
+  readonly lastError: string | null;
+  /**
+   * When a paused run resumes itself, epoch milliseconds; `null` otherwise.
+   */
+  readonly resumeAt: number | null;
+}
+
 interface LibrarySummary {
   readonly id: string;
   readonly slug: string;
@@ -116,6 +137,12 @@ interface LibrarySummary {
    * `null` when the library has never been scanned. See the module header.
    */
   readonly scan: LibraryScanSummary | null;
+  /**
+   * `null` when no enrichment run was ever started and tracks remain. A library whose
+   * tracks were all enriched lazily reports `idle` with `remaining: 0`, not `null` —
+   * `null` says nobody has asked, not that nothing is owed.
+   */
+  readonly enrich: LibraryEnrichSummary | null;
   readonly createdAt: number;
 }
 
@@ -130,19 +157,23 @@ interface LibrarySummary {
 async function listLibrarySummaries(
   scope: Scope,
   scanStatusFor: (libraryId: string) => Promise<ChunkResult | null>,
+  enrichStatusFor?: (libraryId: string) => Promise<EnrichChunkResult | null>,
 ): Promise<LibrarySummary[]> {
   const libraries = await scope.get(Tokens.LibraryService).listAll();
   if (libraries.length === 0) return [];
 
   const ids = libraries.map((library) => library.id);
-  const [fromWorkers, scanStates, songCounts] = await Promise.all([
+  const [fromWorkers, scanStates, songCounts, enrichStatuses] = await Promise.all([
     Promise.all(ids.map(async (id) => await safeScanStatus(scanStatusFor, id))),
     (await scope.get(Tokens.ScanStateDAO)()).listByLibraries(ids),
     (await scope.get(Tokens.SongDAO)()).countByLibraries(ids),
+    enrichStatusFor === undefined
+      ? Promise.resolve(ids.map(() => null))
+      : Promise.all(ids.map(async (id) => await safeEnrichStatus(enrichStatusFor, id))),
   ]);
 
   return libraries.map((library, index) =>
-    summarize(library, scanStates.get(library.id), songCounts.get(library.id), fromWorkers[index] ?? null),
+    summarize(library, scanStates.get(library.id), songCounts.get(library.id), fromWorkers[index] ?? null, enrichStatuses[index] ?? null),
   );
 }
 
@@ -178,6 +209,7 @@ function summarize(
   state: ScanStateRow | undefined,
   songCount: number | undefined,
   status: ChunkResult | null,
+  enrich: EnrichChunkResult | null,
 ): LibrarySummary {
   return {
     id: library.id,
@@ -189,6 +221,7 @@ function summarize(
     isEnabled: library.is_enabled === 1,
     songCount: songCount ?? 0,
     scan: scanSummary(state, status),
+    enrich: enrichSummary(enrich),
     createdAt: library.created_at,
   };
 }
@@ -210,5 +243,44 @@ function scanSummary(state: ScanStateRow | undefined, status: ChunkResult | null
   return { status: storedStatus(state), scanned: state.scanned_count, lastError: state.last_error, resumeAt: null };
 }
 
+/**
+ * One library's enrichment status, or `null` when there is no binding or the call failed.
+ *
+ * `null` for a failed call is deliberate, for the scan's reason: a Durable Object that
+ * cannot be reached is a different event from a run that is paused, and reporting
+ * `paused` for an RPC fault would tell an operator to wait for midnight over a broken
+ * binding.
+ */
+async function safeEnrichStatus(
+  enrichStatusFor: (libraryId: string) => Promise<EnrichChunkResult | null>,
+  libraryId: string,
+): Promise<EnrichChunkResult | null> {
+  try {
+    return await enrichStatusFor(libraryId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One library's enrichment summary, from the run's own object.
+ *
+ * Unlike the scan half there is no D1 row to fall back to: progress lives in Durable
+ * Object storage because metering D1 writes must not itself spend D1 writes, so with
+ * nothing from the object there is no run to report. That is also why the in-process
+ * fallback reports `null` until nothing remains — a live count is a measurement, not a
+ * run, and the list must not dress one as the other.
+ */
+function enrichSummary(status: EnrichChunkResult | null): LibraryEnrichSummary | null {
+  if (status === null) return null;
+  return {
+    status: status.status,
+    enriched: status.enriched,
+    remaining: status.remaining,
+    lastError: status.lastError,
+    resumeAt: status.resumeAt,
+  };
+}
+
 export { listLibrarySummaries };
-export type { LibraryScanSummary, LibrarySummary };
+export type { LibraryEnrichSummary, LibraryScanSummary, LibrarySummary };

@@ -66,6 +66,12 @@ interface LibraryWire {
    * belongs.
    */
   scan?: { status?: string; scanned?: number; lastError?: string | null } | null;
+  /**
+   * The enrichment state each library carries. `null` — not absent — when no run was ever
+   * started and tracks remain; a client that cannot tell the two renders an empty line
+   * where the run's action belongs.
+   */
+  enrich?: { status?: string; enriched?: number; remaining?: number; lastError?: string | null; resumeAt?: number | null } | null;
   [key: string]: unknown;
 }
 
@@ -529,6 +535,137 @@ describe('libraries', () => {
     const { status, body } = await call('/user/libraries/nope/scan/step', { method: 'POST' });
     expect(status).toBe(404);
     expect(body.Exception?.Message).toContain('not found');
+  });
+});
+
+const flacEncoder = new TextEncoder();
+
+/**
+ * A real FLAC prefix reporting 180 seconds, so an enrichment served from the harness
+ * origin resolves the duration from one ranged read. The same fixture
+ * `test/enrichment-config.test.ts` builds; copied rather than imported because suites
+ * do not import from each other.
+ */
+function flacBody(): Uint8Array {
+  const streamInfo = new Uint8Array(34);
+  const view = new DataView(streamInfo.buffer);
+  view.setUint16(0, 4096);
+  view.setUint16(2, 4096);
+  const bits: number[] = [];
+  const push = (value: number, width: number): void => {
+    for (let index = width - 1; index >= 0; index -= 1) bits.push((value >>> index) & 1);
+  };
+  push(44_100, 20);
+  push(1, 3);
+  push(15, 5);
+  push(44_100 * 180, 36);
+  for (let index = 0; index < 64; index += 1) {
+    if (bits[index]) streamInfo[10 + (index >> 3)]! |= 1 << (7 - (index & 7));
+  }
+  return new Uint8Array([...flacEncoder.encode('fLaC'), 0x80, 0, 0, 34, ...streamInfo]);
+}
+
+/**
+ * The library-wide enrichment: the operator trigger beside the scan.
+ *
+ * The route claims are the only ones asserted here — reachable, shaped like the SPA
+ * reads, refusing while the scan runs. What a chunk *does* is asserted over real SQLite
+ * in `test/enrich-library.test.ts` and what the alarm chain does in
+ * `test/enrich-worker.test.ts`; neither can see that the routes exist.
+ */
+describe('library enrichment', () => {
+  const root = '/remote.php/dav/files/alice/Music';
+
+  async function makeOwing(): Promise<void> {
+    await harness.db.db.prepare('UPDATE songs SET enriched_at = NULL, reader_version = 0').run();
+    harness.dav.setTree({
+      [`${root}/Bon Iver/For Emma/01.flac`]: [
+        { path: `${root}/Bon Iver/For Emma/01.flac`, size: 4096, contentType: 'audio/flac', body: flacBody() },
+      ],
+      [`${root}/Bon Iver/For Emma/02.flac`]: [
+        { path: `${root}/Bon Iver/For Emma/02.flac`, size: 8192, contentType: 'audio/flac', body: flacBody() },
+      ],
+    });
+    vi.stubGlobal('fetch', harness.dav.fetch);
+  }
+
+  it('reports an enriched library as idle with nothing remaining, not as absent', async () => {
+    // The harness seeds two enriched tracks, so the run has nothing to do — and "nothing
+    // to do" is a measurement (`remaining: 0`) rather than an absent field, which a client
+    // reads as "never enriched".
+    const { body } = await call('/user/libraries');
+    expect(body.libraries?.[0]?.enrich).toEqual({ status: 'idle', enriched: 0, remaining: 0, lastError: null, resumeAt: null });
+  });
+
+  it('reports null while tracks remain and no run was ever started', async () => {
+    await harness.db.db.prepare('UPDATE songs SET enriched_at = NULL').run();
+
+    const { body } = await call('/user/libraries');
+    expect(body.libraries?.[0]).toHaveProperty('enrich', null);
+  });
+
+  it('starts a run from the operator surface and enriches every owing track', async () => {
+    await makeOwing();
+
+    const started = await call('/user/libraries/L1/enrich', { method: 'POST' });
+
+    expect(started.status).toBe(200);
+    expect(started.body.status).toBe('idle');
+    expect(started.body).toMatchObject({ enriched: 2, remaining: 0, lastError: null });
+    expect(harness.dav.gets).toHaveLength(2);
+  });
+
+  it('advances one chunk per step without the binding', async () => {
+    // Without the `ENRICH` binding there is no alarm, so each step is one bounded chunk
+    // of the same run — the client-driven path, like the scan's step before it.
+    await makeOwing();
+
+    const chunk = await call('/user/libraries/L1/enrich/step', { method: 'POST' });
+
+    expect(chunk.status).toBe(200);
+    expect(chunk.body).toMatchObject({ enriched: 2, remaining: 0 });
+    expect(chunk.body).toHaveProperty('stoppedBy');
+  });
+
+  it('reads status without doing work', async () => {
+    await harness.db.db.prepare('UPDATE songs SET enriched_at = NULL').run();
+
+    const before = harness.dav.requestCount();
+    const { status, body } = await call('/user/libraries/L1/enrich');
+
+    expect(status).toBe(200);
+    expect(body).toBeNull();
+    expect(harness.dav.requestCount()).toBe(before);
+  });
+
+  it('refuses to start or step while the scan is advancing, but still reports status', async () => {
+    await makeOwing();
+    await harness.db.db
+      .prepare("INSERT INTO scan_state (library_id, status, scanned_count, total_count, index_version, consecutive_failures, updated_at) VALUES ('L1', 'scanning', 0, 0, 1, 0, 0)")
+      .run();
+
+    const started = await call('/user/libraries/L1/enrich', { method: 'POST' });
+    expect(started.status).toBe(409);
+    expect(started.body.Exception?.Message).toMatch(/scan is/i);
+
+    const stepped = await call('/user/libraries/L1/enrich/step', { method: 'POST' });
+    expect(stepped.status).toBe(409);
+
+    // The read is unaffected: reporting on a run is not running one.
+    const read = await call('/user/libraries/L1/enrich');
+    expect(read.status).toBe(200);
+  });
+
+  it('answers 404 for a library that does not exist, on the routes that do work', async () => {
+    for (const path of ['/user/libraries/nope/enrich', '/user/libraries/nope/enrich/step']) {
+      const { status } = await call(path, { method: 'POST' });
+      expect(status, path).toBe(404);
+    }
+    // The read is the exception: with no run and no rows it reports an idle library with
+    // nothing owing, which is what "no work" looks like rather than a missing library.
+    const { status, body } = await call('/user/libraries/nope/enrich');
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ status: 'idle', remaining: 0 });
   });
 });
 

@@ -25,9 +25,12 @@ interface Notice {
 export type {
   LibrarySummary,
   LibraryScanSummary,
+  LibraryEnrichSummary,
   ProbeResult,
   ScanStateSummary,
   ScanStatus,
+  EnrichStateSummary,
+  EnrichStatus,
   ChunkStopReason,
   LibraryIndexStats,
   IndexStats,

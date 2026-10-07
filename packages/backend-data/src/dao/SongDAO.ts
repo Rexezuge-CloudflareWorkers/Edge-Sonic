@@ -36,13 +36,6 @@ import { buildMetadataPatch, NO_METADATA_WRITE } from './songMetadata';
 import type { MetadataWriteResult } from './songMetadata';
 
 /**
- * Library ids per statement: one variable each, and nothing else.
- *
- * Derived from the measured ceiling rather than chosen, so a raised `MAX_LIBRARIES` cannot
- * silently push this over D1's 100-parameter limit. See `sqlLimits.ts`.
- */
-
-/**
  * Insert or refresh a song's *file* facts, leaving derived metadata alone.
  *
  * The tag-derived columns (`title`, `duration`, `bitrate`, …) are deliberately absent

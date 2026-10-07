@@ -41,6 +41,7 @@ interface LibraryWire {
   isEnabled: boolean;
   songCount: number;
   scan: { status: 'idle' | 'scanning' | 'failed' | 'stalled'; scanned: number; lastError: string | null } | null;
+  enrich: { status: 'idle' | 'enriching' | 'failed' | 'stalled' | 'paused'; enriched: number; remaining: number; lastError: string | null; resumeAt: number | null } | null;
   createdAt: number;
 }
 
@@ -55,6 +56,7 @@ function library(overrides: Partial<LibraryWire> = {}): LibraryWire {
     isEnabled: true,
     songCount: 0,
     scan: null,
+    enrich: null,
     createdAt: 0,
     ...overrides,
   };
@@ -167,6 +169,52 @@ describe('the scan state an operator can see', () => {
     renderView();
     expect(await screen.findByText('Stopped retrying. Fix the cause, then rescan.')).toBeTruthy();
     expect(screen.queryByText('Retrying after an error.')).toBeNull();
+  });
+});
+
+describe('the enrichment state an operator can see', () => {
+  it('says a library has never been enriched, on first load and with no click', async () => {
+    // `enrich: null` is what the server sends when no run was ever started and tracks
+    // remain — the enrichment half of the scan's "never scanned" state, and the row's
+    // second call to action beside it.
+    stubList(() => [library({ enrich: null })]);
+    renderView();
+    expect(await screen.findByText('Not enriched yet.')).toBeTruthy();
+    expect(screen.queryByText('Enriched.')).toBeNull();
+  });
+
+  it('shows the remaining count while a run is advancing', async () => {
+    stubList(() => [library({ enrich: { status: 'enriching', enriched: 4, remaining: 12, lastError: null, resumeAt: null } })]);
+    renderView();
+    expect(await screen.findByText('Enriching.')).toBeTruthy();
+    expect(screen.getByText('12 tracks remaining')).toBeTruthy();
+  });
+
+  it('keeps polling while an enrichment is advancing, and stops when it finishes', async () => {
+    // The scan's poll guard extended: an idle scan beside a running enrichment must not
+    // stop the timer, and a finished run must.
+    let enrich = library({
+      songCount: 40,
+      scan: { status: 'idle', scanned: 9, lastError: null },
+      enrich: { status: 'enriching', enriched: 4, remaining: 12, lastError: null, resumeAt: null },
+    });
+    const fetchMock = stubList(() => [enrich]);
+    renderView();
+    await screen.findByText('Enriching.');
+    await tick(1);
+    expect(listCalls(fetchMock)).toBeGreaterThan(1);
+
+    enrich = library({
+      songCount: 40,
+      scan: { status: 'idle', scanned: 9, lastError: null },
+      enrich: { status: 'idle', enriched: 16, remaining: 0, lastError: null, resumeAt: null },
+    });
+    await tick(1);
+    expect(await screen.findByText('Enriched.')).toBeTruthy();
+
+    const settled = listCalls(fetchMock);
+    await tick(3);
+    expect(listCalls(fetchMock)).toBe(settled);
   });
 });
 

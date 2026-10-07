@@ -6,7 +6,7 @@
  */
 import { apiDelete, apiGet, apiPatch, apiPost } from '../lib/api';
 import type { LibraryPatch } from '../lib/libraryDraft';
-import type { IndexDropResult, IndexStats, LibrarySummary, ProbeResult, ScanStateSummary } from '../types';
+import type { EnrichStateSummary, IndexDropResult, IndexStats, LibrarySummary, ProbeResult, ScanStateSummary } from '../types';
 
 export const listLibraries = (): Promise<{ libraries: LibrarySummary[] }> => apiGet('/libraries');
 
@@ -68,6 +68,35 @@ export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiG
  * while some other surface happened to poll it.
  */
 export const stepLibraryScan = (id: string): Promise<ScanStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/scan/step`);
+
+/**
+ * Start a library-wide tag enrichment.
+ *
+ * A `POST` for the probe's reason: it performs live outbound requests with the stored
+ * credential, and a `GET` a link — or a prefetcher — can trigger is a `GET` neither
+ * should. Runs only while the scan is idle; while the scan is advancing the server
+ * refuses with `409`, so the operator learns to wait rather than watching a run that
+ * cannot move.
+ */
+export const startLibraryEnrich = (id: string): Promise<EnrichStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/enrich`);
+
+/**
+ * Read one library's enrichment state.
+ *
+ * A passive read, like `libraryScanStatus`: the page polls the list, not this, and one
+ * poll carries every library. Kept as a named export for the same reason — the route is
+ * part of the operator API, and deleting the wrapper because nothing here calls it today
+ * would make the route look unused to the next reader.
+ */
+export const libraryEnrichStatus = (id: string): Promise<EnrichStateSummary | null> => apiGet(`/libraries/${encodeURIComponent(id)}/enrich`);
+
+/**
+ * Advance one enrichment chunk.
+ *
+ * Without the `ENRICH` binding this is the only thing that moves a run at all — the
+ * client-driven path, one bounded chunk per call, like the scan's step before it.
+ */
+export const stepLibraryEnrich = (id: string): Promise<EnrichStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/enrich/step`);
 
 /**
  * What dropping every library's index would cost.

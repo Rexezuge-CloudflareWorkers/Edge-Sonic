@@ -23,6 +23,19 @@ export {
 } from './scanRetry';
 export { EnrichmentService, shouldEnrich } from './EnrichmentService';
 export type { EnrichmentDeps } from './EnrichmentService';
+export { LibraryEnrichmentService } from './libraryEnrichment';
+export type { EnrichLibraryDeps } from './libraryEnrichment';
+export {
+  enrichDailyAllowancePause,
+  enrichDailyWriteAllowanceSpent,
+  enrichD1AllowancePause,
+  enrichIdleResult,
+  enrichPausedResult,
+  describeEnrichFailure,
+  isEnrichAdvancing,
+  willEnrichResumeWithoutPoll,
+} from './enrichRetry';
+export type { EnrichChunkResult, EnrichStatus } from './enrichRetry';
 export { isCompleteEnrichment } from './songMetaCache';
 export type { CachedEnrichment } from './songMetaCache';
 export { resolveTailDuration, recordsLengthAtTheEnd, NO_TAIL_DURATION } from './oggTailDuration';
