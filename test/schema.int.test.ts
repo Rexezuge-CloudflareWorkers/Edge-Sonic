@@ -60,7 +60,7 @@ import {
 import { DERIVED_MARKER, EMPTY_DERIVED_MARKER } from './helpers/harness';
 import { sqliteQueryable, queryPlan } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
-import { albumIdOf, specFromKey } from '@edge-sonic/subsonic';
+import { albumIdOf, isShortSongId, mintSongId, specFromKey } from '@edge-sonic/subsonic';
 // The comparator under test is the one the endpoints publish with, imported rather than
 // restated: a copy here would pass against itself, and the assertion it exists for is that
 // the row fetch's SQL order and this order agree.
@@ -4043,5 +4043,93 @@ describe('a remote instance’s two refusals are told apart, because they are no
     });
 
     await expect(service.remove('no-such-source')).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
+
+describe('short song ids', () => {
+  async function seedShortIds(): Promise<{ libraryId: string; songs: SongDAO; legacy: string; short: string }> {
+    const userId = await seedUser('ShortIds');
+    const libraryId = await seedLibrary(userId, 'LSHORT');
+    const songs = new SongDAO(handle.db, DERIVED_MARKER);
+    const legacy = songId(libraryId, 'Blur/Holocene/01.flac');
+    await songs.upsertFileFacts([
+      { id: legacy, libraryId, path: 'Blur/Holocene/01.flac', dirPath: 'Blur/Holocene', name: '01.flac', size: 10, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+    ]);
+    const short = mintSongId();
+    await songs.upsertFileFacts([
+      { id: short, libraryId, path: 'Blur/For Emma/02.flac', dirPath: 'Blur/For Emma', name: '02.flac', size: 10, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+    ]);
+    return { libraryId, songs, legacy, short };
+  }
+
+  it('mints ids no download filename can refuse', () => {
+    // The defect: a reversible id grows with the path and a client filing it
+    // as a name answers ENAMETOOLONG. 24 chars against a 255-byte component.
+    for (let i = 0; i < 5; i += 1) {
+      const id = mintSongId();
+      expect(isShortSongId(id)).toBe(true);
+      expect(id.length).toBeLessThanOrEqual(32);
+    }
+  });
+
+  it('finds a row by path, the identity that never changes', async () => {
+    const { libraryId, songs } = await seedShortIds();
+    expect((await songs.findByPath(libraryId, 'Blur/Holocene/01.flac'))?.path).toBe('Blur/Holocene/01.flac');
+    expect(await songs.findByPath(libraryId, 'Blur/missing.flac')).toBeNull();
+  });
+
+  it('resolves a short id directly and a legacy id through its path', async () => {
+    const { songs, legacy, short } = await seedShortIds();
+    expect((await songs.findBySongId(short))?.path).toBe('Blur/For Emma/02.flac');
+    expect((await songs.findBySongId(legacy))?.path).toBe('Blur/Holocene/01.flac');
+    expect(await songs.findBySongId('s:not-a-real-id')).toBeNull();
+    expect(await songs.findBySongId(mintSongId())).toBeNull();
+  });
+
+  it('resolves mixed id lists in the caller order', async () => {
+    const { libraryId, songs, legacy, short } = await seedShortIds();
+    const inLibrary = await songs.listIdsIn(libraryId, [legacy, short, 's:missing']);
+    expect(inLibrary.map((row) => row.path)).toEqual(['Blur/Holocene/01.flac', 'Blur/For Emma/02.flac']);
+    const across = await songs.listIdsAcrossLibraries([short, legacy]);
+    expect(across.map((row) => row.path)).toEqual(['Blur/For Emma/02.flac', 'Blur/Holocene/01.flac']);
+    // Scoped to one library: a legacy id for another library stays absent.
+    expect(await songs.listIdsIn('SOMEWHERE-ELSE', [legacy])).toEqual([]);
+  });
+
+  it('keeps the minted id when the same path is upserted again', async () => {
+    // Stability moved from the function to the row: a fresh random id per
+    // pass must update the row rather than duplicate it, or every rescan
+    // orphans every saved reference.
+    const { libraryId, songs } = await seedShortIds();
+    const before = (await songs.findByPath(libraryId, 'Blur/Holocene/01.flac'))?.id;
+    await songs.upsertFileFacts([
+      { id: mintSongId(), libraryId, path: 'Blur/Holocene/01.flac', dirPath: 'Blur/Holocene', name: '01.flac', size: 11, mtimeMs: 2, contentType: 'audio/flac', suffix: 'flac' },
+    ]);
+    expect((await songs.findByPath(libraryId, 'Blur/Holocene/01.flac'))?.id).toBe(before);
+  });
+
+  it('selects only long ids for rotation', async () => {
+    const { libraryId, songs } = await seedShortIds();
+    expect((await songs.listLegacySongIds(libraryId, 10)).map((row) => row.path)).toEqual(['Blur/Holocene/01.flac']);
+  });
+
+  it('rotates a row and its playlist entries together, or neither', async () => {
+    const { libraryId, songs, legacy } = await seedShortIds();
+    const playlists = new PlaylistDAO(handle.db);
+    const userId = await seedUser('ShortIdsOwner');
+    const playlist = await playlists.create({ ownerUserId: userId, name: 'Mix' });
+    await playlists.replaceEntries(playlist.id, [legacy], 100);
+
+    const rotated = mintSongId();
+    const result = await songs.rotateSongId(libraryId, 'Blur/Holocene/01.flac', legacy, rotated);
+    expect(result.changes).toBeGreaterThan(0);
+
+    // The join the playlist renders through holds again, under the new id.
+    expect((await playlists.listEntrySongs(playlist.id)).map((row) => row.id)).toEqual([rotated]);
+    // And the client's cached long id still resolves, through the path.
+    expect((await songs.findBySongId(legacy))?.id).toBe(rotated);
+    expect((await songs.listLegacySongIds(libraryId, 10))).toEqual([]);
+    // A second rotation of the same row matches nothing and changes nothing.
+    expect((await songs.rotateSongId(libraryId, 'Blur/Holocene/01.flac', legacy, mintSongId())).changes).toBe(0);
   });
 });

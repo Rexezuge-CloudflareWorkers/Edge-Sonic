@@ -80,6 +80,16 @@ type ChildNodeRow = NodeRow & {
    * upserted as a song for ever.
    */
   has_song: 0 | 1;
+  /**
+   * The `songs.id` for this path, or `null` when there is no song row.
+   *
+   * Read from the same `LEFT JOIN` as `has_song`, so reusing an existing id costs
+   * no extra statement. Song ids are opaque and random per row now (see
+   * `subsonic/songId.ts`) — a writer that minted a fresh one per pass would
+   * orphan every saved playlist on each rescan, so the existing id is reused
+   * and only a missing row mints.
+   */
+  song_id: string | null;
 };
 
 interface SongRow {

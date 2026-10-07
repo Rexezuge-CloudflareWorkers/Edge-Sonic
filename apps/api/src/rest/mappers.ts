@@ -3,8 +3,10 @@
  *
  * ### The id rules, restated where they are used
  *
- * - `song` ids come from `encodeId`, which is reversible, so `stream` can resolve
- *   an id to a path without a lookup.
+ * - `song` ids are short and opaque (`subsonic/songId.ts`), resolved through
+ *   the row — so `stream` reads the database where it once decoded the id.
+ *   Legacy reversible ids are still accepted and resolve through
+ *   `(library_id, path)`.
  * - `album` ids are the album's **grouping key**, never its name and no longer its directory —
  *   `ALBUM_GROUP_BY` decides what an album is, `subsonic/albumKey.ts` owns that question and
  *   `./albumIdentity.ts` carries it per request. A name would be the part that changes; a
@@ -16,7 +18,7 @@
  *   folder).
  */
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { artistElement, artistIdOf, elList } from '@edge-sonic/subsonic';
+import { artistElement, artistIdOf, elList, legacySongId } from '@edge-sonic/subsonic';
 import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
 import type { AlbumIdentity } from './albumIdentity';
 
@@ -236,6 +238,22 @@ interface AnnotationLookup {
  */
 const NO_ANNOTATIONS: AnnotationLookup = { stars: new Map(), ratings: new Map(), playCounts: new Map() };
 
+/**
+ * An annotation for a song under either id it has ever been published under.
+ *
+ * Stars, ratings and play counts are stored under the id the song had when the
+ * user marked it. Rotation renames the row but leaves these tables alone (they
+ * resolve through the legacy fallback), so a lookup checks the row's current
+ * id first and its legacy long form second — the same "current plus legacy"
+ * shape `albumModel` uses for folder-shaped album ids.
+ */
+function annotationValue(lookup: ReadonlyMap<string, number> | undefined, song: SongRow): number | undefined {
+  if (!lookup || lookup.size === 0) return undefined;
+  const current = lookup.get(song.id);
+  if (current !== undefined) return current;
+  return lookup.get(legacySongId(song.library_id, song.path));
+}
+
 function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity, annotations?: AnnotationLookup): Song {
   const albumId = identity.idOf(song);
   // `artist` falls back for the same reason `album` does, four lines below — a row the
@@ -255,6 +273,9 @@ function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity
   // the album's answer rather than each track's.
   const albumArtist = song.album_artist ?? song.artist ?? undefined;
   const title = titleOf(song);
+  const starredAt = annotationValue(annotations?.stars, song);
+  const rating = annotationValue(annotations?.ratings, song);
+  const playCount = annotationValue(annotations?.playCounts, song) ?? 0;
   return {
     id: song.id,
     mediaType: 'song',
@@ -288,12 +309,12 @@ function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity
     suffix: song.suffix || suffixOfPath(song.path),
     created: toIso(song.created_at),
     ...(albumId !== undefined && { coverArt: albumId }),
-    ...(annotations?.stars.has(song.id) && { starred: toIso(song.mtime_ms) }),
-    ...(annotations?.ratings.has(song.id) && { userRating: annotations.ratings.get(song.id) }),
+    ...(starredAt !== undefined && { starred: toIso(song.mtime_ms) }),
+    ...(rating !== undefined && { userRating: rating }),
     // Always a number, defaulting to 0. Omitting it leaves a client doing
     // `playCount + 1` rendering `NaN`, and `playCount` is a value every client displays
     // rather than an annotation that is either present or absent.
-    playCount: annotations?.playCounts.get(song.id) ?? 0,
+    playCount,
   };
 }
 
@@ -329,6 +350,9 @@ function guessContentType(suffix: string): string {
 
 function songToChild(song: SongRow, library: LibraryRow, parentId: string, identity: AlbumIdentity, annotations?: AnnotationLookup): Child {
   const albumId = identity.idOf(song);
+  const starredAt = annotationValue(annotations?.stars, song);
+  const rating = annotationValue(annotations?.ratings, song);
+  const playCount = annotationValue(annotations?.playCounts, song) ?? 0;
   return {
     id: song.id,
     parent: parentId,
@@ -350,12 +374,12 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, ident
     bitRate: song.bitrate,
     created: toIso(song.created_at),
     mediaType: 'song',
-    ...(annotations?.stars.has(song.id) && { starred: toIso(song.mtime_ms) }),
-    ...(annotations?.ratings.has(song.id) && { userRating: annotations.ratings.get(song.id) }),
+    ...(starredAt !== undefined && { starred: toIso(song.mtime_ms) }),
+    ...(rating !== undefined && { userRating: rating }),
     // Always a number, defaulting to 0. Omitting it leaves a client doing
     // `playCount + 1` rendering `NaN`, and `playCount` is a value every client displays
     // rather than an annotation that is either present or absent.
-    playCount: annotations?.playCounts.get(song.id) ?? 0,
+    playCount,
   };
 }
 

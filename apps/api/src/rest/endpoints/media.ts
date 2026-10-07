@@ -24,8 +24,7 @@
  * `Content-Range` intact. This is the one endpoint where "don't be clever" is the
  * entire implementation.
  */
-import { decodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
-import type { IdKindValue } from '@edge-sonic/subsonic';
+import { ErrorCode, SubsonicError } from '@edge-sonic/subsonic';
 import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { guessContentType } from '../mappers';
@@ -66,29 +65,23 @@ function passthrough(upstream: Response): Response {
 /**
  * Resolve a song id to its library, row, and path.
  *
- * The path comes from the **ID**, not from a `songs` row lookup — that is what
- * makes the ID scheme reversible and keeps the hot path off the database. The row is
- * still read, for two reasons that are not optional:
- *
- * 1. `Content-Type` and `Content-Length` come from the index rather than from
- *    trusting the origin's header for a file we never checked;
- * 2. the existence check is what makes a forged ID harmless. Without it, a crafted
- *    `s:<b64url(libA|any/path)>` would stream any readable path in that library.
+ * Database-first: the id — short or legacy — resolves to a row, and the row's
+ * own `library_id` and `path` are what stream. A forged id names no row either
+ * way, so it is `code=70` without ever touching the origin. The grant check
+ * stays `requireForUser`, so an id in a library the caller cannot see is still
+ * `code=70` and never an oracle.
  */
-async function resolveSong(context: RestContext, expectedKind: IdKindValue) {
+async function resolveSong(context: RestContext) {
   const id = context.params.require('id');
-  const decoded = decodeId(id, expectedKind);
-  TreeService.assertPath(decoded.path);
-  const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
-  context.libraries.assertReachable(library);
-
-  const song = await context.songs.findById(id);
-  if (!song || song.path !== decoded.path) {
-    // Either the id does not exist, or it names a path this library has not
-    // indexed. Both are `code=70`.
+  const song = await context.songs.findBySongId(id);
+  if (!song) {
     throw new SubsonicError(ErrorCode.NotFound, 'Media not found.');
   }
-  return { id, decoded, library, song };
+  TreeService.assertPath(song.path);
+  const library = await context.libraries.requireForUser(context.user.id, song.library_id);
+  context.libraries.assertReachable(library);
+
+  return { id: song.id, library, song };
 }
 
 /**
@@ -101,11 +94,11 @@ async function resolveSong(context: RestContext, expectedKind: IdKindValue) {
  * byte.
  */
 async function stream(context: RestContext): Promise<PassthroughResponse> {
-  const { decoded, library, song } = await resolveSong(context, IdKind.Song);
+  const { library, song } = await resolveSong(context);
   const client = await context.libraries.clientFor(library);
   const range = context.params.get('range') ?? headerRange(context);
 
-  const upstream = await client.get(decoded.path, {
+  const upstream = await client.get(song.path, {
     ...(range !== null && range.length > 0 && { range }),
     timeoutMs: context.streamTimeoutMs,
   });
@@ -125,9 +118,9 @@ async function stream(context: RestContext): Promise<PassthroughResponse> {
  * its real name rather than the song id.
  */
 async function download(context: RestContext): Promise<PassthroughResponse> {
-  const { decoded, library, song } = await resolveSong(context, IdKind.Song);
+  const { library, song } = await resolveSong(context);
   const client = await context.libraries.clientFor(library);
-  const upstream = await client.get(decoded.path, { timeoutMs: context.streamTimeoutMs });
+  const upstream = await client.get(song.path, { timeoutMs: context.streamTimeoutMs });
 
   const response = passthrough(upstream);
   if (!response.headers.has('content-type')) {

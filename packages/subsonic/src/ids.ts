@@ -6,14 +6,18 @@
  * across restarts and across devices. That rules out anything minted per request.
  *
  * So IDs are **reversible** — `kind:base64url(libraryId + "\n" + path)` — and
- * three properties follow:
+ * three properties follow (for every kind **except songs**, which are now short
+ * and opaque — see `songId.ts` — and resolve through the row):
  *
  * 1. Resolving an ID to a path costs a base64 decode, so `stream` never needs a
  *    database lookup to know *what* to fetch. The hot path stays off D1 and KV.
+ *    (Songs are the exception: their ids outgrew client filenames, so `stream`
+ *    reads the row first.)
  * 2. The `kind` prefix makes the ID self-describing, so `getCoverArt` and
  *    `stream` dispatch on the prefix instead of a lookup table.
  * 3. A rename or a move is not a data migration — the same path yields the same
- *    ID forever.
+ *    ID forever. (Songs are stable the other way: the row keeps its minted id
+ *    across rescans, and the id backfill renames long ids to short ones.)
  *
  * Property 3 has a consequence that is easy to get wrong and is load-bearing:
  * an **album** ID must resolve back to its songs, so the payload has to be

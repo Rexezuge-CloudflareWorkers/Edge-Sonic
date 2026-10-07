@@ -1,7 +1,7 @@
 /**
  * Per-user state the filesystem cannot hold: bookmarks and the play queue.
  */
-import { decodeId, el, elList, ErrorCode, IdKind, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { el, elList, ErrorCode, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -25,14 +25,12 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
   const annotations = await annotationsFor(context, rows.length > 0);
   const nodes: ElementNode[] = [];
   for (const row of rows) {
-    const decoded = safeDecode(row.song_id, IdKind.Song);
-    if (!decoded) continue;
+    const song = await context.songs.findBySongId(row.song_id);
+    if (!song) continue;
     // A bookmark for a library this user cannot see is dropped, not rejected: the
     // user may legitimately have had access revoked since bookmarking.
-    const songLibrary = library.find((candidate) => candidate.id === decoded.libraryId);
+    const songLibrary = library.find((candidate) => candidate.id === song.library_id);
     if (!songLibrary) continue;
-    const song = await context.songs.findById(row.song_id);
-    if (!song) continue;
     nodes.push({
       // Renamed to `bookmark`: the element name is the JSON key a client reads, so a
       // `song` element inside a `bookmarks` wrapper produces `bookmarks.song` and leaves
@@ -53,16 +51,18 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
 
 async function createBookmark(context: RestContext): Promise<EnvelopeResponse> {
   const id = context.params.require('id');
-  const decoded = decodeId(id, IdKind.Song);
+  const song = await context.songs.findBySongId(id);
+  if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
   // Awaited, before the write. `void` started the grant check and discarded its
   // rejection, so the bookmark was written for a library the caller cannot see; the
   // `bookmarks` table has no foreign key to `songs` to catch it, and `getBookmarks`
   // filters by library, so the row was invisible and permanent. The same defect the
   // play queue had at `savePlayQueue` below.
-  await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+  await context.libraries.requireForUser(context.user.id, song.library_id);
   const position = context.params.int('position', 0, { min: 0 });
   const comment = context.params.get('comment');
-  await context.annotations.createBookmark(context.user.id, id, position, comment ?? null);
+  // Canonical id: a client holding a legacy long id migrates to the short one here.
+  await context.annotations.createBookmark(context.user.id, song.id, position, comment ?? null);
   return respond(context, null);
 }
 
@@ -124,6 +124,13 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   }
 
   const annotations = await annotationsFor(context, renderable.length > 0);
+  // Canonical current: a client holding a legacy long id for a rotated row
+  // resolves to the same track, so the comparison is on what the row holds now.
+  let currentCanonical: string | null = null;
+  if (saved.currentSongId !== null) {
+    const current = await context.songs.findBySongId(saved.currentSongId);
+    currentCanonical = current?.id ?? null;
+  }
   return respond(
     context,
     elList(
@@ -137,7 +144,7 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
         //
         // `current` is reported only when the track is still in the queue. Naming an id
         // the client cannot resolve is worse than naming none.
-        ...(saved.currentSongId !== null && renderable.some((song) => song.id === saved.currentSongId) ? [el('current', {}, [saved.currentSongId])] : []),
+        ...(currentCanonical !== null && renderable.some((song) => song.id === currentCanonical) ? [el('current', {}, [currentCanonical])] : []),
         el('position', {}, [saved.positionMs]),
         // `username` and `changed` are part of the same element, and a client that syncs a
         // queue between devices needs to know whose queue it is and when it moved.
@@ -180,31 +187,32 @@ async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   // `code=50`, and the queue was written with an id pointing at a library the caller
   // cannot see. `getPlayQueue` then filtered it out, so the queue simply came back
   // shorter than it was saved — a silent data loss with an authorization hole under it.
+  //
+  // Resolved through the row, not decoded: short ids carry no library to decode,
+  // and the canonical id is stored so a legacy id migrates on save.
+  const canonical: string[] = [];
   for (const id of ids) {
-    const decoded = decodeId(id, IdKind.Song);
-    await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+    const song = await context.songs.findBySongId(id);
+    if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+    await context.libraries.requireForUser(context.user.id, song.library_id);
+    canonical.push(song.id);
   }
+  let canonicalCurrent: string | null = null;
   if (current !== null) {
-    const decoded = decodeId(current, IdKind.Song);
-    await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+    const song = await context.songs.findBySongId(current);
+    if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+    await context.libraries.requireForUser(context.user.id, song.library_id);
+    canonicalCurrent = song.id;
   }
 
   await context.annotations.savePlayQueue({
     userId: context.user.id,
-    songIds: ids,
-    currentSongId: current,
+    songIds: canonical,
+    currentSongId: canonicalCurrent,
     positionMs: position,
     changed: context.params.get('changed') ?? new Date().toISOString(),
   });
   return respond(context, null);
-}
-
-function safeDecode(id: string, kind: string) {
-  try {
-    return decodeId(id, kind as never);
-  } catch {
-    return null;
-  }
 }
 
 const stateEndpoints = { getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue };

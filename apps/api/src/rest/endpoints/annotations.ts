@@ -5,7 +5,7 @@
  * same three id parameters (`id`, `albumId`, `artistId`) because the protocol
  * reuses the same shape across them.
  */
-import { decodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
+import { decodeId, ErrorCode, SubsonicError } from '@edge-sonic/subsonic';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import { librariesForId } from './libraries';
@@ -46,6 +46,15 @@ async function collectTargets(context: RestContext): Promise<Array<{ id: string;
   const targets: Array<{ id: string; itemType: 'song' | 'album' | 'artist' }> = [];
   for (const [param, itemType] of ID_PARAMS) {
     for (const raw of context.params.ids(param)) {
+      if (itemType === 'song') {
+        // Resolved through the row: short ids carry no library to decode, and
+        // the canonical id is stored so a legacy id migrates on star.
+        const song = await context.songs.findBySongId(raw);
+        if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+        await context.libraries.requireForUser(context.user.id, song.library_id);
+        targets.push({ id: song.id, itemType });
+        continue;
+      }
       const decoded = decodeId(raw);
       // Awaited, before anything is written: a forged library id fails here. And it goes
       // through `librariesForId` rather than straight to `requireForUser`, because an album or
@@ -120,16 +129,18 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
   const playerId = context.params.get('i') ?? null;
 
   for (const id of ids) {
-    const decoded = decodeId(id, IdKind.Song);
+    const song = await context.songs.findBySongId(id);
+    if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
     // Awaited. `void` here started the grant check and discarded its rejection, so the
     // play it was guarding was recorded for a library the caller cannot see — see
     // `collectTargets` for why that is invisible rather than merely wrong.
-    await context.libraries.requireForUser(context.user.id, decoded.libraryId);
+    await context.libraries.requireForUser(context.user.id, song.library_id);
     if (submission) {
       // `PlayCountDAO.recordPlay` rather than an annotation method — see
       // `packages/backend-data/src/dao/playCounts.ts`: incrementing and overwriting the same
       // table is the distinction that file exists to keep legible.
-      await context.playCounts.recordPlay(context.user.id, id);
+      // Canonical id, so a legacy scrobble migrates the count.
+      await context.playCounts.recordPlay(context.user.id, song.id);
     }
   }
 
@@ -137,13 +148,13 @@ async function scrobble(context: RestContext): Promise<EnvelopeResponse> {
   // user's current track, and writing one row per scrobbled id would have the last
   // one win arbitrarily.
   //
-  // The id is already decoded and authorized above, so it is not decoded again here —
-  // the second `decodeId` was the same throwing call on the same bytes with its result
-  // discarded.
+  // Canonical: the loop above already resolved and authorized every id, so the
+  // first row's id is re-read rather than re-decoded.
+  const first = await context.songs.findBySongId(ids[0]);
   await context.annotations.setNowPlaying({
     userId: context.user.id,
     username: context.username,
-    songId: ids[0],
+    songId: first?.id ?? ids[0],
     playerName,
     playerId,
   });

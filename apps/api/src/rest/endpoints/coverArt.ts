@@ -44,7 +44,7 @@
  * extracted bytes are cached in KV under a 30-day TTL, which holds it to roughly one
  * origin read per album per client per month.
  */
-import { decodeAlbumKey, decodeId, encodeId, IdKind } from '@edge-sonic/subsonic';
+import { decodeAlbumKey, decodeId, IdKind } from '@edge-sonic/subsonic';
 import type { IdKindValue } from '@edge-sonic/subsonic';
 import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import { librariesForId } from './libraries';
@@ -111,6 +111,15 @@ const ALBUM_ART_TRACK_LIMIT = 3;
 
 async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
   const id = context.params.require('id');
+  // Song fast path, before any decode: short ids carry no library or path to
+  // decode, and legacy song ids for rotated rows no longer match their row's
+  // id either. The row has both, so it resolves either form.
+  const song = await context.songs.findBySongId(id);
+  if (song) {
+    const library = await context.libraries.requireForUser(context.user.id, song.library_id);
+    context.libraries.assertReachable(library);
+    return await coverForSongs(library, [song], song.dir_path, context);
+  }
   // The prefix is not checked here: `getCoverArt` legitimately accepts a song, an album, an
   // artist, or a directory id, and all of them resolve to a folder.
   const decoded = decodeId(id);
@@ -133,6 +142,19 @@ async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
     decoded.kind === IdKind.Artist ? { dirPath: null, songs: [] } : await albumTargetFor(library, libraries.map((row) => row.id), decoded.kind, decoded.path, context);
 
   const folder = await resolveCoverFolder(library, decoded.kind, decoded.path, target.dirPath, context);
+  return await coverForTarget(library, target, folder, context);
+}
+
+/**
+ * Sidecar probe, then embedded tags, then the placeholder — the shared tail
+ * for the song fast path above and the decoded album/artist/directory path.
+ */
+async function coverForSongs(library: LibraryRow, songs: readonly SongRow[], dirPath: string | null, context: RestContext): Promise<PassthroughResponse> {
+  const folder = dirPath === null ? null : await findCoverIn(library, dirPath, context).catch(() => null);
+  return await coverForTarget(library, { dirPath, songs }, folder, context);
+}
+
+async function coverForTarget(library: LibraryRow, target: AlbumTarget, folder: string | null, context: RestContext): Promise<PassthroughResponse> {
   if (folder !== null) {
     return await forwardCoverFile(library, folder, context);
   }
@@ -218,7 +240,7 @@ interface AlbumTarget {
  */
 async function albumTargetFor(library: LibraryRow, scope: LibraryScope, kind: IdKindValue, path: string, context: RestContext): Promise<AlbumTarget> {
   if (kind === IdKind.Song) {
-    const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
+    const song = await context.songs.findByPath(library.id, path);
     return { dirPath: song?.dir_path ?? null, songs: song === null ? [] : [song] };
   }
   if (kind === IdKind.AlbumKey) {
@@ -309,7 +331,7 @@ async function resolveCoverFolder(
   context: RestContext,
 ): Promise<string | null> {
   if (kind === IdKind.Song) {
-    const song = await context.songs.findById(encodeId(IdKind.Song, library.id, path));
+    const song = await context.songs.findByPath(library.id, path);
     return song ? await findCoverIn(library, song.dir_path, context) : null;
   }
   // Every kind whose id resolves to a folder: an album key, a legacy album directory, and a

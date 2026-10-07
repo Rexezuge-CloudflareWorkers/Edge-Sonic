@@ -32,7 +32,7 @@
  */
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
 import type { LibraryRow, NodeRow, SongRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
-import { encodeId, IdKind } from '@edge-sonic/subsonic';
+import { mintSongId } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
 import { nodeRowNeedsWrite } from './nodeWrite';
@@ -295,7 +295,7 @@ class TreeService {
       // implied by a comparison that never fires.
       if (nodeChanged) {
         songInputs.push({
-          id: encodeId(IdKind.Song, library.id, path),
+          id: mintSongId(),
           libraryId: library.id,
           path,
           dirPath: parentPath,

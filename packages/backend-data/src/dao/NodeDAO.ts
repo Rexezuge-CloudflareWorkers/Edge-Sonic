@@ -170,7 +170,7 @@ class NodeDAO extends BaseDAO {
       async () =>
         await this.database
           .prepare(
-            `SELECT n.*, (s.id IS NOT NULL) AS has_song
+            `SELECT n.*, (s.id IS NOT NULL) AS has_song, s.id AS song_id
              FROM nodes n
              LEFT JOIN songs s ON s.library_id = n.library_id AND s.path = n.path
              WHERE n.library_id = ? AND n.parent_path = ?

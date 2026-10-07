@@ -111,7 +111,10 @@ function createIndex() {
             [...nodes.values()]
               .filter((node) => node.parent_path === parentPath)
               .sort((a, b) => a.name_ci.localeCompare(b.name_ci))
-              .map((node) => ({ ...node, has_song: [...songs.values()].some((song) => song.path === node.path) ? 1 : 0 }) as ChildNodeRow),
+              .map((node) => {
+                const song = [...songs.values()].find((song) => song.path === node.path);
+                return { ...node, has_song: song ? 1 : 0, song_id: song?.id ?? null } as ChildNodeRow;
+              }),
           ),
         // `path !== ''` excludes the library root's own row, which is
         // `path === parentPath === ''` and so matches `parent_path === ''` exactly as a
@@ -208,11 +211,16 @@ function createIndex() {
           let changed = 0;
           for (const raw of inputs) {
             const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
-            const existing = songs.get(input.id);
+            // Keyed by path, like the real `ON CONFLICT (library_id, path)`, and the
+            // existing id preserved: ids are minted once per row, so a fresh id per
+            // pass must not become a second row. Keying this double by `input.id`
+            // modelled the old reversible scheme, where the same path always
+            // produced the same id.
+            const existing = songs.get(input.path);
             if (existing !== undefined && existing.size === input.size && existing.mtime_ms === input.mtimeMs) continue;
             const derived = deriveFromPath(input.dirPath, DERIVED_MARKER);
-            songs.set(input.id, {
-              id: input.id,
+            songs.set(input.path, {
+              id: existing?.id ?? input.id,
               library_id: LIBRARY_ID,
               path: input.path,
               dir_path: input.dirPath,
@@ -287,7 +295,7 @@ function createIndex() {
           const keepSet = new Set(keep);
           const doomed = db(() => [...songs.values()].filter((song) => song.dir_path === dirPath && !keepSet.has(song.path)));
           // The deletes are a batch of their own, so they are a second statement group.
-          for (const song of doomed) songs.delete(song.id);
+          for (const song of doomed) songs.delete(song.path);
           writes.songs += doomed.length;
           subrequests.charge(doomed.length, 'd1');
           return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
@@ -296,7 +304,7 @@ function createIndex() {
         // and their `dir_path` is deeper than the folder itself.
         deleteSubtree: async (_libraryId: string, dirPath: string) => {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath || song.dir_path.startsWith(`${dirPath}/`));
-          for (const song of doomed) songs.delete(song.id);
+          for (const song of doomed) songs.delete(song.path);
           writes.songs += doomed.length;
           return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
         },

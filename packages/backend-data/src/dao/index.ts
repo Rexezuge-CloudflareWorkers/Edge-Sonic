@@ -32,6 +32,11 @@ export type { WriteBatchResult } from './BaseDAO';
 // question from "one row by id", and because it is the query that had to be batched to
 // D1's ceiling — which put `SongDAO` over the god-file limit.
 export { SongIdLookupDAO } from './songIdLookup';
+export { IDS_PER_STATEMENT } from './songIdLookup';
+// Renaming legacy long song ids to short ones, a page per scan chunk. Its own
+// DAO because `SongDAO` owns one row and is already at the god-file limit, and
+// because the rename spans two tables atomically.
+export { SongIdRotationDAO } from './songIdRotation';
 export { libraryScope, libraryIds, libraryReserve } from './libraryScope';
 export type { LibraryScope } from './libraryScope';
 export { deriveFromPath, deriveTitleFromFileName, DERIVED_VERSION } from './pathConvention';

@@ -11,7 +11,7 @@
  * the boundary is drawn here rather than chosen.
  */
 import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
-import { encodeId, IdKind } from '@edge-sonic/subsonic';
+import { mintSongId } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import { basename, isAudioFile, suffixOf } from './libraryNames';
@@ -181,7 +181,11 @@ async function reconcileFolder(
     const songRowMissing = known?.has_song !== 1;
     if (changed || songRowMissing) {
       songInputs.push({
-        id: encodeId(IdKind.Song, library.id, path),
+        // Reuse the row's id when it has one: ids are minted once and kept, so
+        // a fresh random id per pass would orphan every saved reference. Only
+        // a missing row mints. `song_id` rides the same `LEFT JOIN` as
+        // `has_song`, so this costs no extra statement.
+        id: known?.song_id ?? mintSongId(),
         libraryId: library.id,
         path,
         dirPath: folder.path,
