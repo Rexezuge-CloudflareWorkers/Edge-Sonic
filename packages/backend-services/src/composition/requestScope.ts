@@ -22,8 +22,8 @@ import type { EnrichDriver } from '../library/EnrichDriver';
 import { ScanService } from '../index/ScanService';
 import { TreeService } from '../index/TreeService';
 import { EnrichmentService } from '../index/EnrichmentService';
-import { resolveKey } from './serviceFactory';
 import type { RequestScopeEnv } from './serviceFactory';
+import { bindKeys } from './bindKeys';
 import { bindEnrichment } from './bindEnrichment';
 import { bindImport } from './bindImport';
 import { bindIndexDrop } from './bindIndexDrop';
@@ -100,26 +100,8 @@ function createRequestScope(
   // cannot be escalated into impersonating a user.
   //
   // Merging them into one master key destroys that property invisibly.
-  scope.bindValue(
-    Tokens.UserKey,
-    resolveKey(
-      env.SUBSONIC_USER_ENCRYPTION_KEY_SECRET,
-      env.SUBSONIC_USER_ENCRYPTION_KEY,
-      'SUBSONIC_USER_ENCRYPTION_KEY_SECRET',
-      'SUBSONIC_USER_ENCRYPTION_KEY',
-      subrequests,
-    ),
-  );
-  scope.bindValue(
-    Tokens.WebdavKey,
-    resolveKey(
-      env.WEBDAV_ENCRYPTION_KEY_SECRET,
-      env.WEBDAV_ENCRYPTION_KEY,
-      'WEBDAV_ENCRYPTION_KEY_SECRET',
-      'WEBDAV_ENCRYPTION_KEY',
-      subrequests,
-    ),
-  );
+  // Wiring lives in `bindKeys.ts` so this root stays lifecycle-only.
+  bindKeys(scope, env, subrequests);
 
   // DAOs. Bound as thunks so construction stays lazy and a handler that never
   // touches songs does not construct the songs DAO.
@@ -162,18 +144,8 @@ function createRequestScope(
    * rotating it would require re-entering every Subsonic user's password, and a compromise of
    * the most frequently read key in the product would yield it. So it gets its own, and the
    * name shape `*-encryption-key` means `init-secrets.ts` generates the value with no edit to
-   * its known-names list.
+   * its known-names list. Bound in `bindKeys.ts` with the other two.
    */
-  scope.bindValue(
-    Tokens.RemoteKey,
-    resolveKey(
-      env.SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET,
-      env.SUBSONIC_REMOTE_ENCRYPTION_KEY,
-      'SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET',
-      'SUBSONIC_REMOTE_ENCRYPTION_KEY',
-      subrequests,
-    ),
-  );
 
   const userKey = scope.get(Tokens.UserKey);
   const webdavKey = scope.get(Tokens.WebdavKey);

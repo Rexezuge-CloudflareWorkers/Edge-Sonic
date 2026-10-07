@@ -16,6 +16,9 @@
  */
 import type { Hono } from 'hono';
 import { AppConfiguration, DEFAULT_STREAM_RATE_LIMIT } from '@edge-sonic/backend-runtime/config';
+import { Tokens } from '@edge-sonic/backend-services/composition';
+import { BaseRoute } from '../endpoints/BaseRoute';
+import type { UserContext } from '../endpoints/BaseRoute';
 import { rateLimit } from './rateLimit';
 
 /**
@@ -96,8 +99,9 @@ function install(app: LimitApp, def: RateLimitDef): void {
       // Read through the request's own configuration, which is the only place `env`
       // exists at request time. The alternative — a module-level constant named
       // `STREAM_RATE_LIMIT` — is what made the variable look configured while nothing
-      // read it.
-      max: def.keyPrefix === 'stream' ? (c) => AppConfiguration.fromEnv(c.env).getStreamRateLimit() : def.max,
+      // read it. Prefers the scope's shared config so one request parses env once;
+      // falls back to `fromEnv` for call sites outside the middleware ordering.
+      max: def.keyPrefix === 'stream' ? (c) => streamLimitFor(c) : def.max,
       keyPrefix: def.keyPrefix,
       surface: def.surface,
     }),
@@ -130,6 +134,21 @@ function registerRestRateLimits(app: LimitApp): void {
 function registerUserRateLimits(app: LimitApp): void {
   for (const def of RATE_LIMIT_DEFS) {
     if (def.surface === 'user') install(app, def);
+  }
+}
+
+/**
+ * Stream budget for one request.
+ *
+ * Single ownership: the scope's `AppConfig` when middleware ordering installed
+ * one, otherwise a fresh parse. A second parse per request is correct but
+ * wasteful; sharing the scope's instance keeps one configuration per request.
+ */
+function streamLimitFor(c: UserContext): number {
+  try {
+    return BaseRoute.getScope(c).get(Tokens.AppConfig).getStreamRateLimit();
+  } catch {
+    return AppConfiguration.fromEnv(c.env).getStreamRateLimit();
   }
 }
 
