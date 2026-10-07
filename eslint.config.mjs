@@ -481,6 +481,23 @@ export default tseslint.config(
       ],
     },
   },
+  // app: apps/web — the browser. No backend packages at all: importing one would
+  // compile and then fail at bundle time, with the error pointing at the bundler
+  // rather than the boundary. There used to be no block for it, which is how the
+  // layer table's "may import: the browser" was a convention instead of a gate.
+  {
+    files: ['apps/web/**/*.{ts,js,tsx,jsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            { group: ['@edge-sonic/*', '@edge-sonic/**'], message: 'apps/web ships zero backend dependencies — this module is the SPA’s own copy' },
+          ],
+        },
+      ],
+    },
+  },
   // --- Test file overrides (must be last to override plugin rules) ---
   {
     files: ['test/**/*.{ts,tsx}', '**/*.test.{ts,tsx}', '**/*.spec.{ts,tsx}'],

@@ -57,8 +57,10 @@ export default defineConfig({
         // Raise these as coverage grows. Never lower them to excuse a regression in
         // code that is already covered.
         //
-        // Set from a measurement of 87.24/76.94/90.32/90.57, floored to whole
-        // percent (statements/branches/functions/lines).
+        // Set from a measurement of 89.33/78.93/92.07/92.49, floored to whole
+        // percent (statements/branches/functions/lines). The last step added
+        // queue-consumer, playlist, D1-retry and rate-limit tests and removed
+        // a dead batched-count DAO method.
         // The function floor is the one left behind, because 91 would sit above the
         // measurement. Branch coverage is what moves most when code is added, so a floor a
         // routine PR trips is a floor people learn to ignore.
@@ -74,10 +76,10 @@ export default defineConfig({
         // to admit code that nobody calls is a floor measuring the wrong thing. The floors
         // are whole percentages *below* the measurement rather than rounded to it, so a
         // tenth of a point of jitter does not turn the gate red.
-        statements: 87,
-        branches: 76,
-        functions: 90,
-        lines: 90,
+        statements: 89,
+        branches: 78,
+        functions: 92,
+        lines: 92,
       },
     },
   },

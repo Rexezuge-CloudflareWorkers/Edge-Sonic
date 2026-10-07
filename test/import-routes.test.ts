@@ -449,8 +449,10 @@ describe('a stopped Workflow is recorded as stopped, not as complete', () => {
     }
 
     expect(lines.length).toBeGreaterThanOrEqual(1);
-    expect(String(lines[0][0])).toContain('LibraryImportWorkflow');
-    expect(String(lines[0][0])).not.toContain('secret');
+    // The first argument is the logger's prefix; the message is the second, and the error
+    // object the third — interpolating its text is the taint this policy exists to avoid.
+    expect(String(lines[0][1])).toContain('LibraryImportWorkflow');
+    expect(String(lines[0][1])).not.toContain('secret');
   });
 });
 

@@ -54,6 +54,9 @@ import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { ScanPauseStore, isDailyLimitRefusal, SCAN_ALARM_DELAY_MS } from './scanPause';
 import { chargeForIndexDrop, stopForIndexDrop } from './scanIndexDrop';
 import { createScanWorkerScope } from './ScanWorkerFactory';
+import { createLogger } from '@edge-sonic/backend-runtime/logger';
+
+const logger = createLogger('ScanWorker');
 
 /**
  * The alarm the chain re-arms itself with after a fault it could not record.
@@ -292,7 +295,7 @@ class ScanWorker extends DurableObject<Cloudflare.Env> {
         await this.pauseAndArm(pause);
         return;
       }
-      console.error('[ScanWorker] alarm failed; the chain stays armed for a bounded retry', error);
+      logger.error('alarm failed; the chain stays armed for a bounded retry', error);
       // Re-arm unconditionally, and after the same delay a normal chunk would use. The
       // chunk's own failure already records `last_error` and counts against the retry
       // budget; this arm exists so a fault *outside* `step` — storage, the library lookup —

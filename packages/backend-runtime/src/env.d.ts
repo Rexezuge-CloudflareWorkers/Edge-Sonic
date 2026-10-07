@@ -34,7 +34,6 @@ declare global {
     DEMO_MODE?: string;
     DEMO_USER_EMAIL?: string;
     SCAN_QUEUE?: unknown;
-    IMPORT_QUEUE?: unknown;
     LOG_LEVEL?: string;
   }
 }

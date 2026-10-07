@@ -4,8 +4,8 @@ Scope: the whole suite. Parent index: `../../../AGENTS.md`.
 
 Everything runs under **Node**. There is no workerd, no pool, and no second toolchain.
 
-Thresholds (`vitest.config.mts`): **85 / 73 / 90 / 89** (statements / branches /
-functions / lines), against a measured 85.95 / 73.96 / 90.98 / 89.61. These are a
+Thresholds (`vitest.config.mts`): **89 / 78 / 92 / 92** (statements / branches /
+functions / lines), against a measured 89.33 / 78.93 / 92.07 / 92.49. These are a
 **measured floor**, not an aspiration: lower one to make CI green and the gate stops saying
 anything. Raise them as coverage grows.
 
@@ -346,6 +346,10 @@ shipped with a green suite, so each names the test that now holds it.
 | `spa-decisions.test.ts`                  | The SPA's error decoder across both dialects and a non-JSON body, and `describeStopReason` |
 | `web-landing.test.tsx`                   | The signed-out surface: all three `authorized` states, and the sign-in-that-changed-nothing hint |
 | `test/scripts/locale-checks.test.ts`          | The locale rules as rules, and the `t()` parser's three wrong shapes — each pinned |
+| `playlists.test.ts`                      | The playlist surface end to end: create/replace, rename, position-addressed removals, empty-wrapper `getPlaylists` |
+| `queue-consumer.test.ts`                 | The queue consumer's failure policy: unknown shape is acked, a failed step is retried, never both, and cron's fanout never throws |
+| `d1-retry.test.ts`                       | `executeD1WithRetry`: transient faults retry, deterministic ones do not, and a `run()` result's `success` flag is honoured |
+| `queue-cron.test.ts`                     | The validated message shapes, the fail-soft producer, poison never re-queueing, and the cron fanout's bounded, fail-soft listing |
 | `test/scripts/migration-lock.test.ts`         | Every lock finding kind, `--write` add-only behaviour, and the duplicate-prefix rule |
 | `test/scripts/cli-args.test.ts`               | Flag parsing rejects rather than ignores: unknown, repeated, and valueless |
 | `test/scripts/spa-shell-checks.test.ts`       | Each way a served shell can be wrong, and the shell that is fine passing |

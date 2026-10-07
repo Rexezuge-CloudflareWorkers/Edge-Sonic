@@ -27,7 +27,6 @@ interface ServiceEnv {
   SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
   ENVIRONMENT?: string;
   SCAN_QUEUE?: unknown;
-  IMPORT_QUEUE?: unknown;
   DEBUG_MODE?: string;
   DEV_AUTH_EMAIL?: string;
   DEMO_MODE?: string;

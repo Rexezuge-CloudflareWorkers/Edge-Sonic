@@ -14,24 +14,17 @@ interface QueueSender {
 
 interface QueueServiceDeps {
   scanQueue: QueueSender | null;
-  importQueue: QueueSender | null;
 }
 
 class QueueService {
   private readonly scanQueue: QueueSender | null;
-  private readonly importQueue: QueueSender | null;
 
   public constructor(deps: QueueServiceDeps) {
     this.scanQueue = deps.scanQueue ?? null;
-    this.importQueue = deps.importQueue ?? null;
   }
 
   public hasScanQueue(): boolean {
     return this.scanQueue !== null;
-  }
-
-  public hasImportQueue(): boolean {
-    return this.importQueue !== null;
   }
 
   public async enqueueScan(libraryId: string): Promise<boolean> {
@@ -41,19 +34,7 @@ class QueueService {
       await this.scanQueue.send(message);
       return true;
     } catch (error) {
-      console.debug('[QueueService] scan enqueue failed:', error);
-      return false;
-    }
-  }
-
-  public async enqueueImportBatch(runId: string): Promise<boolean> {
-    if (this.importQueue === null) return false;
-    try {
-      const message: QueueMessage = { kind: 'import-batch', runId };
-      await this.importQueue.send(message);
-      return true;
-    } catch (error) {
-      console.debug('[QueueService] import enqueue failed:', error);
+      console.warn('[QueueService] scan enqueue failed; the alarm/poll paths remain the truth:', error);
       return false;
     }
   }

@@ -19,19 +19,9 @@
  * `shouldEnrich` decides on, over rows instead of one row.
  */
 import { BaseDAO } from './BaseDAO';
-import { chunkArray } from './chunking';
-import { bindChunkSize } from './sqlLimits';
 import type { D1Queryable } from '../utils/D1Types';
 import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
 import type { SubrequestMeter } from '@edge-sonic/shared';
-
-/**
- * Library ids per statement: one variable each, and nothing else.
- *
- * Derived from the measured ceiling rather than chosen, so a raised `MAX_LIBRARIES`
- * cannot silently push this over D1's 100-parameter limit. See `sqlLimits.ts`.
- */
-const LIBRARIES_PER_STATEMENT = bindChunkSize(1);
 
 /**
  * One track the library-wide enrichment still owes a tag read.
@@ -97,32 +87,6 @@ class SongEnrichmentDAO extends BaseDAO {
       'songs.countNeedingEnrichment',
     );
     return row?.cnt ?? 0;
-  }
-
-  /**
-   * Tracks still owing a tag read, for many libraries in one statement per batch.
-   *
-   * A library with nothing owing is **absent from the map** — the same convention as the
-   * other batched counts in this layer, so "nothing left" and "never looked at" stay
-   * distinguishable to the caller that renders them.
-   */
-  public async countNeedingEnrichmentByLibraries(libraryIds: readonly string[], readerVersion: number): Promise<Map<string, number>> {
-    const counts = new Map<string, number>();
-    for (const chunk of chunkArray(libraryIds, LIBRARIES_PER_STATEMENT)) {
-      const placeholders = chunk.map(() => '?').join(', ');
-      const result = await this.withRetry(
-        async () =>
-          await this.database
-            .prepare(
-              `SELECT library_id, COUNT(*) AS cnt FROM songs WHERE library_id IN (${placeholders}) AND (enriched_at IS NULL OR reader_version != ?) GROUP BY library_id`,
-            )
-            .bind(...chunk, readerVersion)
-            .all<{ library_id: string; cnt: number }>(),
-        'songs.countNeedingEnrichmentByLibraries',
-      );
-      for (const row of result.results ?? []) counts.set(row.library_id, row.cnt);
-    }
-    return counts;
   }
 }
 

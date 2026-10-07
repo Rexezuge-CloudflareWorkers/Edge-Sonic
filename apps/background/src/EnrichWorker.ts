@@ -48,6 +48,9 @@ import type { ChunkResult, EnrichChunkResult, ScanDailyBudget } from '@edge-soni
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { ScanPauseStore, isDailyLimitRefusal, SCAN_ALARM_DELAY_MS } from './scanPause';
 import { createScanWorkerScope } from './ScanWorkerFactory';
+import { createLogger } from '@edge-sonic/backend-runtime/logger';
+
+const logger = createLogger('EnrichWorker');
 
 /**
  * The alarm the chain re-arms itself with after a fault it could not record, and behind
@@ -315,7 +318,7 @@ class EnrichWorker extends DurableObject<Cloudflare.Env> {
         await this.pause.arm(pause);
         return;
       }
-      console.error('[EnrichWorker] alarm failed; the chain stays armed for a bounded retry', error);
+      logger.error('alarm failed; the chain stays armed for a bounded retry', error);
       await this.ctx.storage.setAlarm(Date.now() + RETRY_ARM_DELAY_MS);
     }
   }

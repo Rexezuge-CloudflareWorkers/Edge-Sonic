@@ -56,6 +56,9 @@ import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import { createScanWorkerScope } from './ScanWorkerFactory';
 import { createPlayCountStore, describeWalkFailure, retryDelayMs, dailyLimitWalkMessage } from './playCountRetry';
 import type { WalkProgress } from './playCountRetry';
+import { createLogger } from '@edge-sonic/backend-runtime/logger';
+
+const logger = createLogger('PlayCountImportWorker');
 
 /**
 The alarm's own payload: the run to walk.
@@ -149,7 +152,7 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
       };
       const consecutiveFailures = (progress.consecutiveFailures ?? 0) + 1;
       const lastError = describeWalkFailure(error);
-      console.error(`[PlayCountImportWorker] batch failed (attempt ${consecutiveFailures} of ${MAX_CONSECUTIVE_FAILURES}): ${lastError}`, error);
+      logger.error(`batch failed (attempt ${consecutiveFailures} of ${MAX_CONSECUTIVE_FAILURES}): ${lastError}`, error);
       if (runId !== undefined && consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
         await this.settle(runId, { ...progress, consecutiveFailures, lastError }, lastError);
         return;
@@ -179,7 +182,7 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
       consecutiveFailures: 0,
     };
     const lastError = dailyLimitWalkMessage(kind);
-    console.error(`[PlayCountImportWorker] ${lastError}`, error);
+    logger.error(lastError, error);
     await this.ctx.storage.put<WalkProgress>('alarm', { ...progress, lastError });
     if (runId !== undefined) {
       try {

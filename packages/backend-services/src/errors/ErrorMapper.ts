@@ -32,6 +32,9 @@ import { ConflictError, DatabaseError, NotFoundError, ServiceError, Unauthorized
 import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
 import { getBackendStrings } from '@edge-sonic/shared/i18n';
 import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
+import { createLogger } from '@edge-sonic/backend-runtime/logger';
+
+const logger = createLogger('ErrorMapper');
 import { ErrorCode, isSubsonicError, SubsonicError } from '@edge-sonic/subsonic';
 
 /**
@@ -61,7 +64,7 @@ interface UserErrorBody {
 function toSubsonicError(error: unknown): SubsonicError {
   if (isSubsonicError(error)) return error;
   if (error instanceof DatabaseError) {
-    console.error('Database error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+    logger.error('Database error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
     const spentAllowance = d1AllowanceSentence(error);
     return spentAllowance === null ? new SubsonicError(ErrorCode.Generic) : new SubsonicError(ErrorCode.Generic, spentAllowance);
   }
@@ -81,10 +84,10 @@ function toSubsonicError(error: unknown): SubsonicError {
     if (error.getErrorCode() < 500) {
       return new SubsonicError(ErrorCode.Generic, error.getErrorMessage());
     }
-    console.error('Service error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+    logger.error('Service error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
     return new SubsonicError(ErrorCode.Generic);
   }
-  console.error('Unhandled error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+  logger.error('Unhandled error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
   return new SubsonicError(ErrorCode.Generic);
 }
 
@@ -113,12 +116,12 @@ function toUserResponse(error: unknown, locale?: string | null): { status: numbe
     const masked = status >= 500;
     const message = masked ? strings.internalError : error.getErrorMessage();
     if (masked) {
-      console.error('User API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+      logger.error('User API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
     }
     return { status, body: { Exception: { Type: error.getErrorType(), Message: message } } };
   }
 
-  console.error('Unhandled user API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+  logger.error('Unhandled user API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
   return { status: 500, body: { Exception: { Type: 'InternalServerError', Message: strings.internalError } } };
 }
 

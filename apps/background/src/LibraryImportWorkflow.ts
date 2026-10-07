@@ -63,6 +63,9 @@ import type { PhaseContext, PhaseReport } from '@edge-sonic/backend-services/imp
 import type { PlayCountImportWorker } from './PlayCountImportWorker';
 import { importPhaseStore } from './importPhaseStore';
 import { createScanWorkerScope } from './ScanWorkerFactory';
+import { createLogger } from '@edge-sonic/backend-runtime/logger';
+
+const logger = createLogger('LibraryImportWorkflow');
 
 /**
  * The play-count Durable Object's stub, typed by **the class itself**.
@@ -321,8 +324,7 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
     try {
       await stub.start({ runId });
     } catch (err: unknown) {
-      console.error('[LibraryImportWorkflow] the play-count walk could not be started; the run is recorded as failed');
-      console.error(err);
+      logger.error('the play-count walk could not be started; the run is recorded as failed', err);
       return { kind: 'failed', reason: WALK_START_FAILED };
     }
     const scope = createScanWorkerScope(this.env);

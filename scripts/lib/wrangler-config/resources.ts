@@ -182,16 +182,14 @@ export function queueNamesIn(config: WranglerConfig): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
   for (const producer of config.queues?.producers ?? []) {
-    if (producer.queue && !seen.has(producer.queue)) {
-      seen.add(producer.queue);
-      names.push(producer.queue);
-    }
+    if (!producer.queue || seen.has(producer.queue)) continue;
+    seen.add(producer.queue);
+    names.push(producer.queue);
   }
   for (const consumer of config.queues?.consumers ?? []) {
-    if (consumer.queue && !seen.has(consumer.queue)) {
-      seen.add(consumer.queue);
-      names.push(consumer.queue);
-    }
+    if (!consumer.queue || seen.has(consumer.queue)) continue;
+    seen.add(consumer.queue);
+    names.push(consumer.queue);
   }
   return names;
 }

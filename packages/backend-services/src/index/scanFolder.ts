@@ -373,7 +373,7 @@ async function reconcileFolder(
  *
  * `billedRows` is present because the alternative is an inline literal at the one site that
  * needs it, and that literal is a place a future third count would be added to the type and not
- * to the value — the `NO_FOLDER_WRITES` reasoning, applied to the row-write accounting instead of
+ * to the value — the `NO_FOLDER_WRITES` caution, applied to the row-write accounting instead of
  * the folder's.
  */
 const NO_SONG_ROWS: WriteBatchResult = { changes: 0, written: 0, truncated: false, billedRows: 0 };
