@@ -84,10 +84,10 @@ type ChildNodeRow = NodeRow & {
    * The `songs.id` for this path, or `null` when there is no song row.
    *
    * Read from the same `LEFT JOIN` as `has_song`, so reusing an existing id costs
-   * no extra statement. Song ids are opaque and random per row now (see
-   * `subsonic/songId.ts`) — a writer that minted a fresh one per pass would
-   * orphan every saved playlist on each rescan, so the existing id is reused
-   * and only a missing row mints.
+   * no extra statement. Song ids are derived from `(library_id, path)` (see
+   * `subsonic/songId.ts`) — a writer that derived unconditionally would rename a
+   * legacy row out from under the id backfill's selection, so the existing id is
+   * reused and only a missing row derives.
    */
   song_id: string | null;
 };

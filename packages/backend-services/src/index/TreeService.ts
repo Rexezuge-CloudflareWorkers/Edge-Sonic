@@ -32,7 +32,7 @@
  */
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
 import type { LibraryRow, NodeRow, SongRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
-import { mintSongId } from '@edge-sonic/subsonic';
+import { deriveShortSongId } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource, WebDavClient } from '@edge-sonic/webdav';
 import { nodeRowNeedsWrite } from './nodeWrite';
@@ -295,7 +295,10 @@ class TreeService {
       // implied by a comparison that never fires.
       if (nodeChanged) {
         songInputs.push({
-          id: mintSongId(),
+          // Derived, not minted: the same library and path always hash to the
+          // same id, so a browse-materialized row and a scan-written row agree
+          // without a lookup, and a rescan after an index drop recreates it.
+          id: deriveShortSongId(library.id, path),
           libraryId: library.id,
           path,
           dirPath: parentPath,

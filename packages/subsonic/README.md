@@ -20,7 +20,7 @@ answers `200`, renders plausibly, and is invisible from inside the server.
 | `params.ts` | query-parameter coercion — and why `int` and `optionalInt` differ |
 | `errors.ts` | the error codes and their HTTP statuses |
 | `extensions.ts` | which OpenSubsonic extensions this server advertises, and why |
-| `md5.ts`, `constants.ts`, `types.ts` | |
+| `md5.ts`, `sha256.ts`, `constants.ts`, `types.ts` | |
 
 ## The one model, three serializers
 
@@ -52,10 +52,12 @@ reasoning is in the protocol guide. `array: true` is the exception.
 looked up in a table. `decodeId` refuses `..`, empty segments, control characters and `%XX`,
 because `normalizeRelativePath` runs over the payload and a hostile id is a traversal.
 
-Song ids are the exception: short and opaque (`songId.ts`, `s:` plus 22 random
-base64url chars), because a reversible song id grows with the path and clients
-file downloads under it — over 255 bytes is `ENAMETOOLONG`. They resolve
-through the row; legacy long ids still resolve through `(library_id, path).
+Song ids are the exception: short and derived (`songId.ts`, `s:` plus the first
+128 bits of SHA-256 over `libraryId \n path` as 22 base64url chars), because
+a reversible song id grows with the path and clients file downloads under
+it — over 255 bytes is `ENAMETOOLONG`. They resolve through the row, and a
+rescan recreates them byte-identically; legacy long ids still resolve through
+`(library_id, path)`.
 
 Eight kinds exist and **three are never minted**: `mf:` (the music folder is a position, not
 a row), `dira:` (reserved; `getIndexes` mints `ar:`) and `vid:` (reserved for video). An id

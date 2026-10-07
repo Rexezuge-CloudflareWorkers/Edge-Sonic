@@ -212,10 +212,11 @@ function createIndex() {
           for (const raw of inputs) {
             const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
             // Keyed by path, like the real `ON CONFLICT (library_id, path)`, and the
-            // existing id preserved: ids are minted once per row, so a fresh id per
-            // pass must not become a second row. Keying this double by `input.id`
-            // modelled the old reversible scheme, where the same path always
-            // produced the same id.
+            // existing id preserved: ids are derived from the path, so a rescan
+            // computes the same value — but the row keeps what it has regardless,
+            // which is what keeps a legacy row long until the backfill rotates it.
+            // Keying this double by `input.id` modelled the old reversible scheme,
+            // where the same path always produced the same id.
             const existing = songs.get(input.path);
             if (existing !== undefined && existing.size === input.size && existing.mtime_ms === input.mtimeMs) continue;
             const derived = deriveFromPath(input.dirPath, DERIVED_MARKER);

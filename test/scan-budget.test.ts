@@ -246,8 +246,9 @@ function createIndex(options: IndexOptions = {}) {
               // make this suite re-enrich every track on every pass.
               //
               // Keyed by path with the id preserved, like production's
-              // `ON CONFLICT (library_id, path)`: ids are minted once per row, so a
-              // fresh id per pass must update the row rather than duplicate it.
+              // `ON CONFLICT (library_id, path)`: the id is derived from the path,
+              // so a rescan computes the same value — and a legacy row keeps its
+              // long id until the backfill rotates it.
               .map((node) => {
                 const song = [...songs.values()].find((song) => song.path === node.path);
                 return { ...node, has_song: song ? 1 : 0, song_id: song?.id ?? null } as ChildNodeRow;
@@ -353,8 +354,8 @@ function createIndex(options: IndexOptions = {}) {
             const dirPath = input.path.split('/').slice(0, -1).join('/');
             const derived = deriveFromPath(dirPath, DERIVED_MARKER);
             // Keyed by path with the id preserved, like production's
-            // `ON CONFLICT (library_id, path)`: ids are minted once per row, so
-            // a fresh id per pass updates the row rather than duplicating it.
+            // `ON CONFLICT (library_id, path)`: the id is derived from the path,
+            // so a rescan computes the same value rather than duplicating the row.
             const oldId = songs.get(input.path)?.id;
             songs.set(input.path, {
               id: oldId ?? input.id,
