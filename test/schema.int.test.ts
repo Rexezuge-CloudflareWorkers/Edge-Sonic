@@ -728,6 +728,137 @@ describe('schema', () => {
     }
   });
 
+  /**
+   * The 3NF deviations, pinned.
+   *
+   * `docs/agents/indexing/AGENTS.md` states that the schema is in 3NF apart from **ten `_ci`
+   * twins and four stored aggregates**, and gives the Unicode table explaining why the obvious
+   * replacement is a behaviour regression. A documentation claim nobody measures is the exact
+   * shape this repository has shipped defects through — a comment, a default, and a number typed
+   * beside the code it bounds — so the inventory below is read out of `PRAGMA table_info` and
+   * compared to a list **written out here rather than derived from the DAOs**, for the reason
+   * the `import_runs` assertion above gives: a list derived from the code cannot detect a
+   * disagreement the code is part of.
+   *
+   * Both halves matter. If a migration drops a twin, this goes red and the doc is caught before
+   * it ships. If someone adds an 11th twin, this also goes red — a new deviation is a decision
+   * that has to be written down, with the same justification, and not one that arrives silently
+   * and is discovered by the next reader to wonder why the doc is out of date.
+   */
+  describe('the 3NF deviations the documentation names', () => {
+    function columnsOf(table: string): string[] {
+      return (handle.raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name);
+    }
+
+    function tableNames(): string[] {
+      return (
+        handle.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name);
+    }
+
+    it('stores exactly ten lowercased twins, in the eight tables named', () => {
+      const expected: Record<string, string[]> = {
+        import_sources: ['username_ci'],
+        libraries: ['slug_ci'],
+        nodes: ['name_ci'],
+        // `idx_songs_album` alone needs two of these, which is why this table carries six.
+        songs: ['album_artist_ci', 'album_ci', 'artist_ci', 'genre_ci', 'name_ci', 'title_ci'],
+        users: ['username_ci'],
+      };
+
+      const actual: Record<string, string[]> = {};
+      for (const table of tableNames()) {
+        const twins = columnsOf(table).filter((column) => column.endsWith('_ci'));
+        if (twins.length > 0) actual[table] = twins.toSorted();
+      }
+
+      expect(actual).toEqual(expected);
+      // Stated as a count too, because "fourteen columns" is the number the doc leads with and
+      // a reader who trusts it deserves it to be checked rather than inferred.
+      expect(Object.values(actual).flat()).toHaveLength(10);
+    });
+
+    it('backs nine declared indexes, and songs.billed-rows depends on that count', () => {
+      // The twins exist to be indexable. Removing them leaves `lower(col)`, which cannot use an
+      // index at all — so the deviation and the index it backs are one fact, asserted together
+      // rather than as two that can drift.
+      const indexes: Array<{ tbl_name: string; name: string }> = handle.raw
+        .prepare(
+          "SELECT tbl_name, name FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name",
+        )
+        .all() as Array<{ tbl_name: string; name: string }>;
+
+      const usingTwins = indexes.filter((index) =>
+        (handle.raw.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name: string }>).some((column) =>
+          column.name.endsWith('_ci'),
+        ),
+      );
+
+      expect(usingTwins.map((index) => index.name).sort()).toEqual([
+        'idx_import_sources_username_ci',
+        'idx_libraries_slug_ci',
+        'idx_nodes_parent_ci',
+        'idx_songs_album',
+        'idx_songs_album_title_ci',
+        'idx_songs_artist',
+        'idx_songs_genre',
+        'idx_songs_title_ci',
+        'idx_users_username_ci',
+      ]);
+
+      // And the consequence, which is the number an operator's daily allowance is spent against:
+      // dropping them would take `songs` from nine index entries to four and move
+      // MAX_BILLED_ROWS_PER_ROW from ten to five.
+      expect(MAX_BILLED_ROWS_PER_ROW).toBe(10);
+      expect(billedRowsForTable('songs', 1)).toBe(10);
+    });
+
+    it('keeps the four stored aggregates, which are what listVisible reads for free', () => {
+      // `playlists.song_count`/`duration` are recomputed by `refreshTotals` and returned by
+      // `SELECT *`; `scan_state.scanned_count`/`total_count` are the progress counters. Derived
+      // columns, and removing them costs a correlated subquery per playlist on the query that
+      // renders a list — under a 50-subrequest ceiling on Free.
+      // Matched on the **qualified** name, not the bare column: `songs.duration` exists and is
+      // deliberately absent from the expectation below, because it is read from the file's tags
+      // rather than computed from another column — so it is not a deviation, and matching on
+      // `duration` alone would fail on a column that is correct where it is. `play_counts`
+      // `.play_count` is the same case: a counter that increments is not derivable.
+      const aggregates = new Set(['playlists.song_count', 'playlists.duration', 'scan_state.scanned_count', 'scan_state.total_count']);
+
+      const found: string[] = [];
+      for (const table of tableNames()) {
+        for (const column of columnsOf(table)) {
+          const qualified = `${table}.${column}`;
+          if (aggregates.has(qualified)) found.push(qualified);
+        }
+      }
+
+      expect(found.toSorted()).toEqual([...aggregates].toSorted());
+    });
+
+    it('cannot be normalised by COLLATE NOCASE, because SQLite folds ASCII only', () => {
+      // The measurement behind the doc's Unicode table, on the same engine the suite runs
+      // against. Without this the justification is a claim, and the natural next step is someone
+      // swapping a twin for a collation and silently splitting every non-ASCII user in two.
+      //
+      // D1's *build* is not measured here and is not claimed to behave identically — the
+      // engine-versus-build gap has cost this repository a defect before, and `wrangler d1
+      // execute` is the instrument that closes it.
+      const equality = (value: string): number =>
+        (handle.raw.prepare('SELECT (? = ? COLLATE NOCASE) AS equal').get(value.toLowerCase(), value) as { equal: number })
+          .equal;
+
+      // ASCII agrees, which is why a spot check on ASCII fixtures finds nothing wrong.
+      expect(equality('MiXeD')).toBe(1);
+      // Non-ASCII does not, and these are the rows a normalisation would split.
+      expect(equality('ÉCLAIR')).toBe(0);
+      expect(equality('İSTANBUL')).toBe(0);
+      expect(equality('ΣΊΣΥΦΟΣ')).toBe(0);
+    });
+  });
+
   it('leaves no dead table behind, and no foreign key that does not resolve', () => {
     // The reference project's `router_backends`/`namespaces`, inherited from
     // Durable-DAV-Router via `0001_router_init.sql`. Dead code here, and

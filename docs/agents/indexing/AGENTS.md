@@ -30,6 +30,98 @@ suite red rather than quietly halving the budget.
 Batch sizes are **derived**, never typed: `bindChunkSize(varsPerRow)` at
 `dao/sqlLimits.ts` is the single place the 100-parameter ceiling is turned into a number.
 
+## Normalisation, and the fourteen columns that do not obey it
+
+The schema is in **3NF** apart from fourteen deliberate exceptions. No table here is split,
+joined or restructured to reach 3NF, and the reason that is a sentence rather than a project is
+the last paragraph of this section. The exceptions are columns, in two kinds, and they are not
+the same kind of problem:
+
+| Deviation | Columns | Why it exists |
+| --- | ---: | --- |
+| `_ci` twins | 10 | an indexable lowercased twin, because `lower(col)` cannot use one |
+| stored aggregates | 4 | a number the writer already holds and the reader would re-derive |
+
+**The 10 `_ci` columns** are transitive dependencies on their twin — `name → name_ci` — and are
+the textbook violation. Enumerated from `PRAGMA table_info` over both applied migrations, not
+from grep, so the count is the schema's:
+
+`users.username_ci` · `libraries.slug_ci` · `import_sources.username_ci` · `nodes.name_ci` ·
+`songs.{name,title,artist,album,album_artist,genre}_ci`
+
+They back **nine declared indexes**, which is the whole reason they are stored rather than
+computed — `idx_songs_album` alone needs two of them, and it is the index that keeps
+`getArtists`/`getAlbumList2` from sorting on every request:
+
+| Table | Index | `_ci` columns |
+| --- | --- | ---: |
+| `songs` | `idx_songs_album` | **2** |
+| `songs` | `idx_songs_artist` | 1 |
+| `songs` | `idx_songs_genre` · `idx_songs_title_ci` · `idx_songs_album_title_ci` | 1 each |
+| `nodes` | `idx_nodes_parent_ci` | 1 |
+| `users` | `idx_users_username_ci` | 1 |
+| `libraries` | `idx_libraries_slug_ci` | 1 |
+| `import_sources` | `idx_import_sources_username_ci` | 1 |
+
+**The 4 aggregates** are `playlists.song_count`, `playlists.duration`,
+`scan_state.scanned_count` and `scan_state.total_count` — each derivable from
+`playlist_entries`/`nodes`, and each recomputed by a writer that already holds the number:
+`refreshTotals` folds both playlist totals into the same statement as the entry write, and
+`listVisible` returns them for free from `SELECT *`. Recomputing them on read costs a
+correlated subquery per playlist against the 50-subrequest Free ceiling, on the one query that
+renders a playlist list.
+
+### The obvious refactor is a behaviour regression, and this is the measurement for it
+
+Both standard replacements work, and both are wrong here. `COLLATE NOCASE` with a `UNIQUE`
+constraint rejects `Alice`/`alice` and uses a covering index; `GENERATED ALWAYS AS
+(lower(col)) STORED` indexes cleanly. Neither is equivalent to what is stored, because the
+twins hold **JavaScript's** `toLowerCase()` and SQLite's `lower()` and `NOCASE` are ASCII-only:
+
+| Input | JS `toLowerCase()` | SQLite `lower()` | `NOCASE` equal? |
+| --- | --- | --- | ---: |
+| `MiXeD` | `mixed` | `mixed` | 1 |
+| `ÉCLAIR` | `éclair` | `Éclair` | **0** |
+| `İSTANBUL` | `i̇stanbul` | `İstanbul` | **0** |
+| `ΣΊΣΥΦΟΣ` | `σίσυφος` | `ΣΊΣΥΦΟΣ` | **0** |
+
+Measured on **3.53.4** — the engine `test/helpers/sqlite.ts` runs the suite against, and the
+version the `ADD COLUMN IF NOT EXISTS` finding below was measured on. D1's *build* has not been
+measured for this, and the difference between the two has cost this repository a defect before;
+treat a claim about D1 from this table as unproven.
+
+So a mechanical normalisation does not make the schema tidier, it makes `Éclair` and
+`éclair` two different users, and drops the nine indexes on the way past.
+
+### Three more deviations that are structural rather than columnar
+
+These are the ones a "just normalise it" request usually means, and each has a stated reason:
+
+- **`nodes.parent_path` rather than a `parent_id` self-reference.** A `parent_id` costs a join
+  on every `getIndexes`, which is the tree walk the browser drives; `idx_nodes_parent_ci` reads
+  as `(library_id, parent_path, name_ci)` and answers it from one index.
+- **`songs.{name,name_ci,dir_path}` duplicate `nodes.{name,name_ci,parent_path}`.** A genuine
+  cross-table redundancy — same key, same values. `dir_path` is the one that has to be on
+  `songs`, because it is how an album resolves to its tracks and therefore how an `alk:` id is
+  derived; the other two are duplication kept to avoid the join on every song read.
+- **`stars`/`ratings` keep `item_id` + `item_type` instead of one table per type.** The ids are
+  derived, never minted, so a polymorphic column is what lets a deleted-and-rescanned library
+  re-attach every star. Three typed tables would orphan all of them — the same conclusion
+  `indexDrop` already rests on.
+
+`import_runs.{phases_json,report_json}` is a **1NF** question rather than a 3NF one, and is
+answered on write volume: a report nobody queries by item is thousands of writes against a
+5,000-rows/day allowance to store as rows what one column holds.
+
+### Why none of this is a table rebuild
+
+A migration here may not `ALTER`, both applied files are sha256-locked, and D1 runs each
+migration in an implicit transaction — so `DROP TABLE` on a parent becomes a `DELETE FROM parent`
+that fires every cascade beneath it (`users` has nine children, `libraries` four). Reaching 3NF
+is therefore a new `0010_*.sql` rebuilding `users`, `libraries`, `nodes`, `songs` and
+`import_sources`: the exact shape of the `songs.reader_version` change this repository shipped
+once, where the column never reached the live database and every enrichment write failed.
+
 ## Invariants
 
 Violating any of these reintroduces a fixed defect. The suite asserts each one.
@@ -38,7 +130,9 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   use an index, so the authenticated hot path becomes a full table scan. Every writer
   stores a lowercased twin, so this changes no matching semantics. Paths are the
   exception and are exact: a WebDAV origin on Linux is case-sensitive, and lowercasing a
-  path merges two real folders.
+  path merges two real folders. The twins are a 3NF deviation with a measured
+  justification and a Unicode table — see
+  [Normalisation](#normalisation-and-the-fourteen-columns-that-do-not-obey-it).
 - **The album/artist/genre queries page over groups, then fetch every row of the groups
   on the page.** A SQL `GROUP BY` returns one *representative row* per group, so the
   counts computed from it are 1 for a real discography. This shipped once: every album in
