@@ -283,10 +283,22 @@ is pinned there.
       A dedicated `songs.title_source` is the shape that holds **both** "never
       overwrite a tag" and "a corrected derivation still propagates", and the
       schema rules are what stop it: **SQLite has no `ALTER TABLE … ADD COLUMN IF
-      NOT EXISTS`** (measured on 3.53.4, after assuming otherwise), a migration
-      here may not `ALTER`, and editing the locked baseline is the
+      NOT EXISTS`** (measured on 3.53.4, after assuming otherwise), **the baseline**
+      may not `ALTER`, and editing the locked baseline is the
       `songs.reader_version` defect this package has already paid for once. Worth
       revisiting if a column-adding migration path is ever built.
+      The rule is scoped to the baseline because it is the baseline's property: it
+      executes against production databases that already hold every table, which is
+      why it may contain nothing but no-ops. An incremental file is recorded by its
+      own filename in `d1_migrations` and runs exactly once, so it may `ALTER` —
+      `0010_drop_token_epoch.sql` does, and `ALTER TABLE … DROP COLUMN` has no
+      `IF EXISTS` form precisely because that file is never run twice. Verified on
+      workerd's build, not only `node:sqlite`: `wrangler d1 migrations apply --local`
+      applies it, reads back 0 `token_epoch` columns and a clean `foreign_key_check`,
+      and a second apply answers *"No migrations to apply!"*. Note what
+      did **not** relax: **no migration may `DROP TABLE`**, on any file, because D1's
+      implicit transaction turns a parent drop into a cascading `DELETE`. `ADD COLUMN`
+      is still unavailable for the baseline's own reason, so this buys nothing yet.
     - **The suffix is stripped only when it is a container this server indexes**, against a
       transcribed copy of `libraryNames.ts`'s `AUDIO_SUFFIXES` (layer 0 cannot import layer 3,
       so it is a copy pinned by `test/schema.int.test.ts`). Cutting at the last dot instead
@@ -525,16 +537,26 @@ is pinned there.
 
 ## Schema
 
-**Two** migrations, applied in Wrangler's order: `migrations/0008_squash.sql` is the
+**Three** migrations, applied in Wrangler's order: `migrations/0008_squash.sql` is the
 squashed baseline every database is built from and every future migration stacks on (17
-tables), and `migrations/0009_subsonic_import.sql` adds the import's three (20 in all, with
-40 index entries counting the implicit `sqlite_autoindex_*` a `TEXT PRIMARY KEY` creates).
-`libraries` and `users` carry a `key_version` for credential rotation. `users` also carries
-`token_epoch`, bumped on a password change and **read by nothing** — a Subsonic token is
-`md5(password + salt)`, so the password change is what actually revokes issued tokens, and
-the credential carries no epoch to compare. The header of the file records what it absorbs and why it is idempotent —
-which is the property to read before editing it, because it also runs against databases
-that already have the full schema.
+tables), `migrations/0009_subsonic_import.sql` adds the import's three (20 in all, with
+40 index entries counting the implicit `sqlite_autoindex_*` a `TEXT PRIMARY KEY` creates),
+and `migrations/0010_drop_token_epoch.sql` removes one column from `users` and changes
+nothing else — same 20 tables, same 40 index entries. The header of the baseline records what
+it absorbs and why it is idempotent; that is the property to read before editing it, because
+it also runs against databases that already have the full schema.
+`libraries` and `users` carry a `key_version` for credential rotation: re-encrypt under a new
+version, then drop the old one.
+`users` **no longer** carries `token_epoch`, dropped in `migrations/0010_drop_token_epoch.sql`
+— it was bumped on a password change and read by nothing, and the reasoning is worth keeping
+because the column looked load-bearing. A Subsonic token is `md5(password + salt)`, so it is
+derived from the credential rather than issued by the server: changing the password changes
+**what the token is computed from**, and every issued token stops verifying at that statement.
+Revocation is real, and it is a consequence of the credential rather than of an epoch. For an
+epoch to have meant anything the credential would have to carry the epoch it was minted under,
+and no column ever held it — `token_epoch` recorded how many times a password had changed while
+no client knew the number. **Nothing should be written to read a replacement**, because the
+protocol has no field to compare one against.
 
 ## Layer 2 (layer 0 only)
 

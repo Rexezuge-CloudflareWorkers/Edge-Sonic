@@ -303,15 +303,18 @@ of those is asserted in `test/enrichment-config.test.ts`. The raw var is a test-
 escape hatch so `wrangler dev` works without a Secrets Store; the production template
 does not declare it, and a broken binding must never be masked by one.
 
-The schema carries `key_version` on both tables and `token_epoch` on `users`.
-`key_version` is the rotation handle — re-encrypt under a new version, then drop the old.
-**`token_epoch` is bumped by a password change and read by nothing**, and a previous
-version of this file called it "the only way to revoke a token". It is not, and it could
-not be: `t` is `md5(password + salt)`, so a password change already invalidates every
-issued token by changing what the token is computed *from*, and the credential carries no
-epoch field for a server to compare one against. Revocation is therefore real and
-`token_epoch` is redundant belt-and-braces. Asserted as a column and as a bump
-(`test/schema.int.test.ts`), **not** as a read — and nothing should be written to read it.
+The schema carries `key_version` on both tables, and that is the rotation handle —
+re-encrypt under a new version, then drop the old one.
+`users` also **used to** carry `token_epoch`, bumped by a password change and read by
+nothing; a previous version of this file called it "the only way to revoke a token". It is
+not, and it could not be: `t` is `md5(password + salt)`, so a password change already
+invalidates every issued token by changing what the token is computed *from*. Revocation is
+real, and it never needed an epoch. Dropped in `migrations/0010_drop_token_epoch.sql`, which
+also records why an epoch could not have worked even in principle: the column held how many
+times the password had changed, and no credential ever held the count a client was minted
+under, so there was nothing to compare. Asserted as an **absence**
+(`test/schema.int.test.ts`) so a reintroduced `CREATE TABLE users` is caught, and nothing
+should be written to read a replacement — the protocol has no field to compare one against.
 
 **A store that is recreated is a new key, and the rows are not.**
 `provisionWranglerResources` mints a *new* `store_id` when the store has to be created,

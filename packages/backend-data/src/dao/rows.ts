@@ -17,7 +17,6 @@ interface UserRow {
   password_ciphertext: string;
   password_iv: string;
   key_version: number;
-  token_epoch: number;
   email: string | null;
   is_admin: number;
   is_enabled: number;

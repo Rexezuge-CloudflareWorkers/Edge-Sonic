@@ -1,0 +1,70 @@
+-- ---------------------------------------------------------------------------
+-- Drop `users.token_epoch`, which nothing read
+-- ---------------------------------------------------------------------------
+--
+-- `token_epoch` was bumped in the same statement as a password change and
+-- compared by nothing. It was not a near-miss and it was not a half-built
+-- feature that one more column would finish -- it could not work, and the
+-- reason is worth keeping because the column looked load-bearing:
+--
+--   A Subsonic client authenticates with `t = md5(password + salt)`. There is
+--   no server-issued token and no session row, so there is nothing to revoke.
+--   Changing the password changes *what the token is computed from*, so every
+--   already-issued token stops verifying immediately. Revocation is real, and it
+--   is a consequence of the credential rather than of an epoch.
+--
+-- For an epoch to mean anything the credential would have to carry the epoch it
+-- was minted under, and `users` had no such column -- `token_epoch` recorded
+-- how many times a password had changed, and nothing anywhere recorded which
+-- count a client held. There was no mechanism to add without also inventing the
+-- protocol field to check it against.
+--
+-- So the column was write-only: an `INTEGER` bumped on every rotation, indexed
+-- by nothing, and never projected into a query that decided anything.
+-- `packages/backend-data/AGENTS.md` said so, `docs/agents/runtime/AGENTS.md`
+-- said so, and both said *nothing should be written to read it* -- which is the
+-- correct instruction to leave in place for a future reader, and is why this
+-- migration deletes the column rather than only documenting it.
+--
+-- `key_version` stays, and is a different thing: it is the rotation *handle*.
+-- Re-encrypt under a new version, then drop the old one.
+--
+-- WHY THIS FILE ALTERs, WHEN THE BASELINE MUST NOT
+--
+-- The baseline (`0008_squash.sql`) may contain nothing but statements that are
+-- no-ops against a database that already holds the full schema, because it runs
+-- against production databases that already do -- the files it absorbed are
+-- skipped by `d1_migrations` and it is the one that executes. That is why it
+-- folds its columns into `CREATE TABLE`s rather than using `ALTER TABLE ... ADD
+-- COLUMN`, which has no `IF NOT EXISTS` form and fails with "duplicate column
+-- name" on exactly those databases.
+--
+-- An incremental file is not in that position. D1 records applied migrations by
+-- *filename* in `d1_migrations`, so this one runs exactly once and is skipped
+-- on every later `wrangler d1 migrations apply` -- the same once-only mechanism
+-- that makes `0009` safe. So a non-idempotent statement here is not a defect, and
+-- this file is deliberately NOT re-runnable: `DROP COLUMN` has no `IF EXISTS`
+-- form, and a second run fails with `no such column: "token_epoch"`. That is
+-- the intended behaviour, not an oversight.
+--
+-- The rebuild alternative -- create `users_new`, copy, `DROP TABLE users`,
+-- rename -- is not available here at all. `users` parents ten tables
+-- (`user_libraries`, `playlists`, `stars`, `ratings`, `bookmarks`, `play_queue`,
+-- `play_queue_entries`, `play_counts`, `now_playing`, `import_runs`), and D1 runs
+-- each migration in an implicit transaction, so `DROP TABLE` on a parent becomes
+-- a `DELETE FROM parent` that fires every cascade beneath it. `ALTER TABLE ...
+-- DROP COLUMN` is the only statement that removes the column without touching a
+-- single child row; verified against SQLite 3.53.4 with `PRAGMA foreign_keys` on,
+-- both `users` indexes intact, `PRAGMA foreign_key_check` clean.
+--
+-- Nothing else in the schema changes, so `TABLE_INDEX_COUNTS` in
+-- `dao/billedRows.ts` is untouched: `users` still bills 3 rows per written row.
+--
+-- Verified on workerd's own SQLite, not only `node:sqlite`, because the gap between
+-- an engine and a platform's build has cost this repository a defect before: applied
+-- with `wrangler d1 migrations apply --local`, then read back —
+-- `pragma_table_info('users')` has 0 `token_epoch` columns, `pragma_foreign_key_check`
+-- has 0 violations, `users` keeps both its indexes, and 20 declared indexes survive.
+-- A second `apply` answers "No migrations to apply!", so the unguarded `DROP COLUMN`
+-- below is never executed twice.
+ALTER TABLE users DROP COLUMN token_epoch;

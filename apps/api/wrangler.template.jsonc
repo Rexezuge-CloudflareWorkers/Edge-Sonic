@@ -165,7 +165,8 @@
   //
   // Two keys, not one, because they guard different things. Rotating the WebDAV credential
   // must not require re-entering every user's password, and a compromise of one store must
-  // not yield both. `users.key_version` and `users.token_epoch` exist for the same reason.
+  // not yield both. `users.key_version` exists so a user credential rotates on the same
+  // schedule as a library's, independently of the key that encrypts it.
   //
   // NOTE: this field is NOT inherited by a named `env.*` block, so a multi-environment
   // deployment has to repeat it in each one.
