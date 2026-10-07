@@ -64,7 +64,6 @@ interface RequestScopeEnv {
   SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
   ENVIRONMENT?: string;
   SCAN_QUEUE?: unknown;
-  IMPORT_QUEUE?: unknown;
 }
 
 /**

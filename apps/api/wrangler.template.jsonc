@@ -110,18 +110,19 @@
       "database_name": "edge-sonic-db",
     },
   ],
-  // Two queues, never one: scan chunks and import batches have separate budgets
-  // for the same reason SCAN and IMPORT_DO are separate namespaces. Consumers
-  // run in this Worker (`queue` handler); producers enqueue via QueueService and
-  // fail soft when the bindings are absent.
+  // One queue: scan chunks. Import used to have its own, but its producer was
+  // never wired and its consumer acknowledged without doing work — the Workflow
+  // and the play-count Durable Object are the import path. A dead binding is a
+  // dead resource on the account, so it was deleted rather than left declared.
+  //
+  // Consumers run in this Worker (`queue` handler); producers enqueue via
+  // QueueService and fail soft when the binding is absent. Messages that fail
+  // after `max_retries` land in the dead-letter queue with the error attached,
+  // instead of being acknowledged as if they had been handled.
   "queues": {
-    "producers": [
-      { "binding": "SCAN_QUEUE", "queue": "edge-sonic-scan" },
-      { "binding": "IMPORT_QUEUE", "queue": "edge-sonic-import" },
-    ],
+    "producers": [{ "binding": "SCAN_QUEUE", "queue": "edge-sonic-scan" }],
     "consumers": [
-      { "queue": "edge-sonic-scan", "max_batch_size": 4, "max_retries": 3 },
-      { "queue": "edge-sonic-import", "max_retries": 3 },
+      { "queue": "edge-sonic-scan", "max_batch_size": 4, "max_retries": 3, "dead_letter_queue": "edge-sonic-scan-dlq" },
     ],
   },
   // Nightly maintenance fanout: enqueue one scan-chunk per library so idle

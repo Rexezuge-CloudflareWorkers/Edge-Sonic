@@ -79,7 +79,14 @@ const HOSTILE_LENGTH = 40_000;
  * the gap is 3-4 orders of magnitude in both directions, so this number does not need to be
  * re-tuned when the machine changes.
  */
-const LINEAR_BUDGET_MS = 250;
+// Was 250 ms: a single-run measurement at that ceiling turned red on a loaded CI
+// machine while the code under test was still measured in fractions of a millisecond.
+// What the budget actually protects against is the quadratic reference, which sits at
+// ~1,700 ms for this input size — so the budget stays a wall-clock assertion (the thing
+// under test is wall time), but at 1,000 ms it keeps a real ~17x gap under the failure
+// mode it excludes and ~5,000x headroom over the linear path, which is what a machine
+// manages to stay inside.
+const LINEAR_BUDGET_MS = 1000;
 
 /**
  * The two patterns the production code used to carry, rebuilt from a string.
@@ -361,9 +368,10 @@ describe('slash stripping stays linear', () => {
     // `DAV:href` is `<base>/<path>`, so a run of thousands of slashes sits between two real
     // segments rather than at either end of the string.
     const hostile = interiorSlashRun(HOSTILE_LENGTH);
-    const started = process.hrtime.bigint();
-    const stripped = observedStrip(hostile);
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    let stripped = '';
+    const elapsedMs = bestOfFiveMs(() => {
+      stripped = observedStrip(hostile);
+    });
 
     expect(stripped).toBe(hostile);
     expect(stripped).toBe(stripSlashesOracle(hostile));
@@ -382,9 +390,10 @@ describe('slash stripping stays linear', () => {
     // is stated rather than assumed, and so nobody later concludes from a green run that "a
     // long slash run" is one input when it is four with exactly one that costs anything.
     const hostile = build(HOSTILE_LENGTH);
-    const started = process.hrtime.bigint();
-    const stripped = observedStrip(hostile);
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    let stripped = '';
+    const elapsedMs = bestOfFiveMs(() => {
+      stripped = observedStrip(hostile);
+    });
 
     expect(stripped).toBe(stripSlashesOracle(hostile));
     expect(elapsedMs).toBeLessThan(LINEAR_BUDGET_MS);
@@ -464,9 +473,10 @@ describe('the album separator stays linear', () => {
     // - **Non-empty whitespace-separated sides** so the answer is a real split rather than the
     //   "separator at an end" fallback, which two different wrong answers can both produce.
     const hostile = `Artist${' '.repeat(HOSTILE_LENGTH)}- Album`;
-    const started = process.hrtime.bigint();
-    const observed = derivedNames(hostile);
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    let observed: ReturnType<typeof derivedNames> = { artist: null, album: null };
+    const elapsedMs = bestOfFiveMs(() => {
+      observed = derivedNames(hostile);
+    });
 
     // `derivedNames` strips the marker, so the split is compared unmarked; the marking itself is
     // asserted by the table above and by the nesting block.
@@ -484,9 +494,10 @@ describe('the album separator stays linear', () => {
     // Correctness and budget on the other three shapes. Not the adversarial case — the case
     // above is — and kept so the boundary is stated rather than assumed.
     const hostile = build(HOSTILE_LENGTH);
-    const started = process.hrtime.bigint();
-    const observed = derivedNames(hostile);
-    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    let observed: ReturnType<typeof derivedNames> = { artist: null, album: null };
+    const elapsedMs = bestOfFiveMs(() => {
+      observed = derivedNames(hostile);
+    });
 
     expect(observed).toEqual(flatAlbumOracle(hostile));
     expect(elapsedMs).toBeLessThan(LINEAR_BUDGET_MS);

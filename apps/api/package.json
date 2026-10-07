@@ -15,7 +15,6 @@
     "@edge-sonic/media-tags": "workspace:*",
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
-    "@edge-sonic/webdav": "workspace:*",
     "hono": "4.13.12",
     "jose": "6.2.12"
   },

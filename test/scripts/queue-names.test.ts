@@ -13,12 +13,12 @@ describe('queueNamesIn: what the deploy creates', () => {
         queues: {
           producers: [
             { binding: 'SCAN_QUEUE', queue: 'edge-sonic-scan' },
-            { binding: 'IMPORT_QUEUE', queue: 'edge-sonic-import' },
+            { binding: 'IMPORT_QUEUE', queue: 'edge-sonic-scan-dlq' },
           ],
-          consumers: [{ queue: 'edge-sonic-scan' }, { queue: 'edge-sonic-import' }],
+          consumers: [{ queue: 'edge-sonic-scan' }, { queue: 'edge-sonic-scan-dlq' }],
         },
       }),
-    ).toEqual(['edge-sonic-scan', 'edge-sonic-import']);
+    ).toEqual(['edge-sonic-scan', 'edge-sonic-scan-dlq']);
   });
 
   it('keeps first-seen order and skips empty names', () => {

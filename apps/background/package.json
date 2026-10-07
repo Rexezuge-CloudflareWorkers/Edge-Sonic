@@ -24,7 +24,6 @@
     "@edge-sonic/backend-services": "workspace:*",
     "@edge-sonic/media-tags": "workspace:*",
     "@edge-sonic/shared": "workspace:*",
-    "@edge-sonic/subsonic": "workspace:*",
     "@edge-sonic/webdav": "workspace:*"
   },
   "devDependencies": {

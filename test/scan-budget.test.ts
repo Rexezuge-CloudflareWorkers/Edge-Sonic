@@ -560,8 +560,8 @@ interface Harness {
  * An enrichment that wrote nothing, which is a different answer from one that was not asked.
  *
  * A value rather than an inline `{ rowsWritten: 0, billedRows: 0 }` at the one site that needs
- * it, for the `NO_FOLDER_WRITES` reason: an object literal there is where a third count would be
- * added to the type and not to the value.
+ * it, for the same reason `NO_FOLDER_WRITES` was named: an object literal there is where a third
+ * count would be added to the type and not to the value.
  */
 const NO_ENRICHMENT_WRITE = { rowsWritten: 0, billedRows: 0 } as const;
 

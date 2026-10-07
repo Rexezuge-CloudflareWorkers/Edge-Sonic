@@ -37,6 +37,10 @@
  *   thirty steps produces one of these lines per fault, so it has to say *which instance class*
  *   stopped.
  */
+import { createLogger } from '../logger';
+
+const logger = createLogger('workflow');
+
 async function runWorkflow<TResult>(label: string, body: () => Promise<TResult>): Promise<TResult> {
   try {
     return await body();
@@ -45,8 +49,7 @@ async function runWorkflow<TResult>(label: string, body: () => Promise<TResult>)
     // a URL and a remote's response fragment, and Cloudflare's CodeQL `js/clear-text-logging`
     // taints a variable built from them — which is why the error object is logged as a separate
     // argument rather than interpolated. The label alone is the thing this line is for.
-    console.error(`[workflow] ${label} failed; the instance is recorded as failed, not complete`);
-    console.error(err);
+    logger.error(`${label} failed; the instance is recorded as failed, not complete`, err);
     // Rethrown, not returned. Returning normally is how a Workflow reports success.
     throw err;
   }

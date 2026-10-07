@@ -230,16 +230,23 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
   /**
    * Queue consumer: one bounded chunk per message.
    *
-   * Separate queues per workload so an import walk cannot block a scan chunk.
-   * Unknown messages are logged skips; a throw would redeliver poison for ever.
-   * Lazy-imported so the fetch path never pays for the background graph.
+   * A message that cannot be processed (unknown shape, gone library) is
+   * acknowledged — redelivery cannot fix either. A message whose processing
+   * failed is retried with backoff, and once Cloudflare's `max_retries` is
+   * spent the message lands in the dead-letter queue. The previous handler
+   * caught every error and acked, so every failure was silently dropped and
+   * the retry budget never ran; a throw that kills the whole batch would
+   * retry *every* message in it, including the ones that succeeded, so the
+   * decision is per message.
    */
-  public async onQueue(batch: { messages: Array<{ body: unknown }> }, env: Cloudflare.Env): Promise<void> {
+  public async onQueue(batch: { messages: Array<{ body: unknown; ack?(): void; retry?(): void }> }, env: Cloudflare.Env): Promise<void> {
     for (const message of batch.messages) {
       try {
         await consumeQueueMessage(message.body, () => createScanWorkerScope(env));
+        message.ack?.();
       } catch (error) {
-        console.error('[queue] message failed, acknowledged to avoid poison redelivery:', error);
+        console.error('[queue] message failed; it will be retried, and dead-lettered once the retry budget is spent:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+        message.retry?.();
       }
     }
   }

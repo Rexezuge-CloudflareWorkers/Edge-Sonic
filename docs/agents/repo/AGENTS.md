@@ -23,8 +23,9 @@ part: what exists, what runs it, and what refuses to merge.
 Enforced by `no-restricted-imports` in `eslint.config.mjs`, not by convention — and the
 enforcement has gaps worth knowing: there is **no** layer block for `subsonic` or
 `media-tags`, and `apps/api`'s `backend-data` block sets `allowTypeImports: true`, which is
-the one permitted value import. `@edge-sonic/dav-store` is still named as a restricted group
-though no such package exists.
+the one permitted value import. `apps/web` now has the block the table implies — it bans every `@edge-sonic/*`
+import, which the SPA's zero-backend-dependency rule previously was by convention
+only.
 
 **`scripts/` and `functions/` are not workspace packages.** `pnpm run typecheck` reaches them
 through `typecheck:scripts` and `typecheck:functions`, so a new directory there needs its
@@ -67,8 +68,8 @@ integration config has no thresholds, deliberately.
 
 ## The gates
 
-**Coverage floors are `85 / 73 / 90 / 89`** (statements / branches / functions / lines),
-against a measured 85.95 / 73.96 / 90.98 / 89.61. They are a **measured** floor: lower one
+**Coverage floors are `89 / 78 / 92 / 92`** (statements / branches / functions / lines),
+against a measured 89.33 / 78.93 / 92.07 / 92.49. They are a **measured** floor: lower one
 to make CI green and the gate stops saying anything. `apps/web` is deliberately *not* in the
 coverage `include`, and `packages/backend-errors` is excluded because it is a pure taxonomy
 whose mapping out is tested.

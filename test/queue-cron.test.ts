@@ -1,17 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { QueueService } from '@edge-sonic/backend-services/queue';
-import {
-  isImportQueueMessage,
-  isQueueMessage,
-  isScanQueueMessage,
-} from '@edge-sonic/backend-services/queue';
+import { isQueueMessage, isScanQueueMessage } from '@edge-sonic/backend-services/queue';
 import { consumeQueueMessage, librariesDueForCron } from '../apps/background/src/queueConsumers';
 
 describe('queue messages: validated, never cast', () => {
-  it('accepts scan-chunk and import-batch shapes', () => {
+  it('accepts the scan-chunk shape, and nothing else', () => {
     expect(isScanQueueMessage({ kind: 'scan-chunk', libraryId: 'L1' })).toBe(true);
-    expect(isImportQueueMessage({ kind: 'import-batch', runId: 'R1' })).toBe(true);
     expect(isQueueMessage({ kind: 'scan-chunk', libraryId: 'L1' })).toBe(true);
+    expect(isQueueMessage({ kind: 'import-batch', runId: 'R1' })).toBe(false);
   });
 
   it('rejects empty ids and unknown kinds without throwing', () => {
@@ -25,25 +21,26 @@ describe('queue messages: validated, never cast', () => {
 
 describe('QueueService: fail-soft producer', () => {
   it('enqueues nothing without bindings', async () => {
-    const queue = new QueueService({ scanQueue: null, importQueue: null });
+    const queue = new QueueService({ scanQueue: null });
     expect(queue.hasScanQueue()).toBe(false);
     expect(await queue.enqueueScan('L1')).toBe(false);
-    expect(await queue.enqueueImportBatch('R1')).toBe(false);
   });
 
   it('sends typed messages and survives a throwing sender', async () => {
     const sent: unknown[] = [];
     const queue = new QueueService({
       scanQueue: { send: async (message: unknown) => void sent.push(message) },
-      importQueue: {
+    });
+    const throwing = new QueueService({
+      scanQueue: {
         send: async () => {
           throw new Error('queue down');
         },
       },
     });
+    expect(await throwing.enqueueScan('L1')).toBe(false);
     expect(await queue.enqueueScan('L1')).toBe(true);
     expect(sent).toEqual([{ kind: 'scan-chunk', libraryId: 'L1' }]);
-    expect(await queue.enqueueImportBatch('R1')).toBe(false);
   });
 });
 
@@ -53,6 +50,23 @@ describe('queue consumer: poison never re-queues', () => {
       throw new Error('scope must not be built for poison');
     });
     expect(outcome).toEqual({ handled: false, reason: 'unknown-kind:reindex-everything' });
+  });
+
+  it('a failing step propagates, so the message is retried rather than dropped', async () => {
+    const scopeFor = () => ({
+      get: (token: symbol): unknown => {
+        if (token.description === 'LibraryDAO') {
+          return async () => ({ findById: async () => ({ id: 'L1' }) });
+        }
+        if (token.description === 'ScanService') {
+          return { step: async () => { throw new Error('D1 refused the chunk writes'); } };
+        }
+        throw new Error(`unexpected token ${String(token)}`);
+      },
+    });
+    await expect(
+      consumeQueueMessage({ kind: 'scan-chunk', libraryId: 'L1' }, scopeFor as never),
+    ).rejects.toThrow('D1 refused the chunk writes');
   });
 
   it('reports a gone library instead of stepping', async () => {

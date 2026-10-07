@@ -71,6 +71,8 @@
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import type { DavResource } from '@edge-sonic/webdav';
 import { reconcileFolder } from './scanFolder';
+import { mergeFolderWrites, NO_FOLDER_WRITES } from './scanAccounting';
+import type { FolderWrites } from './scanAccounting';
 import { backfill, settle, NO_DERIVATION } from './scanPrelude';
 import type { DerivationCost } from './deriveBackfill';
 import { start } from './scanStart';
@@ -172,13 +174,11 @@ class ScanService {
     let state: ScanStateRow | null = null;
     let budget: ScanBudget | undefined;
     let derived: DerivationCost = NO_DERIVATION;
-    let rowsWritten = 0;
-    // The day's allowance is denominated in **billed** rows, metered separately from
-    // `rowsWritten` because the ratio is not fixed: `songs` bills ten per row, `nodes` four.
-    let billedRows = 0;
-    // Kept apart from `rowsWritten` on purpose: the day's row-write allowance counts every row,
-    // and the cache-invalidation signal counts only the ones a cached answer reads.
-    let indexChanged = false;
+    // The chunk's writes accumulate through the two mergers, which is the one place
+    // `rowsWritten` (the day's allowance), `billedRows` (what that allowance is metered
+    // in) and `indexChanged` (the cache-invalidation signal) are kept from disagreeing —
+    // see `scanAccounting` for why the three are answers to three different questions.
+    let totals: FolderWrites = NO_FOLDER_WRITES;
     let scanned = 0;
     let foldersVisited = 0;
 
@@ -203,11 +203,9 @@ class ScanService {
       // — and each of those is a return, not a value to carry on from. `null` means: walk.
       if (settled !== null) return settled;
 
-      rowsWritten = derived.rowsWritten;
-      billedRows = derived.billedRows;
       // The backfill writes `songs` grouping, which every aggregate reads, so it counts. It is
       // the one writer outside `reconcileFolder`.
-      indexChanged = derived.rowsWritten > 0;
+      totals = mergeFolderWrites(totals, { rowsWritten: derived.rowsWritten, billedRows: derived.billedRows, indexChanged: derived.rowsWritten > 0 });
       scanned = state.scanned_count;
 
       for (const folder of frontier) {
@@ -232,17 +230,17 @@ class ScanService {
           // proportional to the deletion rather than to library size.
           const removed = await this.deps.nodes.deleteSubtree(library.id, folder.path);
           const removedSongs = await this.deps.songs.deleteInDirectoryNotIn(library.id, folder.path, []);
-          rowsWritten += removed.changes + removedSongs.changes;
-          billedRows += removed.billedRows + removedSongs.billedRows;
           // A subtree leaving the index *is* a change to it — the opposite of a flag flipping.
-          indexChanged ||= removed.changes > 0 || removedSongs.changes > 0;
+          totals = mergeFolderWrites(totals, {
+            rowsWritten: removed.changes + removedSongs.changes,
+            billedRows: removed.billedRows + removedSongs.billedRows,
+            indexChanged: removed.changes > 0 || removedSongs.changes > 0,
+          });
           scanned += 1;
           continue;
         }
         const reconciled = await reconcileFolder(this.deps, library, folder, listed, budget);
-        rowsWritten += reconciled.rowsWritten;
-        billedRows += reconciled.billedRows;
-        indexChanged ||= reconciled.indexChanged;
+        totals = mergeFolderWrites(totals, reconciled);
         scanned += 1;
       }
 
@@ -252,7 +250,7 @@ class ScanService {
       // `scanned` above is still the absolute count the result reports; only the write is a delta.
       //
       // `indexChanged` rides along, and is deliberately **not** `rowsWritten > 0` — `scanAccounting`.
-      await this.deps.scanState.saveProgress(library.id, foldersVisited, null, indexChanged);
+      await this.deps.scanState.saveProgress(library.id, foldersVisited, null, totals.indexChanged);
       return {
         status: 'scanning',
         scanned,
@@ -260,10 +258,10 @@ class ScanService {
         lastError: null,
         foldersVisited,
         subrequests: budget.spend(),
-        rowsWritten,
+        rowsWritten: totals.rowsWritten,
         // What those rows cost. Not derivable from `rowsWritten`: `nodes` and `songs` bill
         // differently per row.
-        billedRows,
+        billedRows: totals.billedRows,
         // `frontier` when the loop ran out of folders to visit, and the bound that
         // cut it short otherwise — which is the fact an operator watching a scan
         // that is not finishing needs, and the two have different remedies.
@@ -313,7 +311,7 @@ class ScanService {
           return unrecordedFailure(`${message} (the failure could not be recorded: ${describeFailure(persistError)})`);
         }
       }
-      return await this.failChunk(library, state, error, budget, { rowsWritten, billedRows, scanned, foldersVisited });
+      return await this.failChunk(library, state, error, budget, { rowsWritten: totals.rowsWritten, billedRows: totals.billedRows, scanned, foldersVisited });
     }
   }
 

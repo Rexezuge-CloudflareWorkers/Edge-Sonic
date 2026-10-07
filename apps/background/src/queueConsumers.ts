@@ -1,42 +1,48 @@
 /**
- * Queue consumers + cron fanout (Strategy over the same services the
+ * Queue consumer + cron fanout (Strategy over the same services the
  * alarm/direct paths use).
  *
  * Pure dispatch: takes a scope factory so tests drive the real `ScanService`
- * and import walk without workerd. Unknown messages are logged skips, never
- * throws — a throw re-queues poison for ever.
+ * without workerd. A message whose shape is wrong is a logged skip — its
+ * redelivery would never succeed. A message whose *processing* fails throws,
+ * so the queue's retry budget applies and an exhausted message lands in the
+ * dead-letter queue rather than being acknowledged as handled.
  */
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { isImportQueueMessage, isScanQueueMessage } from '@edge-sonic/backend-services/queue';
-import type { QueueMessage } from '@edge-sonic/backend-services/queue';
+import { isScanQueueMessage } from '@edge-sonic/backend-services/queue';
 import type { createScanWorkerScope } from './ScanWorkerFactory';
+import { createLogger } from '@edge-sonic/backend-runtime/logger';
+
+const logger = createLogger('queue');
 
 type WorkerScope = ReturnType<typeof createScanWorkerScope>;
 
 type QueueOutcome = { readonly handled: true; readonly kind: string } | { readonly handled: false; readonly reason: string };
 
 async function consumeQueueMessage(message: unknown, scopeFor: () => WorkerScope): Promise<QueueOutcome> {
-  if (!isScanQueueMessage(message) && !isImportQueueMessage(message)) {
+  if (!isScanQueueMessage(message)) {
     const raw = typeof message === 'object' && message !== null ? (message as { kind?: unknown }).kind : undefined;
     const kind = typeof raw === 'string' && raw.length > 0 ? raw : 'unknown';
-    console.debug(`[queue] skipping unknown message kind "${kind}"`);
+    logger.warn(`skipping unknown message kind "${kind}"`);
     return { handled: false, reason: `unknown-kind:${kind}` };
   }
-  const typed: QueueMessage = message;
-  if (typed.kind === 'scan-chunk') {
-    const scope = scopeFor();
-    const libraries = await scope.get(Tokens.LibraryDAO)();
-    const library = await libraries.findById(typed.libraryId);
-    if (library === null) return { handled: false, reason: 'library-gone' };
-    const scan = scope.get(Tokens.ScanService);
-    await scan.step(library);
-    return { handled: true, kind: 'scan-chunk' };
-  }
   const scope = scopeFor();
-  const runs = await scope.get(Tokens.ImportRunDAO)();
-  const run = await runs.findById(typed.runId);
-  if (run === null) return { handled: false, reason: 'run-gone' };
-  return { handled: true, kind: 'import-batch' };
+  const libraries = await scope.get(Tokens.LibraryDAO)();
+  const library = await libraries.findById(message.libraryId);
+  if (library === null) {
+    // The registration is gone, so the message can never be processed; skip rather
+    // than retry it into the dead-letter queue.
+    logger.warn('scan-chunk for an unknown library; acknowledged');
+    return { handled: false, reason: 'library-gone' };
+  }
+  const scan = scope.get(Tokens.ScanService);
+  // A throw propagates on purpose: the scan did not complete, so the message is
+  // retried by the queue and, past `max_retries`, dead-lettered. The same `step`
+  // body is what the operator's manual path runs, so a queue-driven chunk
+  // overlapping the alarm is the overlap the manual path already permits, with
+  // the same delta accounting on the frontier.
+  await scan.step(library);
+  return { handled: true, kind: 'scan-chunk' };
 }
 
 /**
@@ -53,7 +59,7 @@ async function librariesDueForCron(scopeFor: () => WorkerScope): Promise<readonl
     const rows = await libraries.list();
     return rows.map((row) => row.id);
   } catch (error) {
-    console.debug('[cron] library listing failed, enqueuing nothing:', error);
+    logger.warn('library listing failed, enqueuing nothing:', error);
     return [];
   }
 }

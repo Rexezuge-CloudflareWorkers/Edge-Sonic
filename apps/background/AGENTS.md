@@ -13,6 +13,7 @@ was opened first.
 | `PlayCountImportWorker.ts` | the import's **unbounded** half: walking a remote's albums for play counts |
 | `ScanWorkerFactory.ts` | the composition root both classes build their scope through |
 | `scanPause.ts` | the scan's day-row-write budget and the pause a spent allowance implies |
+| `queueConsumers.ts` | the queue consumer and the cron fanout: pure dispatch, a scope factory injected |
 | `scanIndexDrop.ts` | the two `ScanWorker` RPCs the Danger Zone's drop calls, and the ordering they must be called in |
 
 ## A drop stops this object **before** the D1 deletes, and charges it after
@@ -142,3 +143,20 @@ where the import's *scheduling* lives, whose every defect is a **silent wedge** 
 error. The fakes model the two load-bearing platform facts: `setAlarm` is a **recorded schedule**
 (a fake that fired immediately would make every batch loop run to exhaustion, the exact behaviour
 the bound prevents) and `step.do` is **cached by name**.
+
+
+## The queue is a bounded retry path, and poison is acked, failure is retried
+
+`consumeQueueMessage` validates a message's **shape** and refuses anything it cannot use —
+an unknown kind, a library that no longer exists. Those are *acked*: redelivery cannot fix
+either, and acking is what keeps poison from re-queueing forever. A message whose
+*processing* fails throws, so Cloudflare's `max_retries: 3` applies and an exhausted
+message lands in `edge-sonic-scan-dlq`. The previous consumer caught every error and
+acked, which dropped each failed chunk silently and never ran the budget. Import used to
+have its own queue with the opposite defect: a producer that was never wired and a
+consumer that acknowledged without doing the work — the Workflow is the import path, and
+the dead binding was removed rather than left declared.
+
+Cron enqueues one `scan-chunk` per library; it never walks. An alarm tick is the truth of
+the scan's progress, and the queue is only a way to keep idle libraries moving when no
+client polls.

@@ -1,7 +1,7 @@
 /**
  * Queue wiring for the composition root.
  *
- * Reads `SCAN_QUEUE`/`IMPORT_QUEUE` off `env` like every other binding: absent
+ * Reads `SCAN_QUEUE` off `env` like every other binding: absent
  * in tests and local dev, present when the deployment template declares them.
  * A sender that is not a `send` function is treated as absent rather than
  * throwing at scope-construction time.
@@ -22,13 +22,11 @@ function asSender(value: unknown): QueueSender | null {
 function bindQueue(scope: Container, env: RequestScopeEnv): void {
   const queueEnv = env as {
     SCAN_QUEUE?: unknown;
-    IMPORT_QUEUE?: unknown;
   };
   scope.bindValue(
     Tokens.QueueService,
     new QueueService({
       scanQueue: asSender(queueEnv.SCAN_QUEUE),
-      importQueue: asSender(queueEnv.IMPORT_QUEUE),
     }),
   );
 }

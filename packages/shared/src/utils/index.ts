@@ -1,7 +1,5 @@
-export { TimestampUtil } from './TimestampUtil';
 export { UUIDUtil } from './UUIDUtil';
 export { isValidEmailFormat } from './Identity';
-export { canonicalizeLanguageTag } from './LanguageTag';
 export { ErrorSanitizationUtil } from './ErrorSanitizationUtil';
 export { SubrequestCounter, UNMETERED_SUBREQUESTS, SUBREQUEST_KINDS, subrequestSpend, NO_SUBREQUESTS_SPENT } from './SubrequestMeter';
 export type { SubrequestMeter, SubrequestKind, SubrequestSpend } from './SubrequestMeter';

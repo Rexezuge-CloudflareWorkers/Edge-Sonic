@@ -189,6 +189,24 @@ describe('the bucket', () => {
     expect(getRateLimitBucketCountForTests()).toBeLessThanOrEqual(5000);
   });
 
+  it('evicts rather than clears when the bucket table overflows', async () => {
+    // The flood: each request a distinct client address, so each is its own
+    // bucket that never expires inside the test window. Past 1000 the cleanup
+    // has to evict live buckets down to the cap — and it must pick the
+    // oldest-resetting, not clear the table (clearing would hand every new key
+    // a fresh allowance, which is the thing the flood is testing).
+    const app = limitedApp(2);
+    for (let index = 0; index < 5100; index += 1) {
+      await hit(app, { 'cf-connecting-ip': `198.51.${index >> 8}.${index & 255}` });
+    }
+    expect(getRateLimitBucketCountForTests()).toBeLessThanOrEqual(5000);
+    // A key that survived eviction still counts against its earlier request:
+    // a table that had been cleared would answer 200 here as though the
+    // address had never been seen.
+    const survivor = { 'cf-connecting-ip': '198.51.19.255' }; // 5063 — inside the retained tail
+    expect((await hit(app, survivor)).status).toBe(200);
+  }, 60_000);
+
   it('fails open, because a limiter that throws takes playback down for everyone', async () => {
     // The limiter wraps its whole body in a `try { … } catch { await next() }`, so its
     // own state going wrong can never become a 5xx for a legitimate stream. Hono turns
