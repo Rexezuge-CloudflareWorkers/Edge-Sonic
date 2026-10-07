@@ -10,6 +10,8 @@
     "./MediaWorker": "./src/MediaWorker.ts",
     "./LibraryImportWorkflow": "./src/LibraryImportWorkflow.ts",
     "./PlayCountImportWorker": "./src/PlayCountImportWorker.ts",
+    "./ScanWorkerFactory": "./src/ScanWorkerFactory.ts",
+    "./queueConsumers": "./src/queueConsumers.ts",
     "./scanPause": "./src/scanPause.ts"
   },
   "scripts": {

@@ -24,6 +24,7 @@ import { TreeService } from '../index/TreeService';
 import { EnrichmentService } from '../index/EnrichmentService';
 import type { RequestScopeEnv } from './serviceFactory';
 import { bindKeys } from './bindKeys';
+import { bindQueue } from './bindQueue';
 import { bindEnrichment } from './bindEnrichment';
 import { bindImport } from './bindImport';
 import { bindIndexDrop } from './bindIndexDrop';
@@ -102,6 +103,7 @@ function createRequestScope(
   // Merging them into one master key destroys that property invisibly.
   // Wiring lives in `bindKeys.ts` so this root stays lifecycle-only.
   bindKeys(scope, env, subrequests);
+  bindQueue(scope, env);
 
   // DAOs. Bound as thunks so construction stays lazy and a handler that never
   // touches songs does not construct the songs DAO.

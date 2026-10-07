@@ -67,6 +67,8 @@ const SUBPATH_EXPORTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^@edge-sonic\/backend-services\/errors$/, 'packages/backend-services/src/errors/index.ts'],
   [/^@edge-sonic\/backend-services\/index$/, 'packages/backend-services/src/index/index.ts'],
   [/^@edge-sonic\/backend-services\/library$/, 'packages/backend-services/src/library/index.ts'],
+  [/^@edge-sonic\/backend-services\/queue$/, 'packages/backend-services/src/queue/index.ts'],
+  [/^@edge-sonic\/backend-services\/import$/, 'packages/backend-services/src/import/index.ts'],
   [/^@edge-sonic\/shared\/utils$/, 'packages/shared/src/utils/index.ts'],
   [/^@edge-sonic\/shared\/i18n$/, 'packages/shared/src/i18n/index.ts'],
 ];

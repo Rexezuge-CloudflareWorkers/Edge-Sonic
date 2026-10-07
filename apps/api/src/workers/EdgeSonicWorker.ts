@@ -53,6 +53,9 @@ import { errorResponse, resolveFormat } from '@edge-sonic/subsonic';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { registerUserRoutes } from '../user/routes';
 import { userAuthentication, registerUserRateLimits, registerRestRateLimits, scopeMiddleware, securityHeaders } from '../middleware';
+import { createScanWorkerScope } from '@edge-sonic/background/ScanWorkerFactory';
+import { consumeQueueMessage, librariesDueForCron } from '@edge-sonic/background/queueConsumers';
+import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composition';
 import { dispatchRest } from '../rest/dispatch';
 import { SPA_HTML } from '../generated/spa-shell';
 import type { WorkerEnv } from '../endpoints/BaseRoute';
@@ -222,6 +225,45 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
       }
     }
     return await this.app.fetch(request, env, ctx);
+  }
+
+  /**
+   * Queue consumer: one bounded chunk per message.
+   *
+   * Separate queues per workload so an import walk cannot block a scan chunk.
+   * Unknown messages are logged skips; a throw would redeliver poison for ever.
+   * Lazy-imported so the fetch path never pays for the background graph.
+   */
+  public async onQueue(batch: { messages: Array<{ body: unknown }> }, env: Cloudflare.Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        await consumeQueueMessage(message.body, () => createScanWorkerScope(env));
+      } catch (error) {
+        console.error('[queue] message failed, acknowledged to avoid poison redelivery:', error);
+      }
+    }
+  }
+
+  /**
+   * Cron maintenance: enqueue one scan-chunk per registered library.
+   *
+   * Enqueues rather than walks: a cron invocation has the same 50-subrequest
+   * ceiling as any other, so walking here would truncate after one folder.
+   * Fail-soft when queues or D1 are unavailable — the alarm/poll paths remain
+   * the truth.
+   */
+  public async onScheduled(env: Cloudflare.Env): Promise<void> {
+    try {
+      const scope = createRequestScope(env);
+      const queue = scope.get(Tokens.QueueService);
+      if (!queue.hasScanQueue()) return;
+      const scopeFor = () => createScanWorkerScope(env);
+      for (const libraryId of await librariesDueForCron(scopeFor)) {
+        await queue.enqueueScan(libraryId);
+      }
+    } catch (error) {
+      console.error('[cron] scheduled fanout failed:', error);
+    }
   }
 }
 

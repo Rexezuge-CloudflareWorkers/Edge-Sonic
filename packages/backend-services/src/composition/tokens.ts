@@ -196,6 +196,13 @@ const Tokens = {
    * user's password — and a compromise of the frequently-read WebDAV key must not yield it.
    */
   RemoteKey: Symbol('RemoteKey') as Token<() => Promise<string>>,
+  /**
+   * Queue producer for scan chunks and import batches.
+   *
+   * Fail-soft: absent bindings enqueue nothing and return `false`, so the
+   * alarm/direct paths remain the truth when queues are not configured.
+   */
+  QueueService: Symbol('QueueService') as Token<import('../queue/queueService').QueueService>,
 } satisfies Record<string, Token<unknown>>;
 
 /**

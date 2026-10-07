@@ -19,3 +19,5 @@ export { LibraryImportWorkflow, STEP_RETRIES, STEP_TIMEOUT, WALK_START_FAILED } 
 export type { ImportWorkflowPayload, ImportStub, WalkOutcome } from './LibraryImportWorkflow';
 export { PlayCountImportWorker, ALBUMS_PER_BATCH, SUBSREQUESTS_PER_ALBUM_BASE } from './PlayCountImportWorker';
 export type { WalkRequest, WalkProgress } from './PlayCountImportWorker';
+export { consumeQueueMessage, librariesDueForCron } from './queueConsumers';
+export type { QueueOutcome } from './queueConsumers';
