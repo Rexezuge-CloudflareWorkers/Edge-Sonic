@@ -57,8 +57,8 @@ class UserDAO extends BaseDAO {
       async () =>
         await this.database
           .prepare(
-            `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, token_epoch, email, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, 1, 1, ?, ?, 1, 1, ?, ?)`,
+            `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, email, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, 1, ?, ?, 1, 1, ?, ?)`,
           )
           .bind(
             id,
@@ -82,16 +82,26 @@ class UserDAO extends BaseDAO {
   /**
    * Change a password and invalidate every issued token.
    *
-   * `token_epoch` is bumped in the SAME statement as the credential write. A
-   * Subsonic token is valid forever, so without the bump there is no way to
-   * revoke one after a password change — the client's saved credential keeps
-   * working until the user notices.
+   * A Subsonic token is `md5(password + salt)`, so it is derived from the
+   * credential rather than issued by the server — there is no session row and
+   * nothing to revoke. Changing the password changes **what the token is computed
+   * from**, so every already-issued token stops verifying at this statement, and
+   * revocation is a consequence of the write rather than a second mechanism.
+   *
+   * `token_epoch` used to be bumped here "in the SAME statement" to invalidate
+   * tokens. It was compared by nothing and could not have worked: the column
+   * recorded how many times the password had changed while no credential carried
+   * the epoch a client held, so there was no value to compare against. Dropped in
+   * `migrations/0010_drop_token_epoch.sql`.
+   *
+   * `key_version` **is** load-bearing — it is the rotation handle. Re-encrypt
+   * under a new version, then drop the old one.
    */
   public async updatePassword(id: string, passwordCiphertext: string, passwordIv: string, keyVersion: number): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database
-          .prepare('UPDATE users SET password_ciphertext = ?, password_iv = ?, key_version = ?, token_epoch = token_epoch + 1, updated_at = ? WHERE id = ?')
+          .prepare('UPDATE users SET password_ciphertext = ?, password_iv = ?, key_version = ?, updated_at = ? WHERE id = ?')
           .bind(passwordCiphertext, passwordIv, keyVersion, nowSeconds(), id)
           .run(),
       'users.updatePassword',

@@ -280,8 +280,8 @@ describe('getUser and getUsers', () => {
     const secret = await encryptData('opensesame', 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=');
     await harness.db.db
       .prepare(
-        `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, token_epoch, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
-         VALUES ('u-bob', 'bob', 'bob', ?, ?, 1, 1, 0, 1, 1, 0, 0)`,
+        `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
+         VALUES ('u-bob', 'bob', 'bob', ?, ?, 1, 0, 1, 1, 0, 0)`,
       )
       .bind(secret.ciphertext, secret.iv)
       .run();
@@ -302,8 +302,8 @@ describe('getUser and getUsers', () => {
     const secret = await encryptData('opensesame', 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=');
     await harness.db.db
       .prepare(
-        `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, token_epoch, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
-         VALUES ('u-bob', 'bob', 'bob', ?, ?, 1, 1, 0, 1, 1, 0, 0)`,
+        `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
+         VALUES ('u-bob', 'bob', 'bob', ?, ?, 1, 0, 1, 1, 0, 0)`,
       )
       .bind(secret.ciphertext, secret.iv)
       .run();

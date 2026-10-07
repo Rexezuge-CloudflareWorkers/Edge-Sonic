@@ -12,9 +12,9 @@ Layer 3: layers 0–2, and never `apps/*`.
   cleartext password) is accepted as a fallback because the protocol allows it; an empty
   salt is **refused**, because computing `md5(password + "")` would accept a token the
   caller chose by supplying nothing. **A password change revokes an already-issued token
-  because `t` is derived from the current password** — not because of `token_epoch`, which
-  is bumped in the same statement and read by nothing. The credential carries no epoch
-  field for a server to compare one against, so there is no mechanism here to add.
+  because `t` is derived from the current password** — there is no session row and
+  nothing to revoke. (A `token_epoch` column once suggested otherwise; it was bumped
+  here, compared by nothing, and is gone as of `migrations/0010_drop_token_epoch.sql`.)
 - `auth/AccessAuthService` authenticates `/user/*` behind Cloudflare Access. The bypass
   chain is `DEMO_MODE` → `DEV_AUTH_EMAIL` → JWT → the **`ACCESS` binding**, and the first
   two are gated on an **environment allow-list**. A deny-list would enable the bypass for

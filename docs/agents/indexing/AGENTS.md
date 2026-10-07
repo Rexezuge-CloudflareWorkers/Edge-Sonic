@@ -11,10 +11,11 @@ row-write allowance runs out in a couple of hours of scanning.
 
 ## The schema
 
-Two migrations, in Wrangler's order: `migrations/0008_squash.sql` (the baseline — 17
-tables) and `migrations/0009_subsonic_import.sql` (3 more). **20 tables, 40 index entries**
-— 20 declared and 20 implicit `sqlite_autoindex_*`, because a `TEXT PRIMARY KEY` is one.
-`PRAGMA foreign_key_check` is clean.
+Three migrations, in Wrangler's order: `migrations/0008_squash.sql` (the baseline — 17
+tables), `migrations/0009_subsonic_import.sql` (3 more), and
+`migrations/0010_drop_token_epoch.sql` (drops one column from `users`, and changes nothing
+else). **20 tables, 40 index entries** — 20 declared and 20 implicit `sqlite_autoindex_*`,
+because a `TEXT PRIMARY KEY` is one. `PRAGMA foreign_key_check` is clean.
 
 | Table | Index entries | Billed rows per written row |
 | --- | ---: | ---: |
@@ -159,7 +160,31 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `[]` for a library of 80 albums, `getSong` answered a masked 500, and the scan wedged —
   through 489 passing tests. Two rules, and the second exists because the first did not
   stop it:
+  - **A migration change is a new numbered file, and only the baseline may not `ALTER`.** These
+  are two rules, and the second exists because the first did not stop it:
   - **A schema change is a new numbered file.** Never an edit to one that has shipped.
+  - **The baseline may contain nothing but no-ops against a full schema**, because it is the
+    file that actually executes against production: `d1_migrations` records the absorbed
+    filenames, so they are skipped and `0008` is what runs. Hence `CREATE TABLE IF NOT EXISTS`
+    throughout, hence no `ALTER TABLE` in it — `ADD COLUMN` has no `IF NOT EXISTS` form and
+    fails with "duplicate column name" on exactly the databases that need it, which is why
+    those columns are folded into their `CREATE TABLE`s.
+  - **An incremental file may `ALTER`,** because D1 records it by its own filename and skips
+    it once applied, so it is never run twice. `0010_drop_token_epoch.sql` relies on this: its
+    `ALTER TABLE users DROP COLUMN` has no `IF EXISTS` form, and a second run fails with
+    `no such column` — correct for a file that runs once, and a defect only under a rule that
+    never applied to it. This is why the re-run assertions in `test/schema.int.test.ts` read
+    the baseline alone rather than `migrationSql()`.
+    Measured on **workerd's build**, not only `node:sqlite`, because the engine-versus-build
+    gap has cost this repository a defect before: `wrangler d1 migrations apply --local`
+    applied it, `pragma_table_info('users')` reads back 0 `token_epoch` columns with
+    `pragma_foreign_key_check` clean and both `users` indexes intact, and a second apply
+    answers *"No migrations to apply!"*. An `ALTER` in the **baseline** is still caught —
+    that assertion reads the baseline alone, and was verified by injecting one.
+  - **What did *not* relax: no migration may `DROP TABLE`, on any file.** D1's implicit
+    transaction turns a parent drop into a `DELETE FROM parent` firing every cascade beneath
+    it — `users` parents ten tables — so a drop that looks like a schema change is in fact an
+    unrecoverable mass `DELETE`. That assertion still reads the whole set, deliberately.
   - **`migrations/migrations.lock.json` records the sha256 of everything applied**, and
     `test/schema.int.test.ts` asserts both directions — every file on disk is listed, and
     every listed hash matches. Adding a migration means adding a lock entry in the same

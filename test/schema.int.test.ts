@@ -65,7 +65,7 @@ import { albumIdOf, deriveShortSongId, isShortSongId, specFromKey } from '@edge-
 // restated: a copy here would pass against itself, and the assertion it exists for is that
 // the row fetch's SQL order and this order agree.
 import { compareAlbumTracks } from '../apps/api/src/rest/albumIdentity';
-import { migrationDigests, migrationFiles, migrationFindingsOfKind, migrationSql } from './helpers/migrations';
+import { migrationDigests, migrationFiles, migrationFindingsOfKind, migrationSql, migrationSqlOf } from './helpers/migrations';
 import { checkMigrations } from '../scripts/migrations/lock-check';
 
 /**
@@ -73,6 +73,28 @@ import { checkMigrations } from '../scripts/migrations/lock-check';
  * `edited` and `orphan` checks; everything after it is immutable.
  */
 const BASELINE = '0008_squash.sql';
+
+/**
+ * The baseline's SQL alone, without the incremental files stacked on top.
+ *
+ * Three assertions below used to read `migrationSql()` — **every** file joined — and assert
+ * that re-running the whole set is a no-op. That property is real for the baseline and false
+ * for the rest: D1 records applied migrations by *filename* in `d1_migrations`, so an
+ * incremental file runs exactly once and is skipped on every later apply, while the baseline
+ * runs against production databases that already hold every table it creates.
+ *
+ * `migrations/0010_drop_token_epoch.sql` is the case that made the difference concrete. Its
+ * `ALTER TABLE users DROP COLUMN token_epoch` has no `IF EXISTS` form, so a second run fails
+ * with `no such column` — correct behaviour for a file D1 will never run twice, and otherwise
+ * read as a defect against a rule that never applied to it.
+ *
+ * So the idempotency assertions are scoped to the file the requirement belongs to, and the
+ * incremental files are covered by a *different* and still-load-bearing rule: no `DROP TABLE`
+ * in any file, because D1's implicit transaction turns that into a cascade delete.
+ */
+function baselineSql(): string {
+  return migrationSqlOf(BASELINE);
+}
 
 /**
  * The order `getAlbumList2?type=alphabeticalByName` asks for.
@@ -205,9 +227,16 @@ describe('the squashed baseline', () => {
   it('leaves the schema unchanged when applied to a database that already has it', () => {
     // The property that makes the squash safe on an existing deployment. This is the
     // only path it takes after its first application, so it is the one that matters.
+    //
+    // Scoped to `baselineSql()`, not `migrationSql()`. The re-run property belongs to
+    // *this file*: `d1_migrations` records the absorbed filenames, so they are skipped
+    // and `0008` is what actually executes against production. An incremental file is
+    // recorded by its own filename and skipped once applied, so it is never run twice —
+    // which is what licenses `0010`'s unguarded `DROP COLUMN`, and what would make
+    // asserting idempotency of the whole set a claim about files that are never re-run.
     const before = structureOf(handle);
 
-    expect(() => handle.raw.exec(migrationSql())).not.toThrow();
+    expect(() => handle.raw.exec(baselineSql())).not.toThrow();
 
     expect(structureOf(handle)).toBe(before);
   });
@@ -222,37 +251,58 @@ describe('the squashed baseline', () => {
     const usersBefore = handle.raw.prepare('SELECT COUNT(*) AS n FROM users').get() as { n: number };
     const librariesBefore = handle.raw.prepare('SELECT COUNT(*) AS n FROM libraries').get() as { n: number };
 
-    handle.raw.exec(migrationSql());
+    handle.raw.exec(baselineSql());
 
     expect(handle.raw.prepare('SELECT COUNT(*) AS n FROM users').get()).toEqual(usersBefore);
     expect(handle.raw.prepare('SELECT COUNT(*) AS n FROM libraries').get()).toEqual(librariesBefore);
   });
 
   it('contains no statement that cannot be re-run against a full schema', () => {
-    // The execution test above is the measurement — it does what a deploy does. These
-    // two are the named early warnings, because an unguarded statement is invisible in
-    // a passing suite until a real database runs it:
+    // The execution test above is the measurement — it does what a deploy does. This
+    // one is the named early warning, because an unguarded statement is invisible in
+    // a passing suite until a real database runs it. It reads `baselineSql()`,
+    // because **this is a rule about the baseline**: the only file that executes
+    // against a database which already has the full schema.
     //
-    //  - `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS` form at all, so it fails
-    //    with "duplicate column name" on every already-migrated database. This is
-    //    precisely how the absorbed migrations added their columns, which is why the
-    //    squash folds them into the `CREATE TABLE`s instead.
-    //  - `DROP TABLE` would be a no-op rather than an error, which is exactly why the
-    //    absorbed `namespaces`/`router_backends` drops are absent instead: the tables
-    //    are never created, so there is nothing to drop.
+    // `ALTER TABLE … ADD COLUMN` has no `IF NOT EXISTS` form at all, so it fails
+    // with "duplicate column name" on every already-migrated database. This is
+    // precisely how the absorbed migrations added their columns, which is why the
+    // squash folds them into the `CREATE TABLE`s instead.
     //
     // Matched against the file with its `--` line comments stripped, because this file
     // *documents* both of the statements it forbids — it has to, to explain why they
     // are gone — and a regex over the raw text matches its own explanation. Safe here
     // because the file uses only `--` line comments and holds no string literal
     // containing `--`; a block comment or one would need a real tokenizer instead.
-    const statements = migrationSql()
+    const statements = baselineSql()
       .split('\n')
       .map((line) => line.replace(/--.*$/, ''))
       .join('\n');
 
     expect(statements, 'an ALTER TABLE cannot be guarded — fold the column into its CREATE TABLE').not.toMatch(/ALTER\s+TABLE/i);
-    expect(statements, 'a DROP TABLE has nothing to drop — the baseline never creates these').not.toMatch(/DROP\s+TABLE/i);
+  });
+
+  it('contains no DROP TABLE in ANY migration, because a parent drop becomes a cascade', () => {
+    // The rule that does **not** narrow with the baseline, and the reason the previous
+    // assertion had to be split rather than merely rescoped.
+    //
+    // `DROP TABLE IF EXISTS` is a no-op rather than an error, which is why the absorbed
+    // `namespaces`/`router_backends` drops are absent instead: the baseline never creates
+    // them, so there is nothing to drop. But that safety depends on *nothing creating the
+    // table*, and an incremental file is the one place a table this repository stopped
+    // creating could be reintroduced.
+    //
+    // And it is load-bearing everywhere, not just in the baseline: D1 runs each migration
+    // in an implicit transaction, so `DROP TABLE` on a parent becomes a `DELETE FROM parent`
+    // that fires every `ON DELETE CASCADE` beneath it. `users` parents ten tables. A drop
+    // that looks like a schema change and is in fact a mass `DELETE` is unrecoverable in a
+    // single `wrangler d1 migrations apply`.
+    const statements = migrationSql()
+      .split('\n')
+      .map((line) => line.replace(/--.*$/, ''))
+      .join('\n');
+
+    expect(statements, 'a DROP TABLE has nothing to drop, and on a parent it is a cascading DELETE').not.toMatch(/DROP\s+TABLE/i);
   });
 });
 
@@ -908,7 +958,13 @@ describe('schema', () => {
     const columns = (handle.raw.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).map((row) => row.name);
     expect(columns).toContain('username_ci');
     expect(columns).toContain('password_ciphertext');
-    expect(columns).toContain('token_epoch');
+
+    // `token_epoch` was here, and its removal is asserted rather than assumed — the column
+    // was bumped by `updatePassword` and compared by nothing, and a `CREATE TABLE` that
+    // still declared it would pass every DAO test while making the migration a no-op on a
+    // database that already had it. Absence is the assertion that catches a reintroduced
+    // `CREATE TABLE users`; see `migrations/0010_drop_token_epoch.sql` for why it went.
+    expect(columns).not.toContain('token_epoch');
 
     // Exactly one file may claim a 4-digit prefix. D1 orders migrations by the REST of
     // the filename, so two files numbered `0001_` land in an order decided by a
@@ -2855,19 +2911,34 @@ describe('DAO round-trips', () => {
     expect((await playlists.findById(playlist.id))?.song_count).toBe(2);
   });
 
-  it('bumps token_epoch on a password change, invalidating issued tokens', async () => {
-    // A Subsonic token is valid forever, so without the bump there is no way to revoke
-    // one: a client's saved credential keeps working after a password change.
-    const userId = await seedUser('EpochUser');
+  it('rotates the credential and its key version on a password change', async () => {
+    // This test used to be called *"bumps token_epoch on a password change, invalidating
+    // issued tokens"*, and its comment claimed a Subsonic token is valid forever with no
+    // way to revoke one. Both were wrong, and the column is gone
+    // (`migrations/0010_drop_token_epoch.sql`).
+    //
+    // `t = md5(password + salt)` is *derived from* the credential, so changing the password
+    // stops every issued token verifying immediately — revocation is a consequence of this
+    // write, not a second mechanism that needed an epoch to work. There was never a session
+    // row and never an epoch a client held, so there was nothing for `token_epoch` to
+    // compare against; it recorded how many times the password had changed and no client
+    // knew the number.
+    //
+    // What this asserts now is the part that IS load-bearing: `key_version` is the rotation
+    // handle — re-encrypt under a new version, then drop the old one — so a rotation that
+    // left it unmoved would be untraceable.
+    const userId = await seedUser('RotationUser');
     const users = new UserDAO(handle.db);
-    const before = await users.findById(userId);
 
     const rotated = await encryptData('new-password', await testKey());
     await users.updatePassword(userId, rotated.ciphertext, rotated.iv, 2);
 
     const after = await users.findById(userId);
-    expect(after?.token_epoch).toBe((before?.token_epoch ?? 1) + 1);
     expect(after?.key_version).toBe(2);
+    // The new credential is readable, which is what makes the rotation complete rather
+    // than merely recorded — `password_ciphertext` and `password_iv` move in this statement.
+    expect(after?.password_ciphertext).toBe(rotated.ciphertext);
+    expect(after?.password_iv).toBe(rotated.iv);
   });
 
   it('counts auth failures inside a window and clears them on success', async () => {

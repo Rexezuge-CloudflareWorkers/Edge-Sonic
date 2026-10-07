@@ -59,6 +59,19 @@ function migrationSql(): string {
     .join('\n');
 }
 
+/**
+ * One migration file's SQL, by name.
+ *
+ * Separate from `migrationSql()` because the two answer different questions, and conflating
+ * them is what makes a rule look universal when it is not. `migrationSql()` is "what does a
+ * fresh database become" — every file, in apply order. This is "what does *this* file say",
+ * which is what an assertion scoped to one file needs: reading the joined set to assert
+ * something about a single member asserts against all the others too.
+ */
+function migrationSqlOf(name: string): string {
+  return readFileSync(fileURLToPath(new URL(`../../migrations/${name}`, import.meta.url)), 'utf8');
+}
+
 function sha256(name: string): string {
   return createHash('sha256').update(readFileSync(fileURLToPath(new URL(`../../migrations/${name}`, import.meta.url)))).digest('hex');
 }
@@ -105,6 +118,7 @@ export {
   LOCK_PATH,
   migrationFiles,
   migrationSql,
+  migrationSqlOf,
   migrationDigests,
   sha256,
   migrationFindings,
