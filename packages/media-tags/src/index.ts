@@ -61,8 +61,19 @@ const DEFAULT_PREFIX_BYTES = 128 * 1024;
  * stamped by the old rule is a wrong value, and the repair mechanism for a wrong value
  * written by an earlier reader is this counter. One bump re-reads every row the old rule
  * touched, which is also what invalidates the `songMeta` entries holding the same answer.
+ *
+ * ### Version 3: the cache learned the tags, not just the duration
+ *
+ * A `songMeta` entry carried only the technical facts, so replaying it into a row that
+ * had lost its tags (an index drop deletes `songs` but not this cache; a re-index then
+ * recreates the row with path-derived names under the same id and mtime) stamped the
+ * folder's sanitized spelling current with a correct duration — `Avid _ Hands Up to
+ * the Sky` for `Avid / Hands Up to the Sky`, where `/` cannot live in a folder name —
+ * and no `getSong`, rescan, or re-enrichment ever re-read it. Entries without tags are
+ * therefore wrong values in exactly the version-1 sense, and the bump re-reads both
+ * the rows they stranded and the entries themselves.
  */
-const READER_VERSION = 2;
+const READER_VERSION = 3;
 
 function startsWith(bytes: Uint8Array, magic: readonly number[], offset = 0): boolean {
   return offset + magic.length > bytes.length ? false : magic.every((byte, index) => bytes[offset + index] === byte);

@@ -40,9 +40,9 @@ import type { AudioTags } from '@edge-sonic/media-tags';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import { isTransientEnrichmentFailure, shouldEnrich } from './enrichmentRetry';
-import { isCompleteEnrichment } from './songMetaCache';
+import { isCompleteEnrichment, buildCacheEntry } from './songMetaCache';
 import type { CachedEnrichment } from './songMetaCache';
-import { metadataFromCachedEnrichment } from './enrichCacheReplay';
+import { metadataFromCachedEnrichment, tagsFromCachedEnrichment } from './enrichCacheReplay';
 import { persistEnrichment } from './enrichPersist';
 import { resolveTailDuration } from './oggTailDuration';
 import type { TailDuration } from './oggTailDuration';
@@ -183,11 +183,16 @@ class EnrichmentService {
       // Replay the cached result into D1 if the row lost it (a restored backup, or
       // a row written by a scan after the cache was populated). The reader version is
       // part of the entry for the same reason it is a column: a cached value is only
-      // usable by the reader that produced it.
+      // usable by the reader that produced it. The tags replay with the technical
+      // facts for the same reason they are cached with them: a row recreated after
+      // the read (an index drop deletes `songs` but not this cache) holds
+      // path-derived names, and replaying only the duration would stamp those
+      // guesses current — a sanitized folder spelling with a correct duration,
+      // never re-read.
       if (song.enriched_at === null || song.reader_version !== READER_VERSION) {
         // Measured, not declared: a cached replay is still a `songs` write, and a scan that
         // restored a library from a backup replays one of these per track.
-        const written = await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, null);
+        const written = await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, tagsFromCachedEnrichment(cached));
         return { tags: null, rowsWritten: written.changes, billedRows: written.billedRows };
       }
       return NO_ENRICHMENT_WRITTEN;
@@ -308,18 +313,7 @@ class EnrichmentService {
     if (tail.transient) return NO_ENRICHMENT_WRITTEN;
     const duration = tail.duration;
 
-    const entry: CachedEnrichment = {
-      mtimeMs: facts.mtimeMs,
-      readerVersion: READER_VERSION,
-      durationSeconds: duration,
-      // The bitrate of a variable-bitrate file is `size × 8 ÷ duration`, so it needs the
-      // duration first: computed here rather than in the reader, which was handed a
-      // duration it then refused to use.
-      bitrateKbps: duration !== null && duration > 0 && facts.size > 0 ? Math.round((facts.size * 8) / duration / 1000) : tags.bitrateKbps,
-      sampleRate: tags.sampleRate,
-      channels: tags.channels,
-      container: tags.container,
-    };
+    const entry: CachedEnrichment = buildCacheEntry(facts.mtimeMs, facts.size, tags, duration);
     // Only a **complete** read is cached, and the incompleteness is not the container's
     // fault: `resolveTailDuration` answers `null` for a container it cannot date, and also
     // for one whose duration it was not allowed to read. Caching the first would trade a
@@ -381,5 +375,5 @@ export { shouldEnrich } from './enrichmentRetry';
 export type { EnrichmentDeps, EnrichFacts, EnrichmentOutcome };
 // Re-exported so the entry's shape and the test about it have one import path, and so a
 // caller that built one by hand keeps the module that decides whether it is usable.
-export { isCompleteEnrichment } from './songMetaCache';
+export { isCompleteEnrichment, buildCacheEntry } from './songMetaCache';
 export type { CachedEnrichment } from './songMetaCache';
