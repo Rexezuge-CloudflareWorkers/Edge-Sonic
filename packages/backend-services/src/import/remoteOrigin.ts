@@ -34,7 +34,7 @@
  * environment, must not be grandfathered because it is already in the database.
  */
 import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
-import { isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
+import { isLocalhostName, isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
 
 /**
 Matches `LibraryService`'s, so a mount path may not smuggle a traversal.
@@ -62,7 +62,7 @@ function normalizeRemoteBaseUrl(raw: string, allowPrivate: boolean): string {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new BadRequestError('Import source URL must use http or https.');
   }
-  if (url.protocol === 'http:' && !isLoopbackOrPrivate(url.hostname)) {
+  if (url.protocol === 'http:' && !isLoopbackForPlaintext(url.hostname)) {
     throw new BadRequestError('Import source URL must use https.');
   }
   if (url.username !== '' || url.password !== '') {
@@ -121,6 +121,14 @@ function normalizeMountPath(raw: string): string {
   // behind a mount point, answering 404 on a perfectly correct configuration. It is the exact
   // failure the caller-side comment warns about, reached by the one input everybody types first.
   return joined.length === 0 ? '' : `/${joined}`;
+}
+
+/**
+ * Plaintext hosts: loopback only, matching `LibraryService`.
+ */
+function isLoopbackForPlaintext(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return isLocalhostName(host) || host === '::1' || host === '0.0.0.0' || /^127\./.test(host);
 }
 
 function isLoopbackOrPrivate(hostname: string): boolean {

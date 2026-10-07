@@ -45,8 +45,10 @@
  * the same guard keeps a blanket `OPTIONS` handler from swallowing a future one.
  */
 import { AbstractEntrypointWorker } from '@edge-sonic/backend-runtime/base';
+import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { errorResponse, resolveFormat } from '@edge-sonic/subsonic';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { registerUserRoutes } from '../user/routes';
@@ -95,7 +97,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
     // than Hono's default text body: a client parsing `/rest` has no way to interpret
     // anything else, and the user SPA reads HTTP statuses and a typed error body.
     app.onError((error, c) => {
-      console.error('Unhandled worker error:', error instanceof Error ? (error.stack ?? error.message) : error);
+      console.error('Unhandled worker error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
       const url = new URL(c.req.url);
       if (!url.pathname.startsWith('/rest/')) {
         // The **user** API, which is a JSON surface whose client reads the status. A
@@ -105,7 +107,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
         // support ticket that cannot be reproduced. `toUserResponse` keeps the 4xx and
         // its message, and still masks a 5xx.
         const mapped = toUserResponse(error, c.req.header('accept-language'));
-        return c.json(mapped.body, mapped.status as 400);
+        return c.json(mapped.body, mapped.status as ContentfulStatusCode);
       }
       const mapped = toSubsonicError(error);
       return errorResponse(mapped, { format: resolveFormat(url.searchParams.get('f')), jsonpCallback: url.searchParams.get('callback') });

@@ -81,10 +81,15 @@ describe('normalizeBaseUrl', () => {
     }
   });
 
-  it('permits a private host only when the policy allows it', () => {
+  it('permits a private host only when the policy allows it, and only over https', () => {
     // This is the co-located `wrangler dev` against a LAN Nextcloud case, and it has
     // to be an explicit opt-in rather than an accident of the environment.
-    expect(normalizeBaseUrl('http://192.168.1.10:8080', true)).toBe('http://192.168.1.10:8080');
+    // Plaintext is loopback-only: private LAN must use https even with opt-in,
+    // because a Basic credential is base64, not encryption.
+    expect(normalizeBaseUrl('https://192.168.1.10:8080', true)).toBe('https://192.168.1.10:8080');
+    expect(() => normalizeBaseUrl('http://192.168.1.10:8080', true)).toThrow(/https/);
+    expect(normalizeBaseUrl('http://127.0.0.1:8080', true)).toBe('http://127.0.0.1:8080');
+    expect(normalizeBaseUrl('http://localhost:8080', true)).toBe('http://localhost:8080');
   });
 });
 

@@ -18,7 +18,7 @@
 import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
-import { isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
+import { isLocalhostName, isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
 import { WebDavClient, WebDavError, toLibraryPath } from '@edge-sonic/webdav';
 import { classifyBeforeRequest, credentialUnreadable, fromStatus, reachable, unreachable } from './probeOutcome';
 import type { ProbeOutcome } from './probeOutcome';
@@ -88,9 +88,10 @@ function normalizeBaseUrl(raw: string, allowPrivate: boolean): string {
   if (url.protocol !== 'https:' && url.protocol !== 'http:') {
     throw new BadRequestError('Library URL must use http or https.');
   }
-  // Plaintext is allowed only for the loopback case a local dev server needs.
-  // Everywhere else a Basic credential must not cross the network in the clear.
-  if (url.protocol === 'http:' && !isLoopbackOrPrivate(url.hostname)) {
+  // Plaintext is allowed only for loopback a local dev server needs, never for
+  // private LAN: a Basic credential is base64, not encryption, and must not
+  // cross even a local network in the clear.
+  if (url.protocol === 'http:' && !isLoopbackForPlaintext(url.hostname)) {
     throw new BadRequestError('Library URL must use https.');
   }
   if (url.username !== '' || url.password !== '') {
@@ -114,9 +115,16 @@ function normalizeBaseUrl(raw: string, allowPrivate: boolean): string {
   return url.origin;
 }
 
-function isLoopbackOrPrivate(hostname: string): boolean {
+/**
+ * Hosts where plaintext `http` is permitted: loopback only, never private LAN.
+ *
+ * A Basic credential is base64 rather than encryption, so even a local network
+ * hop must not carry it in the clear. Private LAN over `http` must use `https`
+ * or run on loopback.
+ */
+function isLoopbackForPlaintext(hostname: string): boolean {
   const host = hostname.toLowerCase();
-  return host === 'localhost' || host.endsWith('.localhost') || isPrivateOrInternalHost(host);
+  return isLocalhostName(host) || host === '::1' || host === '0.0.0.0' || /^127\./.test(host);
 }
 
 /**
