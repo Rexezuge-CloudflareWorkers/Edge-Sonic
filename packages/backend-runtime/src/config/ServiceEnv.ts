@@ -18,11 +18,14 @@ interface ServiceEnv {
   CACHE?: unknown;
   SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   WEBDAV_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
+  SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   // Raw-key escape hatch for the integration pool and local dev without a Secrets
   // Store. TEST-ONLY: the production template does not declare these, and
   // `resolveKey` must never let them mask a broken production binding.
   SUBSONIC_USER_ENCRYPTION_KEY?: string;
   WEBDAV_ENCRYPTION_KEY?: string;
+  SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
+  ENVIRONMENT?: string;
   DEBUG_MODE?: string;
   DEV_AUTH_EMAIL?: string;
   DEMO_MODE?: string;

@@ -62,6 +62,10 @@ const NON_RETRYABLE_PATTERNS: RegExp[] = [
   /authorization/i,
   /authentication/i,
   /invalid\s+argument/i,
+  // Deterministic query-shape faults must never retry: `too many SQL variables`
+  // is a bind-ceiling defect fixed by batching, not a transient. Without this,
+  // `/too\s+many/i` in RETRYABLE_PATTERNS retries it 3x with backoff.
+  /too\s+many\s+SQL\s+variables/i,
 ];
 
 /**

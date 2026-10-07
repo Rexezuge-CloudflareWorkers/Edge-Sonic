@@ -103,8 +103,8 @@ function createRequestScope(
   scope.bindValue(
     Tokens.UserKey,
     resolveKey(
-      (env as { SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> } }).SUBSONIC_USER_ENCRYPTION_KEY_SECRET,
-      (env as { SUBSONIC_USER_ENCRYPTION_KEY?: string }).SUBSONIC_USER_ENCRYPTION_KEY,
+      env.SUBSONIC_USER_ENCRYPTION_KEY_SECRET,
+      env.SUBSONIC_USER_ENCRYPTION_KEY,
       'SUBSONIC_USER_ENCRYPTION_KEY_SECRET',
       'SUBSONIC_USER_ENCRYPTION_KEY',
       subrequests,
@@ -113,8 +113,8 @@ function createRequestScope(
   scope.bindValue(
     Tokens.WebdavKey,
     resolveKey(
-      (env as { WEBDAV_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> } }).WEBDAV_ENCRYPTION_KEY_SECRET,
-      (env as { WEBDAV_ENCRYPTION_KEY?: string }).WEBDAV_ENCRYPTION_KEY,
+      env.WEBDAV_ENCRYPTION_KEY_SECRET,
+      env.WEBDAV_ENCRYPTION_KEY,
       'WEBDAV_ENCRYPTION_KEY_SECRET',
       'WEBDAV_ENCRYPTION_KEY',
       subrequests,
@@ -167,8 +167,8 @@ function createRequestScope(
   scope.bindValue(
     Tokens.RemoteKey,
     resolveKey(
-      (env as { SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET?: { get(): Promise<string> } }).SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET,
-      (env as { SUBSONIC_REMOTE_ENCRYPTION_KEY?: string }).SUBSONIC_REMOTE_ENCRYPTION_KEY,
+      env.SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET,
+      env.SUBSONIC_REMOTE_ENCRYPTION_KEY,
       'SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET',
       'SUBSONIC_REMOTE_ENCRYPTION_KEY',
       subrequests,

@@ -46,7 +46,7 @@
  * retry instead of a wedge.
  */
 import { DurableObject } from 'cloudflare:workers';
-import { SCAN_CHUNK_SUBSREQUEST_BUDGET } from '@edge-sonic/backend-runtime/config';
+import { SCAN_CHUNK_SUBSREQUEST_BUDGET, SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
 import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
@@ -66,8 +66,11 @@ interface WalkRequest {
 
 /**
 One remote album's whole cost: the `getAlbum` call, the two match statements, and its writes.
+
+Aliases the folder base cost rather than retyping `6`: one number for one unit of
+work, owned by `subrequests.ts`, so the two cannot drift.
 */
-const SUBSREQUESTS_PER_ALBUM_BASE = 6;
+const SUBSREQUESTS_PER_ALBUM_BASE = SUBSREQUESTS_PER_FOLDER_BASE;
 
 /**
 Albums one batch attempts, derived from the ceiling rather than typed beside the loop.

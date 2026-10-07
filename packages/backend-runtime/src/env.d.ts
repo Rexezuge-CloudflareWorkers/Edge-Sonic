@@ -32,6 +32,7 @@ declare global {
     POLICY_AUD?: string;
     DEV_AUTH_EMAIL?: string;
     DEMO_MODE?: string;
+    DEMO_USER_EMAIL?: string;
     LOG_LEVEL?: string;
   }
 }

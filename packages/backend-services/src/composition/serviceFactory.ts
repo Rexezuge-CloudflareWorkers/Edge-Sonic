@@ -40,6 +40,7 @@ interface RequestScopeEnv {
   CACHE?: unknown;
   SUBSONIC_USER_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   WEBDAV_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
+  SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET?: SecretsStoreSecret;
   /**
   The platform-provisioned Cloudflare Access binding.
 
@@ -57,6 +58,11 @@ interface RequestScopeEnv {
   Test-only. Never declared in the production template.
   */
   WEBDAV_ENCRYPTION_KEY?: string;
+  /**
+  Test-only remote key escape hatch. Never declared in the production template.
+  */
+  SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
+  ENVIRONMENT?: string;
 }
 
 /**
