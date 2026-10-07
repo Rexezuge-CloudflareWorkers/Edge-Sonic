@@ -147,7 +147,16 @@ async function embeddedArtFor(target: AlbumTarget, library: LibraryRow, context:
  * Sidecar probe, then embedded tags, then the placeholder.
  */
 async function coverForSongs(library: LibraryRow, songs: readonly SongRow[], dirPath: string | null, context: RestContext): Promise<PassthroughResponse> {
-  const folder = dirPath === null ? null : await findCoverIn(library, dirPath, context).catch(() => null);
+  const folder =
+    dirPath === null
+      ? null
+      : await findCoverIn(library, dirPath, context).catch((error) => {
+          // Fallback preserved: a failed sidecar probe must not fail the artwork
+          // request when embedded art may still answer. Logged so a 500/timeout
+          // does not read as "no folder art" with no trace.
+          console.debug(`[coverArt] sidecar probe failed for "${dirPath}":`, error);
+          return null;
+        });
   return await coverForTarget(library, { dirPath, songs }, folder, context);
 }
 

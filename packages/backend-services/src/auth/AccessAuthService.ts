@@ -152,7 +152,12 @@ class AccessAuthService {
    * an unhandled rejection in the auth middleware.
    */
   private async fromBinding(): Promise<string | null> {
-    const identity = await this.env.ACCESS?.getIdentity().catch(() => undefined);
+    const identity = await this.env.ACCESS?.getIdentity().catch((error) => {
+      // A rejected binding is a broken platform configuration, not "no identity".
+      // Still a 401 (fail closed), but logged so transient faults are visible.
+      console.debug('[AccessAuth] ACCESS binding getIdentity failed:', error);
+      return undefined;
+    });
     // Fail closed on an unverified identity. The binding is trusted; an
     // unverified identity inside it must still not authenticate.
     if (identity?.emailVerified === false || identity?.email_verified === false) return null;

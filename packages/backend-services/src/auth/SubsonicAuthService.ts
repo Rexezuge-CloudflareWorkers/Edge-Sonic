@@ -113,10 +113,11 @@ class SubsonicAuthService {
     // into a lockout. This is the only write on the success path.
     try {
       await this.deps.throttle.clearFailures(identity);
-    } catch {
+    } catch (error) {
       // A failed clear is a hygiene problem, not an authentication one: the
       // window expires on its own. Failing here would reject a valid login
-      // because of a bookkeeping write.
+      // because of a bookkeeping write. Logged so lockout-counter faults surface.
+      console.debug('[SubsonicAuth] clearFailures failed:', error);
     }
     return user;
   }
@@ -124,15 +125,18 @@ class SubsonicAuthService {
   private async recordFailure(identity: string, bucket: number, oldestBucket: number): Promise<void> {
     try {
       await this.deps.throttle.recordFailure(identity, bucket);
-    } catch {
+    } catch (error) {
       // Swallowed deliberately. A counter that fails to increment must not turn a
       // 401 into a 500, and must not tell the caller the counter is broken.
+      // Logged so a broken throttle is observable server-side.
+      console.debug('[SubsonicAuth] recordFailure failed:', error);
     }
     try {
       await this.deps.throttle.pruneOldBuckets(identity, oldestBucket);
-    } catch {
+    } catch (error) {
       // Best-effort: `countRecentFailures` bounds its own range, so an unpruned
-      // bucket is harmless.
+      // bucket is harmless. Logged for the same reason as above.
+      console.debug('[SubsonicAuth] pruneOldBuckets failed:', error);
     }
   }
 
