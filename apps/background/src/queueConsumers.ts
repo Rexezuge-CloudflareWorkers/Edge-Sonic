@@ -13,16 +13,12 @@ import type { createScanWorkerScope } from './ScanWorkerFactory';
 
 type WorkerScope = ReturnType<typeof createScanWorkerScope>;
 
-type QueueOutcome =
-  | { readonly handled: true; readonly kind: string }
-  | { readonly handled: false; readonly reason: string };
+type QueueOutcome = { readonly handled: true; readonly kind: string } | { readonly handled: false; readonly reason: string };
 
-async function consumeQueueMessage(
-  message: unknown,
-  scopeFor: () => WorkerScope,
-): Promise<QueueOutcome> {
+async function consumeQueueMessage(message: unknown, scopeFor: () => WorkerScope): Promise<QueueOutcome> {
   if (!isScanQueueMessage(message) && !isImportQueueMessage(message)) {
-    const kind = typeof message === 'object' && message !== null ? String((message as { kind?: unknown }).kind ?? 'unknown') : 'unknown';
+    const raw = typeof message === 'object' && message !== null ? (message as { kind?: unknown }).kind : undefined;
+    const kind = typeof raw === 'string' && raw.length > 0 ? raw : 'unknown';
     console.debug(`[queue] skipping unknown message kind "${kind}"`);
     return { handled: false, reason: `unknown-kind:${kind}` };
   }

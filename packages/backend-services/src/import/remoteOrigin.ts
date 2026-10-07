@@ -106,7 +106,8 @@ function normalizeMountPath(raw: string): string {
   } catch {
     throw new BadRequestError('Import source mount path is not valid percent-encoding.');
   }
-  if (decoded.includes('\\') || decoded.includes('\0')) throw new BadRequestError('Import source mount path contains an illegal character.');
+  if (decoded.includes('\\') || decoded.includes('\0'))
+    throw new BadRequestError('Import source mount path contains an illegal character.');
   if (decoded.split('/').includes('..')) throw new BadRequestError('Import source mount path must not contain "..".');
 
   const joined = decoded
@@ -129,11 +130,6 @@ function normalizeMountPath(raw: string): string {
 function isLoopbackForPlaintext(hostname: string): boolean {
   const host = hostname.toLowerCase();
   return isLocalhostName(host) || host === '::1' || host === '0.0.0.0' || /^127\./.test(host);
-}
-
-function isLoopbackOrPrivate(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return host === 'localhost' || host.endsWith('.localhost') || isPrivateOrInternalHost(host);
 }
 
 /**
