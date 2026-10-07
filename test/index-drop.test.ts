@@ -21,7 +21,13 @@
  * did, and the suite agreed with itself and with neither.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { encryptData, generateAesGcmKey } from '@edge-sonic/backend-data/crypto';
+import { ScanBudget, TreeService, reconcileFolder } from '@edge-sonic/backend-services/index';
+import { SubrequestCounter } from '@edge-sonic/shared';
+import { WebDavClient } from '@edge-sonic/webdav';
+import { fakeDav } from './helpers/fakeDav';
+import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import {
   IndexDropDAO,
   IndexStatsDAO,
@@ -48,18 +54,17 @@ function nowSeconds(): number {
 }
 
 /**
- * A song id, minted the way production mints one.
+ * A song id, derived the way production derives one.
  *
  * Written out rather than imported from `subsonic`, because the assertion this file exists to
  * make is that the id is a *pure function of the library and the path*. A test that computed
  * it by calling the same helper the code under test calls would pass even if that helper
  * changed to use a UUID — which is the property that makes annotations survive a drop at all.
+ * `node:crypto` is the independent implementation; the product runs the vendored `sha256.ts`.
  */
 function derivedSongId(libraryId: string, path: string): string {
-  const bytes = new TextEncoder().encode(`${libraryId}\n${path}`);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return `s:${btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')}`;
+  const digest = createHash('sha256').update(`${libraryId}\n${path}`, 'utf8').digest().subarray(0, 16);
+  return `s:${digest.toString('base64url')}`;
 }
 
 const MARKER = '';
@@ -254,26 +259,70 @@ describe('the annotations survive, because song ids are derived', () => {
     /**
      * The load-bearing claim, and the one nothing else in the suite measured.
      *
-     * A song id is `s:` + base64url(`libraryId` + "\n" + `path`) — derived from the file's
-     * location, not minted. So dropping the index and rescanning the same library produces
-     * byte-identical ids, and the star that was written before the drop resolves to the row
-     * that exists after it.
+     * A song id is `s:` + base64url(first 128 bits of SHA-256(`libraryId` + "\n" + `path`)) —
+     * derived from the file's location, not minted. So dropping the index and rescanning the
+     * same library produces byte-identical ids, and the star that was written before the drop
+     * resolves to the row that exists after it.
      *
      * If this stops holding — a UUID, or a counter — the decision to keep the annotations
-     * becomes wrong and every star in the deployment silently orphans. It is asserted by
-     * re-deriving the id from the path with a helper that does **not** call the production
-     * encoder, so a change to that encoder fails here rather than agreeing with itself.
+     * becomes wrong and every star in the deployment silently orphans. Both
+     * the read-through and scan writers are exercised against real SQLite;
+     * `node:crypto` checks the id independently of the product's own encoder.
      */
     const user = (await new UserDAO(handle.db).create({ username: 'ann', passwordCiphertext: 'x', passwordIv: 'y' })).id;
     await seedLibrary(user, 'L1');
-    const before = await seedSong('L1', 'Bon Iver/For Emma/01.flac', 'Bon Iver/For Emma');
+    const library = await handle.db.prepare('SELECT * FROM libraries WHERE id = ?').bind('L1').first<LibraryRow>();
+    if (!library) throw new Error('missing seeded library');
+    const folder = 'Bon Iver/For Emma';
+    const path = `${folder}/01.flac`;
+    const absolute = `${library.root_path}/${folder}`;
+    const dav = fakeDav({
+      [absolute]: [
+        { path: absolute, collection: true, mtime: 1000 },
+        { path: `${absolute}/01.flac`, size: 1000, mtime: 1000, contentType: 'audio/flac' },
+      ],
+    });
+    // The actual browse writer, not `seedSong` assigning the expected id into
+    // `SongDAO`: that old test passed even while production minted at random.
+    const tree = new TreeService({
+      nodes: new NodeDAO(handle.db),
+      songs: new SongDAO(handle.db, MARKER),
+      clientFor: async () => new WebDavClient(library.base_url, library.root_path, { username: 'alice', password: 'dav-password' }, dav.fetch),
+      timeoutMs: 1000,
+    });
+    const browseId = async (): Promise<string> => {
+      await tree.children(library, folder);
+      const song = await handle.db.prepare('SELECT id FROM songs WHERE library_id = ? AND path = ?').bind(library.id, path).first<{ id: string }>();
+      if (!song) throw new Error('browse did not persist the song');
+      return song.id;
+    };
+    const before = await browseId();
+    expect(before).toBe(derivedSongId(library.id, path));
     await seedAnnotations(user, before);
 
     await new IndexDropDAO(handle.db).dropLibrary('L1');
 
-    // The rescan: the same library, the same path, written again from scratch.
-    const after = await seedSong('L1', 'Bon Iver/For Emma/01.flac', 'Bon Iver/For Emma');
+    // Cold scan from the same WebDAV listing, through real DAOs: the browse
+    // writer and the scan writer must choose the same id for the same file.
+    const meter = new SubrequestCounter(50);
+    const nodes = new NodeDAO(handle.db, meter);
+    const songs = new SongDAO(handle.db, MARKER, meter);
+    await nodes.upsertMany([{ libraryId: library.id, path: folder, parentPath: 'Bon Iver', name: 'For Emma', mtimeMs: 1000, etag: null, depth: 2, isScanned: false }]);
+    const folderRow = await nodes.find(library.id, folder);
+    if (!folderRow) throw new Error('scan frontier folder is missing');
+    const client = new WebDavClient(library.base_url, library.root_path, { username: 'alice', password: 'dav-password' }, dav.fetch);
+    const listing = await client.propfind(folder, { depth: 1, timeoutMs: 1000 });
+    const budget = new ScanBudget({ meter, maxRequests: 42, deadlineMs: 20_000 });
+    await reconcileFolder({ nodes, songs, enrichMaxPerFolder: 0 } as never, library, folderRow, listing, budget);
+    const scanned = await songs.findByPath(library.id, path);
+    expect(scanned?.id).toBe(before);
+    expect(dav.propfinds).toHaveLength(2);
 
+    // A second drop and a cold browse also recreate it. This guards both
+    // writers: a test that only called a hand-written seeder passed on random
+    // production ids while agreeing with itself about what a rescan would do.
+    await new IndexDropDAO(handle.db).dropLibrary('L1');
+    const after = await browseId();
     expect(after).toBe(before);
     const star = await handle.db.prepare('SELECT item_id FROM stars WHERE user_id = ?').bind(user).first<{ item_id: string }>();
     expect(star?.item_id).toBe(after);
@@ -284,6 +333,10 @@ describe('the annotations survive, because song ids are derived', () => {
       .bind(user)
       .first<{ id: string }>();
     expect(resolved?.id).toBe(before);
+    const playCount = await handle.db.prepare('SELECT s.id FROM play_counts pc JOIN songs s ON s.id = pc.song_id WHERE pc.user_id = ?').bind(user).first<{ id: string }>();
+    const bookmark = await handle.db.prepare('SELECT s.id FROM bookmarks b JOIN songs s ON s.id = b.song_id WHERE b.user_id = ?').bind(user).first<{ id: string }>();
+    expect(playCount?.id).toBe(before);
+    expect(bookmark?.id).toBe(before);
   });
 });
 

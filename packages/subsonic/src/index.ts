@@ -31,3 +31,4 @@ export * from './types';
 export * from './builders';
 export * from './extensions';
 export { md5Hex, md5Bytes } from './md5';
+export { sha256Hex, sha256Bytes } from './sha256';

@@ -1,11 +1,13 @@
 /**
  * The bounded pass that rotates legacy long song ids to short ones.
  *
- * New rows are minted short at insert time, but every row indexed before the
+ * New rows are derived short at insert time, but every row indexed before the
  * switch carries `s:base64url(libraryId + "\n" + path)` — up to ~1,400 chars,
  * and several hundred for ordinary CJK libraries. Clients file downloads under
  * the id, and a component over 255 bytes is `ENAMETOOLONG` with no
- * server-side error. So the rows have to be renamed, one chunk at a time.
+ * server-side error. So the rows have to be renamed, one chunk at a time — to
+ * the derived short id the indexer now writes, so the rename converges rather
+ * than minting a second value for the same file.
  *
  * Runs ahead of the walk on every poll, beside the derivation backfill, for
  * the same reason: the walk only touches changed files, so an untouched
@@ -27,7 +29,7 @@ import {
   SUBSREQUESTS_PER_CHUNK_OVERHEAD,
   SUBSREQUESTS_PER_FOLDER_BASE,
 } from '@edge-sonic/backend-runtime/config';
-import { mintSongId } from '@edge-sonic/subsonic';
+import { deriveShortSongId } from '@edge-sonic/subsonic';
 import type { ScanBudget } from './scanBudget';
 import type { ScanIdRotationStore } from './scanTypes';
 
@@ -64,7 +66,7 @@ async function rotatePendingSongIds(store: ScanIdRotationStore, libraryId: strin
   let rowsWritten = 0;
   let billedRows = 0;
   for (const row of rows) {
-    const result = await store.rotateSongId(libraryId, row.path, row.id, mintSongId());
+    const result = await store.rotateSongId(libraryId, row.path, row.id, deriveShortSongId(libraryId, row.path));
     rowsWritten += result.changes;
     billedRows += result.billedRows;
   }

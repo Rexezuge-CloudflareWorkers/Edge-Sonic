@@ -8,6 +8,7 @@
  * outside the library).
  */
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   albumElement,
   albumWithSongs,
@@ -15,6 +16,7 @@ import {
   decodeAlbumKey,
   decodeId,
   decodeLegacyPassword,
+  deriveShortSongId,
   el,
   elList,
   encodeId,
@@ -25,7 +27,6 @@ import {
   isShortSongId,
   isValidJsonpCallback,
   legacySongId,
-  mintSongId,
   resolveFormat,
   songElement,
   SONG_LEGACY_ID_LENGTH_THRESHOLD,
@@ -612,22 +613,40 @@ describe('Subsonic ids', () => {
   });
 
   describe('short song ids', () => {
-    it('mints a 24-char filename-safe id', () => {
+    it('derives a 24-char filename-safe id', () => {
       // A client files downloads under the id, and a path component over 255
       // bytes is ENAMETOOLONG with no server-side error — the defect this
       // scheme exists to fix.
-      const id = mintSongId();
+      const id = deriveShortSongId(libraryId, path);
       expect(id).toMatch(/^s:[\w-]{22}$/);
       expect(id.length).toBeLessThanOrEqual(SONG_LEGACY_ID_LENGTH_THRESHOLD);
       expect(isShortSongId(id)).toBe(true);
       expect(isShortSongId(encodeId(IdKind.Song, libraryId, path))).toBe(false);
+      const longPath = `音楽/${'界'.repeat(120)}.flac`;
+      expect(encodeId(IdKind.Song, libraryId, longPath).length).toBeGreaterThan(255);
+      expect(deriveShortSongId(libraryId, longPath)).toHaveLength(24);
     });
 
-    it('mints a fresh id per call, so the row keeps it rather than the path', () => {
-      // Reversible ids are stable by construction; opaque ones are stable
-      // because the row keeps the minted value — see UPSERT_FILE_FACTS, which
-      // preserves songs.id on conflict. Uniqueness here is what makes that safe.
-      expect(mintSongId()).not.toBe(mintSongId());
+    it('derives the same id for the same file, so a rescan re-attaches every annotation', () => {
+      // The index drop keeps stars, play counts and bookmarks while deleting
+      // the rows; the rescan recreates them. Byte-identical ids are what makes
+      // that safe — a random id per index would orphan every one of them.
+      expect(deriveShortSongId(libraryId, path)).toBe(deriveShortSongId(libraryId, path));
+    });
+
+    it('derives a different id for a different file or a different library', () => {
+      // The same relative path in two libraries is two files, so the library
+      // is part of the preimage rather than a prefix the hash cannot see.
+      expect(deriveShortSongId(libraryId, 'other.flac')).not.toBe(deriveShortSongId(libraryId, path));
+      expect(deriveShortSongId('other-library', path)).not.toBe(deriveShortSongId(libraryId, path));
+    });
+
+    it('matches SHA-256 truncated to 128 bits, computed independently', () => {
+      // `node:crypto` is the oracle and the vendored `sha256.ts` is what
+      // production runs. Agreeing here is what makes the derivation portable
+      // across runtimes rather than an accident of one implementation.
+      const digest = createHash('sha256').update(`${libraryId}\n${path}`, 'utf8').digest().subarray(0, 16);
+      expect(deriveShortSongId(libraryId, path)).toBe(`s:${Buffer.from(digest).toString('base64url')}`);
     });
 
     it('computes the legacy form a rotation left behind', () => {

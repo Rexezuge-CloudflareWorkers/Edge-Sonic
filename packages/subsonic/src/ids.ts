@@ -16,8 +16,9 @@
  * 2. The `kind` prefix makes the ID self-describing, so `getCoverArt` and
  *    `stream` dispatch on the prefix instead of a lookup table.
  * 3. A rename or a move is not a data migration — the same path yields the same
- *    ID forever. (Songs are stable the other way: the row keeps its minted id
- *    across rescans, and the id backfill renames long ids to short ones.)
+ *    ID forever. (Songs are stable the same way: the id is derived from
+ *    `(library_id, path)`, so a rescan after an index drop recreates it, and
+ *    the id backfill renames long ids to the derived short form.)
  *
  * Property 3 has a consequence that is easy to get wrong and is load-bearing:
  * an **album** ID must resolve back to its songs, so the payload has to be

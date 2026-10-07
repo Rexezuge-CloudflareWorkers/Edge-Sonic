@@ -344,12 +344,13 @@ granted set rather than widened to everything and filtered afterwards.
 ## Ids
 
 `kind:base64url(libraryId \n path)`, kinds `s:`/`al:`/`alk:`/`ar:`/`dir:`/`vid:`/`mf:`/`dira:` —
-except `s:`, which is short and opaque (`subsonic/songId.ts`: `s:` plus 22 random
-base64url chars). A reversible song id grows with the path and clients file
+except `s:`, which is short and derived (`subsonic/songId.ts`: `s:` plus the
+first 128 bits of SHA-256 over `libraryId \n path` as 22 base64url chars, so a
+rescan after an index drop recreates it). A reversible song id grows with the path and clients file
 downloads under it, so over 255 bytes it is `ENAMETOOLONG` on the client with
 no server-side error. Song ids resolve through the row; legacy long ids still
 resolve through `(library_id, path)`, and the scan backfill rotates them a page
-per chunk. Album (`alk:`) and artist (`ar:`) ids stay reversible: they name
+per chunk to the derived short form. Album (`alk:`) and artist (`ar:`) ids stay reversible: they name
 groups, not files, and are never download filenames.
 Artist ids derive from the artist grouping's **name**. Album ids derive from the album's
 **grouping key** — `ALBUM_GROUP_BY`, owned by `subsonic/albumKey.ts` and carried per request by

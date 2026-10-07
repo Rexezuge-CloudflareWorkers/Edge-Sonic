@@ -1,8 +1,8 @@
 /**
- * The song-id rotation backfill: legacy long ids become short ones, a page per
- * chunk, until none remain.
+ * The song-id rotation backfill: legacy long ids become the derived short
+ * ones, a page per chunk, until none remain.
  *
- * New rows are minted short at insert; every row indexed before the switch
+ * New rows are derived short at insert; every row indexed before the switch
  * still carries `s:base64url(libraryId + "\n" + path)`, which clients file
  * downloads under — over 255 bytes is ENAMETOOLONG. The walk only touches
  * changed files, so untouched rows would keep long ids for ever without this.
@@ -60,6 +60,20 @@ describe('rotatePendingSongIds', () => {
     }
     // And already-short rows are never selected: the set strictly shrinks.
     expect(await fake.listLegacySongIds(LIBRARY, 10)).toEqual([]);
+  });
+
+  it('rotates the same path to the same id, so the rename converges', async () => {
+    // Derived, not minted: two passes over the same library must agree, or a
+    // rotation interrupted between the `songs` rename and the playlist rewrite
+    // could not be retried to the same value.
+    const paths = ['Blur/01.flac', 'Blur/02.flac'];
+    const first = store(paths.map((path) => ({ id: legacyId(path), path })));
+    await rotatePendingSongIds(first, LIBRARY, budget());
+    const second = store(paths.map((path) => ({ id: legacyId(path), path })));
+    await rotatePendingSongIds(second, LIBRARY, budget());
+    expect(first.rotated.map((row) => row.newId)).toEqual(second.rotated.map((row) => row.newId));
+    // And two files never share one: the rotation must not merge rows.
+    expect(new Set(first.rotated.map((row) => row.newId)).size).toBe(paths.length);
   });
 
   it('is free when nothing is owed', async () => {

@@ -33,7 +33,7 @@ class SongIdRotationDAO extends BaseDAO {
   }
 
   /**
-   * Rotate one song's id from its legacy long form to a short one.
+   * Rotate one song's id from its legacy long form to the derived short one.
    *
    * All-or-nothing with the playlist entries naming it: `listEntrySongs` joins
    * `songs` on `s.id = e.song_id`, so a song rotated without its entries

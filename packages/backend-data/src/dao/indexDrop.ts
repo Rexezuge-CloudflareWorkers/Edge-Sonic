@@ -11,7 +11,8 @@
  * to `songs`. They hold song ids as opaque strings. Leaving them behind is safe anyway, and it
  * is safe for a specific reason rather than by luck:
  *
- * > A song id is `s:` + base64url(`libraryId` + "\n" + `path`) — derived, not minted.
+ * > A song id is `s:` + base64url(first 128 bits of SHA-256(`libraryId` + "\n" + `path`)) —
+ * > derived, not minted.
  *
  * So a rescan of the same library recreates byte-identical ids, and every star, play count and
  * playlist entry re-attaches to the row it belonged to. Dropping the annotations as well would
