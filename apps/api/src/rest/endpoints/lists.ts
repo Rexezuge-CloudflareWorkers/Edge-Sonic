@@ -15,7 +15,7 @@
  * `subsonic/albumKey.ts`. Both variants follow it, so a client that sends either gets the
  * same albums with the same ids.
  */
-import { albumChildElement, albumElement, decodeId, el, elList, ErrorCode, IdKind, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, el, elList, ErrorCode, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -56,20 +56,6 @@ const ALBUM_ORDER_BY: Readonly<Record<string, readonly string[]>> = {
   byYear: ['MIN(year) ASC', 'MIN(album_ci) ASC'],
   byGenre: ['MIN(genre_ci) ASC', 'MIN(album_ci) ASC'],
 };
-
-/**
-Decode an id, or `null` when it is not of this kind or is malformed.
-*/
-function safeDecodeId(id: string, kind: string): ReturnType<typeof decodeId> | null {
-  try {
-    return decodeId(id, kind as never);
-  } catch {
-    // A star whose id this server can no longer decode — a deleted library, or a
-    // row written before an id scheme change. Skipped rather than failing the
-    // whole list: one stale star must not hide every other one.
-    return null;
-  }
-}
 
 /**
  * Render album models as the element type their wrapper declares.
@@ -166,8 +152,8 @@ async function starredAlbums(
   for (const id of starredIds) {
     const key = await resolveAlbumId(id, identity.grouping, async (dirPath) => await context.songs.listByAlbumDir(library.id, dirPath));
     // A star whose album has gone resolves to nothing and is skipped rather than failing the
-    // list: one stale row must not hide every other star, which is the same rule
-    // `safeDecodeId` applies to an id this server can no longer decode.
+    // list: one stale row must not hide every other star — an id that resolves
+    // to nothing is skipped rather than failing the whole list.
     if (key === null || keys.includes(key)) continue;
     keys.push(key);
   }
@@ -258,8 +244,9 @@ async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'
     context.annotations.listStarred(context.user.id, 'album'),
   ]);
 
-  const songIdsHere = songIds.filter((id) => safeDecodeId(id, IdKind.Song)?.libraryId === library.id);
-  const songs = await context.songs.listIdsIn(library.id, songIdsHere);
+  // Resolved across libraries then narrowed: short ids carry no library to
+  // filter by before the lookup, and the row's own `library_id` is the filter.
+  const songs = (await context.songs.listIdsAcrossLibraries(songIds)).filter((row) => row.library_id === library.id);
 
   const annotations = await annotationsFor(context, songIds.length + albumIds.length > 0);
   // Through `starredAlbums`, not a per-id directory read: an album's identity is now a tag for
@@ -295,9 +282,9 @@ async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
   const entries = await context.annotations.listNowPlaying();
   const nodes: ElementNode[] = [];
   for (const entry of entries) {
-    if (!entry.song_id || (safeDecodeId(entry.song_id, IdKind.Song)?.libraryId !== library.id)) continue;
-    const song = await context.songs.findById(entry.song_id);
-    if (!song) continue;
+    if (!entry.song_id) continue;
+    const song = await context.songs.findBySongId(entry.song_id);
+    if (!song || song.library_id !== library.id) continue;
     nodes.push({
       ...songElement(songToModel(song, library, identity)),
       // The wrapper declares `entry` as its list key, and the element name is the JSON

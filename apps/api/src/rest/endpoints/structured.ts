@@ -201,29 +201,29 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
  */
 async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   const id = requireMediaId(context, 'Song');
-  const decoded = decodeId(id, IdKind.Song);
-  const library = await context.libraries.requireForUser(context.user.id, decoded.libraryId);
-  TreeService.assertPath(decoded.path);
-
-  let song = await context.songs.findById(id);
+  const song = await context.songs.findBySongId(id);
   if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+  const library = await context.libraries.requireForUser(context.user.id, song.library_id);
+  TreeService.assertPath(song.path);
+
+  let resolved = song;
 
   // Through the **media** object, not the scan's. A Durable Object handles one event at a
   // time, so resolving the scan stub here would put this request behind whatever chunk that
   // library's scan happened to be running — up to `SCAN_CHUNK_DEADLINE_MS` of a client's wait.
   const stub = context.mediaStubFor(library.id);
   if (stub) {
-    const updated = await stub.enrichSong(library.id, id);
-    if (updated) song = updated;
+    const updated = await stub.enrichSong(library.id, resolved.id);
+    if (updated) resolved = updated;
   } else {
-    await context.enrichment.enrich(library, song);
+    await context.enrichment.enrich(library, resolved);
     // Re-read: the enrichment wrote duration, bitrate, and tags to D1, and the
     // in-memory row still has the pre-enrichment zeros.
-    song = (await context.songs.findById(id)) ?? song;
+    resolved = (await context.songs.findById(resolved.id)) ?? resolved;
   }
 
   const annotations = await annotationsFor(context, true);
-  return respond(context, songElement(songToModel(song, library, context.albumsFor(library), annotations)));
+  return respond(context, songElement(songToModel(resolved, library, context.albumsFor(library), annotations)));
 }
 
 /**

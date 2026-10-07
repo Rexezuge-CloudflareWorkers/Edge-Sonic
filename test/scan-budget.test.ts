@@ -244,7 +244,14 @@ function createIndex(options: IndexOptions = {}) {
               // A double that looked the id up in a path-keyed map — or vice versa — would report
               // every child as having no song row, which is the defect's own symptom and would
               // make this suite re-enrich every track on every pass.
-              .map((node) => ({ ...node, has_song: [...songs.values()].some((song) => song.path === node.path) ? 1 : 0 }) as ChildNodeRow),
+              //
+              // Keyed by path with the id preserved, like production's
+              // `ON CONFLICT (library_id, path)`: ids are minted once per row, so a
+              // fresh id per pass must update the row rather than duplicate it.
+              .map((node) => {
+                const song = [...songs.values()].find((song) => song.path === node.path);
+                return { ...node, has_song: song ? 1 : 0, song_id: song?.id ?? null } as ChildNodeRow;
+              }),
           ),
         listRoots: async () => await charge(() => [...nodes.values()].filter((node) => node.parent_path === '' && node.path !== '')),
         listFrontier: async (_libraryId: string, limit: number) =>
@@ -345,8 +352,12 @@ function createIndex(options: IndexOptions = {}) {
           for (const input of inputs.slice(0, written)) {
             const dirPath = input.path.split('/').slice(0, -1).join('/');
             const derived = deriveFromPath(dirPath, DERIVED_MARKER);
-            songs.set(input.id, {
-              id: input.id,
+            // Keyed by path with the id preserved, like production's
+            // `ON CONFLICT (library_id, path)`: ids are minted once per row, so
+            // a fresh id per pass updates the row rather than duplicating it.
+            const oldId = songs.get(input.path)?.id;
+            songs.set(input.path, {
+              id: oldId ?? input.id,
               library_id: LIBRARY_ID,
               path: input.path,
               dir_path: dirPath,
@@ -408,13 +419,13 @@ function createIndex(options: IndexOptions = {}) {
           // The deletes are a batch of their own, so they are charged as one — which is the
           // case that makes the scan's prune a budget item at all.
           const { written } = writeBatch(doomed.length);
-          for (const song of doomed.slice(0, written)) songs.delete(song.id);
+          for (const song of doomed.slice(0, written)) songs.delete(song.path);
           if (doomed.length > 0) meter.charge(doomed.length, 'd1');
           return { changes: written, written, truncated: written < doomed.length, billedRows: billedRowsForTable('songs', written) };
         },
         deleteSubtree: async (_libraryId: string, dirPath: string) => {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath);
-          for (const song of doomed) songs.delete(song.id);
+          for (const song of doomed) songs.delete(song.path);
           return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
         },
         countByLibrary: async () => songs.size,

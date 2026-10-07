@@ -26,6 +26,7 @@ export * from './params';
 export * from './ids';
 export * from './albumKey';
 export * from './albumId';
+export * from './songId';
 export * from './types';
 export * from './builders';
 export * from './extensions';

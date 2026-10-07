@@ -343,12 +343,24 @@ granted set rather than widened to everything and filtered afterwards.
 
 ## Ids
 
-`kind:base64url(libraryId \n path)`, kinds `s:`/`al:`/`alk:`/`ar:`/`dir:`/`vid:`/`mf:`/`dira:`.
+`kind:base64url(libraryId \n path)`, kinds `s:`/`al:`/`alk:`/`ar:`/`dir:`/`vid:`/`mf:`/`dira:` —
+except `s:`, which is short and opaque (`subsonic/songId.ts`: `s:` plus 22 random
+base64url chars). A reversible song id grows with the path and clients file
+downloads under it, so over 255 bytes it is `ENAMETOOLONG` on the client with
+no server-side error. Song ids resolve through the row; legacy long ids still
+resolve through `(library_id, path)`, and the scan backfill rotates them a page
+per chunk. Album (`alk:`) and artist (`ar:`) ids stay reversible: they name
+groups, not files, and are never download filenames.
 Artist ids derive from the artist grouping's **name**. Album ids derive from the album's
 **grouping key** — `ALBUM_GROUP_BY`, owned by `subsonic/albumKey.ts` and carried per request by
 `./albumIdentity` — and never from the album name, which is the part that changes.
 
-### An album or artist id names **no** library, and a song id still does
+### An album or artist id names **no** library, and a song still resolves to one
+
+A legacy song id carries its library in the payload; a short one carries
+nothing and resolves to it through the row. Either way the scope rule below is
+unchanged — the grant check is on the resolved library, so an id in a library
+the caller cannot see is `code=70`, never `code=50`.
 
 `decodeId` requires a library half (`separator <= 0` is `code=70`), so "this id
 names no particular library" is not a payload this repository could otherwise

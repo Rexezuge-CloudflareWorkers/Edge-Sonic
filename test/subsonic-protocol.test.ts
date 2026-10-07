@@ -22,9 +22,13 @@ import {
   errorResponse,
   IdKind,
   isClientVersionSupported,
+  isShortSongId,
   isValidJsonpCallback,
+  legacySongId,
+  mintSongId,
   resolveFormat,
   songElement,
+  SONG_LEGACY_ID_LENGTH_THRESHOLD,
   successResponse,
   SubsonicParams,
   SubsonicError,
@@ -605,6 +609,33 @@ describe('Subsonic ids', () => {
     const song = encodeId(IdKind.Song, libraryId, 'Bon Iver/For Emma/01.flac');
     expect(album).not.toBe(song);
     expect(() => decodeId(album, IdKind.Song)).toThrow(SubsonicError);
+  });
+
+  describe('short song ids', () => {
+    it('mints a 24-char filename-safe id', () => {
+      // A client files downloads under the id, and a path component over 255
+      // bytes is ENAMETOOLONG with no server-side error — the defect this
+      // scheme exists to fix.
+      const id = mintSongId();
+      expect(id).toMatch(/^s:[\w-]{22}$/);
+      expect(id.length).toBeLessThanOrEqual(SONG_LEGACY_ID_LENGTH_THRESHOLD);
+      expect(isShortSongId(id)).toBe(true);
+      expect(isShortSongId(encodeId(IdKind.Song, libraryId, path))).toBe(false);
+    });
+
+    it('mints a fresh id per call, so the row keeps it rather than the path', () => {
+      // Reversible ids are stable by construction; opaque ones are stable
+      // because the row keeps the minted value — see UPSERT_FILE_FACTS, which
+      // preserves songs.id on conflict. Uniqueness here is what makes that safe.
+      expect(mintSongId()).not.toBe(mintSongId());
+    });
+
+    it('computes the legacy form a rotation left behind', () => {
+      // Stars, ratings and play counts are stored under the id the song had
+      // when marked, so a lookup checks the row's current id and this one.
+      expect(legacySongId(libraryId, path)).toBe(encodeId(IdKind.Song, libraryId, path));
+      expect(decodeId(legacySongId(libraryId, path), IdKind.Song)).toEqual({ kind: IdKind.Song, libraryId, path });
+    });
   });
 
   describe('rejects a forged id', () => {

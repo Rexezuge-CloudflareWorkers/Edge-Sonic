@@ -13,7 +13,7 @@
  * multiple `songIndexToRemove` parameters. So the DAO removes **highest index
  * first**, which makes the result identical regardless of the order received.
  */
-import { elList, ErrorCode, playlistElement, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { elList, ErrorCode, legacySongId, playlistElement, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { PlaylistRow } from '@edge-sonic/backend-data/dao';
@@ -141,7 +141,14 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
 
   // An entry whose library the owner has since lost the grant to is dropped rather than
   // reported: the playlist is visible, the song outside the caller's grants is not.
-  const rows = (await context.playlists.listEntrySongs(playlist.id)).filter((song) => visible.has(song.library_id));
+  //
+  // Resolved entry-by-entry rather than through the entry join: entries written
+  // before the short-id rotation hold legacy long ids that no longer match
+  // `songs.id`, so the join would drop them and the playlist would come back
+  // shorter than it was saved.
+  const entries = await context.playlists.listEntries(playlist.id);
+  const entryRows = await context.songs.listIdsAcrossLibraries(entries.map((entry) => entry.song_id));
+  const rows = entryRows.filter((song) => visible.has(song.library_id));
   const annotations = await annotationsFor(context, rows.length > 0);
 
   // The protocol names a playlist's songs `entry`, not `song`. Both spellings appear
@@ -188,8 +195,21 @@ async function resolveSongIds(context: RestContext, ids: readonly string[]): Pro
   const visible = await grantedLibraryIds(context);
   if (visible.size === 0) return [];
   const rows = await context.songs.listIdsAcrossLibraries(ids);
-  const found = new Set(rows.filter((row) => visible.has(row.library_id)).map((row) => row.id));
-  return ids.filter((songId) => found.has(songId));
+  // Both forms: a client holding a legacy long id for a rotated row resolves
+  // to a short row, so the input matches under the id the row holds now *or*
+  // the one it held when the client saw it. Canonical short ids are returned,
+  // so a legacy playlist entry migrates on write.
+  const found = new Set<string>();
+  const canonicalOf = new Map<string, string>();
+  for (const row of rows) {
+    if (!visible.has(row.library_id)) continue;
+    found.add(row.id);
+    const legacy = legacySongId(row.library_id, row.path);
+    found.add(legacy);
+    canonicalOf.set(row.id, row.id);
+    canonicalOf.set(legacy, row.id);
+  }
+  return ids.flatMap((songId) => (found.has(songId) ? [canonicalOf.get(songId)!] : []));
 }
 
 /**

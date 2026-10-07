@@ -27,6 +27,7 @@ import type { SubrequestMeter } from '@edge-sonic/shared';
 import type { SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { SongIdLookupDAO } from './songIdLookup';
+import { SongIdRotationDAO } from './songIdRotation';
 import { SongCountDAO } from './songCounts';
 import { libraryScope } from './libraryScope';
 import type { LibraryScope } from './libraryScope';
@@ -93,6 +94,38 @@ class SongDAO extends BaseDAO {
       async () => await this.database.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first<SongRow>(),
       'songs.findById',
     );
+  }
+
+  /**
+   * One song by its library-relative path. Delegates to {@link SongIdLookupDAO},
+   * built from `this` so it inherits the request scope's meter.
+   */
+  public async findByPath(libraryId: string, path: string): Promise<SongRow | null> {
+    return await new SongIdLookupDAO(this.database, this.subrequests).findByPath(libraryId, path);
+  }
+
+  /**
+   * One song by whatever id a client is holding — short or legacy. Delegates
+   * to {@link SongIdLookupDAO} for the same reason as `findByPath`.
+   */
+  public async findBySongId(id: string): Promise<SongRow | null> {
+    return await new SongIdLookupDAO(this.database, this.subrequests).findBySongId(id);
+  }
+
+  /**
+   * Rows still carrying a reversible long id. Delegates to
+   * {@link SongIdRotationDAO}, the scan backfill's store.
+   */
+  public async listLegacySongIds(libraryId: string, limit: number): Promise<readonly Pick<SongRow, 'id' | 'library_id' | 'path'>[]> {
+    return await new SongIdRotationDAO(this.database, this.subrequests).listLegacySongIds(libraryId, limit);
+  }
+
+  /**
+   * Rotate one song's id and its playlist entries, atomically. Delegates to
+   * {@link SongIdRotationDAO}.
+   */
+  public async rotateSongId(libraryId: string, path: string, oldId: string, newId: string): Promise<WriteBatchResult> {
+    return await new SongIdRotationDAO(this.database, this.subrequests).rotateSongId(libraryId, path, oldId, newId);
   }
 
   public async listByDirectory(libraryId: string, dirPath: string): Promise<SongRow[]> {

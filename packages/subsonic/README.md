@@ -52,6 +52,11 @@ reasoning is in the protocol guide. `array: true` is the exception.
 looked up in a table. `decodeId` refuses `..`, empty segments, control characters and `%XX`,
 because `normalizeRelativePath` runs over the payload and a hostile id is a traversal.
 
+Song ids are the exception: short and opaque (`songId.ts`, `s:` plus 22 random
+base64url chars), because a reversible song id grows with the path and clients
+file downloads under it — over 255 bytes is `ENAMETOOLONG`. They resolve
+through the row; legacy long ids still resolve through `(library_id, path).
+
 Eight kinds exist and **three are never minted**: `mf:` (the music folder is a position, not
 a row), `dira:` (reserved; `getIndexes` mints `ar:`) and `vid:` (reserved for video). An id
 kind nobody mints is still accepted, because one stored before it was retired must keep

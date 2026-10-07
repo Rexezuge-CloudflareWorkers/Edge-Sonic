@@ -179,7 +179,12 @@ ON CONFLICT (library_id, path) DO UPDATE SET
   -- and clearing one without the other leaves a row that claims to be enriched by a
   -- reader nobody is running any more.
   reader_version = CASE WHEN songs.mtime_ms = excluded.mtime_ms THEN songs.reader_version ELSE 0 END,
-  id = excluded.id,
+  -- The id is deliberately absent from this list. Song ids are opaque and minted
+  -- once per row (see subsonic songId.ts): re-assigning id from excluded here
+  -- would give every touched row a fresh random id on each pass and orphan every
+  -- saved playlist, star and queue entry. A new path inserts with its minted id;
+  -- an existing one keeps the id it has, long or short, until the id backfill
+  -- rotates it.
   name = excluded.name,
   name_ci = excluded.name_ci,
   size = excluded.size,
