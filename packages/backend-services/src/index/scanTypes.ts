@@ -115,19 +115,6 @@ interface ScanDerivationStore {
 applyDerivation(writes: readonly DerivationWrite[]): Promise<WriteBatchResult>;
 }
 
-/**
- * The store the song-id rotation backfill needs.
- *
- * Separate from `ScanSongStore` because it answers a different question — "which
- * rows still carry a reversible long id" — over a length selection rather than
- * a change selection. Optional on `ScanDeps` so existing doubles keep
- * compiling; production wires the real DAO.
- */
-interface ScanIdRotationStore {
-  listLegacySongIds(libraryId: string, limit: number): Promise<readonly { id: string; library_id: string; path: string }[]>;
-  rotateSongId(libraryId: string, path: string, oldId: string, newId: string): Promise<WriteBatchResult>;
-}
-
 interface ScanDeps {
   nodes: ScanNodeStore;
   songs: ScanSongStore;
@@ -140,12 +127,6 @@ interface ScanDeps {
    * the right degradation: the aggregates stay empty and nothing else regresses.
    */
   derivation?: ScanDerivationStore;
-  /**
-   * Rotate legacy long song ids to short ones for rows the walk will never
-   * revisit. Optional like `derivation`, for the same reason: a scan that
-   * cannot rotate still walks, and the ids repair on the next poll that can.
-   */
-  idRotation?: ScanIdRotationStore;
   /**
    * The invocation's subrequest counter.
    *
@@ -376,7 +357,6 @@ export type {
   ScanSongStore,
   ScanStateStore,
   ScanDerivationStore,
-  ScanIdRotationStore,
   ScanDailyBudget,
   ScanStatus,
   ChunkResult,

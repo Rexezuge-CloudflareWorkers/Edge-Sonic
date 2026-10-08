@@ -268,8 +268,17 @@ class AuthThrottleDAO extends BaseDAO {
 
   /**
   Record one failure against the current window.
+
+  **One statement, and it returns nothing.** This read the row back and returned the count, which
+  doubled the statements every *failed* authentication spent — on the one path that exists to stop
+  password guessing, and the only statement in it whose result was not used for a decision. It was
+  also a non-atomic read of a value `ON CONFLICT DO UPDATE` had already computed authoritatively,
+  so a caller added later would have seen a count two concurrent failures could both report.
+
+  The decision this counter feeds is {@link countRecentFailures}, which reads the window itself and
+  is the number that actually decides a lockout.
   */
-  public async recordFailure(identity: string, bucket: number): Promise<number> {
+  public async recordFailure(identity: string, bucket: number): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database
@@ -281,15 +290,6 @@ class AuthThrottleDAO extends BaseDAO {
           .run(),
       'throttle.recordFailure',
     );
-    const row = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT failures FROM auth_failures WHERE identity = ? AND bucket = ?')
-          .bind(identity, bucket)
-          .first<{ failures: number }>(),
-      'throttle.recordFailure.read',
-    );
-    return row?.failures ?? 1;
   }
 
   /**

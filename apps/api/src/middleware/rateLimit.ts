@@ -57,21 +57,70 @@ function evictOldestBucket(): void {
  */
 const MAX_BUCKETS = 5000;
 
+/**
+ * Below this many buckets, cleanup does nothing at all.
+ *
+ * The threshold rather than 0: sweeping a handful of entries on every request is work for nothing,
+ * and below the threshold an expiry sweep cannot reclaim enough to matter.
+ */
+const CLEANUP_THRESHOLD = 1000;
+
+/**
+ * Sweep expired buckets, at most once per `CLEANUP_INTERVAL_MS`.
+ *
+ * ### Why this is amortised rather than per-request
+ *
+ * It used to run on **every** request: below 1,000 buckets it returned immediately, and at or above
+ * it every single request paid a full iteration of a map holding up to `MAX_BUCKETS` entries — plus
+ * two more full iterations per eviction. Memory was already bounded, so the cap worked; what was
+ * unbounded was the *cost*, and it was paid by every caller rather than by the one who filled the
+ * map. An attacker rotating 1,000+ distinct keys therefore converted every subsequent request on
+ * that isolate into O(n) map work against the Free plan's 10 ms CPU budget — which is a cheap way to
+ * make a rate limiter a denial-of-service vector against itself.
+ *
+ * So the sweep is time-triggered rather than size-triggered. Memory is still bounded — that was
+ * never the problem — and the work is now paid at a fixed rate instead of a per-request one.
+ *
+ * **The map can still be large when this runs.** That is the point: the cap is what bounds memory,
+ * and this bounds what an attacker pays per request.
+ */
+const CLEANUP_INTERVAL_MS = 30_000;
+
+let lastCleanupAt = 0;
+
 function cleanup(now: number): void {
-  if (buckets.size < 1000) return;
-  for (const [key, bucket] of buckets) {
-    if (bucket.resetAt <= now) buckets.delete(key);
-  }
-  // Evict the oldest-resetting bucket rather than clearing the map, so an
-  // attacker flooding new keys cannot wipe out everyone else's buckets.
+  // **The cap is enforced on every request**, and only the sweep is deferred. Those are different
+  // jobs with different failure modes: the cap is a *memory* bound, and memory grows whether or not
+  // a sweep runs, so deferring it would make the bound wrong — an attacker rotating keys would hold
+  // `MAX_BUCKETS + one request's worth` rather than `MAX_BUCKETS`, and `test/rate-limit.test.ts`
+  // asserts the ceiling directly.
   //
-  // Evict down to `MAX_BUCKETS - 1` because the caller adds its own bucket
-  // immediately afterwards; evicting to exactly `MAX_BUCKETS` let the map reach
-  // `MAX_BUCKETS + 1` before the next cleanup.
+  // Evicting **down** rather than clearing, so an attacker flooding new keys cannot wipe out
+  // everyone else's buckets. Down to `MAX_BUCKETS - 1` because the caller adds its own bucket
+  // immediately afterwards; evicting to exactly `MAX_BUCKETS` let the map reach `MAX_BUCKETS + 1`
+  // before the next cleanup.
   let overflow = buckets.size - (MAX_BUCKETS - 1);
   while (overflow > 0) {
     evictOldestBucket();
     overflow -= 1;
+  }
+
+  // **The sweep is amortised**, which is the part that used to run per-request. It walks the whole
+  // map to drop the expired entries, so above the threshold every request paid a full iteration of up
+  // to `MAX_BUCKETS` entries — paid by every caller rather than by the one who filled the map. An
+  // attacker rotating 1,000+ distinct keys turned every subsequent request on that isolate into O(n)
+  // map work against the Free plan's 10 ms CPU budget: a cheap way to make a rate limiter a
+  // denial-of-service vector against itself.
+  //
+  // Nothing is lost by deferring it. An expired bucket is *already* treated as absent by the
+  // request path (`existing.resetAt <= now` takes the same branch as a missing key), so the sweep
+  // only reclaims memory — and memory is what the cap above already bounds. The cost moves from
+  // per-request to a fixed rate.
+  if (buckets.size < CLEANUP_THRESHOLD) return;
+  if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
+  lastCleanupAt = now;
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt <= now) buckets.delete(key);
   }
 }
 
@@ -140,6 +189,24 @@ function rateLimit(opts: {
     throw new Error('Invalid rateLimit keyPrefix: must be a non-empty string');
   }
   return async (c: RateLimitContext, next: Next): Promise<Response | void> => {
+    // The limiter's own work, and **only** the limiter's own work, is inside this `try`.
+    //
+    // It used to enclose `await next()` as well. The intent was "fail open if the limiter cannot
+    // size itself", and the way that was written also caught anything the *downstream chain*
+    // rejected — calling `next()` a second time from the `catch`.
+    //
+    // **Measured, and the second call does not re-run anything.** Hono's `compose` guards its own
+    // dispatch with `if (i <= index) throw new Error('next() called multiple times')`
+    // (`hono/dist/compose.js`), so the second call throws rather than re-entering the handlers
+    // after this one. A probe of both shapes — the chain's handler throwing, with an `onError` that
+    // also throws — ran the handler exactly once either way. So the defect this fixes was **not** a
+    // double-written scrobble; it was that the limiter's contract depended on a guard in a library
+    // it does not own, and that a rejection escaping the chain surfaced as *"next() called multiple
+    // times"* — a message naming a Hono internal, on a path whose documented behaviour is to fail
+    // open.
+    //
+    // Correct in both directions for the same reason: a fail-open branch should not enclose the
+    // thing it is failing open *for*, whatever the framework underneath happens to do.
     try {
       const now = Date.now();
       cleanup(now);
@@ -163,8 +230,7 @@ function rateLimit(opts: {
       const existing = buckets.get(key);
       if (!existing || existing.resetAt <= now) {
         buckets.set(key, { count: 1, resetAt: now + opts.windowMs });
-        await next();
-        return;
+        return await next();
       }
       if (existing.count >= max) {
         const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
@@ -199,9 +265,11 @@ function rateLimit(opts: {
         });
       }
       existing.count += 1;
-      await next();
+      return await next();
     } catch {
-      await next();
+      // Fail open: the limiter could not size itself, and a request must not fail because of that.
+      // `next()` runs **once**, from here or from the paths above — never from both.
+      return await next();
     }
   };
 }

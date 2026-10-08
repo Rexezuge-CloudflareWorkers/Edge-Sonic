@@ -61,8 +61,11 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     because `decodeId` runs `normalizeRelativePath` over the payload and a raw album name
     holding `..`, `/` or `%` is an id this server cannot read back. `al:` is still **accepted**
     and resolves through the directory to the whole group, so a star written before the change
-    still points at the merged album — and an annotation lookup checks the legacy ids too, or
-    a correctly-stored star is reported by nothing.
+    still points at the merged album — and an album annotation lookup checks the folder-shaped id
+    too, or a correctly-stored star is reported by nothing. This is **not** the same as the song-id
+    fallback, which is retired: an album id is reversible by construction, so `al:` is a spelling
+    this server still mints under `folder` grouping, while a song id is derived and never minted in
+    two forms.
   - **A partial group is not an album.** `getArtist` and `search3` grouped the artist's own
     rows, which publishes an album holding one track of a compilation and a `songCount` that
     disagrees with every other surface. Both complete each group first.

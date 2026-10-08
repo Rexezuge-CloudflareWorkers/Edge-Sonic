@@ -14,7 +14,7 @@
  * is a well-formed envelope whether the endpoint exists, threw, or declined to
  * implement.
  */
-import { errorResponse, notFound, resolveFormat, successResponse } from '@edge-sonic/subsonic';
+import { errorResponse, notFound, resolveFormat, SPANNING_LIBRARY_ID, successResponse } from '@edge-sonic/subsonic';
 import { ErrorCode, isClientVersionSupported, SubsonicError } from '@edge-sonic/subsonic';
 
 import { SubsonicParams, decodeLegacyPassword } from '@edge-sonic/subsonic';
@@ -24,7 +24,8 @@ import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { clientIp } from '../middleware/rateLimit';
 import type { RestContext } from './context';
-import { albumIdentity } from './albumIdentity';
+import { albumIdentity, identityPerLibrary } from './albumIdentity';
+import { maxOffsetFor } from './paging';
 import { getMediaStub, hasMediaBinding } from '../workers/scanStubs';
 import { ENDPOINTS } from './endpoints';
 import { openSubsonicExtensionsPayload } from './endpoints/system';
@@ -246,6 +247,8 @@ async function buildContext(
     // resolved before `env` exists, which is the `LOG_LEVEL` defect: a setting that passes
     // validation and changes nothing.
     albumsFor: (library) => albumIdentity(config.getAlbumGroupBy(), library.id),
+    albumsForScope: (libraries) => identityPerLibrary(config.getAlbumGroupBy(), libraries, albumIdentity(config.getAlbumGroupBy(), libraries[0]?.id ?? SPANNING_LIBRARY_ID)),
+    maxOffset: maxOffsetFor(maxPage),
   };
 }
 

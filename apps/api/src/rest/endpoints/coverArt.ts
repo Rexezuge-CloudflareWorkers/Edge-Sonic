@@ -28,8 +28,8 @@ import { coverForSongs, coverForTarget, findCoverIn, representativeDir } from '.
 
 async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
   const id = context.params.require('id');
-  // Song fast path, before any decode: short ids carry no library or path to
-  // decode, and legacy song ids for rotated rows no longer match either.
+  // Song fast path, before any decode: a short song id carries no library or path to decode, so
+  // resolving it is one indexed read and everything else here is for the directory-shaped kinds.
   const song = await context.songs.findBySongId(id);
   if (song) {
     const library = await context.libraries.requireForUser(context.user.id, song.library_id);

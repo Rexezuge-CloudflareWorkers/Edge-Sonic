@@ -22,9 +22,7 @@ import {
  */
 export const DEFAULT_DEMO_USER_EMAIL = 'demo@edge-sonic.invalid';
 
-export const DEFAULT_DEBUG_MODE = 'false';
 export const DEFAULT_ENVIRONMENT = 'production';
-export const DEFAULT_SITE_URL = '';
 
 /**
 Cap on how many media folders one user may be granted.

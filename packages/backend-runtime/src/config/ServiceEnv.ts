@@ -27,13 +27,11 @@ interface ServiceEnv {
   SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
   ENVIRONMENT?: string;
   SCAN_QUEUE?: unknown;
-  DEBUG_MODE?: string;
   DEV_AUTH_EMAIL?: string;
   DEMO_MODE?: string;
   DEMO_USER_EMAIL?: string;
   TEAM_DOMAIN?: string;
   POLICY_AUD?: string;
-  SITE_URL?: string;
   MAX_LIBRARIES?: string;
   WEBDAV_TIMEOUT_MS?: string;
   SCAN_CHUNK_FOLDERS?: string;

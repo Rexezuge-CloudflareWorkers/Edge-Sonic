@@ -180,18 +180,42 @@ async function resolveAlbumId(
   grouping: AlbumGroupingValue,
   resolveDirRows: (dirPath: string) => Promise<readonly AlbumKeyRow[]>,
 ): Promise<string | null> {
+  const folderDir = folderDirOfAlbumId(raw);
+  if (folderDir !== null) {
+    const rows = await resolveDirRows(folderDir);
+    return rows.length === 0 ? null : albumKeySpec(rows[0], grouping).string;
+  }
   let decoded: ReturnType<typeof decodeId>;
   try {
     decoded = decodeId(raw);
   } catch {
     return null;
   }
-  if (decoded.kind === IdKind.AlbumKey) return decodeAlbumKey(decoded.path);
-  if (decoded.kind !== IdKind.Album) return null;
-  const rows = await resolveDirRows(decoded.path);
-  return rows.length === 0 ? null : albumKeySpec(rows[0], grouping).string;
+  return decoded.kind === IdKind.AlbumKey ? decodeAlbumKey(decoded.path) : null;
 }
 
-export { albumIdOf, artistIdOf, encodeAlbumKey, decodeAlbumKey, resolveAlbumId };
+/**
+ * The directory a **folder-shaped** album id names, or `null` for anything else.
+ *
+ * Split out because a batch of ids needs the directories *before* it can issue one query, and
+ * {@link resolveAlbumId} takes its rows from a caller it cannot batch. `getStarred` resolved each
+ * id in its own `await` — one D1 read per starred album, against a 50-subrequest ceiling, and
+ * against `libraries[0]` alone, which dropped every star whose directory lived in a second
+ * granted library.
+ *
+ * `null` covers every other shape: a tag-grouping id needs no read at all, and an id that is not
+ * an album id is not this function's business to interpret.
+ */
+function folderDirOfAlbumId(raw: string): string | null {
+  let decoded: ReturnType<typeof decodeId>;
+  try {
+    decoded = decodeId(raw);
+  } catch {
+    return null;
+  }
+  return decoded.kind === IdKind.Album ? decoded.path : null;
+}
+
+export { albumIdOf, artistIdOf, encodeAlbumKey, decodeAlbumKey, resolveAlbumId, folderDirOfAlbumId };
 
 export { type AlbumKeySpec } from './albumKey';

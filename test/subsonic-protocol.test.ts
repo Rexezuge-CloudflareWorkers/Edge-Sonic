@@ -26,10 +26,8 @@ import {
   isClientVersionSupported,
   isShortSongId,
   isValidJsonpCallback,
-  legacySongId,
   resolveFormat,
   songElement,
-  SONG_LEGACY_ID_LENGTH_THRESHOLD,
   successResponse,
   SubsonicParams,
   SubsonicError,
@@ -619,7 +617,7 @@ describe('Subsonic ids', () => {
       // scheme exists to fix.
       const id = deriveShortSongId(libraryId, path);
       expect(id).toMatch(/^s:[\w-]{22}$/);
-      expect(id.length).toBeLessThanOrEqual(SONG_LEGACY_ID_LENGTH_THRESHOLD);
+      expect(id).toHaveLength(24);
       expect(isShortSongId(id)).toBe(true);
       expect(isShortSongId(encodeId(IdKind.Song, libraryId, path))).toBe(false);
       const longPath = `音楽/${'界'.repeat(120)}.flac`;
@@ -649,11 +647,16 @@ describe('Subsonic ids', () => {
       expect(deriveShortSongId(libraryId, path)).toBe(`s:${Buffer.from(digest).toString('base64url')}`);
     });
 
-    it('computes the legacy form a rotation left behind', () => {
-      // Stars, ratings and play counts are stored under the id the song had
-      // when marked, so a lookup checks the row's current id and this one.
-      expect(legacySongId(libraryId, path)).toBe(encodeId(IdKind.Song, libraryId, path));
-      expect(decodeId(legacySongId(libraryId, path), IdKind.Song)).toEqual({ kind: IdKind.Song, libraryId, path });
+    it('is the only song id this server mints, and the reversible one is not it', () => {
+      // The reversible form is retired with the rotation, so this is now a statement about what a
+      // client can still be *holding* rather than about a lookup: a pre-rotation id is well-formed
+      // and decodes cleanly, and no lookup resolves it. `songIdLookup.ts` asserts the second half
+      // over real SQLite; what belongs here is that the two spellings cannot be confused.
+      const reversible = encodeId(IdKind.Song, libraryId, path);
+      expect(isShortSongId(reversible)).toBe(false);
+      expect(reversible).not.toBe(deriveShortSongId(libraryId, path));
+      // Still decodable, which is why a stale id reads as a well-formed request rather than garbage.
+      expect(decodeId(reversible, IdKind.Song)).toEqual({ kind: IdKind.Song, libraryId, path });
     });
   });
 

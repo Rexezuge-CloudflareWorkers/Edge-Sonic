@@ -19,9 +19,10 @@
  * alone would pass again on two surfaces that disagree.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { encodeId, IdKind, MAX_IDS_PER_REQUEST } from '@edge-sonic/subsonic';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { NodeDAO } from '@edge-sonic/backend-data/dao';
-import { createHarness, WEBDAV_TEST_KEY, nowSeconds } from './helpers/harness';
+import { createHarness, subsonicId, WEBDAV_TEST_KEY, nowSeconds } from './helpers/harness';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
 /**
@@ -103,6 +104,17 @@ interface IndexesEnvelope {
 }
 
 /**
+ * A `dir:` id for a library-relative folder, the spelling `getIndexes` publishes.
+ *
+ * Built through the product's own encoder on purpose: the bug this file's new block covers was a
+ * *published* id that named the wrong directory, so a hand-rolled id would assert the test's own
+ * spelling rather than what a client holds.
+ */
+function shortcutIdOf(path: string): string {
+  return encodeId(IdKind.Directory, 'L1', path);
+}
+
+/**
 The folder roots a `getIndexes` call answered with, and the error code if it refused.
 
 Read from the top-level `shortcut` children, where the schema puts them — not from
@@ -114,6 +126,63 @@ async function browse(musicFolderId: string): Promise<{ names: string[]; code: n
   const envelope = (await call('getIndexes', { musicFolderId })) as IndexesEnvelope;
   return { names: (envelope.indexes?.shortcut ?? []).map((shortcut) => shortcut.name), code: envelope.error?.code };
 }
+
+/**
+ * A request naming an unbounded number of ids is refused with a code a client can read.
+ *
+ * `id` is a **repeatable, comma-split** parameter — `MULTI_VALUE_PARAMS` holds it *because*
+ * clients repeat it — and `SubsonicParams.fromRequest` also accepts a form body, so a URL length
+ * does not bound it either. Every endpoint walking that list cost 2–4 statements per id against a
+ * platform ceiling with nothing capping the count, so a few hundred ids terminated the invocation:
+ * **no Subsonic envelope, no `413`, nothing in a log** — a dropped connection.
+ *
+ * Refusing is what `BaseDAO.requireSubrequests` already does for every batched read in the data
+ * layer, and `UserStateDAO.savePlayQueue` passes `requireComplete` because a half-written queue is
+ * a *shorter* queue. The endpoint side had no equivalent, so that refusal never got its chance.
+ *
+ * Asserted on all three write surfaces that walk the list, and with a **negative** — a list under
+ * the limit must still succeed — because a guard that rejects everything passes a refusal test.
+ */
+describe('a request naming too many ids is refused, not truncated', () => {
+  /**
+  A list long enough to cross the limit without being enormous to serialize.
+  */
+  function manyIds(count: number): string {
+    return Array.from({ length: count }, (_, index) => `s:${String(index).padStart(22, '0')}`).join(',');
+  }
+
+  it('refuses star, scrobble and savePlayQueue above the limit, and honours a list under it', async () => {
+    // The harness library has a handful of tracks, so `manyIds` is mostly unresolvable ids. That
+    // is deliberate: **the refusal has to come before resolution** or a request full of unknown ids
+    // would answer `code=70` and never reach the bound — which is exactly the ordering bug this
+    // asserts against.
+    const over = manyIds(MAX_IDS_PER_REQUEST + 1);
+
+    for (const endpoint of ['star', 'scrobble', 'savePlayQueue']) {
+      const { body } = await harness.rest(endpoint, { id: over });
+      const error = (body['subsonic-response'] as { error?: { code?: number; message?: string } }).error;
+      expect(error?.code, `${endpoint} above the limit is a refusal`).toBe(0);
+      expect(error?.message, `${endpoint} names the limit`).toMatch(/too many ids/i);
+    }
+
+    // And the negative: one **real** id still works on all three, so the guard is not simply
+    // refusing everything and the refusal is not standing in for a `code=70`. Built through the
+    // same `subsonicId` the rest of the suite uses, because a hand-typed id here would only prove
+    // the harness is lenient about ids it does not know.
+    const songId = subsonicId('s', 'Bon Iver/For Emma/01.flac');
+    for (const endpoint of ['star', 'scrobble', 'savePlayQueue']) {
+      const { body } = await harness.rest(endpoint, { id: songId });
+      expect((body['subsonic-response'] as { error?: { code?: number } }).error, `${endpoint} under the limit`).toBeUndefined();
+    }
+  });
+
+  it('reports a limit above the page ceiling, so paging a list is never refused for asking', async () => {
+    // A client paging a list names ids, and the point of the bound is to refuse a request that
+    // could not be answered anyway. A limit *below* the page ceiling would refuse a legitimate page,
+    // which is a different bug and one this states rather than leaves to a reader.
+    expect(MAX_IDS_PER_REQUEST).toBeGreaterThanOrEqual(500);
+  });
+});
 
 describe('a musicFolderId is a position both surfaces publish identically', () => {
   it('answers the same list, in the same order, from getUser and getMusicFolders', async () => {
@@ -207,6 +276,71 @@ describe('a musicFolderId is a position both surfaces publish identically', () =
     // a populated one on the other would be exactly the disagreement it exists to catch.
     // Both are absent, on both surfaces: an item key with no items is not `[]`.
     expect(await publishedLists()).toEqual({ folder: undefined, musicFolder: [] });
+  });
+});
+
+/**
+ * `getIndexes` publishes a **shortcut** per top-level folder, and a client walking *up* from one
+ * follows the `parent` that `getMusicDirectory` publishes on its `directory` element.
+ *
+ * `getMusicDirectory` computed it as `path.slice(0, path.lastIndexOf('/'))`, and a top-level
+ * folder's path holds **no separator at all** — so `lastIndexOf` answered `-1` and
+ * `'Blur'.slice(0, -1)` is `'Blu'`. The published `parent` therefore named a directory that does
+ * not exist, and following it issued a live `PROPFIND` for `Blu` and answered `code=70`. Every
+ * client that reached the top of the tree and tried to go further hit it, on every library, and
+ * nothing in the suite asserted `parent` on a shortcut at all.
+ *
+ * `libraryNames.parentOf` already had the correct form (`slash === -1 ? '' : …`) — the library root
+ * **is** the parent of a top-level folder, and an empty `parent` says exactly that. So the fix was
+ * to use the one function rather than to write the slice again.
+ *
+ * The pair of assertions below is the round trip: `shortcut.id` → `getMusicDirectory` →
+ * `directory.parent` → `getMusicDirectory` again. A `parent` that does not resolve is a link that
+ * is dead on arrival, which is the shape of defect `apps/api/AGENTS.md` says is worse than
+ * omitting the id.
+ */
+describe('walking up from a top-level folder reaches the library root', () => {
+  it('publishes a parent that getMusicDirectory can resolve, which slice(0, -1) could not', async () => {
+    const indexes = (await call('getIndexes')) as IndexesEnvelope;
+    const shortcut = indexes.indexes?.shortcut?.[0];
+    expect(shortcut, 'the harness library has a top-level folder to walk up from').toBeDefined();
+
+    const shortcutIds = (indexes.indexes?.shortcut ?? []) as Array<{ name: string }>;
+    expect(shortcutIds.map((entry) => entry.name)).toContain('Bon Iver');
+
+    // `getMusicDirectory` on the shortcut's own id. `getIndexes` publishes it, so this is the
+    // exact request a client makes when the user taps a top-level folder.
+    const shortcutId = shortcutIdOf('Bon Iver');
+    const folder = (await call('getMusicDirectory', { id: shortcutId })) as { directory?: { parent?: string; name?: string } };
+    expect(folder.directory?.name).toBe('Bon Iver');
+
+    // The library root, as **the empty string** rather than as an id. `decodeId` refuses an empty
+    // path, so no `dir:` id can name the root and an id there resolves to `code=70` — so an id
+    // would be a link dead on arrival. `slice(0, -1)` published something worse: the id for
+    // `Bon Ive`, one character short, which is a directory that does not exist.
+    expect(folder.directory?.parent, 'a top-level folder has no parent above it').toBe('');
+
+    // So the walk-up terminates here, and the client is at the top of the tree rather than at a
+    // 404. Asserted as "the parent is absent/falsey" because that is what a client checks.
+    expect(folder.directory?.parent).toBeFalsy();
+  });
+
+  it('publishes the library root as its own parent, and a nested folder parent that resolves', async () => {
+    // `Bon Iver/For Emma` is a folder *inside* a top-level one, so it does have a separator — and
+    // its parent is `Bon Iver`. Asserted beside the root case so a fix that special-cased "no
+    // separator" without keeping the nested case correct would fail here.
+    const shortcutId = shortcutIdOf('Bon Iver');
+    const nested = shortcutIdOf('Bon Iver/For Emma');
+    const folder = (await call('getMusicDirectory', { id: nested })) as { directory?: { parent?: string }; error?: { code: number } };
+
+    expect(folder.error?.code).toBeUndefined();
+    expect(folder.directory?.parent).toBe(shortcutId);
+
+    // And that parent is itself a directory, not another dead link.
+    const parentId = folder.directory?.parent ?? '';
+    const up = (await call('getMusicDirectory', { id: parentId })) as { directory?: { name?: string }; error?: { code: number } };
+    expect(up.error?.code).toBeUndefined();
+    expect(up.directory?.name).toBe('Bon Iver');
   });
 });
 

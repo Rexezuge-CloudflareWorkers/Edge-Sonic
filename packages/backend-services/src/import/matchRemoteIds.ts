@@ -159,6 +159,25 @@ Pairs per statement: two bound variables each, plus the `library_id`.
 const PAIRS_PER_STATEMENT = bindChunkSize(2);
 
 /**
+ * The composite-key separator: a literal NUL.
+ *
+ * It has to be a byte the **data cannot contain**, because this key is a concatenation of two
+ * independent tag values. A space would not do it — `(album: "a b", title: "c")` and `(album: "a",
+ * title: "b c")` produce the identical composite, so two different songs would share a bucket and
+ * `narrow` would be asked to separate them on disc and track alone. That is the same shape of defect
+ * `subsonic/albumId.ts` records for `al:`/`alk:` colliding, where the fix was a structurally
+ * disambiguated encoding rather than a delimiter the data could contain. `normalizeRelativePath`
+ * refuses control characters in paths, so no title this server derives can hold one.
+ *
+ * **Written as an escape, and that is the second half of why.** The literal byte was written
+ * directly into the template string, which makes the file **binary**: `rg` silently refuses to
+ * search it, `git diff` renders it invisibly, and most editors show nothing where the delimiter
+ * should be. Two files in this repository were in that state. Every other NUL in the codebase is
+ * written as `'\0'` — this constant is the third one, and the only reason it exists.
+ */
+const NUL = '\0';
+
+/**
  * Resolve a page of remote songs to local ids.
  *
  * One page rather than one song, because the alternative is a statement per song against the
@@ -225,7 +244,7 @@ async function matchRemoteSongs(
   for (const candidate of unresolved) {
     const key = metadataKeyOf(candidate);
     if (key === null) continue;
-    const composite = `${key[0]} ${key[1]}`;
+    const composite = `${key[0]}${NUL}${key[1]}`;
     const bucket = pairs.get(composite);
     if (bucket) bucket.push(candidate);
     else pairs.set(composite, [candidate]);
@@ -236,7 +255,7 @@ async function matchRemoteSongs(
   for (const chunk of chunkArray(pendingByKey, PAIRS_PER_STATEMENT)) {
     const rows = await store.findByAlbumTitle(libraryId, chunk.map(metadataKeyOf).filter((key): key is readonly [string, string] => key !== null));
     for (const row of rows) {
-      const key = `${row.album_ci} ${row.title_ci}`;
+      const key = `${row.album_ci}${NUL}${row.title_ci}`;
       const bucket = rowsByKey.get(key);
       if (bucket) bucket.push(row);
       else rowsByKey.set(key, [row]);

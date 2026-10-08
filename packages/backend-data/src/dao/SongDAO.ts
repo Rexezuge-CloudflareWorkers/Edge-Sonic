@@ -27,7 +27,7 @@ import type { SubrequestMeter } from '@edge-sonic/shared';
 import type { SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { SongIdLookupDAO } from './songIdLookup';
-import { SongIdRotationDAO } from './songIdRotation';
+import { SongAlbumDirDAO } from './songAlbumDirs';
 import { SongCountDAO } from './songCounts';
 import { libraryScope } from './libraryScope';
 import type { LibraryScope } from './libraryScope';
@@ -99,33 +99,21 @@ class SongDAO extends BaseDAO {
   /**
    * One song by its library-relative path. Delegates to {@link SongIdLookupDAO},
    * built from `this` so it inherits the request scope's meter.
+   *
+   * Also what the legacy song-id fallback rode on, and what `getCoverArt`'s song branch still
+   * resolves a **directory-shaped** id through — a `dir:` id names a path rather than a song, so
+   * that lookup is not a fallback and does not go away with one.
    */
   public async findByPath(libraryId: string, path: string): Promise<SongRow | null> {
     return await new SongIdLookupDAO(this.database, this.subrequests).findByPath(libraryId, path);
   }
 
   /**
-   * One song by whatever id a client is holding — short or legacy. Delegates
-   * to {@link SongIdLookupDAO} for the same reason as `findByPath`.
+   * One song by id. Delegates to {@link SongIdLookupDAO} for the same reason as
+   * `findByPath`.
    */
   public async findBySongId(id: string): Promise<SongRow | null> {
     return await new SongIdLookupDAO(this.database, this.subrequests).findBySongId(id);
-  }
-
-  /**
-   * Rows still carrying a reversible long id. Delegates to
-   * {@link SongIdRotationDAO}, the scan backfill's store.
-   */
-  public async listLegacySongIds(libraryId: string, limit: number): Promise<readonly Pick<SongRow, 'id' | 'library_id' | 'path'>[]> {
-    return await new SongIdRotationDAO(this.database, this.subrequests).listLegacySongIds(libraryId, limit);
-  }
-
-  /**
-   * Rotate one song's id and its playlist entries, atomically. Delegates to
-   * {@link SongIdRotationDAO}.
-   */
-  public async rotateSongId(libraryId: string, path: string, oldId: string, newId: string): Promise<WriteBatchResult> {
-    return await new SongIdRotationDAO(this.database, this.subrequests).rotateSongId(libraryId, path, oldId, newId);
   }
 
   public async listByDirectory(libraryId: string, dirPath: string): Promise<SongRow[]> {
@@ -145,6 +133,16 @@ class SongDAO extends BaseDAO {
   */
   public async listByAlbumDir(libraryId: string, dirPath: string): Promise<SongRow[]> {
     return await this.listByDirectory(libraryId, dirPath);
+  }
+
+  /**
+   * Every song in every one of `dirPaths`, keyed by directory. Delegates to
+   * {@link SongAlbumDirDAO}, built from `this` so it inherits the request scope's meter, for the
+   * reason `findByPath` and `findBySongId` do. See that module for why the batched form exists at
+   * all — `getStarred` resolved each starred album with one read per id against `libraries[0]`.
+   */
+  public async songsByAlbumDirs(scope: LibraryScope, dirPaths: readonly string[]): Promise<Map<string, SongRow[]>> {
+    return await new SongAlbumDirDAO(this.database, this.subrequests).songsByAlbumDirs(scope, dirPaths);
   }
 
   /**

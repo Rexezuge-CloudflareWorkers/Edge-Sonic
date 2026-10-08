@@ -6,7 +6,7 @@
  * authentication. Those three are the parts of the protocol that are easy to get
  * subtly wrong and that a handler has no business repeating.
  */
-import type { LibraryRow, UserRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, SongRow, UserRow } from '@edge-sonic/backend-data/dao';
 import type { AlbumIdentity } from './albumIdentity';
 
 import type { SubsonicParams } from '@edge-sonic/subsonic';
@@ -99,6 +99,14 @@ interface RestContext {
   */
   readonly pageSize: (requested: number | undefined, fallback?: number) => number;
   /**
+   * The largest `offset` a request may carry, derived from this deployment's page ceiling.
+   *
+   * `params.int` bounds an offset by `MAX_SAFE_INTEGER`, which is a parse bound rather than a
+   * page bound — and two endpoints added it to their limit, so one query parameter asked D1 for
+   * the whole matching set and the caller discarded it with a `slice`. See `./paging`.
+   */
+  readonly maxOffset: number;
+  /**
   The album identity for a library — its grouping, its key, and its id.
 
   **Resolved from the request's configuration and never from a module constant**, because a
@@ -108,6 +116,15 @@ interface RestContext {
   see.
   */
   readonly albumsFor: (library: LibraryRow) => AlbumIdentity;
+  /**
+   * The album identity for a **set** of libraries, resolved per row.
+   *
+   * The union default means one request reads N libraries, and under `ALBUM_GROUP_BY=folder` the
+   * library is *part of* the album id — so a single identity cannot name all N. Every mapper takes
+   * this rather than an identity, which is what makes "the id was minted against the wrong
+   * library" unrepresentable rather than merely fixed.
+   */
+  readonly albumsForScope: (libraries: readonly LibraryRow[]) => (song: SongRow) => AlbumIdentity;
 }
 
 export type { RestContext };

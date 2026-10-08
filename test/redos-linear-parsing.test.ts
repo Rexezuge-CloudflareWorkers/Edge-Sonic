@@ -126,7 +126,7 @@ function quadraticStripSlashes(value: string): string {
  * constructor rather than a literal.
  */
 /* eslint-disable-next-line prefer-regex-literals -- a literal here would re-trip CodeQL's own query */
-const QUADRATIC_ALBUM_SEPARATOR = new RegExp('\\s+[-\u2013\u2014]\\s+');
+const QUADRATIC_ALBUM_SEPARATOR = new RegExp('\\s+[-\u2013—]\\s+');
 
 /**
  * Wall-clock milliseconds for one call, as the **minimum** of five runs.

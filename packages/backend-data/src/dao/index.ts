@@ -33,10 +33,9 @@ export type { WriteBatchResult } from './BaseDAO';
 // D1's ceiling — which put `SongDAO` over the god-file limit.
 export { SongIdLookupDAO } from './songIdLookup';
 export { IDS_PER_STATEMENT } from './songIdLookup';
-// Renaming legacy long song ids to short ones, a page per scan chunk. Its own
-// DAO because `SongDAO` owns one row and is already at the god-file limit, and
-// because the rename spans two tables atomically.
-export { SongIdRotationDAO } from './songIdRotation';
+// Songs by directory, in one batched statement over a whole scope. The starred-album resolution
+// reads; `SongDAO` owns one row and is over the soft limit.
+export { SongAlbumDirDAO } from './songAlbumDirs';
 export { libraryScope, libraryIds, libraryReserve } from './libraryScope';
 export type { LibraryScope } from './libraryScope';
 export { deriveFromPath, deriveTitleFromFileName, DERIVED_VERSION } from './pathConvention';

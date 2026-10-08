@@ -56,8 +56,13 @@ Song ids are the exception: short and derived (`songId.ts`, `s:` plus the first
 128 bits of SHA-256 over `libraryId \n path` as 22 base64url chars), because
 a reversible song id grows with the path and clients file downloads under
 it — over 255 bytes is `ENAMETOOLONG`. They resolve through the row, and a
-rescan recreates them byte-identically; legacy long ids still resolve through
-`(library_id, path)`.
+rescan recreates them byte-identically. The reversible form is **retired**:
+`songs.id` was rotated in bounded batches, and the `(library_id, path)` fallback
+that used to resolve a pre-rotation id is gone. An annotation written before the
+rotation — a star, rating, bookmark, play count, queue entry or now-playing row —
+names the old id and no longer resolves. That is the operator's decision, recorded
+in `songId.ts`, and the alternative was a permanent dual-path lookup in five DAOs
+and two mappers reading rows this server will not write again.
 
 Eight kinds exist and **three are never minted**: `mf:` (the music folder is a position, not
 a row), `dira:` (reserved; `getIndexes` mints `ar:`) and `vid:` (reserved for video). An id

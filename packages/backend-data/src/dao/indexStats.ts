@@ -33,17 +33,6 @@ import { NodeDAO } from './NodeDAO';
 import { ScanStateDAO } from './ScanStateDAO';
 
 /**
- * The three tables a drop destroys, and what each one bills per row.
- *
- * `nodes` is here rather than omitted because a library has far more folders than it has
- * tracks, and a projection that quoted only the songs would under-report the bill by a
- * factor the operator cannot see. `scan_state` is one row per library and is included for
- * completeness — it is the smallest term and it is the one that decides whether the library
- * reads as "never scanned" afterwards.
- */
-const DROPPED_TABLES = ['songs', 'nodes', 'scan_state'] as const;
-
-/**
  * What dropping one library's index would delete, and what that would bill.
  *
  * `billedRows` is the figure the operator is shown and is the same arithmetic the drop is
@@ -168,5 +157,5 @@ class IndexStatsDAO extends BaseDAO {
   }
 }
 
-export { IndexStatsDAO, estimateBilledRows, DROPPED_TABLES };
+export { IndexStatsDAO, estimateBilledRows };
 export type { LibraryIndexStats, IndexStats };

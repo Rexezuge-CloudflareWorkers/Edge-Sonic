@@ -193,7 +193,7 @@ class ImportSourceService {
       // exists whose URL they may no longer use, and repeating that sentence into a run report
       // would defeat the point — a report is read by the operator, but it is also served by
       // `GET /user/import/:id`, and the two must not be distinguishable to whoever calls it.
-      return { ok: false, reason: 'The import source\u2019s host is no longer permitted by this deployment\u2019s SSRF policy.' };
+      return { ok: false, reason: 'The import source’s host is no longer permitted by this deployment’s SSRF policy.' };
     }
 
     const key = await this.deps.resolveKey();

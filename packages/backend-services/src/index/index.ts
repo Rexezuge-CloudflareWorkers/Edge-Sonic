@@ -10,7 +10,7 @@ export { reconcileFolder } from './scanFolder';
 export { nodeRowNeedsWrite } from './nodeWrite';
 export type { DesiredNodeRow } from './nodeWrite';
 export type { FolderWrites } from './scanAccounting';
-export type { ScanDeps, ScanSongInput, ScanDerivationStore, ScanIdRotationStore, ScanDailyBudget } from './scanTypes';
+export type { ScanDeps, ScanSongInput, ScanDerivationStore, ScanDailyBudget } from './scanTypes';
 export type { ScanNodeInput, ScanNodeStore } from './scanNodeStore';
 export {
   MAX_CONSECUTIVE_FAILURES,

@@ -23,7 +23,13 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 - `src/rest/endpoints/` — one module per protocol area. `index.ts` holds the table and
   the known-but-unimplemented list.
 - `src/rest/context.ts` — the per-request shape: `songs` (row state) and `songIndex`
-  (the aggregate reads), plus `params`, `format`, and `pageSize`.
+  (the aggregate reads), plus `params`, `format`, `pageSize` and `maxOffset`.
+- `src/rest/mappers.ts` — song rows to protocol records, and the names both a song element and the
+  artist grouping derive. `src/rest/artistIndex.ts` — the artist half (`groupArtistRows`,
+  `artistIndexGroups`), split out because it is *artist* work and the two are the shared half of
+  `getArtists` and `getIndexes`. `src/rest/albumIdentity.ts` — what an album **is** for one request:
+  `albumIdentity` for one library and `identityPerLibrary` for a granted set. `src/rest/paging.ts` —
+  the derived `maxOffset`, with the reason an offset needs a ceiling at all.
 - `src/user/routes.ts` — the operator API behind Access. `src/user/librarySummary.ts` — the
   library list's projection over `libraries`, `scan_state` and `songs`.
   `src/user/indexDropRoutes.ts` — the Danger Zone's three routes.
@@ -324,6 +330,33 @@ listed it at `songCount: 1` and never opened the track it was missing. There was
 no client view that showed both — so "a user with two libraries is not a user with
 a preference between them" was the only reading that made the data reachable.
 
+### The union reaches the **identity**, not only the read — and the mappers make that structural
+
+It was implemented for the *read* and not for the *identity*, in four places. Each bound
+`library = libraries[0]` and used it to filter rows or mint ids while reading across the union:
+
+| Surface | What it dropped |
+| --- | --- |
+| `getStarred` | every starred **song** from the second library, while the starred **albums** in the same response were unioned — so one response was internally inconsistent |
+| `getNowPlaying` | the current track, for a user playing something in their second library |
+| `getArtist` | every album key outside `libraries[0]`, from the completion fetch — so a split release was published here at a `songCount` of 1 while `getAlbumList2`, `search3` and `getAlbum` reported 2 for the same id |
+| every album list | nothing visible under a tag grouping, and a **dead link** under `ALBUM_GROUP_BY=folder` |
+
+The folder case is the one that made it a protocol bug rather than a missing row: under that grouping
+the library is **part of** the album id (`albumIdOf`), so a release whose folder lives in library 2 was
+published as `al:<library1>:<library2Dir>` — and `getAlbum` decoded it, queried library 1 for library
+2's directory, found nothing and answered `code=70`. The tag groupings carry the sentinel and ignore
+the library half, which is exactly why the defect survived and only appeared on a per-performer
+library.
+
+So the fix is structural rather than a patch per call site: `songToModel`, `songToChild`,
+`albumModel`, `groupArtistRows` and `groupAlbumsOf` take **`(song) => AlbumIdentity`** — a resolver —
+instead of a `LibraryRow` beside an identity. They used to accept that library argument **and never
+read it**, so nothing about the two could be checked against each other; a resolver cannot disagree
+with its row. `context.albumsForScope(libraries)` builds one from a granted set. Asserted in
+`test/library-union.test.ts`, in both directions for `getStarred`, plus `getNowPlaying` and
+`getArtist`.
+
 **And the cost, which is a decision with a witness in
 `test/library-union.test.ts`:** `getMusicFolders` still publishes the individual
 libraries, so a client with a folder picker can choose one and will then see
@@ -348,9 +381,11 @@ except `s:`, which is short and derived (`subsonic/songId.ts`: `s:` plus the
 first 128 bits of SHA-256 over `libraryId \n path` as 22 base64url chars, so a
 rescan after an index drop recreates it). A reversible song id grows with the path and clients file
 downloads under it, so over 255 bytes it is `ENAMETOOLONG` on the client with
-no server-side error. Song ids resolve through the row; legacy long ids still
-resolve through `(library_id, path)`, and the scan backfill rotates them a page
-per chunk to the derived short form. Album (`alk:`) and artist (`ar:`) ids stay reversible: they name
+no server-side error. Song ids resolve through the row by primary key, and **only** that:
+the reversible long form and its `(library_id, path)` fallback are retired, so an
+annotation written before the rotation (a star, rating, bookmark, play count, queue
+entry or now-playing row) names the old id and no longer resolves. The operator's
+decision; see `subsonic/songId.ts`. Album (`alk:`) and artist (`ar:`) ids stay reversible: they name
 groups, not files, and are never download filenames.
 Artist ids derive from the artist grouping's **name**. Album ids derive from the album's
 **grouping key** — `ALBUM_GROUP_BY`, owned by `subsonic/albumKey.ts` and carried per request by
@@ -358,10 +393,9 @@ Artist ids derive from the artist grouping's **name**. Album ids derive from the
 
 ### An album or artist id names **no** library, and a song still resolves to one
 
-A legacy song id carries its library in the payload; a short one carries
-nothing and resolves to it through the row. Either way the scope rule below is
-unchanged — the grant check is on the resolved library, so an id in a library
-the caller cannot see is `code=70`, never `code=50`.
+A short song id carries nothing and resolves to its library through the
+row. The scope rule below is unchanged — the grant check is on the resolved library, so an id
+in a library the caller cannot see is `code=70`, never `code=50`.
 
 `decodeId` requires a library half (`separator <= 0` is `code=70`), so "this id
 names no particular library" is not a payload this repository could otherwise
@@ -573,6 +607,17 @@ it is a bare list at a key rather than a record wrapping one.
 - Never batch an `IN (...)` list on a number you chose. Derive it from
   `bindChunkSize`. See the parent index.
 - Never let a list wrapper's child name disagree with its declared list key.
+- Never mint an id from `libraries[0]` over a union read. Take a resolver; see *The union reaches
+  the identity* above.
+- Never pass an unbounded `id` list to a per-id loop. `MAX_IDS_PER_REQUEST` refuses with a code a
+  client can read; without it the platform terminates the invocation and the client sees a dropped
+  connection.
+- Never publish a `parent` id computed with `slice(0, lastIndexOf('/'))`. A top-level folder's path
+  holds no separator, so that answers `-1` and yields the folder name one character short; and
+  `decodeId` refuses an empty path, so the library root has **no id** and is published as `''`.
+  `parentOf` in `libraryNames.ts` is the one implementation of both halves.
+- Never add an unvalidated parameter to a SQL `LIMIT` or `OFFSET`. `context.maxOffset` is derived
+  from the page ceiling; `params.int` bounds an offset by `MAX_SAFE_INTEGER` otherwise.
 - Never mark a `5xx` with a raw error message. A D1 error names tables and columns.
 - Never let `getCoverArt` answer with anything but an image. It is the one `/rest`
   endpoint consumed as bytes rather than parsed, so the Subsonic envelope is not a

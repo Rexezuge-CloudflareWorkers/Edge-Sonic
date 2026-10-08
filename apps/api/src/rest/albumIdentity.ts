@@ -37,7 +37,7 @@
  */
 import { albumIdOf, albumKeySpec } from '@edge-sonic/subsonic';
 import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
-import type { SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 
 /**
  * What an album is, for one request against one library.
@@ -80,6 +80,37 @@ function albumIdentity(grouping: AlbumGroupingValue, libraryId: string): AlbumId
 }
 
 /**
+ * One identity **per library**, for a read that spans several of them.
+ *
+ * ### Why the identity has to follow the row and not the request
+ *
+ * `resolveLibraries` answers every library the caller was granted when no `musicFolderId`
+ * was sent, so a list endpoint reads the union. The album id it then published was minted from
+ * `libraries[0]` — and under `ALBUM_GROUP_BY=folder` that library is **part of the id**
+ * (`albumIdOf`, `subsonic/albumId.ts`). So a release whose folder lives in the second library
+ * was published as `al:<firstLibrary>:<secondLibraryDir>`, and `getAlbum` decoded it, queried
+ * the first library for the second's directory, found nothing and answered `code=70`: a link
+ * that is dead on arrival.
+ *
+ * The tag groupings hide the same defect, because they carry the sentinel and ignore the
+ * library half — which is exactly why it survived. What is wrong is not the value but the
+ * shape: one request holds rows from N libraries and one identity cannot name all N.
+ *
+ * So the id is derived from **the row's own `library_id`**, and this is the lookup that does
+ * it. `fallback` is the identity a caller already built, used for a row whose library is not
+ * in `libraries` — which cannot happen for a grant-scoped read, and is named rather than
+ * thrown so a mapper stays a total function over rows.
+ */
+function identityPerLibrary(
+  grouping: AlbumGroupingValue,
+  libraries: readonly LibraryRow[],
+  fallback: AlbumIdentity,
+): (song: SongRow) => AlbumIdentity {
+  const byLibraryId = new Map(libraries.map((library) => [library.id, albumIdentity(grouping, library.id)]));
+  return (song) => byLibraryId.get(song.library_id) ?? fallback;
+}
+
+/**
  * The one comparator for "an album's tracks, in the order a client sees them".
  *
  * **Disc, then track, then name** — and `disc` was the term two of the three copies were missing.
@@ -96,5 +127,5 @@ function compareAlbumTracks(a: SongRow, b: SongRow): number {
   return (a.disc ?? 9999) - (b.disc ?? 9999) || (a.track ?? 9999) - (b.track ?? 9999) || a.name.localeCompare(b.name);
 }
 
-export { albumIdentity, compareAlbumTracks };
+export { albumIdentity, identityPerLibrary, compareAlbumTracks };
 export type { AlbumIdentity };

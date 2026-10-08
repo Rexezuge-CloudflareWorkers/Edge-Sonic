@@ -32,7 +32,13 @@ import {  ErrorCode, md5Hex, SubsonicError } from '@edge-sonic/subsonic';
 
 interface AuthThrottle {
   countRecentFailures(identity: string, oldestBucket: number, currentBucket: number): Promise<number>;
-  recordFailure(identity: string, bucket: number): Promise<number>;
+  /**
+   * Record one failure. Returns nothing: the decision the counter feeds is
+   * {@link countRecentFailures}, which reads the window itself. It used to return the bucket's
+   * count, read back with a second statement, and the only caller discarded it — so every
+   * *failed* authentication cost two D1 statements on the path that exists to stop guessing.
+   */
+  recordFailure(identity: string, bucket: number): Promise<void>;
   clearFailures(identity: string): Promise<void>;
   pruneOldBuckets(identity: string, oldestBucket: number): Promise<number>;
 }
@@ -173,14 +179,6 @@ class SubsonicAuthService {
     }
 
     return legacyPassword !== null && legacyPassword.length > 0 ? timingSafeEqualStrings(password, legacyPassword) : false;
-  }
-
-  /**
-  Convenience for the admin API, which sets a password rather than checking one.
-  */
-  public static async encryptPassword(plaintext: string, key: string): Promise<{ ciphertext: string; iv: string }> {
-    const { encryptData } = await import('@edge-sonic/backend-data/crypto');
-    return await encryptData(plaintext, key);
   }
 }
 

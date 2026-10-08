@@ -157,17 +157,6 @@ abstract class BaseDAO {
   }
 
   /**
-   * How many more subrequests this DAO could issue, or `Infinity` when unmetered.
-   *
-   * Exposed for the paging loops that page over *groups* rather than rows: they must stop
-   * before the invocation is killed, and the only number that can tell them is the one the
-   * ceiling is enforced through.
-   */
-  protected get subrequestsRemaining(): number {
-    return this.meter.remaining;
-  }
-
-  /**
    * The invocation's counter, for a DAO that constructs another one.
    *
    * `SongDAO` delegates its id lookups to `SongIdLookupDAO`, and it built one with

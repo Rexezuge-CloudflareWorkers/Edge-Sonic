@@ -2,7 +2,7 @@ import { EnvParser } from './EnvParser';
 import type { AlbumGroupingValue } from '@edge-sonic/subsonic';
 import { isLogLevel } from '../logger';
 import type { LogLevel } from '../logger';
-import { DEFAULT_DEBUG_MODE, DEFAULT_SITE_URL } from './ConfigurationDefaults';
+
 import { AuthConfig } from './sections/AuthConfig';
 import { AuthThrottleConfig, LibraryLimits, RequestLimits, ScanLimits } from './sections/LibraryLimits';
 import { DERIVED_MARKER_MAX_LENGTH, validateConfiguration } from './validate';
@@ -82,16 +82,6 @@ class AppConfiguration {
   public getLogLevel(): LogLevel | null {
     const raw = EnvParser.string(this.env, 'LOG_LEVEL', '').trim().toLowerCase();
     return isLogLevel(raw) ? raw : null;
-  }
-
-  public getDebugMode(): boolean {
-    return EnvParser.boolean(this.env, 'DEBUG_MODE', DEFAULT_DEBUG_MODE);
-  }
-
-  public getSiteUrl(): string {
-    let url = EnvParser.string(this.env, 'SITE_URL', DEFAULT_SITE_URL);
-    while (url.endsWith('/')) url = url.slice(0, -1);
-    return url;
   }
 
   public getMaxLibraries(): number {

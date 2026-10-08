@@ -69,7 +69,7 @@ integration config has no thresholds, deliberately.
 ## The gates
 
 **Coverage floors are `89 / 78 / 92 / 92`** (statements / branches / functions / lines),
-against a measured 89.33 / 78.93 / 92.07 / 92.49. They are a **measured** floor: lower one
+against a measured 89.62 / 79.08 / 92.46 / 92.74. They are a **measured** floor: lower one
 to make CI green and the gate stops saying anything. `apps/web` is deliberately *not* in the
 coverage `include`, and `packages/backend-errors` is excluded because it is a pure taxonomy
 whose mapping out is tested.

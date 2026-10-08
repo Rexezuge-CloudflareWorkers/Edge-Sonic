@@ -132,7 +132,7 @@ one is present but inert, because that is the case one config edit from being li
 
 | Group  | Vars (default)                                                             |
 | ------ | -------------------------------------------------------------------------- |
-| App    | `DEBUG_MODE` (`false`), `SITE_URL` (`""`), `LOG_LEVEL` (unset), `ENVIRONMENT` (`production`) |
+| App    | `LOG_LEVEL` (unset), `ENVIRONMENT` (`production`) |
 | Scan   | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`) |
 | Media  | `TAG_READ_BYTES` (`131072`), `TAG_READ_TAIL_BYTES` (`65536`), `WEBDAV_TIMEOUT_MS` (`10000`) |
 | Limits | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`) |

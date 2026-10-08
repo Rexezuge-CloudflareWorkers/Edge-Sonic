@@ -662,12 +662,16 @@ describe('the billed-row model is the schema, not a number typed beside a query'
   });
 });
 
-/** Encode a legacy long Subsonic id, the form every lookup still resolves.
+/** A reversible long Subsonic id, **hand-encoded**, for seeding a row that production never writes.
  *
- * Used for seeding: any `songs.id` value exercises the DAO the same way, and
- * the legacy form is what the rotation cases need. New rows in production carry
- * `deriveShortSongId` instead — see the `short song ids` block, which seeds
- * those through the product. */
+ * Written rather than imported from the product so a test cannot pass by agreeing with the
+ * implementation it is checking: the `short song ids` block asserts that a row carrying this
+ * resolves to nothing, and that assertion is only worth anything if the value is the reversible form
+ * spelled independently. A helper that called `encodeId` would be the same spelling by construction.
+ *
+ * Kept rather than deleted because "a row holding an id this server will never mint again" is a
+ * state a restored backup or a hand-edited database can be in, and its behaviour should be asserted
+ * rather than assumed. */
 function songId(libraryId: string, path: string): string {
   const bytes = new TextEncoder().encode(`${libraryId}\n${path}`);
   let binary = '';
@@ -4253,19 +4257,31 @@ describe('a remote instance’s two refusals are told apart, because they are no
 });
 
 describe('short song ids', () => {
-  async function seedShortIds(): Promise<{ libraryId: string; songs: SongDAO; legacy: string; short: string }> {
+  async function seedShortIds(): Promise<{ libraryId: string; songs: SongDAO; short: string }> {
     const userId = await seedUser('ShortIds');
     const libraryId = await seedLibrary(userId, 'LSHORT');
     const songs = new SongDAO(handle.db, DERIVED_MARKER);
-    const legacy = songId(libraryId, 'Blur/Holocene/01.flac');
-    await songs.upsertFileFacts([
-      { id: legacy, libraryId, path: 'Blur/Holocene/01.flac', dirPath: 'Blur/Holocene', name: '01.flac', size: 10, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
-    ]);
-    const short = deriveShortSongId(libraryId, 'Blur/For Emma/02.flac');
-    await songs.upsertFileFacts([
-      { id: short, libraryId, path: 'Blur/For Emma/02.flac', dirPath: 'Blur/For Emma', name: '02.flac', size: 10, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
-    ]);
-    return { libraryId, songs, legacy, short };
+    // Two rows, so an ordering assertion has something to preserve. Both carry derived ids — the
+    // reversible form is retired, so a row indexed today never holds one.
+    for (const [folder, name] of [
+      ['Blur/For Emma', '02.flac'],
+      ['Blur/Holocene', '01.flac'],
+    ] as const) {
+      await songs.upsertFileFacts([
+        {
+          id: deriveShortSongId(libraryId, `${folder}/${name}`),
+          libraryId,
+          path: `${folder}/${name}`,
+          dirPath: folder,
+          name,
+          size: 10,
+          mtimeMs: 1,
+          contentType: 'audio/flac',
+          suffix: 'flac',
+        },
+      ]);
+    }
+    return { libraryId, songs, short: deriveShortSongId(libraryId, 'Blur/For Emma/02.flac') };
   }
 
   it('derives ids no download filename can refuse', () => {
@@ -4285,60 +4301,43 @@ describe('short song ids', () => {
     expect(await songs.findByPath(libraryId, 'Blur/missing.flac')).toBeNull();
   });
 
-  it('resolves a short id directly and a legacy id through its path', async () => {
-    const { libraryId, songs, legacy, short } = await seedShortIds();
+  it('resolves a short id directly, and answers nothing for an id no row holds', async () => {
+    // **One statement, and no decode fallback.** `findBySongId` used to read `(library_id, path)`
+    // off a reversible `s:` id on a miss, so a pre-rotation id still resolved; the fallback is
+    // retired with the rotation, so a miss is a miss. The two negative cases below are what say so
+    // — one is a malformed id, the other a well-formed id for a path this library does not hold.
+    const { libraryId, songs, short } = await seedShortIds();
     expect((await songs.findBySongId(short))?.path).toBe('Blur/For Emma/02.flac');
-    expect((await songs.findBySongId(legacy))?.path).toBe('Blur/Holocene/01.flac');
     expect(await songs.findBySongId('s:not-a-real-id')).toBeNull();
     expect(await songs.findBySongId(deriveShortSongId(libraryId, 'Blur/missing.flac'))).toBeNull();
+    // And a reversible id for a path that **does** exist resolves to nothing, because the row
+    // holds a derived id. Stated rather than assumed: this is the behaviour the operator chose.
+    expect(await songs.findBySongId(songId(libraryId, 'Blur/For Emma/02.flac'))).toBeNull();
   });
 
-  it('resolves mixed id lists in the caller order', async () => {
-    const { libraryId, songs, legacy, short } = await seedShortIds();
-    const inLibrary = await songs.listIdsIn(libraryId, [legacy, short, 's:missing']);
-    expect(inLibrary.map((row) => row.path)).toEqual(['Blur/Holocene/01.flac', 'Blur/For Emma/02.flac']);
-    const across = await songs.listIdsAcrossLibraries([short, legacy]);
-    expect(across.map((row) => row.path)).toEqual(['Blur/For Emma/02.flac', 'Blur/Holocene/01.flac']);
-    // Scoped to one library: a legacy id for another library stays absent.
-    expect(await songs.listIdsIn('SOMEWHERE-ELSE', [legacy])).toEqual([]);
+  it('resolves id lists in the caller order, omitting ids that do not resolve', async () => {
+    const { libraryId, songs, short } = await seedShortIds();
+    const inLibrary = await songs.listIdsIn(libraryId, [short, 's:missing']);
+    expect(inLibrary.map((row) => row.path)).toEqual(['Blur/For Emma/02.flac']);
+    // Across every library the ids can belong to, and still in the caller's order — an `IN` list
+    // returns rows in index-scan order, so this is the property that makes a play queue stable.
+    const across = await songs.listIdsAcrossLibraries([short, 's:missing']);
+    expect(across.map((row) => row.path)).toEqual(['Blur/For Emma/02.flac']);
+    // Scoped to one library: an id for another library stays absent.
+    expect(await songs.listIdsIn('SOMEWHERE-ELSE', [short])).toEqual([]);
   });
 
-  it('preserves an existing id on upsert, including a legacy one', async () => {
-    // The DAO keeps a row's stored id even if an upsert offers a different one.
-    // New paths derive a short id, but an old row's long id must remain until
-    // rotation can update its playlist entries at the same time.
-    const { libraryId, songs, legacy, short } = await seedShortIds();
+  it('preserves an existing id on upsert, so a rescan writes nothing to the key', async () => {
+    // The DAO keeps a row's stored id even if an upsert offers a different one. With every stored id
+    // being the derived one this is idempotence rather than caution — a rescan computes the value
+    // the row already holds — but it is what keeps `id` out of the `SET` list, and that is the
+    // property worth asserting: a renamed row without its playlist entries orphans every playlist
+    // naming it.
+    const { libraryId, songs, short } = await seedShortIds();
     expect(short).toBe(deriveShortSongId(libraryId, 'Blur/For Emma/02.flac'));
     await songs.upsertFileFacts([
       { id: 's:AAAAAAAAAAAAAAAAAAAAAA', libraryId, path: 'Blur/For Emma/02.flac', dirPath: 'Blur/For Emma', name: '02.flac', size: 11, mtimeMs: 2, contentType: 'audio/flac', suffix: 'flac' },
-      { id: deriveShortSongId(libraryId, 'Blur/Holocene/01.flac'), libraryId, path: 'Blur/Holocene/01.flac', dirPath: 'Blur/Holocene', name: '01.flac', size: 11, mtimeMs: 2, contentType: 'audio/flac', suffix: 'flac' },
     ]);
     expect((await songs.findByPath(libraryId, 'Blur/For Emma/02.flac'))?.id).toBe(short);
-    expect((await songs.findByPath(libraryId, 'Blur/Holocene/01.flac'))?.id).toBe(legacy);
-  });
-
-  it('selects only long ids for rotation', async () => {
-    const { libraryId, songs } = await seedShortIds();
-    expect((await songs.listLegacySongIds(libraryId, 10)).map((row) => row.path)).toEqual(['Blur/Holocene/01.flac']);
-  });
-
-  it('rotates a row and its playlist entries together, or neither', async () => {
-    const { libraryId, songs, legacy } = await seedShortIds();
-    const playlists = new PlaylistDAO(handle.db);
-    const userId = await seedUser('ShortIdsOwner');
-    const playlist = await playlists.create({ ownerUserId: userId, name: 'Mix' });
-    await playlists.replaceEntries(playlist.id, [legacy], 100);
-
-    const rotated = deriveShortSongId(libraryId, 'Blur/Holocene/01.flac');
-    const result = await songs.rotateSongId(libraryId, 'Blur/Holocene/01.flac', legacy, rotated);
-    expect(result.changes).toBeGreaterThan(0);
-
-    // The join the playlist renders through holds again, under the new id.
-    expect((await playlists.listEntrySongs(playlist.id)).map((row) => row.id)).toEqual([rotated]);
-    // And the client's cached long id still resolves, through the path.
-    expect((await songs.findBySongId(legacy))?.id).toBe(rotated);
-    expect((await songs.listLegacySongIds(libraryId, 10))).toEqual([]);
-    // A second rotation of the same row matches nothing and changes nothing.
-    expect((await songs.rotateSongId(libraryId, 'Blur/Holocene/01.flac', legacy, deriveShortSongId(libraryId, 'Blur/Holocene/01.flac'))).changes).toBe(0);
   });
 });

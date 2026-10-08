@@ -267,12 +267,6 @@ function createRequestScope(
         deriveFor: async (rows) => (await scope.get(Tokens.SongDerivationDAO)()).deriveFor(rows),
         applyDerivation: async (writes) => (await scope.get(Tokens.SongDerivationDAO)()).applyDerivation(writes),
       },
-      // Legacy long song ids rotate to short ones a page per chunk, until none
-      // remain. Same budget as the derivation backfill above.
-      idRotation: {
-        listLegacySongIds: async (libraryId, limit) => (await scope.get(Tokens.SongDAO)()).listLegacySongIds(libraryId, limit),
-        rotateSongId: async (libraryId, path, oldId, newId) => (await scope.get(Tokens.SongDAO)()).rotateSongId(libraryId, path, oldId, newId),
-      },
       subrequests,
       clientFor,
       timeoutMs: config.getWebdavTimeoutMs(),

@@ -22,12 +22,28 @@
  * id matches `LIBRARY_ID_PATTERN` (no newline) and a stored path never holds
  * one (`normalizeRelativePath` refuses control characters).
  *
- * Legacy ids are still accepted everywhere and resolve through
- * `(library_id, path)`; they are never minted. Album (`alk:`) and artist
- * (`ar:`) ids are out of scope: they name groups, not files, and are never
- * used as download filenames.
+ * Album (`alk:`) and artist (`ar:`) ids are out of scope: they name groups, not files, and are
+ * never used as download filenames.
+ *
+ * ### The reversible form is gone, and that is a data decision
+ *
+ * There was a `legacySongId(libraryId, path)` here and a `(library_id, path)` fallback behind every
+ * song lookup, so a client holding an id from before the switch kept working: `songs.id` was
+ * rotated in bounded batches by the scan, while stars, ratings, bookmarks, play counts, queue entries
+ * and now-playing rows were left alone and resolved through a dual lookup (`annotationValue` read
+ * the row's current id *and* its legacy form).
+ *
+ * Rotation rewrote `songs.id` and `playlist_entries` — the two places a rename is safe — and
+ * deliberately did **not** rewrite the annotation tables, on the grounds that reads resolve both
+ * forms and writes store the canonical id, so they would migrate lazily as clients re-marked.
+ *
+ * That left the fallback load-bearing rather than transitional, and it is now removed. **A star,
+ * rating, bookmark or play count written before the rotation no longer resolves**, because its row's
+ * id changed and the stored id is the old one. The operator's decision, stated here rather than
+ * discovered later; the alternative was a permanent dual-path lookup in five DAOs and two mappers
+ * whose only remaining purpose was to read rows this server will not write again.
  */
-import { encodeId, IdKind, toBase64Url } from './ids';
+import { toBase64Url } from './ids';
 import { sha256Bytes } from './sha256';
 
 /**
@@ -41,12 +57,6 @@ const SONG_SHORT_PAYLOAD_BYTES = 16;
 const SONG_SHORT_ID_PATTERN = /^s:[\w-]{22}$/;
 
 /**
- * Above every short id (24 chars) and below every production legacy id (a
- * 36-char UUID plus path, base64-encoded). Selects rows still owing rotation.
- */
-const SONG_LEGACY_ID_LENGTH_THRESHOLD = 32;
-
-/**
  * A song's short id, derived from where the file lives.
  *
  * The first 128 bits of SHA-256 over `libraryId + "\n" + path`, base64url
@@ -58,6 +68,11 @@ const SONG_LEGACY_ID_LENGTH_THRESHOLD = 32;
  * after an index drop recreates byte-identical ids. A caller holding a row
  * still reuses the row's stored id — see `songSql.ts`, which preserves
  * `songs.id` on conflict — and only a missing row derives.
+ *
+ * With the reversible form retired that clause is now idempotence rather than caution: every stored
+ * id **is** the derived one, so a rescan computes the value the row already holds and has nothing
+ * to rename. Assigning `id` from `excluded` instead would be equally correct today and would break
+ * the day a stored id was ever not the derived one, which is the reason it is spelled out here.
  */
 function deriveShortSongId(libraryId: string, path: string): string {
   const digest = sha256Bytes(new TextEncoder().encode(`${libraryId}\n${path}`));
@@ -68,15 +83,4 @@ function isShortSongId(id: string): boolean {
   return SONG_SHORT_ID_PATTERN.test(id);
 }
 
-/**
- * The id this song carried before rotation, for annotation lookups.
- *
- * Stars, ratings and play counts are stored under the id the song had when the
- * user marked it. Computing the legacy form from the row lets a lookup check
- * both without rewriting user tables.
- */
-function legacySongId(libraryId: string, path: string): string {
-  return encodeId(IdKind.Song, libraryId, path);
-}
-
-export { deriveShortSongId, isShortSongId, legacySongId, SONG_SHORT_ID_PATTERN, SONG_LEGACY_ID_LENGTH_THRESHOLD };
+export { deriveShortSongId, isShortSongId, SONG_SHORT_ID_PATTERN };

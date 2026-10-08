@@ -83,12 +83,13 @@ export const startLibraryEnrich = (id: string): Promise<EnrichStateSummary> => a
 /**
  * Read one library's enrichment state.
  *
- * A passive read, like `libraryScanStatus`: the page polls the list, not this, and one
- * poll carries every library. Kept as a named export for the same reason — the route is
- * part of the operator API, and deleting the wrapper because nothing here calls it today
- * would make the route look unused to the next reader.
+ * A passive read, like `libraryScanStatus`, and — unlike the scan's — nothing calls it: the
+ * enrichment state arrives on `GET /user/libraries` and `LibrariesView` polls that one list, so a
+ * second read would be a second round trip for the same fact. The route exists and stays; this
+ * wrapper does not, because an export with no caller is a second vocabulary to keep in sync and
+ * its own comment used to argue for keeping it on the grounds that deleting it would make the
+ * **route** look unused — which is a comment about the next reader, not about this file.
  */
-export const libraryEnrichStatus = (id: string): Promise<EnrichStateSummary | null> => apiGet(`/libraries/${encodeURIComponent(id)}/enrich`);
 
 /**
  * Advance one enrichment chunk.
