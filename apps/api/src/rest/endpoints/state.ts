@@ -1,7 +1,7 @@
 /**
  * Per-user state the filesystem cannot hold: bookmarks and the play queue.
  */
-import { el, elList, ErrorCode, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { el, elList, ErrorCode, MAX_IDS_PER_REQUEST, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -35,7 +35,7 @@ async function getBookmarks(context: RestContext): Promise<EnvelopeResponse> {
       // Renamed to `bookmark`: the element name is the JSON key a client reads, so a
       // `song` element inside a `bookmarks` wrapper produces `bookmarks.song` and leaves
       // `bookmarks.bookmark` as the empty seed.
-      ...songElement(songToModel(song, songLibrary, context.albumsFor(songLibrary), annotations)),
+      ...songElement(songToModel(song, () => context.albumsFor(songLibrary), annotations)),
       name: 'bookmark',
       children: [
         el('position', {}, [row.position_ms]),
@@ -61,7 +61,8 @@ async function createBookmark(context: RestContext): Promise<EnvelopeResponse> {
   await context.libraries.requireForUser(context.user.id, song.library_id);
   const position = context.params.int('position', 0, { min: 0 });
   const comment = context.params.get('comment');
-  // Canonical id: a client holding a legacy long id migrates to the short one here.
+  // The row's own id, resolved above — so the stored bookmark names the row rather than whatever
+  // spelling the client sent.
   await context.annotations.createBookmark(context.user.id, song.id, position, comment ?? null);
   return respond(context, null);
 }
@@ -124,8 +125,8 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   }
 
   const annotations = await annotationsFor(context, renderable.length > 0);
-  // Canonical current: a client holding a legacy long id for a rotated row
-  // resolves to the same track, so the comparison is on what the row holds now.
+  // The stored current id, resolved through the row — so the comparison below is between two ids this
+  // server minted rather than between what a client sent and what the row holds.
   let currentCanonical: string | null = null;
   if (saved.currentSongId !== null) {
     const current = await context.songs.findBySongId(saved.currentSongId);
@@ -152,7 +153,7 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
         ...(saved.changedAt === null ? [] : [el('changed', {}, [toIso(saved.changedAt)!])]),
         // Renamed: see the note on `getBookmarks`. The element name is the key, so a
         // `song` element here would put the queue under `playQueue.song`.
-        ...renderable.map((song) => ({ ...songElement(songToModel(song, libraryOf(libraries, song.library_id), context.albumsFor(libraryOf(libraries, song.library_id)), annotations)), name: 'entry' })),
+        ...renderable.map((song) => ({ ...songElement(songToModel(song, () => context.albumsFor(libraryOf(libraries, song.library_id)), annotations)), name: 'entry' })),
       ],
     ),
   );
@@ -176,8 +177,20 @@ function libraryOf(libraries: readonly LibraryRow[], libraryId: string): Library
 
 async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   const ids = context.params.ids('id');
+
+  // **Refused, then resolved in one batched read.** This walked the ids one at a time, two statements
+  // each against a platform ceiling, with nothing bounding the list — and a saved queue is routinely
+  // longer than a page, so this was not a small number of ids. `savePlayQueue` below then passes
+  // `requireComplete`, because a half-saved queue is a *shorter* queue: a wrong answer, not an
+  // unfinished one. Refusing here means the client hears about it. See `subsonic/idLimits.ts`.
+  //
+  // **Before** the other reads, because the refusal is what the client needs and a parameter parse is
+  // not.
+  if (ids.length > MAX_IDS_PER_REQUEST) {
+    throw new SubsonicError(ErrorCode.Generic, `Too many ids in one request: ${ids.length} (limit ${MAX_IDS_PER_REQUEST}).`);
+  }
+
   const current = context.params.get('current') ?? null;
-  const position = context.params.int('position', 0, { min: 0 });
 
   // Validate every id against this user's libraries *before* replacing the queue, so a
   // bad id in the middle cannot leave a half-saved queue.
@@ -188,22 +201,31 @@ async function savePlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   // cannot see. `getPlayQueue` then filtered it out, so the queue simply came back
   // shorter than it was saved — a silent data loss with an authorization hole under it.
   //
-  // Resolved through the row, not decoded: short ids carry no library to decode,
-  // and the canonical id is stored so a legacy id migrates on save.
+  // Resolved through the row, not decoded: a short id carries no library to decode,
+  // and the row's own id is stored, so the queue names rows rather than client spellings.
+  const songs = await context.songs.listIdsAcrossLibraries([...ids, ...(current === null ? [] : [current])]);
+  // A queue is **not** a partial success: an id that does not resolve is `code=70` for the whole
+  // call, which is what the per-id lookup did by throwing on the first miss. The batch omits
+  // unresolvable ids, so the count is what detects it.
+  const expected = ids.length + (current === null ? 0 : 1);
+  if (songs.length !== expected) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+
   const canonical: string[] = [];
-  for (const id of ids) {
-    const song = await context.songs.findBySongId(id);
-    if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+  for (const song of songs.slice(0, ids.length)) {
     await context.libraries.requireForUser(context.user.id, song.library_id);
     canonical.push(song.id);
   }
   let canonicalCurrent: string | null = null;
   if (current !== null) {
-    const song = await context.songs.findBySongId(current);
-    if (!song) throw new SubsonicError(ErrorCode.NotFound, 'Song not found.');
+    const song = songs[ids.length];
     await context.libraries.requireForUser(context.user.id, song.library_id);
     canonicalCurrent = song.id;
   }
+
+  // Read after every id has resolved and been authorized, so a rejected id cannot have spent the
+  // parameter parse — the point of validating first is that nothing is written, and reading the
+  // position early would be work done for a call that is about to fail.
+  const position = context.params.int('position', 0, { min: 0 });
 
   await context.annotations.savePlayQueue({
     userId: context.user.id,

@@ -26,8 +26,6 @@ declare global {
     WEBDAV_ENCRYPTION_KEY?: string;
     SUBSONIC_REMOTE_ENCRYPTION_KEY?: string;
     ENVIRONMENT?: string;
-    DEBUG_MODE?: string;
-    SITE_URL?: string;
     TEAM_DOMAIN?: string;
     POLICY_AUD?: string;
     DEV_AUTH_EMAIL?: string;

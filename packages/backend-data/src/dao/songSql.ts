@@ -181,10 +181,13 @@ ON CONFLICT (library_id, path) DO UPDATE SET
   reader_version = CASE WHEN songs.mtime_ms = excluded.mtime_ms THEN songs.reader_version ELSE 0 END,
   -- The id is deliberately absent from this list. Song ids are derived from
   -- (library_id, path) (see subsonic songId.ts), so a rescan computes the same
-  -- id the row already holds — and a legacy row keeps its long id until the id
-  -- backfill rotates it to the derived short form together with its playlist
-  -- entries. Assigning id from excluded here would rename such a row without
-  -- its entries, orphaning every playlist that names it.
+  -- id the row already holds and this clause has nothing to change. It was
+  -- absent for a harder reason — a row carrying a reversible long id kept it
+  -- until the rotation renamed it together with its playlist entries — and
+  -- that fallback is gone. Assigning id from excluded here would be
+  -- equivalent today and unsafe the first time a stored id is not the derived
+  -- one: it renames the row without its playlist entries, orphaning every
+  -- playlist that names it.
   name = excluded.name,
   name_ci = excluded.name_ci,
   size = excluded.size,

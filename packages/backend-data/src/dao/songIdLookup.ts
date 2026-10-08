@@ -1,6 +1,14 @@
 /**
  * Fetching a known set of song rows, in the caller's order.
  *
+ * ### There is no legacy-id fallback here any more
+ *
+ * Every method below used to answer a miss by decoding the id as a reversible `s:` id and
+ * resolving it through `(library_id, path)` — a second statement per miss, a per-library grouping,
+ * and an `O(n)` decode attempt over ids that were never ids. Rotation rewrote `songs.id` in bounded
+ * batches and the fallback was kept for clients holding a pre-rotation id; that is retired, so a
+ * miss is a miss.
+ *
  * ### Why this is its own module
  *
  * Because it is a *shape* of query rather than a fact about a song. `SongDAO` owns one row —
@@ -36,7 +44,6 @@ import { BaseDAO } from './BaseDAO';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
 import type { SongRow } from './rows';
-import { decodeId, IdKind } from '@edge-sonic/subsonic';
 
 /**
  * Song ids per statement: one variable each, plus the `library_id`.
@@ -63,30 +70,21 @@ class SongIdLookupDAO extends BaseDAO {
   }
 
   /**
-   * One song by whatever id a client is holding — short or legacy.
+   * One song by id, or `null`.
    *
-   * The database first: a short id hits here, and so does a legacy id for a
-   * row that has not been rotated yet. Only on a miss is the id decoded as a
-   * legacy `s:` id and resolved through `(library_id, path)`, which is what
-   * finds a rotated row from a client's cached long id. DB-first is also what
-   * makes a short id that happens to base64-decode safely unambiguous.
+   * **One statement.** It used to fall back to decoding the id as a reversible `s:` id and reading
+   * `(library_id, path)` — so a client holding a pre-rotation id resolved, at the cost of a second
+   * statement on every miss and a decode attempt on every id that was never one. Both are gone with
+   * the fallback; the primary key answers it.
+   *
+   * A caller that genuinely holds a **path** rather than a song id — `getCoverArt`'s song branch —
+   * uses {@link findByPath} for that, which is a different question about the same row.
    */
   public async findBySongId(id: string): Promise<SongRow | null> {
-    const direct = await this.withRetry(
+    return await this.withRetry(
       async () => await this.database.prepare('SELECT * FROM songs WHERE id = ?').bind(id).first<SongRow>(),
       'songs.findBySongId',
     );
-    if (direct) return direct;
-    let libraryId: string;
-    let path: string;
-    try {
-      const decoded = decodeId(id, IdKind.Song);
-      libraryId = decoded.libraryId;
-      path = decoded.path;
-    } catch {
-      return null;
-    }
-    return await this.findByPath(libraryId, path);
   }
 
   /**
@@ -135,53 +133,6 @@ class SongIdLookupDAO extends BaseDAO {
       );
       for (const row of result.results ?? []) found.set(row.id, row);
     }
-    // Legacy fallback: a client holding a long id for a rotated row misses the
-    // lookup above. Decode the misses and resolve through (library_id, path) —
-    // the row's identity that never changes — grouped by library so each group
-    // is one indexed statement on `idx_songs_library_path`.
-    const misses = ids.filter((id) => !found.has(id));
-    if (misses.length > 0) {
-      const byLibrary = new Map<string, { paths: string[]; inputs: string[] }>();
-      const decodedOf = new Map<string, { libraryId: string; path: string }>();
-      for (const id of misses) {
-        try {
-          const decoded = decodeId(id, IdKind.Song);
-          decodedOf.set(id, { libraryId: decoded.libraryId, path: decoded.path });
-          const group = byLibrary.get(decoded.libraryId) ?? { paths: [], inputs: [] };
-          group.paths.push(decoded.path);
-          group.inputs.push(id);
-          byLibrary.set(decoded.libraryId, group);
-        } catch {
-          // Not a legacy song id (a short id simply absent, or garbage) — omitted.
-        }
-      }
-      if (byLibrary.size > 0) {
-        this.requireSubrequests(
-          // eslint-disable-next-line unicorn/prefer-iterator-helpers -- MapIterator.reduce needs a newer lib than this package targets.
-          [...byLibrary.values()].reduce((total: number, group: { paths: string[]; inputs: string[] }) => total + Math.ceil(group.paths.length / IDS_PER_STATEMENT), 0),
-          'songs.listIdsAcrossLibraries.legacy',
-        );
-        const byPath = new Map<string, SongRow>();
-        for (const [libraryId, group] of byLibrary) {
-          for (const chunk of chunkArray(group.paths, IDS_PER_STATEMENT)) {
-            const placeholders = chunk.map(() => '?').join(', ');
-            const result = await this.withRetry(
-              async () =>
-                await this.database
-                  .prepare(`SELECT * FROM songs WHERE library_id = ? AND path IN (${placeholders})`)
-                  .bind(libraryId, ...chunk)
-                  .all<SongRow>(),
-              'songs.listIdsAcrossLibraries.legacy',
-            );
-            for (const row of result.results ?? []) byPath.set(`${row.library_id}\n${row.path}`, row);
-          }
-        }
-        for (const [id, decoded] of decodedOf) {
-          const row = byPath.get(`${decoded.libraryId}\n${decoded.path}`);
-          if (row) found.set(id, row);
-        }
-      }
-    }
     // Re-sorted to the caller's order, because an `IN` list returns rows in index-scan
     // order and a play queue that reshuffles between polls is worse than no play queue.
     return ids.flatMap((id) => {
@@ -211,48 +162,15 @@ class SongIdLookupDAO extends BaseDAO {
       for (const row of result.results ?? []) found.set(row.id, row);
     }
 
-    // Legacy fallback within this library only: a miss decoding to another
-    // library stays absent — the scoped caller asked for one library and a
-    // track outside it must not resolve.
-    const misses = ids.filter((id) => !found.has(id));
-    if (misses.length > 0) {
-      const paths: string[] = [];
-      const decodedOf = new Map<string, string>();
-      for (const id of misses) {
-        try {
-          const decoded = decodeId(id, IdKind.Song);
-          if (decoded.libraryId !== libraryId) continue;
-          decodedOf.set(id, decoded.path);
-          paths.push(decoded.path);
-        } catch {
-          // Not a legacy song id for this library — omitted.
-        }
-      }
-      if (paths.length > 0) {
-        this.requireSubrequests(Math.ceil(paths.length / IDS_PER_STATEMENT), 'songs.listIdsIn.legacy');
-        const byPath = new Map<string, SongRow>();
-        for (const chunk of chunkArray(paths, IDS_PER_STATEMENT)) {
-          const placeholders = chunk.map(() => '?').join(', ');
-          const result = await this.withRetry(
-            async () =>
-              await this.database
-                .prepare(`SELECT * FROM songs WHERE library_id = ? AND path IN (${placeholders})`)
-                .bind(libraryId, ...chunk)
-                .all<SongRow>(),
-            'songs.listIdsIn.legacy',
-          );
-          for (const row of result.results ?? []) byPath.set(row.path, row);
-        }
-        for (const [id, path] of decodedOf) {
-          const row = byPath.get(path);
-          if (row) found.set(id, row);
-        }
-      }
-    }
-
     // One pass over `ids`, not over `found`: the caller's order is the answer, and
     // `found`'s is the index's.
-    return ids.flatMap((id) => (found.has(id) ? [found.get(id)!] : []));
+    //
+    // The membership test is `found.has(id)` and the read is a `get`, on purpose — a `Map` keyed by
+    // the same strings in both places is a single structure, so a row cannot be present in one and
+    // absent from the other. It used to be two hand-maintained collections in the legacy path, and
+    // a `!` bridged them; a divergence there would have written `undefined` into a saved queue rather
+    // than omitting a track, which is the difference between a shorter queue and a corrupt one.
+    return ids.flatMap((id) => (found.has(id) ? [found.get(id) as SongRow] : []));
   }
 }
 

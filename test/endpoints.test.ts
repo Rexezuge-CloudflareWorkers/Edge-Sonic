@@ -602,6 +602,39 @@ describe('starred items', () => {
     expect(afterUnstar.album.map((entry) => entry.id)).toContain(album);
   });
 
+  /**
+   * `starred` is an **instant the user starred at**, and it was published as the file's
+   * modification time multiplied by 1,000.
+   *
+   * Two defects in one expression, in three places (`songToModel`, `songToChild`,
+   * `albumRecord.albumModel`): the wrong *value* — `mtime_ms`, the file's own mtime, rather than
+   * the `starred_at` the row had in hand — and the wrong *unit*, because `mtime_ms` is
+   * `Date.parse(...)` output in **milliseconds** and `toIso` multiplies by 1,000 again. The result
+   * was an out-of-range ISO year (`+54781-…`), which a client modelling `starred` as
+   * `kotlin.time.Instant` throws on. `mappers.ts` already had the correct spelling 112 lines away,
+   * which is what let two literals for one field drift.
+   *
+   * Asserted on the parsed instant rather than on the string shape, because the string shape is
+   * what the broken version also produced — `toISOString` on a nonsense `Date` still yields
+   * `^\d{4}-\d{2}-\d{2}T…` once the year runs to five digits and the regex stops anchoring.
+   */
+  it('reports a starred song with the time it was starred, not the time the file changed', async () => {
+    await harness.rest('star', { id: SKINNY_LOVE });
+
+    const { body } = await harness.rest('getStarred2');
+    const song = payload<{ song: Array<{ id: string; starred?: string }> }>(body, 'starred2').song.find((entry) => entry.id === SKINNY_LOVE);
+    expect(song?.starred, 'a starred song carries a starred instant').toBeDefined();
+
+    const at = new Date(song?.starred as string);
+    expect(Number.isNaN(at.getTime()), `"${String(song?.starred)}" is a parseable instant`).toBe(false);
+    // A real `Date`, not one ~54,000 years out: the year is the four leading digits the protocol
+    // and every client read.
+    expect(at.getUTCFullYear(), 'the year is a plausible one, so no x1000 crept back in').toBeGreaterThan(2000);
+    // And it is *not* the file's mtime. The fixture's mtime is epoch milliseconds, so the broken
+    // value lands ~50,000 years ahead of the star, which was taken moments ago.
+    expect(at.getTime(), 'the star is not the file mtime scaled by 1000').toBeLessThan(Date.now() + 60_000);
+  });
+
   it('refuses to star anything in a library the user cannot see, and writes nothing', async () => {
     // All three id parameters go through the same `collectTargets` loop, so one
     // authorization bug covered three endpoints — which is why the count assertion is

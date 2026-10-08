@@ -17,9 +17,9 @@
  *   compilation splits one artist across many directories and has no single
  *   folder).
  */
-import type { LibraryRow, SongRow } from '@edge-sonic/backend-data/dao';
-import { artistElement, artistIdOf, elList, legacySongId } from '@edge-sonic/subsonic';
-import type { Child, ElementNode, Song } from '@edge-sonic/subsonic';
+import type { SongRow } from '@edge-sonic/backend-data/dao';
+import { artistIdOf } from '@edge-sonic/subsonic';
+import type { Child, Song } from '@edge-sonic/subsonic';
 import type { AlbumIdentity } from './albumIdentity';
 
 /**
@@ -114,110 +114,6 @@ function artistNameOf(song: SongRow): string {
 }
 
 /**
- * The sort letter for index grouping, shared by the tag view and the folder view.
- *
- * A leading article is kept in the display name and stripped only from the
- * grouping letter, which is what every client does with `ignoredArticles`. An
- * empty or non-alphabetic first character sorts under `#` rather than into the
- * empty string, which would produce an unnamed group at the top of the list.
- *
- * One function rather than one per endpoint, because two groupings that disagree
- * on the letter put the same artist under `A` in one browse and `#` in the other.
- */
-function firstLetterOf(name: string): string {
-  const trimmed = name.trim();
-  const first = [...trimmed].at(0);
-  if (first === undefined) return '#';
-  const upper = first.toUpperCase();
-  return /^[A-Z]$/.test(upper) ? upper : '#';
-}
-
-interface ArtistGroup {
-  readonly name: string;
-  readonly albums: Set<string>;
-  readonly songs: number;
-}
-
-/**
- * Song rows → artist groups, sorted by grouping key.
- *
- * The same grouping feeds `getArtists` and the artist half of `getIndexes`, so it
- * lives here rather than in either endpoint: two copies are free to disagree about
- * which name wins, and the disagreement shows up as an artist under two spellings.
- *
- * A real tag wins over a path-derived name, so the first row carrying a tag names
- * the group: a library half-enriched groups under the true name rather than under
- * a guess.
- *
- * `identity` rather than a grouping, because `albums` is a **set of album keys** and the key is
- * the grouping's answer — an artist's `albumCount` is "how many distinct albums is this artist on",
- * and under a tag grouping a compilation counts for every artist who contributed a track to it.
- * That is the honest answer for a library with no `ALBUMARTIST`: the artist page shows the album
- * in full, with the other artists' tracks on it, because a partial album is the one answer a
- * client cannot render.
- */
-function groupArtistRows(rows: readonly SongRow[], identity: AlbumIdentity): ArtistGroup[] {
-  const byName = new Map<string, { name: string; albums: Set<string>; songs: number }>();
-  for (const row of rows) {
-    const name = row.artist ?? artistNameOf(row);
-    const key = name.toLowerCase();
-    const albumKey = identity.keyOf(row);
-    const existing = byName.get(key);
-    if (existing) {
-      existing.albums.add(albumKey);
-      existing.songs += 1;
-    } else {
-      byName.set(key, { name: row.artist ?? name, albums: new Set([albumKey]), songs: 1 });
-    }
-  }
-  return [...byName].sort(([a], [b]) => a.localeCompare(b)).map(([, group]) => group);
-}
-
-/**
- * Artist groups → the letter-bucketed `index` elements both browses publish.
- *
- * One construction, because the attribute set is the contract: `getArtists` and
- * `getIndexes` publish the same `id` for the same artist, or a client drilling
- * from one into `getArtist` lands on `code=70`. The `starred` decoration is the
- * caller's — the folder view does not annotate — so it arrives as a lookup rather
- * than as a second construction.
- */
-function artistIndexGroups(library: LibraryRow, groups: readonly ArtistGroup[], starred: ReadonlyMap<string, number> = new Map()): ElementNode[] {
-  const buckets = new Map<string, ElementNode[]>();
-  for (const group of groups) {
-    const id = artistIdOf(group.name);
-    const letter = firstLetterOf(group.name);
-    const starredAt = starred.get(id);
-    const node = artistElement({
-      id,
-      name: group.name,
-      albumCount: group.albums.size,
-      // A client draws one image per artist row from `coverArt` via `getCoverArt`.
-      // Omitting it leaves Navic and every other grid client with nothing to request,
-      // so the artist list renders as empty tiles even when every album has art.
-      // The id itself is the cover id: `getCoverArt` resolves it to the artist's
-      // representative album (sidecar first, then embedded tags).
-      coverArt: id,
-      // The epoch second the artist was starred, or nothing. It used to be
-      // `{ starred: undefined }`, which is *not* a decorated flag that decorates nothing —
-      // `undefined` is dropped by both serializers, so the attribute did not exist at all
-      // on either surface. An artist star is reachable only through here, because
-      // `getStarred` deliberately does not expand one into its albums.
-      ...(starredAt !== undefined && { starred: toIso(starredAt) }),
-    });
-    const existing = buckets.get(letter);
-    if (existing) {
-      existing.push(node);
-    } else {
-      buckets.set(letter, [node]);
-    }
-  }
-  return [...buckets]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, artists]) => elList('index', 'artist', { name }, artists));
-}
-
-/**
  * This user's annotations, keyed by protocol id.
  *
  * `stars` is a **Map of id to the epoch second it was starred**, not a `Set`, and the
@@ -245,23 +141,26 @@ interface AnnotationLookup {
 const NO_ANNOTATIONS: AnnotationLookup = { stars: new Map(), ratings: new Map(), playCounts: new Map() };
 
 /**
- * An annotation for a song under either id it has ever been published under.
+ * An annotation for a song, under the id the row holds.
  *
- * Stars, ratings and play counts are stored under the id the song had when the
- * user marked it. Rotation renames the row but leaves these tables alone (they
- * resolve through the legacy fallback), so a lookup checks the row's current
- * id first and its legacy long form second — the same "current plus legacy"
- * shape `albumModel` uses for folder-shaped album ids.
+ * It used to check the row's current id **and** its legacy long form, because rotation renamed
+ * `songs.id` while leaving these tables alone. That fallback is retired, so a star, rating or play
+ * count written before the rotation no longer resolves — the operator's decision, recorded in
+ * `subsonic/songId.ts`. One lookup, one id.
  */
 function annotationValue(lookup: ReadonlyMap<string, number> | undefined, song: SongRow): number | undefined {
   if (!lookup || lookup.size === 0) return undefined;
-  const current = lookup.get(song.id);
-  if (current !== undefined) return current;
-  return lookup.get(legacySongId(song.library_id, song.path));
+  return lookup.get(song.id);
 }
 
-function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity, annotations?: AnnotationLookup): Song {
-  const albumId = identity.idOf(song);
+/**
+ * @param identity **Per row**, not per request. It used to take a `LibraryRow` beside this and
+ * never read it, so nothing about the id could be checked against the row it belongs to — and the
+ * identity it did read was built from `libraries[0]`, which under `ALBUM_GROUP_BY=folder` is part
+ * of the album id. A resolver cannot disagree with its row.
+ */
+function songToModel(song: SongRow, identityOf: (song: SongRow) => AlbumIdentity, annotations?: AnnotationLookup): Song {
+  const albumId = identityOf(song).idOf(song);
   // `artist` falls back for the same reason `album` does, four lines below — a row the
   // scan never tag-read and whose path yields no name still has to produce a record a
   // client can decode.
@@ -315,7 +214,7 @@ function songToModel(song: SongRow, library: LibraryRow, identity: AlbumIdentity
     suffix: song.suffix || suffixOfPath(song.path),
     created: toIso(song.created_at),
     ...(albumId !== undefined && { coverArt: albumId }),
-    ...(starredAt !== undefined && { starred: toIso(song.mtime_ms) }),
+    ...(starredAt !== undefined && { starred: toIso(starredAt) }),
     ...(rating !== undefined && { userRating: rating }),
     // Always a number, defaulting to 0. Omitting it leaves a client doing
     // `playCount + 1` rendering `NaN`, and `playCount` is a value every client displays
@@ -354,8 +253,8 @@ function guessContentType(suffix: string): string {
   return CONTENT_TYPES[suffix.toLowerCase()] ?? 'audio/mpeg';
 }
 
-function songToChild(song: SongRow, library: LibraryRow, parentId: string, identity: AlbumIdentity, annotations?: AnnotationLookup): Child {
-  const albumId = identity.idOf(song);
+function songToChild(song: SongRow, parentId: string, identityOf: (song: SongRow) => AlbumIdentity, annotations?: AnnotationLookup): Child {
+  const albumId = identityOf(song).idOf(song);
   const starredAt = annotationValue(annotations?.stars, song);
   const rating = annotationValue(annotations?.ratings, song);
   const playCount = annotationValue(annotations?.playCounts, song) ?? 0;
@@ -380,7 +279,7 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, ident
     bitRate: song.bitrate,
     created: toIso(song.created_at),
     mediaType: 'song',
-    ...(starredAt !== undefined && { starred: toIso(song.mtime_ms) }),
+    ...(starredAt !== undefined && { starred: toIso(starredAt) }),
     ...(rating !== undefined && { userRating: rating }),
     // Always a number, defaulting to 0. Omitting it leaves a client doing
     // `playCount + 1` rendering `NaN`, and `playCount` is a value every client displays
@@ -389,8 +288,8 @@ function songToChild(song: SongRow, library: LibraryRow, parentId: string, ident
   };
 }
 
-export { toIso, guessContentType, songToModel, songToChild, albumNameOf, artistNameOf, groupArtistRows, artistIndexGroups };
+export { toIso, guessContentType, songToModel, songToChild, albumNameOf, artistNameOf };
 export { IGNORED_ARTICLES } from '@edge-sonic/subsonic';
 export type { AlbumIdentity } from './albumIdentity';
-export type { AnnotationLookup, ArtistGroup };
+export type { AnnotationLookup };
 export { NO_ANNOTATIONS };

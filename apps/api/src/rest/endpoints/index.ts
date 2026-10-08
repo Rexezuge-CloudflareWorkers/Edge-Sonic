@@ -331,12 +331,17 @@ function assertResolvableId(context: RestContext, kinds: readonly string[]): voi
 
 const ENDPOINTS: Record<string, RestHandler> = new Proxy(IMPLEMENTED, {
   get(target, property: string) {
-    const handler = Reflect.get(target, property) as RestHandler | undefined;
-    if (handler) return handler;
-    // `hasOwn` rather than a `!== undefined` check: the record's type gives every key a
-    // `string`, so the check reads as always-true to a reader and to the type checker
-    // alike. What is being asked is "is this endpoint one we know about", which is a
-    // question about the *key*.
+    // `hasOwn` **before** `Reflect.get`, which walks the prototype chain. `IMPLEMENTED` is
+    // a plain object literal, so `Reflect.get(target, 'toString')` returns
+    // `Object.prototype.toString` and `/rest/toString.view` resolved a *handler*. It is
+    // callable, returns `"[object Object]"`, and `EdgeSonicWorker` then takes a
+    // non-`Response` branch — so Hono raised "Context is not finalized" and the client got
+    // a masked 500 where `code=70` is the only honest answer. `__proto__` and `constructor`
+    // reached the same place. The other two tables below already ask with `hasOwn`; this
+    // one did not, which is why the three names differed.
+    // `hasOwn` already answered the question, so `IMPLEMENTED[property]` is the read — and it is
+    // not an assertion because the guard above is what makes it defined.
+    if (Object.hasOwn(IMPLEMENTED, property)) return IMPLEMENTED[property];
     if (Object.hasOwn(UNIMPLEMENTED, property)) return absentHandler(property, UNIMPLEMENTED[property]);
     if (Object.hasOwn(EMPTY_RESULT, property)) return emptyResultHandler(EMPTY_RESULT[property]);
     return undefined;

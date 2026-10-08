@@ -94,7 +94,7 @@ function errorResponse(error: SubsonicError, options: EnvelopeOptions, throttled
     children: [el('error', { code: error.code, message: error.message })],
   };
   return new Response(render(root, options), {
-    status: httpStatusForErrorCode(error.code, throttled),
+    status: httpStatusForErrorCode(throttled),
     headers: {
       'Content-Type': CONTENT_TYPES[options.format],
       'Cache-Control': 'no-store',

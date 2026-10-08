@@ -23,7 +23,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHarness, ORIGIN, REMOTE_TEST_KEY, USER_TEST_KEY, WEBDAV_TEST_KEY } from './helpers/harness';
 import type { Harness } from './helpers/harness';
-import { ImportRunDAO, ImportSourceDAO, LibraryDAO, ScanStateDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, ScanStateDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import { readPhases } from '../apps/api/src/user/importRoutes';
 import { BadRequestError, ConflictError } from '@edge-sonic/backend-errors';
@@ -255,7 +255,40 @@ describe('the read surface, and what it must not spend', () => {
     // A **read**: the operator's page polls this while an import runs, and a status read that wrote
     // would spend the allowance it is reporting on.
     expect(body['report']).toBeNull();
+    // No cursor row, because the walk has not started — this run's phases are `playlists` and
+    // `stars`. The walk writes the row on its first batch (`PlayCountImportWorker.runBatch`), so
+    // "absent" here means "the play-count walk has not begun", which is a different thing from
+    // "began and imported nothing" and the client renders them differently.
     expect(body['playCounts']).toBeNull();
+  });
+
+  it('reports a play-count walk in progress, which it could not before the walk wrote the row', async () => {
+    // `ImportPlayCountProgressDAO` had `ensure`/`advance`/`markFinished` and **no writer** — only
+    // `read` was ever called, by this route. So `playCounts` was `null` for every real import: a
+    // field on the wire with nothing behind it, which is the shape `backend-data/AGENTS.md` records
+    // for `ScanStateDAO.ensure` on the libraries page.
+    //
+    // The number is asserted by driving the writer — the walk's own alarm — rather than by writing
+    // the row here, because a test that seeds the row would pass whether or not the walk wrote it.
+    const { userId } = await seedUserWithLibrary('Bob');
+    const sourceId = await seedSource('alice');
+    const runs = new ImportRunDAO(harness.db.db);
+    const run = await runs.create({ sourceId, targetUserId: userId, phases: ['playCounts'] });
+
+    // Before the walk: absent.
+    expect((await call(`/user/import/${run.id}`)).body['playCounts']).toBeNull();
+
+    // What `runBatch` writes on its first batch, and again per batch with a **delta**.
+    const progress = new ImportPlayCountProgressDAO(harness.db.db);
+    await progress.ensure(run.id);
+    await progress.advance(run.id, 'remote-album-3', 3, 41);
+
+    const body = (await call(`/user/import/${run.id}`)).body;
+    expect(body['playCounts']).toEqual({ albumsDone: 3, songsImported: 41 });
+
+    // A second batch adds to it rather than replacing it — the reason `advance` is a delta.
+    await progress.advance(run.id, 'remote-album-6', 3, 12);
+    expect((await call(`/user/import/${run.id}`)).body['playCounts']).toEqual({ albumsDone: 6, songsImported: 53 });
   });
 
   it('reports a run that does not exist as absence rather than an empty one', async () => {

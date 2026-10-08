@@ -183,18 +183,23 @@ describe('the bucket', () => {
     for (let index = 0; index < 5200; index += 1) {
       rateLimit({ windowMs: 60_000, max: 1, keyPrefix: `p${index}`, surface: 'user' });
     }
-    // `cleanup` only runs at request time, so drive a few to trigger it.
+    // The cap runs at request time — `cleanup` is called from the middleware — so drive a few to
+    // trigger it. The *sweep* is throttled by time, but the cap is not, and that split is the point.
     const app = limitedApp(1);
     for (let index = 0; index < 3; index += 1) void hit(app, { 'cf-connecting-ip': `10.0.0.${index}` });
     expect(getRateLimitBucketCountForTests()).toBeLessThanOrEqual(5000);
   });
 
   it('evicts rather than clears when the bucket table overflows', async () => {
-    // The flood: each request a distinct client address, so each is its own
-    // bucket that never expires inside the test window. Past 1000 the cleanup
-    // has to evict live buckets down to the cap — and it must pick the
-    // oldest-resetting, not clear the table (clearing would hand every new key
-    // a fresh allowance, which is the thing the flood is testing).
+    // The flood: each request a distinct client address, so each is its own bucket that never
+    // expires inside the test window. Past the cap the limiter must evict **live** buckets down to
+    // it — and pick the oldest-resetting, not clear the table (clearing would hand every new key a
+    // fresh allowance, which is the thing the flood is testing).
+    //
+    // The cap is enforced on **every** request while the expiry sweep is amortised. Both are the
+    // same function and they were conflated, so both were deferred together at one point and the cap
+    // became wrong: memory grows whether or not a sweep runs, so the memory bound cannot wait for
+    // one. This case is the cap's only assertion and it would not have caught that.
     const app = limitedApp(2);
     for (let index = 0; index < 5100; index += 1) {
       await hit(app, { 'cf-connecting-ip': `198.51.${index >> 8}.${index & 255}` });
@@ -208,10 +213,11 @@ describe('the bucket', () => {
   }, 60_000);
 
   it('fails open, because a limiter that throws takes playback down for everyone', async () => {
-    // The limiter wraps its whole body in a `try { … } catch { await next() }`, so its
-    // own state going wrong can never become a 5xx for a legitimate stream. Hono turns
-    // a handler throw into a 500 of its own accord; what matters here is that the
-    // limiter neither adds a second failure nor blocks the request.
+    // The limiter wraps **its own work** in a `try { … } catch { await next() }`, so its state
+    // going wrong can never become a 5xx for a legitimate stream. Hono turns a handler throw into
+    // a 500 of its own accord; what matters here is that the limiter neither adds a second failure
+    // nor blocks the request. `next()` is deliberately *outside* that `try` — see the block below
+    // this one, which is why this comment says "its own work" rather than "its whole body".
     const app = new Hono<TestEnv>();
     app.use('*', rateLimit(OK));
     app.get('/probe', () => {
@@ -487,5 +493,62 @@ describe('a budget read from the environment', () => {
     );
     throwing.get('/probe', (c) => c.json({ ok: true }));
     expect((await hit(throwing, { 'CF-Connecting-IP': '4.4.4.4' })).status).toBe(200);
+  });
+});
+
+describe('the fail-open branch runs the chain once, and says so', () => {
+  /**
+   * The limiter's `try` used to enclose `await next()` as well as its own work, so a rejection
+   * escaping the downstream chain made it call `next()` again from the `catch`.
+   *
+   * **That did not double-write anything, and the reason is worth recording rather than asserting.**
+   * Hono's `compose` guards its own dispatch — `if (i <= index) throw new Error('next() called
+   * multiple times')` — so the second call throws instead of re-entering the handlers after it. A
+   * probe of both shapes, with the chain's handler throwing *and* the app's `onError` throwing too,
+   * ran the handler exactly once either way. Both shapes answer the same; this file's earlier
+   * version of this test asserted a difference that does not exist, which is the failure mode
+   * `docs/agents/repo/AGENTS.md` warns about from the other direction — a test written to say the
+   * code had been fixed.
+   *
+   * So what is asserted here is the property that actually holds and that the old structure left to
+   * a library it does not own: **the handler runs once**, and a rejection escaping the chain is not
+   * reported to the client as a Hono internal.
+   */
+  it('runs the downstream chain once when the error handler itself throws', async () => {
+    let handlerRuns = 0;
+    const app = new Hono<TestEnv>();
+    app.onError(() => {
+      throw new Error('errorHandler exploded');
+    });
+    app.use('*', rateLimit(OK));
+    app.get('/probe', () => {
+      handlerRuns += 1;
+      throw new Error('downstream exploded');
+    });
+
+    // The throwing `onError` propagates out of `app.request` rather than producing a response —
+    // Hono has nothing left to catch it with — so the throw is caught here and the **count** is
+    // the assertion.
+    await hit(app, { 'CF-Connecting-IP': '5.5.5.5' }).catch(() => null);
+    expect(handlerRuns, 'the handler must not be re-run by the fail-open branch').toBe(1);
+  });
+
+  it('runs the downstream chain once on both ordinary allowed paths', async () => {
+    // A fresh bucket and an existing one each call `next()` exactly once. Without this, the case
+    // above would also pass on a limiter that dropped `next()` entirely — since then nothing runs
+    // twice either.
+    for (const address of ['6.6.6.6', '7.7.7.7']) {
+      let runs = 0;
+      const app = new Hono<TestEnv>();
+      app.use('*', rateLimit({ ...OK, max: 10 }));
+      app.get('/probe', (c) => {
+        runs += 1;
+        return c.json({ ok: true });
+      });
+
+      expect((await hit(app, { 'CF-Connecting-IP': address })).status).toBe(200);
+      expect((await hit(app, { 'CF-Connecting-IP': address })).status).toBe(200);
+      expect(runs, `two allowed requests on ${address} run the handler once each`).toBe(2);
+    }
   });
 });

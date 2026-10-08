@@ -90,9 +90,15 @@ function albumArtistOf(songs: readonly SongRow[]): { name: string; drillable: bo
  * @param identity The request's album identity: the id minted here, and the folder-shaped ids
  * a star may have been stored under.
  */
-function albumModel(songs: readonly SongRow[], library: LibraryRow, identity: AlbumIdentity, annotations: AnnotationLookup): Album {
+/**
+ * @param identity **Per row**, not per request. It used to take a `LibraryRow` as well and never
+ * read it, and the identity it did read was built from `libraries[0]` — so a read spanning several
+ * libraries published every id against the first one, which under `ALBUM_GROUP_BY=folder` is part
+ * of the id. Passing a resolver removes the possibility of the two disagreeing.
+ */
+function albumModel(songs: readonly SongRow[], identityOf: (song: SongRow) => AlbumIdentity, annotations: AnnotationLookup): Album {
   const first = songs[0];
-  const id = identity.idOf(first) ?? '';
+  const id = identityOf(first).idOf(first) ?? '';
   const artist = albumArtistOf(songs);
   // Annotations resolve under the current id only. A star stored under a
   // previous folder-shaped id no longer resolves after a grouping re-key:
@@ -125,7 +131,7 @@ function albumModel(songs: readonly SongRow[], library: LibraryRow, identity: Al
     genre: firstWith(songs, (song) => song.genre) ?? undefined,
     coverArt: id,
     created: toIso(first.created_at),
-    ...(starredAt !== undefined && { starred: toIso(first.mtime_ms) }),
+    ...(starredAt !== undefined && { starred: toIso(starredAt) }),
     ...(rating !== undefined && { userRating: rating }),
   };
 }
@@ -153,7 +159,13 @@ function firstWith<T>(songs: readonly SongRow[], read: (song: SongRow) => T | nu
  * library the caller cannot see is `code=70` and not `code=50`, or the endpoint becomes an
  * oracle for which paths exist. See `apps/api/AGENTS.md`.
  */
-async function libraryForAlbumId(context: RestContext, id: string): Promise<{ library: LibraryRow; scope: LibraryScope }> {
+/**
+ * @returns `libraries` — every library the id may reach, which is the **union** for a tag
+ *   grouping — plus the derived `scope`, and `library` for the single-library callers. `getAlbum`
+ *   needs the whole list, because an album spanning two libraries has rows in both and the id it
+ *   publishes must be minted against each row's own library.
+ */
+async function libraryForAlbumId(context: RestContext, id: string): Promise<{ libraries: readonly LibraryRow[]; library: LibraryRow; scope: LibraryScope }> {
   let libraryId: string;
   let path: string | null;
   try {
@@ -174,7 +186,7 @@ async function libraryForAlbumId(context: RestContext, id: string): Promise<{ li
   const libraries = await librariesForId(context, libraryId);
   const library = libraries[0];
   if (path !== null) TreeService.assertPath(path);
-  return { library, scope: libraries.map((row) => row.id) };
+  return { libraries, library, scope: libraries.map((row) => row.id) };
 }
 
 /**
@@ -224,10 +236,10 @@ async function resolveAlbumKey(context: RestContext, id: string, library: Librar
  * So the split is made by the caller, which knows its own wrapper, and the grouping stays
  * the one place that decides what an album *is*.
  */
-function groupAlbumsOf(rows: readonly SongRow[], library: LibraryRow, identity: AlbumIdentity, annotations: AnnotationLookup): Album[] {
+function groupAlbumsOf(rows: readonly SongRow[], identityOf: (song: SongRow) => AlbumIdentity, annotations: AnnotationLookup): Album[] {
   const groups = new Map<string, SongRow[]>();
   for (const row of rows) {
-    const key = identity.keyOf(row);
+    const key = identityOf(row).keyOf(row);
     const existing = groups.get(key);
     if (existing) {
       existing.push(row);
@@ -242,7 +254,7 @@ function groupAlbumsOf(rows: readonly SongRow[], library: LibraryRow, identity: 
     // what made a two-disc album's `created`, `year` and `genre` depend on which endpoint a
     // client asked.
     const ordered = [...songs].sort(compareAlbumTracks);
-    return albumModel(ordered, library, identity, annotations);
+    return albumModel(ordered, identityOf, annotations);
   });
 }
 export { albumModel, albumArtistOf, groupAlbumsOf, libraryForAlbumId, resolveAlbumKey, VARIOUS_ARTISTS };

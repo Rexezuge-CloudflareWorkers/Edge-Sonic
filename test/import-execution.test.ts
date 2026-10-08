@@ -29,7 +29,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlayCountImportWorker } from '../apps/background/src/PlayCountImportWorker';
 import { LibraryImportWorkflow, WALK_START_FAILED } from '../apps/background/src/LibraryImportWorkflow';
 import { NonRetryableError } from 'cloudflare:workflows';
-import { ImportRunDAO, ImportSourceDAO, LibraryDAO, PlayCountDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import { ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, PlayCountDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import { DatabaseError, SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
@@ -535,6 +535,14 @@ describe('PlayCountImportWorker', () => {
     expect((await new ImportRunDAO(handle.db).findById(runId))?.status).toBe('running');
     expect(ctx.alarms.at(-1)).not.toBeNull();
     expect(setPlayCounts).toHaveBeenCalledTimes(1);
+
+    // And the **operator's** cursor advances with it. The Durable Object's own storage is what the
+    // worker reads; `import_play_count_progress` is what `GET /user/import/:id` reads, so the two can
+    // disagree and an operator watching the page sees nothing move. The write was missing entirely
+    // — `ImportPlayCountProgressDAO` had three writers and no caller — so this is the assertion that
+    // says the walk publishes its progress.
+    const published = await new ImportPlayCountProgressDAO(handle.db).read(runId);
+    expect(published?.albums_done).toBe(2);
 
     // A fresh budget takes the deferred album.
     await worker.alarm();

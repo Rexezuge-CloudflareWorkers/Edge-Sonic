@@ -17,7 +17,6 @@
  */
 import { derivePending, NO_DERIVATION } from './deriveBackfill';
 import type { DerivationCost } from './deriveBackfill';
-import { rotatePendingSongIds, NO_ROTATION } from './songIdBackfill';
 import { decideStep, idleResult, stalledResult, unableToAdvance } from './scanRetry';
 import type { ScanBudget } from './scanBudget';
 import type { ChunkResult, ScanDeps } from './scanTypes';
@@ -55,12 +54,7 @@ import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
  * by breaking enrichment.
  */
 async function backfill(deps: ScanDeps, libraryId: string, budget: ScanBudget): Promise<DerivationCost> {
-  // Rotation first: a renamed row keeps its grouping, so order between the two
-  // does not matter for correctness — but rotation is the one-time repair and
-  // derivation the ongoing one, so the finite pass goes first.
-  const rotated = deps.idRotation ? await rotatePendingSongIds(deps.idRotation, libraryId, budget) : NO_ROTATION;
-  const derived = deps.derivation ? await derivePending(deps.derivation, libraryId, budget) : NO_DERIVATION;
-  return { rowsWritten: rotated.rowsWritten + derived.rowsWritten, billedRows: rotated.billedRows + derived.billedRows };
+  return deps.derivation ? await derivePending(deps.derivation, libraryId, budget) : NO_DERIVATION;
 }
 
 /**

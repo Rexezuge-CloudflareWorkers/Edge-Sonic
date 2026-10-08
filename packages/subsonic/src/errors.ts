@@ -74,7 +74,6 @@ const DEFAULT_MESSAGES: Record<ErrorCodeValue, string> = {
  */
 class SubsonicError extends Error {
   public readonly code: ErrorCodeValue;
-  private readonly detail: string | undefined;
 
   constructor(code: ErrorCodeValue, detail?: string) {
     // The full message is what surfaces to the user; the code is what clients
@@ -83,14 +82,6 @@ class SubsonicError extends Error {
     super(detail && detail.length > 0 ? detail : base);
     this.name = 'SubsonicError';
     this.code = code;
-    this.detail = detail;
-  }
-
-  /**
-  The message without the generic prefix, when one was supplied.
-  */
-  public get detailMessage(): string | undefined {
-    return this.detail;
   }
 }
 
@@ -120,7 +111,7 @@ class SubsonicError extends Error {
  * client that only reads the envelope has no way to know it was throttled rather than
  * refused. So that one is reported twice: 429, and the same failed envelope.
  */
-function httpStatusForErrorCode(code: ErrorCodeValue, throttled = false): number {
+function httpStatusForErrorCode(throttled = false): number {
   if (throttled) return 429;
   return 200;
 }

@@ -139,6 +139,26 @@ async function resolveLibraries(context: RestContext, requested: string | undefi
 }
 
 /**
+ * The library a **row** belongs to, for minting an id over it.
+ *
+ * ### Why the mappers take a resolver rather than a library
+ *
+ * `resolveLibraries` answers **every** granted library when no `musicFolderId` is sent, so a list
+ * endpoint's rows can come from N of them — and under `ALBUM_GROUP_BY=folder` the library is *part*
+ * of the album id (`albumIdOf`, `subsonic/albumId.ts`). Minting every id against `libraries[0]`
+ * therefore published a link that decoded to the wrong library and answered `code=70`.
+ *
+ * The tag groupings hide it: they carry the sentinel and ignore the library half. So the defect was
+ * invisible under the default and only appeared on a per-performer library, which is what
+ * `ALBUM_GROUP_BY=folder` exists for.
+ *
+ * `songToModel`, `songToChild`, `albumModel` and `groupArtistRows` all take
+ * `(song) => AlbumIdentity` now, which is what makes "the id was minted against a different library
+ * than the row's" unrepresentable instead of merely fixed. They used to take a `LibraryRow` beside
+ * the identity **and never read it**, so nothing about the two could be checked.
+ */
+
+/**
  * The libraries a **decoded id** may reach, and the only way an endpoint turns an id into a
  * scope.
  *

@@ -21,14 +21,19 @@
  * it gets a terminated invocation whose work is lost. `SUBSREQUESTS_PER_ALBUM_BASE` is the whole
  * cost of one album's step, not its one `getAlbum` call, for that reason alone.
  *
- * ### The cursor is a row, and a **delta**, and that is two decisions
+ * ### Two records of the walk's position, and only one of them resumes it
  *
- * - **A row in D1**, so a lost isolate resumes rather than restarts. The alternative — a cursor
- *   in the alarm itself — is lost on eviction, and a restarted walk *re-adds* counts that were
- *   already set, which for play counts means inflating every one of them.
- * - **A delta** on `albums_done`/`songs_imported`, for the reason `saveProgress` is: two
- *   overlapping batches would each publish their own total and the smaller would win, so the
- *   progress number would go **backwards** while the work was being done.
+ * - **DO storage** (`WalkProgress.albums`) is the resume point. `listAlbums` takes an offset, so
+ *   the position is a count of albums already fetched and a restart would re-read the page from
+ *   there rather than re-add counts.
+ * - **A row in D1** (`import_play_count_progress`) is what the **operator's page** reads, and it is
+ *   not a resume point. `GET /user/import/:id` polls that row and cannot address this object, so the
+ *   walk publishing only to its own storage meant `playCounts: null` for every real import. See
+ *   `playCountProgress.ts`, which is where the writing half lives.
+ *
+ * The published row advances by a **delta**, for the reason `saveProgress` is: two overlapping
+ * batches would each publish their own total and the smaller would win, so the number an operator
+ * watches would go **backwards** while the work was being done.
  *
  * ### Counts are absolute, written here and only here
  *
@@ -48,14 +53,14 @@
 import { DurableObject } from 'cloudflare:workers';
 import { SCAN_CHUNK_SUBSREQUEST_BUDGET, SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
 import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { runPlayCountAlbumPhase } from '@edge-sonic/backend-services/import';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import { createScanWorkerScope } from './ScanWorkerFactory';
 import { createPlayCountStore, describeWalkFailure, retryDelayMs, dailyLimitWalkMessage } from './playCountRetry';
 import type { WalkProgress } from './playCountRetry';
+import { advanceProgress, ensureProgress, releaseProgress } from './playCountProgress';
+import { walkAlbumPage } from './playCountWalk';
 import { createLogger } from '@edge-sonic/backend-runtime/logger';
 
 const logger = createLogger('PlayCountImportWorker');
@@ -245,6 +250,11 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
     const run = await runs.findById(runId);
     if (run === null) return await this.settle(runId, progress, 'The import run no longer exists.');
 
+    // The cursor the **operator's** status page reads — a different record from the walk's own DO
+    // storage, because the page polls `GET /user/import/:id` and cannot address this object. It had a
+    // DAO and no writer, so the field read `null` for every real import. See `playCountProgress.ts`.
+    await ensureProgress(scope, runId);
+
     // The same service the Workflow used, for the same reason: one reader of one stored credential.
     // Both refusals — the source is gone, or its host is no longer permitted — **settle** rather than
     // re-arm, because neither becomes true again by waiting and the alarm's generic catch would
@@ -279,39 +289,11 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
       return;
     }
 
-    let albumsThisBatch = 0;
-    let songsThisBatch = 0;
-    let unresolvedThisBatch = 0;
-    let deferredForBudget = false;
-
-    for (const album of page) {
-      // `canAfford` against the album's **whole** cost, checked before each one. A batch that
-      // starts an album it cannot finish does not get a slow album \u2014 it gets a terminated
-      // invocation with this batch's earlier rows written and the rest lost.
-      if (!meter.canAfford(SUBSREQUESTS_PER_ALBUM_BASE) || Date.now() >= deadline) {
-        deferredForBudget = true;
-        break;
-      }
-      try {
-        const outcome = await runPlayCountAlbumPhase(phaseContext, album);
-        albumsThisBatch += 1;
-        songsThisBatch += outcome.imported;
-        unresolvedThisBatch += outcome.unresolvedCount;
-      } catch (error) {
-        // `setPlayCounts` is `requireComplete`: an album whose counted tracks do not fit in
-        // what remains of this alarm refuses rather than writing half an album's absolute
-        // values. That refusal is about *this* alarm's remaining budget, not about the album,
-        // so the batch ends here and the album is retried on a fresh budget next alarm.
-        if (error instanceof SubrequestBudgetExhaustedError) {
-          deferredForBudget = true;
-          break;
-        }
-        throw error;
-      }
-    }
+    const walked = await walkAlbumPage(phaseContext, page, { meter, deadline, costPerAlbum: SUBSREQUESTS_PER_ALBUM_BASE });
+    const { albums: albumsThisBatch, songs: songsThisBatch, unresolved: unresolvedThisBatch, deferredForBudget } = walked;
 
     // A **short page** is the remote saying there is no next one. Recorded rather than left for
-    // the operator to infer \u2014 a walk that ended for a reason nobody wrote down reads as a
+    // the operator to infer — a walk that ended for a reason nobody wrote down reads as a
     // walk that finished.
     const exhausted = page.length < ALBUMS_PER_BATCH && !deferredForBudget;
     const next: WalkProgress = {
@@ -323,6 +305,10 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
       consecutiveFailures: 0,
     };
     await this.ctx.storage.put<WalkProgress>('alarm', next);
+    // Published in the same place the walk's own storage is written, and **not** at the end of the walk
+    // — so an operator polling the route sees the count advance rather than jump from null to the
+    // total hours later.
+    await advanceProgress(scope, runId, page.at(-1)?.id ?? null, albumsThisBatch, songsThisBatch);
     if (run.status === 'paused') {
       await runs.update(runId, { status: 'running', lastError: null });
     }
@@ -369,13 +355,17 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
    * `failed` with a reason when the walk could not finish and `completed` when it could. Those
    * are different answers because they ask the operator for different things: a failed walk needs
    * somebody to look, a completed one does not. Collapsing them is how a run sits `running` for
-   * ever with nothing scheduled to advance it \u2014 the exact defect `ScanWorker.alarm`\'s `try`
+   * ever with nothing scheduled to advance it — the exact defect `ScanWorker.alarm`\'s `try`
    * guard exists to prevent.
    */
   private async settle(runId: string, progress: WalkProgress, error: string | null): Promise<void> {
     const scope = createScanWorkerScope(this.env);
     const runs = await scope.get(Tokens.ImportRunDAO)();
     await this.ctx.storage.put<WalkProgress>('alarm', { ...progress, finished: true, lastError: error });
+    // The published cursor is released once the walk is terminal, so a resumed run does not resume from
+    // a position the next walk will pass. Best-effort — see `playCountProgress.ts` for why this one
+    // swallows and the other two do not.
+    await releaseProgress(scope, runId);
     await runs.update(runId, {
       status: error === null ? 'completed' : 'failed',
       lastError: error,

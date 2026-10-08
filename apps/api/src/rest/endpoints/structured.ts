@@ -17,7 +17,8 @@ import { TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
-import { artistIndexGroups, artistNameOf, groupArtistRows, IGNORED_ARTICLES, songToModel } from '../mappers';
+import { artistNameOf, IGNORED_ARTICLES, songToModel } from '../mappers';
+import { artistIndexGroups, groupArtistRows } from '../artistIndex';
 import type { AnnotationLookup } from '../mappers';
 import { compareAlbumTracks } from '../albumIdentity';
 import { albumModel, groupAlbumsOf, libraryForAlbumId, resolveAlbumKey } from './albumRecord';
@@ -66,17 +67,19 @@ async function annotationsFor(context: RestContext, renderingAnything: boolean):
  */
 async function getArtists(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
-  const identity = context.albumsFor(library);
+  const identityOf = context.albumsForScope(libraries);
   const limit = context.pageSize(context.params.optionalInt('size'), 500);
-  const offset = context.params.int('offset', 0, { min: 0 });
+  const offset = context.params.int('offset', 0, { min: 0, max: context.maxOffset });
 
-  const rows = await context.songIndex.listArtists(scope, limit + offset, 0);
+  // `limit + offset` at `offset: 0`, then sliced — which is how an artist page of 500 asked D1
+  // for `500 + offset` rows and discarded all but the page. Paged in SQL, with the offset bounded
+  // (`../paging`).
+  const rows = await context.songIndex.listArtists(scope, limit, offset);
 
-  const groups = groupArtistRows(rows, identity).slice(offset, offset + limit);
+  const groups = groupArtistRows(rows, identityOf);
   const annotations = await annotationsFor(context, groups.length > 0);
-  const indexes = artistIndexGroups(library, groups, annotations.stars);
+  const indexes = artistIndexGroups(groups, annotations.stars);
 
   return respond(context, elList('artists', 'index', { ignoredArticles: IGNORED_ARTICLES }, indexes));
 }
@@ -124,7 +127,8 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const library = libraries[0];
   const scope = libraries.map((row) => row.id);
   const artistName = decoded.path;
-  const identity = context.albumsFor(library);
+  const identityOf = context.albumsForScope(libraries);
+  const grouping = context.albumsFor(library).grouping;
 
   const all = await context.songIndex.listArtists(scope, 5000, 0);
   const mine = all.filter((row) => (row.artist ?? artistNameOf(row)).toLowerCase() === artistName.toLowerCase());
@@ -140,10 +144,16 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   //
   // So the keys are collected and the whole groups fetched. One extra statement per 49 keys,
   // against an endpoint that already spends 51 statements reading artists.
-  const keys = [...new Set(mine.map((row) => identity.keyOf(row)))];
-  const complete = await context.songIndex.listForAlbumKeys(library.id, keys, identity.grouping);
+  const keys = [...new Set(mine.map((row) => identityOf(row).keyOf(row)))];
+  // **`scope`, not `library.id`.** The keys came from the union — `mine` is this artist's tracks
+  // across every granted library — so completing them against `libraries[0]` fetched the groups
+  // from one library while the keys named albums in both. The comment above explains why the
+  // groups must be completed at all; narrowing the completion undid it for exactly the release
+  // this whole feature exists for, publishing an album at a different `songCount` here than
+  // `getAlbumList2`, `search3` and `getAlbum` report for the same id.
+  const complete = await context.songIndex.listForAlbumKeys(scope, keys, grouping);
   const annotations = await annotationsFor(context, true);
-  const albums = groupAlbumsOf(complete, library, identity, annotations);
+  const albums = groupAlbumsOf(complete, identityOf, annotations);
   return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length, coverArt: id }, albums.map((album) => albumElement(album))));
 }
 
@@ -154,8 +164,12 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
 */
 async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   const id = requireMediaId(context, 'Album');
-  const { library, scope } = await libraryForAlbumId(context, id);
+  const { libraries, library, scope } = await libraryForAlbumId(context, id);
   const identity = context.albumsFor(library);
+  // Per row: an album spanning two libraries has rows in both, and under `folder` grouping the
+  // album id names the library — so a single `libraries[0]` identity published the union under the
+  // first library's name, which `getAlbum` then decoded as the wrong directory.
+  const identityOf = context.albumsForScope(libraries);
 
   // Both id kinds, because both are in the wild. `alk:` is what this server mints; `al:` is
   // what it minted before an album's identity became configurable, and it is still sitting in
@@ -178,8 +192,8 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
   return respond(
     context,
     albumWithSongs(
-      albumModel(ordered, library, identity, annotations),
-      ordered.map((song) => songToModel(song, library, identity, annotations)),
+      albumModel(ordered, identityOf, annotations),
+      ordered.map((song) => songToModel(song, identityOf, annotations)),
     ),
   );
 }
@@ -223,7 +237,7 @@ async function getSong(context: RestContext): Promise<EnvelopeResponse> {
   }
 
   const annotations = await annotationsFor(context, true);
-  return respond(context, songElement(songToModel(resolved, library, context.albumsFor(library), annotations)));
+  return respond(context, songElement(songToModel(resolved, () => context.albumsFor(library), annotations)));
 }
 
 /**

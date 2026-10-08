@@ -30,7 +30,7 @@ concrete DAO.
 | `dao/songMatch.ts` | the import's lookups: by path, by album title, and which album keys are present |
 | `dao/playCounts.ts` | `PlayCountDAO` |
 | `dao/imports.ts` | `ImportSourceDAO`, `ImportRunDAO`, and `IMPORT_PHASES` |
-| `dao/importProgress.ts` | `ImportPlayCountProgressDAO` — the walk's own resume point |
+| `dao/importProgress.ts` | `ImportPlayCountProgressDAO` — what the operator's import page reads. **Not** the walk's resume point: that is the Durable Object's own storage, and `listAlbums` takes an offset. This row had three writers and **no caller**, so `GET /user/import/:id` reported `playCounts: null` for every real import; `apps/background/src/playCountProgress.ts` is the writing half. |
 | `dao/index.ts` | the barrel every other layer imports rather than a deep path |
 | `crypto/` | `encryptData`, `decryptData`, `isUsableKey` — every stored credential |
 | `utils/` | `D1Types`, `D1Utils`, `D1ErrorClassifier` |
@@ -41,6 +41,7 @@ concrete DAO.
 | `dao/songCounts.ts` | how many tracks a library holds — a count is not a row                       |
 | `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
 | `dao/songIdLookup.ts` | `IN (...)` id lookups, scoped to one library and across all of them    |
+| `dao/songAlbumDirs.ts` | songs by **directory**, in one batched statement over a whole scope — the starred-album resolution |
 | `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
 | `dao/indexStats.ts`| `IndexStatsDAO` — what dropping an index would cost, before it is run |
 | `dao/indexDrop.ts` | `IndexDropDAO` — the Danger Zone's `DELETE`s, and what they billed   |
@@ -68,6 +69,12 @@ take.
 `libraryId`. The scoped one is right for almost every caller: an id from a library the
 caller cannot see must not resolve, and that is an authorization guarantee the shared method
 cannot make.
+
+**There is no legacy song-id fallback.** Every method here once answered a miss by decoding the id as
+a reversible `s:` id and reading `(library_id, path)` — a second statement per miss, grouped per
+library. Rotation rewrote `songs.id` in bounded batches; the fallback is gone, so a miss is a miss
+and the primary key answers it. `findBySongId` is one statement for the same reason. See
+`subsonic/songId.ts` for the data decision behind it.
 
 The cross-library one is for the two **per-user** records — the play queue and a playlist's
 entries — whose ids come from whatever libraries that user was granted. Both resolved

@@ -13,7 +13,7 @@
  * multiple `songIndexToRemove` parameters. So the DAO removes **highest index
  * first**, which makes the result identical regardless of the order received.
  */
-import { elList, ErrorCode, legacySongId, playlistElement, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { elList, ErrorCode, playlistElement, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { PlaylistRow } from '@edge-sonic/backend-data/dao';
@@ -142,10 +142,11 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
   // An entry whose library the owner has since lost the grant to is dropped rather than
   // reported: the playlist is visible, the song outside the caller's grants is not.
   //
-  // Resolved entry-by-entry rather than through the entry join: entries written
-  // before the short-id rotation hold legacy long ids that no longer match
-  // `songs.id`, so the join would drop them and the playlist would come back
-  // shorter than it was saved.
+  // Resolved entry-by-entry rather than through the entry join, which is `JOIN songs ON
+  // s.id = e.song_id`. The two are the same query against a grant-scoped set, and the difference is
+  // the filter: an entry whose library the owner has since lost the grant to is **dropped** here and
+  // would be **dropped** by the join too, so this is not faster — it is one statement instead of a
+  // join plus a filter, and it keeps the grant decision in the place that reads the grants.
   const entries = await context.playlists.listEntries(playlist.id);
   const entryRows = await context.songs.listIdsAcrossLibraries(entries.map((entry) => entry.song_id));
   const rows = entryRows.filter((song) => visible.has(song.library_id));
@@ -163,7 +164,7 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
     {
       ...element,
       children: rows.map((song) => ({
-        ...songElement(songToModel(song, visible.get(song.library_id) as LibraryRow, context.albumsFor(visible.get(song.library_id) as LibraryRow), annotations)),
+        ...songElement(songToModel(song, () => context.albumsFor(visible.get(song.library_id) as LibraryRow), annotations)),
         name: 'entry',
         array: true as const,
       })),
@@ -195,21 +196,21 @@ async function resolveSongIds(context: RestContext, ids: readonly string[]): Pro
   const visible = await grantedLibraryIds(context);
   if (visible.size === 0) return [];
   const rows = await context.songs.listIdsAcrossLibraries(ids);
-  // Both forms: a client holding a legacy long id for a rotated row resolves
-  // to a short row, so the input matches under the id the row holds now *or*
-  // the one it held when the client saw it. Canonical short ids are returned,
-  // so a legacy playlist entry migrates on write.
-  const found = new Set<string>();
+  // **One map, one id.** This held two hand-maintained collections — a `Set` of matchable ids and a
+  // `Map` from each to its canonical form — populated in lockstep at four statements, with a `!`
+  // bridging them at the read. A divergence between the two would have written `undefined` into a
+  // playlist rather than dropping a track, which is the difference between a shorter playlist and a
+  // corrupt one. The legacy half is gone with the id fallback (`subsonic/songId.ts`); what is left
+  // needs one structure.
   const canonicalOf = new Map<string, string>();
   for (const row of rows) {
     if (!visible.has(row.library_id)) continue;
-    found.add(row.id);
-    const legacy = legacySongId(row.library_id, row.path);
-    found.add(legacy);
     canonicalOf.set(row.id, row.id);
-    canonicalOf.set(legacy, row.id);
   }
-  return ids.flatMap((songId) => (found.has(songId) ? [canonicalOf.get(songId)!] : []));
+  // The grant is checked by *omission* rather than by a filter afterwards: an id in a library the
+  // caller cannot see never enters the map, so it cannot be returned. Filtering the DAO's wider
+  // result set would be the same answer, and one step later.
+  return ids.flatMap((songId) => (canonicalOf.has(songId) ? [canonicalOf.get(songId) as string] : []));
 }
 
 /**

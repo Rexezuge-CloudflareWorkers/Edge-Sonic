@@ -157,7 +157,12 @@ class RemoteSubsonicClient {
       throw new RemoteSubsonicError('The import source returned a response too large to read.', null, null);
     }
     const text = await response.text();
-    if (text.length > MAX_RESPONSE_BYTES) {
+    // **Bytes, not `String.length`.** This is a UTF-16 code-unit count compared against a byte
+    // budget, so a body of 3-byte CJK characters — or 4-byte astral ones — passed at up to 3x the
+    // intended size. The intent of the limit is stated three lines above; the measurement did not
+    // match it. `BaseRoute.readJson` (`apps/api`) already measures `TextEncoder().encode(text)
+    // .byteLength`, and the same limit implemented two ways is how one of them is wrong.
+    if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
       throw new RemoteSubsonicError('The import source returned a response too large to read.', null, null);
     }
     return text;

@@ -83,6 +83,37 @@ describe('the endpoint registry', () => {
     expect(new Set(ENDPOINT_NAMES).size).toBe(ENDPOINT_NAMES.length);
   });
 
+  /**
+   * The lookup must ask "is this a key I declared", not "does reading it produce something".
+   *
+   * `ENDPOINTS` is a `Proxy` over a plain object literal, and the `IMPLEMENTED` branch used
+   * `Reflect.get`, which **walks the prototype chain**. So `/rest/toString.view` resolved
+   * `Object.prototype.toString` as a handler: it is callable, it returned `"[object Object]"`,
+   * and `EdgeSonicWorker` then took its non-`Response` branch — Hono raised *"Context is not
+   * finalized"*, and the client got a masked 500 where `code=70` is the only honest answer.
+   * `__proto__` and `constructor` reached the same place. Verified by execution before the fix,
+   * which is the only reason this is stated as fact rather than as a plausible reading.
+   *
+   * The other two tables in the same `get` trap already used `Object.hasOwn`, which is why the
+   * three names disagreed — the odd one out was a decision nobody made.
+   *
+   * These are **post-authentication** paths, so this is a protocol-correctness bug and not an
+   * authentication bypass: the request still has to authenticate before it is dispatched.
+   */
+  it('answers code=70 for an endpoint named by Object.prototype, rather than resolving it as a handler', async () => {
+    const harness = await createHarness();
+    try {
+      for (const name of ['toString', 'valueOf', 'constructor', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', '__proto__']) {
+        const { body } = await harness.rest(name);
+        const error = (body['subsonic-response'] as { error?: Record<string, unknown> }).error;
+
+        expect(error?.code, `/rest/${name}.view must answer code=70, not dispatch a handler`).toBe(ABSENT);
+      }
+    } finally {
+      harness.close();
+    }
+  });
+
   it('gives every absent endpoint a reason, because the reason is what an operator is shown', () => {
     for (const [name, entry] of Object.entries(UNIMPLEMENTED)) {
       // Non-empty and specific. An empty string is what a placeholder entry carries, and it

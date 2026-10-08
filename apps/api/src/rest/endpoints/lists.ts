@@ -15,7 +15,7 @@
  * `subsonic/albumKey.ts`. Both variants follow it, so a client that sends either gets the
  * same albums with the same ids.
  */
-import { albumChildElement, albumElement, el, elList, ErrorCode, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import { albumChildElement, albumElement, el, elList, ErrorCode, folderDirOfAlbumId, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -90,16 +90,20 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     throw new SubsonicError(ErrorCode.Generic, `type '${type}' not implemented`);
   }
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
-  const identity = context.albumsFor(library);
+  // **Per row**, and this is the whole fix. The scope above is the union, so one
+  // `libraries[0]`-derived identity published every album under the wrong library — which under
+  // `ALBUM_GROUP_BY=folder` is part of the id, so `getAlbum` decoded the list's own id, queried
+  // library 0 for library 1's directory and answered `code=70`.
+  const identityOf = context.albumsForScope(libraries);
+  const grouping = context.albumsFor(libraries[0]).grouping;
   const size = context.pageSize(context.params.optionalInt('size'), 10);
   const offset = context.params.int('offset', 0, { min: 0 });
 
   if (type === 'starred') {
     const starredIds = await context.annotations.listStarred(context.user.id, 'album');
     const annotations = await annotationsFor(context, starredIds.length > 0);
-    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, library, scope, starredIds, annotations), wrapperName)));
+    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, libraries, scope, starredIds, annotations), wrapperName)));
   }
 
   const needsRange = type === 'byYear' || type === 'byGenre';
@@ -111,7 +115,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   const genre = type === 'byGenre' ? context.params.get('genre') : undefined;
 
   const rows = await context.songIndex.listAlbums(scope, {
-    grouping: identity.grouping,
+    grouping,
     genreCi: genre ? genre.toLowerCase() : null,
     ...(needsRange && { fromYear, toYear }),
     limit: size,
@@ -119,7 +123,7 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
     orderBy: ALBUM_ORDER_BY[type] ?? ALBUM_ORDER_BY.random,
   });
 
-  return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbumsOf(rows, library, identity, NO_ANNOTATIONS), wrapperName)));
+  return respond(context, elList(wrapperName, 'album', {}, renderAlbums(groupAlbumsOf(rows, identityOf, NO_ANNOTATIONS), wrapperName)));
 }
 
 /**
@@ -141,25 +145,37 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
  */
 async function starredAlbums(
   context: RestContext,
-  library: LibraryRow,
+  libraries: readonly LibraryRow[],
   scope: LibraryScope,
   starredIds: readonly string[],
   annotations: AnnotationLookup,
 ): Promise<Album[]> {
   if (starredIds.length === 0) return [];
-  const identity = context.albumsFor(library);
-  const keys: string[] = [];
+  const identityOf = context.albumsForScope(libraries);
+  const grouping = context.albumsFor(libraries[0]).grouping;
+  // **A `Set`, and not `keys.includes`.** The dedup ran over an array inside the loop that grows
+  // it, so a user with a few hundred starred albums spent O(n²) comparisons on the request that
+  // is already the slowest one they make.
+  // **The whole scope, and one batched read.** A legacy `al:` id names a directory, so resolving
+  // it needs rows — issued per id before, which meant one D1 read per starred album against a
+  // 50-subrequest ceiling (so ~50 starred albums terminated the request with no envelope), and
+  // against `libraries[0]` alone, which dropped every star whose directory lived in a second
+  // granted library. `folderDirOfAlbumId` collects the directories first so they can be asked for
+  // together.
+  const dirs = starredIds.map((id) => folderDirOfAlbumId(id)).filter((dir): dir is string => dir !== null);
+  const rowsByDir = await context.songs.songsByAlbumDirs(scope, dirs);
+  const keys = new Set<string>();
   for (const id of starredIds) {
-    const key = await resolveAlbumId(id, identity.grouping, async (dirPath) => await context.songs.listByAlbumDir(library.id, dirPath));
+    const key = await resolveAlbumId(id, grouping, async (dirPath) => rowsByDir.get(dirPath) ?? []);
     // A star whose album has gone resolves to nothing and is skipped rather than failing the
-    // list: one stale row must not hide every other star — an id that resolves
-    // to nothing is skipped rather than failing the whole list.
-    if (key === null || keys.includes(key)) continue;
-    keys.push(key);
+    // list: one stale row must not hide every other star. And a `Set`, not `keys.includes`:
+    // the array form was O(n²) on the request the user already waits longest for.
+    if (key === null || keys.has(key)) continue;
+    keys.add(key);
   }
-  if (keys.length === 0) return [];
-  const rows = await context.songIndex.listForAlbumKeys(scope, keys, identity.grouping);
-  return groupAlbumsOf(rows, library, identity, annotations);
+  if (keys.size === 0) return [];
+  const rows = await context.songIndex.listForAlbumKeys(scope, [...keys], grouping);
+  return groupAlbumsOf(rows, identityOf, annotations);
 }
 
 async function getAlbumList(context: RestContext): Promise<EnvelopeResponse> {
@@ -173,16 +189,17 @@ async function getAlbumList2(context: RestContext): Promise<EnvelopeResponse> {
 /**
 Wrap rows as song elements with one set of annotation lookups for the page.
 */
-async function songNodes(context: RestContext, library: LibraryRow, rows: readonly SongRow[]): Promise<ElementNode[]> {
+async function songNodes(context: RestContext, libraries: readonly LibraryRow[], rows: readonly SongRow[]): Promise<ElementNode[]> {
   const ids = rows.map((row) => row.id);
   const annotations = await annotationsFor(context, ids.length > 0);
-  const identity = context.albumsFor(library);
-  return rows.map((row) => songElement(songToModel(row, library, identity, annotations)));
+  // Per row, because `rows` may span the whole granted scope and the album id names the row's own
+  // library under `folder` grouping.
+  const identityOf = context.albumsForScope(libraries);
+  return rows.map((row) => songElement(songToModel(row, identityOf, annotations)));
 }
 
 async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
   const size = context.pageSize(context.params.optionalInt('size'), 10);
   const genre = context.params.get('genre');
@@ -194,18 +211,24 @@ async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
     ...((toYear !== Number.MAX_SAFE_INTEGER) && { toYear }),
     limit: size,
   });
-  return respond(context, elList('randomSongs', 'song', {}, await songNodes(context, library, rows)));
+  return respond(context, elList('randomSongs', 'song', {}, await songNodes(context, libraries, rows)));
 }
 
 async function getSongsByGenre(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
   const genre = context.params.require('genre');
   const count = context.pageSize(context.params.optionalInt('count'), 10);
-  const offset = context.params.int('offset', 0, { min: 0 });
-  const rows = await context.songs.listByGenre(scope, genre.toLowerCase(), count + offset, 0);
-  return respond(context, elList('songsByGenre', 'song', {}, await songNodes(context, library, rows.slice(offset, offset + count))));
+  // **Bounded above, which is the whole point.** `params.int` defaults its maximum to
+  // `MAX_SAFE_INTEGER`, so `?genre=Rock&offset=9007199254740991` bound `LIMIT 9007199254740991`
+  // against D1 — and the whole matching set was pulled into Worker memory only for
+  // `slice(offset, offset + count)` to throw it away. `pageSize` clamps `count` and `offset` had no
+  // clamp at all, on one of the two endpoints a client polls most.
+  const offset = context.params.int('offset', 0, { min: 0, max: context.maxOffset });
+  // Paged in SQL, so the statement carries `LIMIT count OFFSET offset` — one bounded pair rather
+  // than a `count + offset` read whose rows were all discarded afterwards.
+  const rows = await context.songs.listByGenre(scope, genre.toLowerCase(), count, offset);
+  return respond(context, elList('songsByGenre', 'song', {}, await songNodes(context, libraries, rows)));
 }
 
 /**
@@ -237,27 +260,29 @@ async function getGenres(context: RestContext): Promise<EnvelopeResponse> {
  */
 async function starred(context: RestContext, wrapperName: 'starred' | 'starred2'): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
   const [songIds, albumIds] = await Promise.all([
     context.annotations.listStarred(context.user.id, 'song'),
     context.annotations.listStarred(context.user.id, 'album'),
   ]);
 
-  // Resolved across libraries then narrowed: short ids carry no library to
-  // filter by before the lookup, and the row's own `library_id` is the filter.
-  const songs = (await context.songs.listIdsAcrossLibraries(songIds)).filter((row) => row.library_id === library.id);
+  // Resolved across libraries, and **not** narrowed to `libraries[0]`. The filter read as a
+  // filter and was a drop: a short id carries no library to filter by before the lookup, and the
+  // row's own `library_id` is not `libraries[0]` for a user granted two libraries — so every
+  // starred song from the second one vanished with no error, while the starred *albums* in the
+  // same response were unioned. `getBookmarks` and `getPlayQueue` already iterate every library.
+  const songs = await context.songs.listIdsAcrossLibraries(songIds);
 
   const annotations = await annotationsFor(context, songIds.length + albumIds.length > 0);
   // Through `starredAlbums`, not a per-id directory read: an album's identity is now a tag for
   // most libraries, so a starred *folder* id has to resolve through the group or the starred
   // list publishes half of an album the rest of the server publishes whole.
-  const albums = await starredAlbums(context, library, scope, albumIds, annotations);
+  const albums = await starredAlbums(context, libraries, scope, albumIds, annotations);
   // `starred` and `starred2` declare both an `album` and a `song` key, so the wrapper is
   // a record either way. An album in that wrapper is a `Child`, matching `starred`'s own
   // schema — see `renderAlbums` for why the element type follows the wrapper.
   const albumNodes = albums.map((album) => albumChildElement(album, album.artistId));
-  return respond(context, elList(wrapperName, ['album', 'song'], {}, [...albumNodes, ...(await songNodes(context, library, songs))]));
+  return respond(context, elList(wrapperName, ['album', 'song'], {}, [...albumNodes, ...(await songNodes(context, libraries, songs))]));
 }
 
 async function getStarred(context: RestContext): Promise<EnvelopeResponse> {
@@ -271,22 +296,25 @@ async function getStarred2(context: RestContext): Promise<EnvelopeResponse> {
 /**
  * `getNowPlaying` — populated by `scrobble`, and deliberately narrow.
  *
- * Only entries whose song is still in the index are reported, and only for the
- * caller's library. A scrobble for a track that has since been deleted is silently
- * dropped rather than shown as a broken entry.
+ * Only entries whose song is still in the index are reported, and only for a
+ * library the caller was granted. A scrobble for a track that has since been deleted is
+ * silently dropped rather than shown as a broken entry.
  */
 async function getNowPlaying(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, undefined);
-  const library = libraries[0];
-  const identity = context.albumsFor(library);
+  const granted = new Set(libraries.map((row) => row.id));
+  const identityOf = context.albumsForScope(libraries);
   const entries = await context.annotations.listNowPlaying();
   const nodes: ElementNode[] = [];
   for (const entry of entries) {
     if (!entry.song_id) continue;
     const song = await context.songs.findBySongId(entry.song_id);
-    if (!song || song.library_id !== library.id) continue;
+    // **Granted, not `libraries[0]`.** The `!== library.id` read as a grant check and was a
+    // drop: a user whose currently-playing track is in their second library was shown nobody
+    // playing. The grant is the set, which is what `resolveLibraries` answered with.
+    if (!song || !granted.has(song.library_id)) continue;
     nodes.push({
-      ...songElement(songToModel(song, library, identity)),
+      ...songElement(songToModel(song, identityOf)),
       // The wrapper declares `entry` as its list key, and the element name is the JSON
       // key a client reads. Leaving this as `song` puts the payload under
       // `nowPlaying.song` and leaves `nowPlaying.entry` as its empty seed, so a client

@@ -12,9 +12,17 @@ const baseResources = {
   en: { translation: en },
 } as const;
 
+/**
+ * The one place a BCP 47-ish tag is canonicalized (`en_us` → `en-US`).
+ *
+ * Internal rather than exported: it used to be exported as `canonicalizeLanguageTag` for a
+ * `lib/locale.ts` that does not exist, so the wrapper had no caller and its comment described a
+ * delegation that was never wired. `normalizeLanguage` is the only reader, and one spelling of one
+ * function is what keeps normalization from drifting.
+ *
+ * Local rather than shared because the SPA ships zero `@edge-sonic/*` runtime dependencies.
+ */
 function canonicalizeTag(tag: string): string {
-  // The SPA ships zero `@edge-sonic/*` runtime dependencies, so this is
-  // intentionally local rather than shared with a package.
   const normalized = tag.trim().replaceAll('_', '-');
   const parts = normalized.split('-').filter(Boolean);
   if (parts.length === 0) return 'en';
@@ -24,12 +32,13 @@ function canonicalizeTag(tag: string): string {
   return [language, ...rest].join('-');
 }
 
-// Single canonicalizer for BCP 47-ish tags (`en_us` → `en-US`).
-// `lib/locale.ts` delegates here so normalization lives in one place.
-export function canonicalizeLanguageTag(tag: string): string {
-  return canonicalizeTag(tag);
-}
-
+/**
+ * A tag the SPA has a bundle for, defaulting to English.
+ *
+ * The base-language fallback is what makes `en-GB` resolve to `en`: the bundles are per-language,
+ * so a regional variant has no bundle of its own and the language part is the answer. An exact
+ * match is preferred where one exists.
+ */
 export function normalizeLanguage(tag: string | null | undefined): SupportedLanguage {
   if (!tag || typeof tag !== 'string') return 'en';
   const canonical = canonicalizeTag(tag);

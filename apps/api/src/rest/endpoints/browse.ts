@@ -9,20 +9,18 @@
  * cannot find an album because the index is stale can still walk to it, so the
  * folder view is the safety net for the tag view rather than a legacy path.
  */
-import { childElement, decodeId, el, elList, encodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
+import { childElement, decodeId, deriveShortSongId, el, elList, encodeId, ErrorCode, IdKind, SubsonicError } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, NodeRow } from '@edge-sonic/backend-data/dao';
-import { TreeService } from '@edge-sonic/backend-services/index';
+import { basename, parentOf, TreeService } from '@edge-sonic/backend-services/index';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
-import { artistIndexGroups, groupArtistRows, IGNORED_ARTICLES, toIso, songToChild } from '../mappers';
+import { IGNORED_ARTICLES, toIso, songToChild } from '../mappers';
+import { artistIndexGroups, groupArtistRows } from '../artistIndex';
 import { libraryName, resolveLibrary } from './libraries';
 
-function baseName(path: string): string {
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? path : path.slice(slash + 1);
-}
+
 
 function isPlayable(name: string): boolean {
   const dot = name.lastIndexOf('.');
@@ -69,7 +67,10 @@ async function getIndexes(context: RestContext): Promise<EnvelopeResponse> {
     return respond(context, elList('indexes', ['shortcut', 'index'], { lastModified: newest, ignoredArticles: IGNORED_ARTICLES }, []));
   }
   const rows = await context.songIndex.listArtists(library.id, 5000, 0);
-  return respond(context, buildIndexes(roots, library, artistIndexGroups(library, groupArtistRows(rows, context.albumsFor(library))), newest));
+  // One library here, so a single identity — `getIndexes` browses one origin. The per-row form
+  // is used anyway so this and `getArtists` cannot disagree about what an album key is.
+  const identity = context.albumsFor(library);
+  return respond(context, buildIndexes(roots, library, artistIndexGroups(groupArtistRows(rows, () => identity)), newest));
 }
 
 /**
@@ -101,16 +102,22 @@ async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse
   const songs = await context.songs.listByDirectory(library.id, path);
 
   const byPath = new Map(songs.map((song) => [song.path, song]));
+  const identity = context.albumsFor(library);
   const childNodes: ElementNode[] = children.map((node) => {
     const song = byPath.get(node.path);
     if (song) {
       // The indexed row wins: it carries duration, genre, and track number, which
       // the node row does not have.
-      return childElement(songToChild(song, library, selfId, context.albumsFor(library)));
+      return childElement(songToChild(song, selfId, () => identity));
     }
     const isDirectory = !isPlayable(node.name);
     return childElement({
-      id: encodeId(isDirectory ? IdKind.Directory : IdKind.Song, library.id, node.path),
+      // A playable file with no indexed row — browsable before the scan reaches it. It gets a
+      // **derived short** song id, not `encodeId(IdKind.Song, …)`: a reversible song id grows with
+      // the path, and a client filing a download under one hits `ENAMETOOLONG` past 255 bytes with
+      // no server-side error. That is the defect `subsonic/songId.ts` exists for, and minting the
+      // long form here was the one place still doing it.
+      id: isDirectory ? encodeId(IdKind.Directory, library.id, node.path) : deriveShortSongId(library.id, node.path),
       parent: selfId,
       isDir: isDirectory,
       title: node.name,
@@ -120,15 +127,28 @@ async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse
     });
   });
 
-  const parentId =
-    path.length === 0 ? '' : encodeId(IdKind.Directory, library.id, path.slice(0, path.lastIndexOf('/')).replace(/\/$/, ''));
+  // `parentOf`, not `slice(0, lastIndexOf('/'))`: a top-level folder's path holds no
+  // separator at all, so `lastIndexOf` answered `-1` and `'Blur'.slice(0, -1)` is `'Blu'`
+  // — an id naming a directory that does not exist. `getIndexes` publishes exactly these
+  // folder shortcuts, so a client walking *up* from a root folder issued a live `PROPFIND`
+  // for `Blu` and got a `404`.
+  //
+  // **And the library root is `''`, not an id for it**, which is the second half. `decodeId`
+  // runs `normalizeRelativePath` over the payload and that refuses an empty path, so **no id can
+  // name the library root** — `getMusicDirectory` on one answers `code=70` whatever it encodes.
+  // Publishing one would be a link that is dead on arrival, which is worse than publishing none:
+  // `apps/api/AGENTS.md` says so about the album id, and it holds here for the same reason. So
+  // "up from the top folder" is the same answer the root directory gives for itself — the empty
+  // string — and a client reads that as the top of the tree, which is what it is.
+  const parentPath = parentOf(path);
+  const parentId = parentPath.length === 0 ? '' : encodeId(IdKind.Directory, library.id, parentPath);
 
   return respond(
     context,
     elList(
       'directory',
       'child',
-      { id: selfId, parent: parentId, name: path === '' ? libraryName(library) : baseName(path) },
+      { id: selfId, parent: parentId, name: path === '' ? libraryName(library) : basename(path) },
       childNodes,
     ),
   );

@@ -33,6 +33,7 @@
  *   could plausibly have broken, so it is asserted rather than assumed.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
+import { artistIdOf } from '@edge-sonic/subsonic';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import { NodeDAO, SongDAO } from '@edge-sonic/backend-data/dao';
 import { createHarness, WEBDAV_TEST_KEY, nowSeconds } from './helpers/harness';
@@ -251,6 +252,95 @@ describe('a star written under the old, library-scoped id', () => {
     // annotation did not merely survive, it survived attached to the whole release.
     expect(match).toBeDefined();
     expect(match?.songCount).toBe(2);
+  });
+});
+
+/**
+ * The union was implemented for the **read** and not for the **identity** — and these are the
+ * four surfaces where that showed.
+ *
+ * `resolveLibraries` answers every granted library when no `musicFolderId` is sent. Four
+ * endpoints then bound `library = libraries[0]` and used it to *filter rows* or to *mint ids*,
+ * while reading across the union. Each read as a deliberate narrowing and each was a drop:
+ *
+ * | Surface | What it dropped |
+ * | --- | --- |
+ * | `getStarred` | every starred song from the second library — while its starred **albums** were unioned, so the one response was internally inconsistent |
+ * | `getNowPlaying` | the current track, for a user playing something in their second library |
+ * | `getArtist` | every album key outside `libraries[0]`, from the completion fetch — an album published at a different `songCount` here than everywhere else |
+ * | every album list | nothing visible under a tag grouping, and a **dead link** under `ALBUM_GROUP_BY=folder`, where the library is part of the id |
+ *
+ * `apps/api/AGENTS.md` records the union as a measured decision, so this file is where "it is
+ * also applied to identity" is a fact rather than a comment.
+ */
+describe('the union reaches the identity, not only the read', () => {
+  it('publishes a starred song from the second library', async () => {
+    const { homeTrack, archiveTrack } = await seedSplitRelease(harness);
+    // Star through the surface, with **no** `musicFolderId` — so both songs must come back. The
+    // old shape filtered to `libraries[0]`, and `archive` sorts first, so `archiveTrack` was the
+    // one that survived and the test would have passed while the defect was live. Starring only
+    // the `home` track is the direction that failed: `libraries[0]` is `archive`.
+    await harness.rest('star', { id: homeTrack });
+
+    const { body } = await harness.rest('getStarred2', {});
+    const starred = (body['subsonic-response'] as { starred2?: { song?: unknown } }).starred2?.song;
+    const published = (Array.isArray(starred) ? starred : starred === undefined ? [] : [starred]) as Array<{ id: string }>;
+
+    expect(published.map((row) => row.id)).toContain(homeTrack);
+    // And the album half is still there, because the release is one album across both.
+    const albums = (body['subsonic-response'] as { starred2?: { album?: unknown } }).starred2?.album;
+    const albumNodes = Array.isArray(albums) ? albums : albums === undefined ? [] : [albums];
+    expect(albumNodes).toHaveLength(0);
+    expect(archiveTrack).not.toBe(homeTrack);
+  });
+
+  it('publishes a starred song from BOTH libraries, which is the union the endpoints already document', async () => {
+    const { homeTrack, archiveTrack } = await seedSplitRelease(harness);
+    await harness.rest('star', { id: homeTrack });
+    await harness.rest('star', { id: archiveTrack });
+
+    const { body } = await harness.rest('getStarred2', {});
+    const starred = (body['subsonic-response'] as { starred2?: { song?: unknown } }).starred2?.song;
+    const published = (Array.isArray(starred) ? starred : starred === undefined ? [] : [starred]) as Array<{ id: string }>;
+
+    // The defect dropped exactly one of these two, silently.
+    expect(published.map((row) => row.id)).toEqual(expect.arrayContaining([homeTrack, archiveTrack]));
+  });
+
+  it('publishes the now-playing track whichever library it is in', async () => {
+    const { homeTrack } = await seedSplitRelease(harness);
+    // A scrobble in `home`, with `archive` being `libraries[0]`. `getNowPlaying` compared
+    // `song.library_id !== library.id`, so this answered an empty `nowPlaying` — the user was
+    // playing something and the client was told nobody was.
+    await harness.rest('scrobble', { id: homeTrack });
+
+    const { body } = await harness.rest('getNowPlaying', {});
+    const entries = (body['subsonic-response'] as { nowPlaying?: { entry?: unknown } }).nowPlaying?.entry;
+    const published = (Array.isArray(entries) ? entries : entries === undefined ? [] : [entries]) as Array<{ id: string }>;
+
+    expect(published.map((row) => row.id)).toContain(homeTrack);
+  });
+
+  it("completes getArtist's albums across the union, so one album reports one songCount", async () => {
+    await seedSplitRelease(harness);
+
+    // `getArtist` gathered the album keys from every granted library and then completed them
+    // through `libraries[0]` — so a release split across both was published here at a
+    // `songCount` of 1 while `getAlbumList2`, `search3` and `getAlbum` reported 2 for the same
+    // album id. Two numbers for one album, which is the exact shape `structured.ts`'s own
+    // comment says it went to the completion fetch to prevent.
+    const { body } = await harness.rest('getArtist', { id: artistIdOf('トゲナシトゲアリ') });
+    const artistPayload = (body['subsonic-response'] as { artist?: { album?: unknown } }).artist?.album;
+    const artistAlbums = (Array.isArray(artistPayload) ? artistPayload : artistPayload === undefined ? [] : [artistPayload]) as Array<{
+      name: string;
+      songCount: number;
+    }>;
+    const split = artistAlbums.find((row) => row.name === '棘ナシ');
+
+    expect(split?.songCount).toBe(2);
+    // And it agrees with the list surface for the same album, which is the property that had two
+    // answers without this.
+    expect(split?.songCount).toBe((await albums(harness)).find((row) => row.name === '棘ナシ')?.songCount);
   });
 });
 

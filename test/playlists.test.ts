@@ -65,7 +65,7 @@ describe('createPlaylist', () => {
     expect(payload<{ code: number }>(blank.body, 'error').code).toBe(10);
   });
 
-  it('returns the playlist with its entries in the client\u2019s order', async () => {
+  it('returns the playlist with its entries in the client’s order', async () => {
     const { body } = await harness.rest('createPlaylist', { name: 'Mix', songId: `${HOLOCENE},${SKINNY_LOVE}` });
     const playlist = payload<{ id: string; name: string; songCount: number; duration: number; public: boolean; entry: Array<{ id: string }> | { id: string } }>(body, 'playlist');
     expect(playlist.name).toBe('Mix');

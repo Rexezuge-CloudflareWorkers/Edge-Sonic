@@ -301,7 +301,7 @@ describe('route order', () => {
    * The two halves of one decision, and the drift they invite.
    *
    * `SPA_ROUTES` in `EdgeSonicWorker.ts` and the `<Route path="\u2026">` list in
-   * `SpaViewRouter.tsx` are the same list written twice \u2014 once in the router and once in the
+   * `SpaViewRouter.tsx` are the same list written twice — once in the router and once in the
    * route table that serves the shell. Nothing holds them together.
    *
    * The failure is asymmetric, which is why it is worth a guard rather than a convention: a
@@ -312,13 +312,13 @@ describe('route order', () => {
    * obvious to every user who was sent there.
    *
    * Read as **source text** rather than through a DOM or a build: the claim is that two files
-   * agree, and rendering the router would only establish that the router renders \u2014 which it
+   * agree, and rendering the router would only establish that the router renders — which it
    * does, whether or not the worker serves it. This reads the `<Route path="\u2026">` attributes
    * and the `SPA_ROUTES` array out of the two files and compares the sets, so a route added to
    * one and not the other fails here.
    *
    * The catch-all `path="*"` is excluded on purpose: it is the router's *fallback*, not a route
-   * the worker should serve \u2014 it renders a not-found page inside the shell, and treating it as
+   * the worker should serve — it renders a not-found page inside the shell, and treating it as
    * a served route would demand the worker answer it with the shell, which is the opposite.
    */
   it('serves the shell for every route the SPA router declares', () => {

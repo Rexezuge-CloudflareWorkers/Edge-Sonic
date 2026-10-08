@@ -19,7 +19,7 @@
  */
 import { albumChildElement, albumElement, artistIdOf, el, elList, songElement } from '@edge-sonic/subsonic';
 import type { ElementNode } from '@edge-sonic/subsonic';
-import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
+import type { LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
 import type { EnvelopeResponse } from '../respond';
@@ -54,12 +54,20 @@ function readSpec(context: RestContext): SearchSpec {
   return album === undefined ? { term: context.params.require('query'), field: 'any' } : { term: album, field: 'album' };
 }
 
-async function runSearch(context: RestContext, library: LibraryRow, scope: LibraryScope): Promise<{ songs: SongRow[]; spec: SearchSpec }> {
+/**
+ * The song page of a search.
+ *
+ * The offset is paged **in SQL**, and bounded. It used to read `limit + offset` rows at
+ * `offset: 0` and discard all but the page with a `slice` — so `?songOffset=9007199254740991` bound
+ * `LIMIT 9007199254740991` and pulled the whole matching set into Worker memory to throw away. See
+ * `../paging` for why the ceiling is derived from the page size rather than typed.
+ */
+async function runSearch(context: RestContext, scope: LibraryScope): Promise<{ songs: SongRow[]; spec: SearchSpec }> {
   const spec = readSpec(context);
   const limit = context.pageSize(context.params.optionalInt('songCount'), 20);
-  const offset = context.params.int('songOffset', 0, { min: 0 });
-  const songs = await context.songs.search(scope, spec.term, { limit: limit + offset, offset: 0, field: spec.field });
-  return { songs: songs.slice(offset, offset + limit), spec };
+  const offset = context.params.int('songOffset', 0, { min: 0, max: context.maxOffset });
+  const songs = await context.songs.search(scope, spec.term, { limit, offset, field: spec.field });
+  return { songs, spec };
 }
 
 /**
@@ -67,12 +75,12 @@ async function runSearch(context: RestContext, library: LibraryRow, scope: Libra
 */
 async function search(context: RestContext): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
-  const { songs } = await runSearch(context, library, scope);
+  const identityOf = context.albumsForScope(libraries);
+  const { songs } = await runSearch(context, scope);
   const count = context.pageSize(context.params.optionalInt('count'), 20);
   const annotations = await annotationsFor(context, songs.length > 0);
-  const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, library, context.albumsFor(library), annotations)));
+  const nodes = songs.slice(0, count).map((song) => songElement(songToModel(song, identityOf, annotations)));
   return respond(context, elList('searchResult', 'song', {}, nodes));
 }
 
@@ -85,23 +93,23 @@ async function search(context: RestContext): Promise<EnvelopeResponse> {
  */
 async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | 'searchResult3'): Promise<EnvelopeResponse> {
   const libraries = await resolveLibraries(context, context.params.get('musicFolderId'));
-  const library = libraries[0];
   const scope = libraries.map((row) => row.id);
-  const identity = context.albumsFor(library);
-  const { songs } = await runSearch(context, library, scope);
+  const identityOf = context.albumsForScope(libraries);
+  const grouping = context.albumsFor(libraries[0]).grouping;
+  const { songs } = await runSearch(context, scope);
   const annotations = await annotationsFor(context, songs.length > 0);
 
-  const artists = groupArtists(songs, library, identity, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0 }));
-  const albumOffset = context.params.int('albumOffset', 0, { min: 0 });
+  const artists = groupArtists(songs, identityOf, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0, max: context.maxOffset }));
+  const albumOffset = context.params.int('albumOffset', 0, { min: 0, max: context.maxOffset });
   // **Completed, then grouped.** `songs` is the matched subset, so grouping it alone publishes
   // an album holding the tracks the term happened to hit — and the same album id then reports a
   // different `songCount`, `duration` and `artist` here than everywhere else. The protocol's own
   // shape agrees: `searchResult3` carries albums as `AlbumID3` records with no songs attached,
   // so the album's numbers are supposed to be the album's. One statement per 49 keys, against a
   // default page of 20 albums.
-  const albumKeys = [...new Set(songs.map((song) => identity.keyOf(song)))];
-  const complete = await context.songIndex.listForAlbumKeys(scope, albumKeys, identity.grouping);
-  const albums = groupAlbumsOf(complete, library, identity, NO_ANNOTATIONS).slice(
+  const albumKeys = [...new Set(songs.map((song) => identityOf(song).keyOf(song)))];
+  const complete = await context.songIndex.listForAlbumKeys(scope, albumKeys, grouping);
+  const albums = groupAlbumsOf(complete, identityOf, NO_ANNOTATIONS).slice(
     albumOffset,
     albumOffset + context.pageSize(context.params.optionalInt('albumCount'), 20),
   );
@@ -125,7 +133,7 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
       [
         ...artists,
         ...albumNodes,
-        ...songs.map((song) => songElement(songToModel(song, library, identity, annotations))),
+        ...songs.map((song) => songElement(songToModel(song, identityOf, annotations))),
       ],
     ),
   );
@@ -139,12 +147,14 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
  * `getArtists` and has to agree with this or the two browses disagree about an artist's
  * discography.
  */
-function groupArtists(rows: readonly SongRow[], library: LibraryRow, identity: AlbumIdentity, limit: number, offset: number): ElementNode[] {
+function groupArtists(rows: readonly SongRow[], identityOf: (song: SongRow) => AlbumIdentity, limit: number, offset: number): ElementNode[] {
   const counts = new Map<string, { name: string; albums: Set<string> }>();
   for (const row of rows) {
     const name = row.artist ?? row.album_artist ?? artistNameOf(row);
     const key = name.toLowerCase();
-    const albumKey = identity.keyOf(row);
+    // Per row: the album key names the row's own library under `folder` grouping, and `rows`
+    // spans the caller's whole granted scope.
+    const albumKey = identityOf(row).keyOf(row);
     const existing = counts.get(key);
     if (existing) {
       existing.albums.add(albumKey);
