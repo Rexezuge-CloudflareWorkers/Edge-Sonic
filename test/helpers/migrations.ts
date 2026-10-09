@@ -73,7 +73,9 @@ function migrationSqlOf(name: string): string {
 }
 
 function sha256(name: string): string {
-  return createHash('sha256').update(readFileSync(fileURLToPath(new URL(`../../migrations/${name}`, import.meta.url)))).digest('hex');
+  return createHash('sha256')
+    .update(readFileSync(fileURLToPath(new URL(`../../migrations/${name}`, import.meta.url))))
+    .digest('hex');
 }
 
 /**

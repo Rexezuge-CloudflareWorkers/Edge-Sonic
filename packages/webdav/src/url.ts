@@ -49,9 +49,7 @@ function buildDavUrl(baseUrl: string, rootPath: string, relativePath = ''): stri
     return null;
   }
 
-  const segments = `${rootPath}/${relativePath}`
-    .split('/')
-    .filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+  const segments = `${rootPath}/${relativePath}`.split('/').filter((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
 
   // A `..` that survived the filter above would have been a caller bug; refuse
   // rather than silently drop it, so the mistake is visible.

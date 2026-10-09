@@ -118,5 +118,5 @@ async function settle(
   return await finished(deps, library, state, derived);
 }
 
-export { backfill, finished, settle,  };
-export {NO_DERIVATION} from './deriveBackfill';
+export { backfill, finished, settle };
+export { NO_DERIVATION } from './deriveBackfill';

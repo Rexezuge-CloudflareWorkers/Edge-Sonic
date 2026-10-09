@@ -113,7 +113,9 @@ class ImportSourceService {
 
     const key = await this.deps.resolveKey();
     const encrypted = await encryptData(input.password, key);
-    const created = await (await this.deps.sources()).create({
+    const created = await (
+      await this.deps.sources()
+    ).create({
       name,
       baseUrl,
       username,
@@ -175,7 +177,9 @@ class ImportSourceService {
    * whole point of a union over two booleans: the caller cannot handle one case and believe it
    * handled the other.
    */
-  public async clientFor(sourceId: string): Promise<{ readonly ok: true; readonly client: RemoteSubsonicClient } | { readonly ok: false; readonly reason: string }> {
+  public async clientFor(
+    sourceId: string,
+  ): Promise<{ readonly ok: true; readonly client: RemoteSubsonicClient } | { readonly ok: false; readonly reason: string }> {
     const source = await (await this.deps.sources()).findById(sourceId);
     if (source === null) {
       // Not named as "the host is refused", because it is not: there is no host left to judge.
@@ -211,19 +215,6 @@ class ImportSourceService {
         onRequest: this.deps.onRequest,
       }),
     };
-  }
-
-  /**
-   * As {@link clientFor}, but a refusal **throws**.
-   *
-   * For a caller that has no distinct answer for "gone" and "refused" and genuinely wants to treat
-   * them alike. Not used by the three real callers, all of which say what they do with each — it
-   * exists so a fourth one does not reach for {@link clientFor} and re-invent the collapsing.
-   */
-  public async requireClientFor(sourceId: string): Promise<RemoteSubsonicClient> {
-    const result = await this.clientFor(sourceId);
-    if (!result.ok) throw new NotFoundError(result.reason);
-    return result.client;
   }
 }
 

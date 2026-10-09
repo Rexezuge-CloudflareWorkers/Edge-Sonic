@@ -193,9 +193,7 @@ function SettingsView({ showNotice }: { showNotice: ShowNotice }) {
         <CardHeader>
           <CardTitle>{t('settings.title', 'Settings')}</CardTitle>
         </CardHeader>
-        <p className="text-sm text-[var(--color-text-secondary)]">
-          {t('settings.intro', 'Operational controls for this deployment.')}
-        </p>
+        <p className="text-sm text-[var(--color-text-secondary)]">{t('settings.intro', 'Operational controls for this deployment.')}</p>
       </Card>
 
       <DangerZoneCard

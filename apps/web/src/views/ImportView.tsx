@@ -6,8 +6,17 @@ import { Input, Label } from '../components/ui/Input';
 import { Badge } from '../components/ui/Badge';
 import { Card, CardHeader, CardTitle } from '../components/ui/Card';
 import { EmptyState, LoadingSpinner } from '../components/layout/PageState';
-import { PhaseRow,   } from '../components/import/RunReport';
-import { IMPORT_PHASES, IMPORT_PHASE_LABELS, createImportSource, deleteImportSource, listImports, listImportSources, readImport, startImport } from '../services/importService';
+import { PhaseRow } from '../components/import/RunReport';
+import {
+  IMPORT_PHASES,
+  IMPORT_PHASE_LABELS,
+  createImportSource,
+  deleteImportSource,
+  listImports,
+  listImportSources,
+  readImport,
+  startImport,
+} from '../services/importService';
 import { listUsers } from '../services/userService';
 import type { ShowNotice } from '../hooks/useNotice';
 import type { ImportPhase, ImportRunSummary, ImportSourceSummary, PhaseReport, UserSummary } from '../types';
@@ -68,7 +77,6 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
   const [target, setTarget] = useState('');
   const [sourceId, setSourceId] = useState('');
   const [phases, setPhases] = useState<readonly ImportPhase[]>(IMPORT_PHASES.filter((name) => name !== 'playQueue'));
-
 
   /**
    * The one fetch, and it returns its result rather than setting state.
@@ -211,9 +219,21 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
           </Button>
         </CardHeader>
         <div className="space-y-3">
-          <p className="text-sm text-[var(--color-text-secondary)]">{t('import.intro', 'Bring playlists, favourites, ratings, bookmarks and play counts across from another Subsonic server.')}</p>
-          <p className="text-sm text-[var(--color-text-muted)]">{t('import.pauseNotice', 'An import pauses the library scan while it runs, so the two do not compete for the daily write allowance.')}</p>
-          <p className="text-sm text-[var(--color-text-muted)]">{t('import.matchNotice', 'Songs are matched by their path first, then by album and title. Anything that cannot be matched is listed below rather than dropped.')}</p>
+          <p className="text-sm text-[var(--color-text-secondary)]">
+            {t('import.intro', 'Bring playlists, favourites, ratings, bookmarks and play counts across from another Subsonic server.')}
+          </p>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            {t(
+              'import.pauseNotice',
+              'An import pauses the library scan while it runs, so the two do not compete for the daily write allowance.',
+            )}
+          </p>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            {t(
+              'import.matchNotice',
+              'Songs are matched by their path first, then by album and title. Anything that cannot be matched is listed below rather than dropped.',
+            )}
+          </p>
         </div>
       </Card>
 
@@ -229,16 +249,33 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
           <div className="mb-4 space-y-3 rounded-md border border-[var(--color-border)] p-4">
             <div>
               <Label htmlFor="import-source-name">{t('import.sourceName', 'Name')}</Label>
-              <Input id="import-source-name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="My old server" />
+              <Input
+                id="import-source-name"
+                value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                placeholder="My old server"
+              />
             </div>
             <div>
               <Label htmlFor="import-source-url">{t('import.sourceUrl', 'Server URL')}</Label>
-              <Input id="import-source-url" value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://music.example.com/sonic" />
-              <p className="mt-1 text-xs text-[var(--color-text-muted)]">{t('import.sourceUrlHint', 'Include the path if the server is behind a reverse proxy, e.g. /sonic.')}</p>
+              <Input
+                id="import-source-url"
+                value={draft.baseUrl}
+                onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}
+                placeholder="https://music.example.com/sonic"
+              />
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                {t('import.sourceUrlHint', 'Include the path if the server is behind a reverse proxy, e.g. /sonic.')}
+              </p>
             </div>
             <div>
               <Label htmlFor="import-source-user">{t('import.sourceUsername', 'Username on that server')}</Label>
-              <Input id="import-source-user" value={draft.username} onChange={(event) => setDraft({ ...draft, username: event.target.value })} autoComplete="off" />
+              <Input
+                id="import-source-user"
+                value={draft.username}
+                onChange={(event) => setDraft({ ...draft, username: event.target.value })}
+                autoComplete="off"
+              />
             </div>
             <div>
               <Label htmlFor="import-source-pass">{t('import.sourcePassword', 'Password')}</Label>
@@ -249,7 +286,9 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
                 onChange={(event) => setDraft({ ...draft, password: event.target.value })}
                 autoComplete="off"
               />
-              <p className="mt-1 text-xs text-[var(--color-text-muted)]">{t('import.sourcePasswordHint', 'Stored encrypted and never shown again.')}</p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                {t('import.sourcePasswordHint', 'Stored encrypted and never shown again.')}
+              </p>
             </div>
             <Button onClick={() => void submitSource()} disabled={busy === 'source'}>
               {t('common.save', 'Save')}
@@ -257,11 +296,17 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
           </div>
         )}
         {sources.length === 0 ? (
-          <EmptyState title={t('import.noSources', 'No import sources yet')} description={t('import.noSourcesDescription', 'Add the server you are moving from to begin.')} />
+          <EmptyState
+            title={t('import.noSources', 'No import sources yet')}
+            description={t('import.noSourcesDescription', 'Add the server you are moving from to begin.')}
+          />
         ) : (
           <ul className="space-y-2">
             {sources.map((source) => (
-              <li key={source.id} className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] py-2 last:border-b-0">
+              <li
+                key={source.id}
+                className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] py-2 last:border-b-0"
+              >
                 <div>
                   <span className="text-sm text-[var(--color-text-primary)]">{source.name}</span>
                   <span className="ml-2 text-xs text-[var(--color-text-muted)]">
@@ -322,17 +367,24 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
                   <input
                     type="checkbox"
                     checked={phases.includes(name)}
-                    onChange={(event) => setPhases((current) => (event.target.checked ? [...current, name] : current.filter((entry) => entry !== name)))}
+                    onChange={(event) =>
+                      setPhases((current) => (event.target.checked ? [...current, name] : current.filter((entry) => entry !== name)))
+                    }
                   />
                   {IMPORT_PHASE_LABELS[name]}
                   {name === 'playQueue' && (
-                    <span className="text-xs text-[var(--color-text-muted)]">{t('import.playQueueHint', '— off by default; it restores a half-finished queue.')}</span>
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      {t('import.playQueueHint', '— off by default; it restores a half-finished queue.')}
+                    </span>
                   )}
                 </label>
               ))}
             </div>
           </fieldset>
-          <Button onClick={() => void submitImport()} disabled={busy === 'import' || sourceId === '' || target === '' || phases.length === 0}>
+          <Button
+            onClick={() => void submitImport()}
+            disabled={busy === 'import' || sourceId === '' || target === '' || phases.length === 0}
+          >
             <Download className="h-4 w-4" aria-hidden="true" />
             {t('import.startButton', 'Start import')}
           </Button>
@@ -343,9 +395,16 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
         <CardHeader>
           <CardTitle>{t('import.runs', 'Recent imports')}</CardTitle>
         </CardHeader>
-        {stale && <p className="mb-2 text-xs text-[var(--color-text-warning)]">{t('import.stale', 'Could not reach the server — these figures may be out of date.')}</p>}
+        {stale && (
+          <p className="mb-2 text-xs text-[var(--color-text-warning)]">
+            {t('import.stale', 'Could not reach the server — these figures may be out of date.')}
+          </p>
+        )}
         {runs.length === 0 ? (
-          <EmptyState title={t('import.noRuns', 'No imports yet')} description={t('import.noRunsDescription', 'Imports you run will be listed here with anything they could not match.')} />
+          <EmptyState
+            title={t('import.noRuns', 'No imports yet')}
+            description={t('import.noRunsDescription', 'Imports you run will be listed here with anything they could not match.')}
+          />
         ) : (
           <ul className="space-y-1">
             {runs.map((run) => (
@@ -359,7 +418,9 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
                     {run.sourceName ?? t('import.unknownSource', 'Unknown source')}
                     {run.targetUsername === null ? '' : ` → ${run.targetUsername}`}
                   </span>
-                  <Badge variant={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'warning'}>{run.status}</Badge>
+                  <Badge variant={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'error' : 'warning'}>
+                    {run.status}
+                  </Badge>
                 </button>
               </li>
             ))}
@@ -371,7 +432,13 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
         <Card>
           <CardHeader>
             <CardTitle>{t('import.detail', 'What happened')}</CardTitle>
-            <Button variant="ghost" onClick={() => { setSelected(null); setDetail(null); }}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setSelected(null);
+                setDetail(null);
+              }}
+            >
               {t('common.close', 'Close')}
             </Button>
           </CardHeader>
@@ -390,4 +457,4 @@ export default ImportView;
 // Re-exported so a test can reach the reason mapping without rendering the view. `apps/web` has
 // no component tests in the root suite, and this is the decision in this feature.
 
-export {UnresolvedRow, reasonText, PhaseRow} from '../components/import/RunReport';
+export { UnresolvedRow, reasonText, PhaseRow } from '../components/import/RunReport';

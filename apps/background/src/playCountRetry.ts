@@ -83,7 +83,8 @@ interface WalkProgress {
  */
 function createPlayCountStore(scope: ReturnType<typeof createScanWorkerScope>, userId: string) {
   return {
-    findByPaths: async (libraryId: string, paths: readonly string[]) => await (await scope.get(Tokens.SongMatchDAO)()).findByPaths(libraryId, paths),
+    findByPaths: async (libraryId: string, paths: readonly string[]) =>
+      await (await scope.get(Tokens.SongMatchDAO)()).findByPaths(libraryId, paths),
     findByAlbumTitle: async (libraryId: string, pairs: ReadonlyArray<readonly [string, string]>) =>
       await (await scope.get(Tokens.SongMatchDAO)()).findByAlbumTitle(libraryId, pairs),
     grantedLibraryIds: async (id: string) =>

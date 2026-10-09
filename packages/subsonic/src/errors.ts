@@ -7,6 +7,7 @@
  * written to be readable in English on its own, and the code is what code in
  * `subsonic/` branches on.
  */
+import { PROTOCOL_ERROR_HTTP_STATUS } from './constants';
 
 /**
  * Protocol error codes, verbatim from the Subsonic API reference.
@@ -113,7 +114,14 @@ class SubsonicError extends Error {
  */
 function httpStatusForErrorCode(throttled = false): number {
   if (throttled) return 429;
-  return 200;
+  // The constant, rather than a literal beside the reasoning: `PROTOCOL_ERROR_HTTP_STATUS` was
+  // declared in `constants.ts` with the argument above and then read by nothing, so the one place
+  // the status is actually chosen had a bare `200` and the file that explains why had no say in
+  // it. Two constants for one fact, one of them unread — which is the shape
+  // `docs/agents/runtime/AGENTS.md` records as "a variable that no caller reads is not a
+  // variable". A test asserting this answers 200 would have passed either way; this makes the
+  // choice reference the documented value.
+  return PROTOCOL_ERROR_HTTP_STATUS;
 }
 
 /**

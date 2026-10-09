@@ -63,8 +63,6 @@ interface PageOutcome {
   readonly deferredForBudget: boolean;
 }
 
-const NOTHING_WALKED: PageOutcome = { albums: 0, songs: 0, unresolved: 0, deferredForBudget: false };
-
 /**
  * Walk `page` until the album list ends or the budget does.
  *
@@ -103,5 +101,5 @@ async function walkAlbumPage(
   return { albums, songs, unresolved, deferredForBudget: false };
 }
 
-export { walkAlbumPage, NOTHING_WALKED };
+export { walkAlbumPage };
 export type { WalkBounds, PageOutcome };

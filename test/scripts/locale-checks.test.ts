@@ -37,9 +37,7 @@ describe('translationCalls', () => {
     // and a parser excluding `'` from the shared character class stopped matching it —
     // which is not a visible failure, it is a check that silently stopped running.
     const source = `t('libraries.scanPaused', "D1's daily write allowance is spent.")`;
-    expect(translationCalls(source)).toEqual([
-      { key: 'libraries.scanPaused', inlineDefault: "D1's daily write allowance is spent." },
-    ]);
+    expect(translationCalls(source)).toEqual([{ key: 'libraries.scanPaused', inlineDefault: "D1's daily write allowance is spent." }]);
   });
 
   it('accepts a double quote inside a single-quoted default', () => {
@@ -60,11 +58,7 @@ describe('translationCalls', () => {
   it('stops one call at its own terminator', () => {
     // The other regression. A shared `[^\\]` class matches the closing quote as readily
     // as any other character, so the capture ran on and swallowed the rest of the file.
-    const source = [
-      `{t('a.one', 'first')}`,
-      `{t('a.two', 'second')}`,
-      `{t('a.three', 'third')}`,
-    ].join('\n');
+    const source = [`{t('a.one', 'first')}`, `{t('a.two', 'second')}`, `{t('a.three', 'third')}`].join('\n');
     expect(translationCalls(source)).toEqual([
       { key: 'a.one', inlineDefault: 'first' },
       { key: 'a.two', inlineDefault: 'second' },
@@ -79,9 +73,7 @@ describe('translationCalls', () => {
 
   it('handles an interpolation object after the default, which is the third argument', () => {
     const source = `t('landing.signInDidNothing', 'Check {{path}}.', { path: '/home' })`;
-    expect(translationCalls(source)).toEqual([
-      { key: 'landing.signInDidNothing', inlineDefault: 'Check {{path}}.' },
-    ]);
+    expect(translationCalls(source)).toEqual([{ key: 'landing.signInDidNothing', inlineDefault: 'Check {{path}}.' }]);
   });
 
   it('mixes the two delimiters in one call, which the key and default choose independently', () => {

@@ -16,7 +16,12 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readAudioTags, readOpus, readVorbis, READER_VERSION } from '@edge-sonic/media-tags';
-import { AppConfiguration, DEFAULT_STREAM_RATE_LIMIT, DEFAULT_TAG_READ_TAIL_BYTES, MAX_PAGE_SIZE_CEILING } from '@edge-sonic/backend-runtime/config';
+import {
+  AppConfiguration,
+  DEFAULT_STREAM_RATE_LIMIT,
+  DEFAULT_TAG_READ_TAIL_BYTES,
+  MAX_PAGE_SIZE_CEILING,
+} from '@edge-sonic/backend-runtime/config';
 import { resetBreakerForTests, KvCache, KV_DOMAINS } from '@edge-sonic/backend-runtime/kv';
 import { createLogger, setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
@@ -85,7 +90,10 @@ function oggPage(granule: number, payload: readonly number[] | Uint8Array, flags
   segments.push(remaining);
 
   return [
-    0x4f, 0x67, 0x67, 0x53, // "OggS"
+    0x4f,
+    0x67,
+    0x67,
+    0x53, // "OggS"
     0x00, // version
     flags,
     ...le(granule, 8),
@@ -438,7 +446,12 @@ describe('EnrichmentService', () => {
     // An `ftyp` box: a real MP4 header, and one no reader here can use from a prefix.
     dav.setTree({
       '/dav/A/01.flac': [
-        { path: '/dav/A/01.flac', size: 4_000_000, contentType: 'audio/mp4', body: new Uint8Array([...encoder.encode('....ftypisom'), 0, 0, 0, 8]) },
+        {
+          path: '/dav/A/01.flac',
+          size: 4_000_000,
+          contentType: 'audio/mp4',
+          body: new Uint8Array([...encoder.encode('....ftypisom'), 0, 0, 0, 8]),
+        },
       ],
     });
 
@@ -652,7 +665,10 @@ function opusFile(): Uint8Array {
     return out;
   };
   const page = (segments: number[], body: number[], flags: number, granule: number, seq: number): number[] => [
-    0x4f, 0x67, 0x67, 0x53,
+    0x4f,
+    0x67,
+    0x67,
+    0x53,
     0x00,
     flags,
     ...le(granule, 8),
@@ -682,7 +698,13 @@ function opusFile(): Uint8Array {
   // Page 0: the 19-byte identification header, then the comment packet continued on
   // page 1 — the layout that defeated a page-oriented reader.
   chunks.push(
-    ...page([19, 255], [...encoder.encode('OpusHead'), 0x01, 0x02, ...le(PRESKIP, 2), ...le(48_000, 4), ...le(0, 2), 0x00, ...comments.slice(0, 255)], 0x02, 0, 0),
+    ...page(
+      [19, 255],
+      [...encoder.encode('OpusHead'), 0x01, 0x02, ...le(PRESKIP, 2), ...le(48_000, 4), ...le(0, 2), 0x00, ...comments.slice(0, 255)],
+      0x02,
+      0,
+      0,
+    ),
     ...page([comments.length - 255], comments.slice(255), 0x01, 0, 1),
     // The final page, carrying the end-of-stream flag and the file's length.
     ...page([64], [...new Uint8Array(64)], 0x04, 48_000 * DURATION_SECONDS + PRESKIP, 2),
@@ -1150,7 +1172,9 @@ describe('AppConfiguration.validate', () => {
     // "denied" in production. An explicit value always wins.
     expect(config.getAllowPrivateWebdavHosts()).toBeNull();
     expect(config.isBypassAllowed()).toBe(true);
-    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'development', ALLOW_PRIVATE_WEBDAV_HOSTS: 'false' }).getAllowPrivateWebdavHosts()).toBe(false);
+    expect(AppConfiguration.fromEnv({ ENVIRONMENT: 'development', ALLOW_PRIVATE_WEBDAV_HOSTS: 'false' }).getAllowPrivateWebdavHosts()).toBe(
+      false,
+    );
   });
 
   it('names a malformed TAG_READ_TAIL_BYTES, which the numeric list did not check', () => {

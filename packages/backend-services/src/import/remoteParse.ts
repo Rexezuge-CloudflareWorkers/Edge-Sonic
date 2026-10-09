@@ -200,7 +200,9 @@ function toSong(node: unknown): RemoteSong | null {
  */
 function songsOf(wrapper: unknown, childKey: 'song' | 'entry' = 'song'): RemoteSong[] {
   if (!wrapper || typeof wrapper !== 'object') return [];
-  return asArray((wrapper as Record<string, unknown>)[childKey]).map(toSong).filter((song): song is RemoteSong => song !== null);
+  return asArray((wrapper as Record<string, unknown>)[childKey])
+    .map(toSong)
+    .filter((song): song is RemoteSong => song !== null);
 }
 
 /**
@@ -225,7 +227,6 @@ const ENVELOPE_ATTRIBUTES: ReadonlySet<string> = new Set(['status', 'version', '
 /**
 A fault from the remote, carrying what an operator can act on.
 */
-
 
 class RemoteSubsonicError extends Error {
   constructor(

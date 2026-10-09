@@ -187,7 +187,7 @@ abstract class BaseDAO {
    * where every other batching decision in this layer is made.
    */
   protected requireSubrequests(statements: number, context: string): void {
-    if (!Number.isFinite(this.meter.ceiling) || (statements <= this.meter.remaining)) return;
+    if (!Number.isFinite(this.meter.ceiling) || statements <= this.meter.remaining) return;
     throw new SubrequestBudgetExhaustedError(
       `Reading ${context} needs about ${statements} queries and ${this.meter.remaining} remain in this invocation.`,
     );
@@ -210,10 +210,7 @@ abstract class BaseDAO {
    * there: a caller-incremented counter is a *claim* about work, and only a measurement of it
    * can bound anything.
    */
-  protected async runWriteStatement(
-    tracked: TrackedStatement,
-    context: string,
-  ): Promise<{ changes: number; billedRows: number }> {
+  protected async runWriteStatement(tracked: TrackedStatement, context: string): Promise<{ changes: number; billedRows: number }> {
     const result: D1Result = await this.withRetry(async () => await tracked.statement.run(), context);
     const changes = result?.meta?.changes ?? 0;
     return { changes, billedRows: billedRowsFor(tracked.sql, changes) };
@@ -261,7 +258,7 @@ abstract class BaseDAO {
     let billedRows = 0;
     let written = 0;
 
-    for (let offset = 0; offset < statements.length; ) {
+    for (let offset = 0; offset < statements.length;) {
       const fits = this.fitCount(statements.length - offset);
       if (fits === 0) break;
 

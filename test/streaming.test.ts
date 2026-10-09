@@ -47,7 +47,9 @@ Decode a `Basic` credential, so a test can assert on the username.
 */
 function decodeBasic(header: string): { username: string; password: string } {
   const [scheme, encoded] = header.split(' ', 2);
-  return scheme !== 'Basic' || encoded === undefined ? { username: '', password: '' } : { username: atob(encoded).split(':', 1)[0] ?? '', password: atob(encoded).split(':', 2)[1] ?? '' };
+  return scheme !== 'Basic' || encoded === undefined
+    ? { username: '', password: '' }
+    : { username: atob(encoded).split(':', 1)[0] ?? '', password: atob(encoded).split(':', 2)[1] ?? '' };
 }
 
 let harness: Harness;
@@ -77,7 +79,11 @@ describe('stream', () => {
   });
 
   it('forwards a Range verbatim and returns exactly the requested slice', async () => {
-    const response = await harness.fetch(harness.restUrl('stream', { id: harness.ids.skinnyLove }), {}, { headers: { Range: 'bytes=100-199' } });
+    const response = await harness.fetch(
+      harness.restUrl('stream', { id: harness.ids.skinnyLove }),
+      {},
+      { headers: { Range: 'bytes=100-199' } },
+    );
 
     // The range reached the origin unchanged. A server that rewrote or normalized it
     // would still return *a* 206, so the recorded request is the assertion.
@@ -92,7 +98,11 @@ describe('stream', () => {
   it('honours an open-ended range', async () => {
     // What a client sends when it knows the offset and not the length, which is most of
     // them.
-    const response = await harness.fetch(harness.restUrl('stream', { id: harness.ids.skinnyLove }), {}, { headers: { Range: 'bytes=4000-' } });
+    const response = await harness.fetch(
+      harness.restUrl('stream', { id: harness.ids.skinnyLove }),
+      {},
+      { headers: { Range: 'bytes=4000-' } },
+    );
 
     expect(response.status).toBe(206);
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(TRACK.subarray(4000));
@@ -107,7 +117,11 @@ describe('stream', () => {
     // is a `/rest` surface: a client parses the body, and a `416` with no envelope is
     // the response it reports to the user as a server fault. The body is *not* audio,
     // which is the property that matters — a client can tell the seek failed.
-    const response = await harness.fetch(harness.restUrl('stream', { id: harness.ids.skinnyLove }), {}, { headers: { Range: 'bytes=999999-' } });
+    const response = await harness.fetch(
+      harness.restUrl('stream', { id: harness.ids.skinnyLove }),
+      {},
+      { headers: { Range: 'bytes=999999-' } },
+    );
     const body = (await response.json()) as { 'subsonic-response': { status: string; error?: { code: number } } };
 
     expect(response.headers.get('content-type')).toContain('application/json');
@@ -175,17 +189,21 @@ describe('download', () => {
     const escaping = await createHarness({
       [`/remote.php/dav/files/alice/Music/${ALBUM_DIR}`]: [
         { path: `/remote.php/dav/files/alice/Music/${ALBUM_DIR}`, collection: true, mtime: 1000, etag: '"b"' },
-        { path: `/remote.php/dav/files/alice/Music/${ALBUM_DIR}/01.flac`, size: TRACK.length, contentType: 'audio/flac', mtime: 1000, etag: '"c"', body: TRACK },
+        {
+          path: `/remote.php/dav/files/alice/Music/${ALBUM_DIR}/01.flac`,
+          size: TRACK.length,
+          contentType: 'audio/flac',
+          mtime: 1000,
+          etag: '"c"',
+          body: TRACK,
+        },
       ],
     });
     const original = fetch;
     globalThis.fetch = escaping.dav.fetch;
     try {
       const { db } = escaping;
-      await db.db
-        .prepare('UPDATE songs SET name = ? WHERE id = ?')
-        .bind('a";b/../../evil.flac', escaping.ids.skinnyLove)
-        .run();
+      await db.db.prepare('UPDATE songs SET name = ? WHERE id = ?').bind('a";b/../../evil.flac', escaping.ids.skinnyLove).run();
       const response = await escaping.fetch(escaping.restUrl('download', { id: escaping.ids.skinnyLove }));
       const disposition = response.headers.get('content-disposition') ?? '';
 
@@ -360,7 +378,11 @@ describe('the origin credential', () => {
     // Fan-out to a backend is a pure passthrough of the caller's identity, but a *media*
     // request is not: the origin gets the library's own credential and nothing of the
     // end user's session.
-    await harness.fetch(harness.restUrl('stream', { id: harness.ids.skinnyLove }), {}, { headers: { 'Cf-Access-Jwt-Assertion': 'a.jwt.token' } });
+    await harness.fetch(
+      harness.restUrl('stream', { id: harness.ids.skinnyLove }),
+      {},
+      { headers: { 'Cf-Access-Jwt-Assertion': 'a.jwt.token' } },
+    );
 
     // Only the library credential is presented. The end user's Access assertion, their
     // cookie, and their Subsonic token are all absent — the origin has no business
@@ -395,8 +417,7 @@ describe('upstream failures', () => {
     // An origin's error page can contain a filesystem path, a hostname, or a stack.
     const failing = await createHarness({});
     const original = fetch;
-    globalThis.fetch = async () =>
-      new Response('Error 500: /srv/nextcloud/data/alice/Music is not readable by uid 33', { status: 500 });
+    globalThis.fetch = async () => new Response('Error 500: /srv/nextcloud/data/alice/Music is not readable by uid 33', { status: 500 });
     try {
       const response = await failing.fetch(failing.restUrl('stream', { id: failing.ids.skinnyLove }));
       const text = await response.text();
@@ -425,7 +446,11 @@ describe('no buffering', () => {
     // The failure this catches is a server that reads the whole file into memory to
     // compute a `Content-Length` it could have copied. It is invisible for a 4 KB
     // fixture and fatal for a 4 GiB track.
-    const response = await harness.fetch(harness.restUrl('stream', { id: harness.ids.skinnyLove }), {}, { headers: { Range: 'bytes=0-99' } });
+    const response = await harness.fetch(
+      harness.restUrl('stream', { id: harness.ids.skinnyLove }),
+      {},
+      { headers: { Range: 'bytes=0-99' } },
+    );
     const body = new Uint8Array(await response.arrayBuffer());
 
     expect(body).toHaveLength(100);

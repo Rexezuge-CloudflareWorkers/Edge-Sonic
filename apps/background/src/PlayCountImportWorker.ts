@@ -100,7 +100,14 @@ class PlayCountImportWorker extends DurableObject<Cloudflare.Env> {
    */
   public async start(request: WalkRequest): Promise<{ readonly runId: string }> {
     await this.ctx.storage.put('runId', request.runId);
-    await this.ctx.storage.put<WalkProgress>('alarm', { albums: 0, songs: 0, unresolved: 0, finished: false, lastError: null, consecutiveFailures: 0 });
+    await this.ctx.storage.put<WalkProgress>('alarm', {
+      albums: 0,
+      songs: 0,
+      unresolved: 0,
+      finished: false,
+      lastError: null,
+      consecutiveFailures: 0,
+    });
     await this.ctx.storage.setAlarm(Date.now());
     return { runId: request.runId };
   }

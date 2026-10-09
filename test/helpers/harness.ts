@@ -226,7 +226,10 @@ export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeK
     )
     .bind(LIBRARY_ID, davSecret.ciphertext, davSecret.iv, timestamp, timestamp)
     .run();
-  await db.db.prepare('INSERT INTO user_libraries (user_id, library_id, created_at) VALUES (?, ?, ?)').bind(userId, LIBRARY_ID, timestamp).run();
+  await db.db
+    .prepare('INSERT INTO user_libraries (user_id, library_id, created_at) VALUES (?, ?, ?)')
+    .bind(userId, LIBRARY_ID, timestamp)
+    .run();
 
   const ids = {
     skinnyLove: subsonicId('s', `${ALBUM_DIR}/01.flac`),
@@ -239,16 +242,72 @@ export async function createHarness(tree?: Record<string, DavEntry[]>, kv: FakeK
   const nodes = new NodeDAO(db.db);
   await nodes.upsertMany([
     { libraryId: LIBRARY_ID, path: 'Bon Iver', parentPath: '', name: 'Bon Iver', mtimeMs: 1000, etag: '"a"', depth: 1, isScanned: true },
-    { libraryId: LIBRARY_ID, path: ALBUM_DIR, parentPath: 'Bon Iver', name: 'For Emma', mtimeMs: 1000, etag: '"b"', depth: 2, isScanned: true },
-    { libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/01.flac`, parentPath: ALBUM_DIR, name: '01.flac', mtimeMs: 1000, etag: '"c"', depth: 3, isScanned: true },
-    { libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/02.flac`, parentPath: ALBUM_DIR, name: '02.flac', mtimeMs: 1000, etag: '"d"', depth: 3, isScanned: true },
-    { libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/cover.jpg`, parentPath: ALBUM_DIR, name: 'cover.jpg', mtimeMs: 1000, etag: '"e"', depth: 3, isScanned: true },
+    {
+      libraryId: LIBRARY_ID,
+      path: ALBUM_DIR,
+      parentPath: 'Bon Iver',
+      name: 'For Emma',
+      mtimeMs: 1000,
+      etag: '"b"',
+      depth: 2,
+      isScanned: true,
+    },
+    {
+      libraryId: LIBRARY_ID,
+      path: `${ALBUM_DIR}/01.flac`,
+      parentPath: ALBUM_DIR,
+      name: '01.flac',
+      mtimeMs: 1000,
+      etag: '"c"',
+      depth: 3,
+      isScanned: true,
+    },
+    {
+      libraryId: LIBRARY_ID,
+      path: `${ALBUM_DIR}/02.flac`,
+      parentPath: ALBUM_DIR,
+      name: '02.flac',
+      mtimeMs: 1000,
+      etag: '"d"',
+      depth: 3,
+      isScanned: true,
+    },
+    {
+      libraryId: LIBRARY_ID,
+      path: `${ALBUM_DIR}/cover.jpg`,
+      parentPath: ALBUM_DIR,
+      name: 'cover.jpg',
+      mtimeMs: 1000,
+      etag: '"e"',
+      depth: 3,
+      isScanned: true,
+    },
   ]);
 
   const songs = new SongDAO(db.db, DERIVED_MARKER);
   await songs.upsertFileFacts([
-    { id: ids.skinnyLove, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/01.flac`, dirPath: ALBUM_DIR, name: '01.flac', size: 4096, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
-    { id: ids.holocene, libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/02.flac`, dirPath: ALBUM_DIR, name: '02.flac', size: 8192, mtimeMs: 1000, contentType: 'audio/flac', suffix: 'flac' },
+    {
+      id: ids.skinnyLove,
+      libraryId: LIBRARY_ID,
+      path: `${ALBUM_DIR}/01.flac`,
+      dirPath: ALBUM_DIR,
+      name: '01.flac',
+      size: 4096,
+      mtimeMs: 1000,
+      contentType: 'audio/flac',
+      suffix: 'flac',
+    },
+    {
+      id: ids.holocene,
+      libraryId: LIBRARY_ID,
+      path: `${ALBUM_DIR}/02.flac`,
+      dirPath: ALBUM_DIR,
+      name: '02.flac',
+      size: 8192,
+      mtimeMs: 1000,
+      contentType: 'audio/flac',
+      suffix: 'flac',
+    },
   ]);
   // These two rows claim to be *enriched*, so they have to say which reader enriched
   // them. Seeding `duration` and `bitrate` without a `readerVersion` says "these came

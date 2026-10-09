@@ -46,7 +46,10 @@ import type { RemoteSong, RemoteSubsonicClient } from './remoteClient';
 /**
 How an album's remote identity becomes a local one, supplied by the composition root.
 */
-type AlbumMatcher = (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) => Promise<Map<string, string>>;
+type AlbumMatcher = (
+  libraryId: LibraryScope,
+  albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>,
+) => Promise<Map<string, string>>;
 
 /**
 How an artist's remote identity becomes a local one.
@@ -189,7 +192,12 @@ async function runStarsPhase(context: PhaseContext): Promise<PhaseReport> {
   for (const album of albums) {
     const localId = albumMap.get(album.id);
     if (localId === undefined) continue;
-    const star = await store.upsertStar({ userId, itemId: localId, itemType: 'album', starredAt: starredAt({ starred: null } as RemoteSong) });
+    const star = await store.upsertStar({
+      userId,
+      itemId: localId,
+      itemType: 'album',
+      starredAt: starredAt({ starred: null } as RemoteSong),
+    });
     rowsWritten += star.written;
     imported += 1;
   }
@@ -198,7 +206,12 @@ async function runStarsPhase(context: PhaseContext): Promise<PhaseReport> {
   for (const artist of artists) {
     const localId = artistMap.get(artist.id);
     if (localId === undefined) continue;
-    const star = await store.upsertStar({ userId, itemId: localId, itemType: 'artist', starredAt: starredAt({ starred: null } as RemoteSong) });
+    const star = await store.upsertStar({
+      userId,
+      itemId: localId,
+      itemType: 'artist',
+      starredAt: starredAt({ starred: null } as RemoteSong),
+    });
     rowsWritten += star.written;
     imported += 1;
   }
@@ -207,10 +220,22 @@ async function runStarsPhase(context: PhaseContext): Promise<PhaseReport> {
     ...unresolvedFor(songs, songOutcomes, 'star', 'starred'),
     ...albums
       .filter((album) => !albumMap.has(album.id))
-      .map((album) => ({ category: 'star', context: 'starred album', remoteId: album.id, label: `${album.artist ?? 'Unknown artist'} — ${album.name ?? album.id}`, reason: 'not-found' as const })),
+      .map((album) => ({
+        category: 'star',
+        context: 'starred album',
+        remoteId: album.id,
+        label: `${album.artist ?? 'Unknown artist'} — ${album.name ?? album.id}`,
+        reason: 'not-found' as const,
+      })),
     ...artists
       .filter((artist) => !artistMap.has(artist.id))
-      .map((artist) => ({ category: 'star', context: 'starred artist', remoteId: artist.id, label: artist.name ?? artist.id, reason: 'not-found' as const })),
+      .map((artist) => ({
+        category: 'star',
+        context: 'starred artist',
+        remoteId: artist.id,
+        label: artist.name ?? artist.id,
+        reason: 'not-found' as const,
+      })),
   ];
 
   return phase({
@@ -232,7 +257,11 @@ async function runBookmarksPhase(context: PhaseContext): Promise<PhaseReport> {
   const bookmarks = await remote.getBookmarks();
   if (bookmarks.length === 0) return phase({ phase: 'bookmarks', status: 'imported' });
 
-  const outcomes = await matchRemoteSongs(store, libraryId, bookmarks.map((bookmark) => toCandidate(bookmark.song)));
+  const outcomes = await matchRemoteSongs(
+    store,
+    libraryId,
+    bookmarks.map((bookmark) => toCandidate(bookmark.song)),
+  );
   const granted = await store.grantedLibraryIds(userId);
   const songIds = outcomes.flatMap((outcome) => (outcome.songId === null ? [] : [outcome.songId]));
   const permitted = await authorizedSongIds(store, granted, songIds);
@@ -294,7 +323,11 @@ async function runPlayQueuePhase(context: PhaseContext): Promise<PhaseReport> {
   const ordered = [...queue.entries].sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER));
   // Matched on the entry's `Child`, which is what makes the path strategy available here — the
   // same strategy the playlist phase uses, for the same reason.
-  const outcomes = await matchRemoteSongs(store, libraryId, ordered.map((entry) => toCandidate(entry.song)));
+  const outcomes = await matchRemoteSongs(
+    store,
+    libraryId,
+    ordered.map((entry) => toCandidate(entry.song)),
+  );
   const granted = await store.grantedLibraryIds(userId);
   const songIds = outcomes.flatMap((outcome) => (outcome.songId === null ? [] : [outcome.songId]));
   const permitted = await authorizedSongIds(store, granted, songIds);

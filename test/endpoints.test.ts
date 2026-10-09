@@ -180,8 +180,14 @@ describe('getAlbumList', () => {
     // it: a lenient client drops an unknown attribute, and `name` was published too, so
     // every field a client actually reads kept working. It is visible only by reading
     // the same endpoint off a reference server — `scripts/compare-navidrome.mjs`.
-    const legacy = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getAlbumList', { type: 'alphabeticalByName' })).body, 'albumList').album;
-    const current = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body, 'albumList2').album;
+    const legacy = payload<{ album: Array<Record<string, unknown>> }>(
+      (await harness.rest('getAlbumList', { type: 'alphabeticalByName' })).body,
+      'albumList',
+    ).album;
+    const current = payload<{ album: Array<Record<string, unknown>> }>(
+      (await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body,
+      'albumList2',
+    ).album;
 
     // A `Child` names its media `title` and declares itself a directory.
     expect(legacy[0]).toHaveProperty('title');
@@ -297,7 +303,7 @@ describe('getUser and getUsers', () => {
     expect(payload<{ code: number }>(other.body, 'error').code).toBe(50);
   });
 
-  it('lets an admin read another user, with that user\'s own folders', async () => {
+  it("lets an admin read another user, with that user's own folders", async () => {
     const { encryptData } = await import('@edge-sonic/backend-data/crypto');
     const secret = await encryptData('opensesame', 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=');
     await harness.db.db
@@ -429,8 +435,17 @@ describe('getAlbum', () => {
     // Asserted as an equality of key sets rather than spot-checking `created`, because the
     // next field to drift should fail here too.
     const fromAlbum = payload<Record<string, unknown>>((await harness.rest('getAlbum', { id: ALBUM })).body, 'album');
-    const fromArtist = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getArtist', { id: ARTIST })).body, 'artist').album[0];
-    expect(Object.keys(fromAlbum).filter((key) => key !== 'song').sort()).toEqual(Object.keys(fromArtist).filter((key) => key !== 'song').sort());
+    const fromArtist = payload<{ album: Array<Record<string, unknown>> }>((await harness.rest('getArtist', { id: ARTIST })).body, 'artist')
+      .album[0];
+    expect(
+      Object.keys(fromAlbum)
+        .filter((key) => key !== 'song')
+        .sort(),
+    ).toEqual(
+      Object.keys(fromArtist)
+        .filter((key) => key !== 'song')
+        .sort(),
+    );
     expect(fromAlbum.created).toBe(fromArtist.created);
   });
 });
@@ -580,7 +595,10 @@ describe('starred items', () => {
     // a client does and because the id is a grouping key: building it from a directory
     // asserts a spelling the server no longer mints. Starring a directory-shaped id is a
     // separate case — an existing user's star — asserted in the split-release block below.
-    const listed = payload<{ album: Array<{ id: string }> }>((await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body, 'albumList2').album;
+    const listed = payload<{ album: Array<{ id: string }> }>(
+      (await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body,
+      'albumList2',
+    ).album;
     const album = listed[0]?.id ?? '';
     for (const params of [{ id: SKINNY_LOVE }, { albumId: album }, { artistId: artist }] as Record<string, string>[]) {
       await harness.rest('star', params);
@@ -622,7 +640,9 @@ describe('starred items', () => {
     await harness.rest('star', { id: SKINNY_LOVE });
 
     const { body } = await harness.rest('getStarred2');
-    const song = payload<{ song: Array<{ id: string; starred?: string }> }>(body, 'starred2').song.find((entry) => entry.id === SKINNY_LOVE);
+    const song = payload<{ song: Array<{ id: string; starred?: string }> }>(body, 'starred2').song.find(
+      (entry) => entry.id === SKINNY_LOVE,
+    );
     expect(song?.starred, 'a starred song carries a starred instant').toBeDefined();
 
     const at = new Date(song?.starred as string);
@@ -998,7 +1018,9 @@ describe('media retrieval by id', () => {
 describe('getArtists and getArtist', () => {
   it('groups artists, and describes one on request', async () => {
     const grouped = await harness.rest('getArtists');
-    const artists = payload<{ index: Array<{ name: string; artist: Array<{ id: string; name: string; albumCount: number; coverArt?: string }> }> }>(grouped.body, 'artists').index;
+    const artists = payload<{
+      index: Array<{ name: string; artist: Array<{ id: string; name: string; albumCount: number; coverArt?: string }> }>;
+    }>(grouped.body, 'artists').index;
     const bonIver = artists.find((group) => group.name === 'B');
 
     expect(bonIver?.artist[0]).toMatchObject({ id: ARTIST, name: 'Bon Iver', albumCount: 1 });
@@ -1016,7 +1038,10 @@ describe('getArtists and getArtist', () => {
     // would fail on the id scheme rather than on the property. Asserted **against the other
     // surface** for that reason — a hard-coded id passes even if `getArtist` and the lists
     // disagree, which is the defect this line was written for.
-    const listed = payload<{ album: Array<{ id: string }> }>((await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body, 'albumList2').album;
+    const listed = payload<{ album: Array<{ id: string }> }>(
+      (await harness.rest('getAlbumList2', { type: 'alphabeticalByName' })).body,
+      'albumList2',
+    ).album;
     expect(artist.album.map((album) => album.id)).toEqual(listed.map((album) => album.id));
 
     // And a directory-shaped id still resolves to it, which is the whole reason the old
@@ -1050,7 +1075,14 @@ async function seedSplitRelease(album = 'Ex-Otogibanashi'): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
   const rows = [
     { dir: SPLIT_DIR_A, file: '01 - Ex-Otogibanashi.opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 1, disc: 1, duration: 180 },
-    { dir: SPLIT_DIR_A, file: '02 - Sekaijū wa Mine [Remix].opus', artist: 'ryo (supercell), Kagura & Tsukimi', track: 2, disc: 1, duration: 263 },
+    {
+      dir: SPLIT_DIR_A,
+      file: '02 - Sekaijū wa Mine [Remix].opus',
+      artist: 'ryo (supercell), Kagura & Tsukimi',
+      track: 2,
+      disc: 1,
+      duration: 263,
+    },
     { dir: SPLIT_DIR_B, file: '03 - Melt [Remix].opus', artist: 'ryo (supercell) & Kagura', track: 3, disc: 1, duration: 271 },
   ];
   for (const row of rows) {
@@ -1142,7 +1174,9 @@ describe('a release split across directories', () => {
     // **Key sets, not spot checks.** `getAlbum` and the lists built the same album from two
     // literals and had already diverged on `created`, which a client declaring it
     // non-nullable fails on for *every* album.
-    const fromAlbum = Object.keys(album).filter((key) => key !== 'song').sort();
+    const fromAlbum = Object.keys(album)
+      .filter((key) => key !== 'song')
+      .sort();
     const fromList = Object.keys(listed).sort();
     expect(fromAlbum).toEqual(fromList);
     expect(album.id).toBe(listed.id);
@@ -1204,7 +1238,9 @@ describe('a release split across directories', () => {
     // ever. Navidrome answers both from its single album table.
     const tag = (await listAlbums()).filter((album) => album.name === 'Ex-Otogibanashi');
     const { body } = await harness.rest('getAlbumList', { type: 'alphabeticalByName', size: '20' });
-    const structural = payload<{ album: Array<Record<string, unknown>> }>(body, 'albumList').album.filter((album) => album.title === 'Ex-Otogibanashi');
+    const structural = payload<{ album: Array<Record<string, unknown>> }>(body, 'albumList').album.filter(
+      (album) => album.title === 'Ex-Otogibanashi',
+    );
 
     expect(structural.map((album) => album.id)).toEqual(tag.map((album) => album.id));
     expect(structural).toHaveLength(1);
@@ -1283,7 +1319,10 @@ describe('a release split across directories', () => {
     const albums = payload<{ album: Array<Record<string, unknown>> }>(body, 'albumList2').album;
     const album = albums.find((entry) => entry.name === 'Silent Siren Selection');
     expect(album, 'the two-disc album is absent from getAlbumList2').toBeDefined();
-    const detail = payload<{ song: Array<{ title: string; discNumber?: number; track?: number }> }>((await harness.rest('getAlbum', { id: String(album?.id) })).body, 'album');
+    const detail = payload<{ song: Array<{ title: string; discNumber?: number; track?: number }> }>(
+      (await harness.rest('getAlbum', { id: String(album?.id) })).body,
+      'album',
+    );
 
     // Disc 1's two tracks, then disc 2's one. Asserted as the whole sequence rather than as
     // "it is sorted", because a comparator with `disc` removed and one that never had it both
@@ -1316,7 +1355,8 @@ describe('ALBUM_GROUP_BY', () => {
       await seedSplitRelease();
       const response = await harness.fetch(harness.restUrl('getAlbumList2', { type: 'alphabeticalByName', size: '20' }), env);
       const parsed = (await response.json()) as SubsonicBody;
-      return payload<{ album: Array<{ name: string }> }>(parsed, 'albumList2').album.filter((album) => album.name === 'Ex-Otogibanashi').length;
+      return payload<{ album: Array<{ name: string }> }>(parsed, 'albumList2').album.filter((album) => album.name === 'Ex-Otogibanashi')
+        .length;
     };
 
     // `folder` answers its own question: two directories, two albums. `album` merges them.
@@ -1340,8 +1380,16 @@ describe('ALBUM_GROUP_BY', () => {
     expect(reported[0]).toContain('album_artist');
 
     // A valid value reports nothing, and so does an unset one.
-    expect(AppConfiguration.fromEnv({ ALBUM_GROUP_BY: 'album' }).validate().filter((warning) => warning.includes('ALBUM_GROUP_BY'))).toHaveLength(0);
-    expect(AppConfiguration.fromEnv({}).validate().filter((warning) => warning.includes('ALBUM_GROUP_BY'))).toHaveLength(0);
+    expect(
+      AppConfiguration.fromEnv({ ALBUM_GROUP_BY: 'album' })
+        .validate()
+        .filter((warning) => warning.includes('ALBUM_GROUP_BY')),
+    ).toHaveLength(0);
+    expect(
+      AppConfiguration.fromEnv({})
+        .validate()
+        .filter((warning) => warning.includes('ALBUM_GROUP_BY')),
+    ).toHaveLength(0);
   });
 });
 
@@ -1410,8 +1458,8 @@ describe('DERIVED_MARKER', () => {
     await seedHalfEnriched(typeof configured === 'string' ? configured : '');
     const response = await harness.fetch(harness.restUrl('getAlbumList2', { type: 'alphabeticalByName', size: '20' }), env);
     const parsed = (await response.json()) as SubsonicBody;
-    return payload<{ album: Array<{ name: string; songCount: number }> }>(parsed, 'albumList2').album
-      .filter((album) => album.name.startsWith('Black Sands'))
+    return payload<{ album: Array<{ name: string; songCount: number }> }>(parsed, 'albumList2')
+      .album.filter((album) => album.name.startsWith('Black Sands'))
       .map((album) => `${album.name} (${album.songCount})`);
   };
 
@@ -1452,7 +1500,13 @@ describe('DERIVED_MARKER', () => {
         // Enrich track 2 and strip track 1 instead, so the enriched row is *not* first in
         // `compareAlbumTracks` order. Without this the case only ever proves one ordering.
         const second = subsonicId('s', `${MIXED_DIR}/02 Black Sands.opus`);
-        await new SongDAO(harness.db.db, '').applyMetadata(second, { artist: 'Bonobo', album: 'Black Sands', albumArtist: 'Bonobo', year: 2008, genre: 'Electronic' });
+        await new SongDAO(harness.db.db, '').applyMetadata(second, {
+          artist: 'Bonobo',
+          album: 'Black Sands',
+          albumArtist: 'Bonobo',
+          year: 2008,
+          genre: 'Electronic',
+        });
         await harness.db.db
           .prepare('UPDATE songs SET year = NULL, genre = NULL, genre_ci = NULL WHERE path = ?')
           .bind(`${MIXED_DIR}/01 Kerala.opus`)
@@ -1462,7 +1516,9 @@ describe('DERIVED_MARKER', () => {
       // round trip a client runs — a hand-built id would pass whether or not the list publishes
       // the same one.
       const list = (await harness.rest('getAlbumList2', { type: 'alphabeticalByName', size: '20' })).body;
-      const albums = payload<{ album: Array<{ id: string; name: string }> }>(list, 'albumList2').album.filter((album) => album.name === 'Black Sands');
+      const albums = payload<{ album: Array<{ id: string; name: string }> }>(list, 'albumList2').album.filter(
+        (album) => album.name === 'Black Sands',
+      );
       expect(albums).toHaveLength(1);
       const detail = (await harness.rest('getAlbum', { id: albums[0].id })).body;
       return payload<{ year?: number; genre?: string }>(detail, 'album');
@@ -1486,16 +1542,24 @@ describe('DERIVED_MARKER', () => {
     // `code=70` and `getCoverArt` serves the placeholder, with nothing naming a cause. That is
     // the `Sgt. Pepper's` defect one level down, and it is why the marker cannot be arbitrary
     // text however much an operator would like a box-drawing character in it.
-    const control = AppConfiguration.fromEnv({ DERIVED_MARKER: ' (derived\u0007)' }).validate().filter((warning) => warning.includes('DERIVED_MARKER'));
+    const control = AppConfiguration.fromEnv({ DERIVED_MARKER: ' (derived\u0007)' })
+      .validate()
+      .filter((warning) => warning.includes('DERIVED_MARKER'));
     expect(control).toHaveLength(1);
     expect(control[0]).toContain('control character');
 
-    expect(AppConfiguration.fromEnv({ DERIVED_MARKER: ' (guess)' }).validate().filter((warning) => warning.includes('DERIVED_MARKER'))).toHaveLength(0);
+    expect(
+      AppConfiguration.fromEnv({ DERIVED_MARKER: ' (guess)' })
+        .validate()
+        .filter((warning) => warning.includes('DERIVED_MARKER')),
+    ).toHaveLength(0);
 
     // Length, because the marker is appended to every derived name and therefore lands in a
     // base64url id and a `WHERE` clause — paid for on every request, not once.
     const long = 'x'.repeat(AppConfiguration.DERIVED_MARKER_MAX_LENGTH + 1);
-    const overlong = AppConfiguration.fromEnv({ DERIVED_MARKER: long }).validate().filter((warning) => warning.includes('DERIVED_MARKER'));
+    const overlong = AppConfiguration.fromEnv({ DERIVED_MARKER: long })
+      .validate()
+      .filter((warning) => warning.includes('DERIVED_MARKER'));
     expect(overlong).toHaveLength(1);
     expect(overlong[0]).toContain(String(AppConfiguration.DERIVED_MARKER_MAX_LENGTH));
 
@@ -1503,13 +1567,26 @@ describe('DERIVED_MARKER', () => {
     // Under the old statement either character was a wildcard and either could make the backfill
     // match everything or nothing; a validation rule here would preserve the confusion the
     // `grouping_source` column removed.
-    for (const marker of ['%', '_', '%_guess_%', '100%', 'Sgt. Pepper\'s']) {
-      expect(AppConfiguration.fromEnv({ DERIVED_MARKER: marker }).validate().filter((warning) => warning.includes('DERIVED_MARKER')), marker).toHaveLength(0);
+    for (const marker of ['%', '_', '%_guess_%', '100%', "Sgt. Pepper's"]) {
+      expect(
+        AppConfiguration.fromEnv({ DERIVED_MARKER: marker })
+          .validate()
+          .filter((warning) => warning.includes('DERIVED_MARKER')),
+        marker,
+      ).toHaveLength(0);
     }
 
     // Empty reports nothing, because it is the default and warning on a default is noise.
-    expect(AppConfiguration.fromEnv({ DERIVED_MARKER: '' }).validate().filter((warning) => warning.includes('DERIVED_MARKER'))).toHaveLength(0);
-    expect(AppConfiguration.fromEnv({}).validate().filter((warning) => warning.includes('DERIVED_MARKER'))).toHaveLength(0);
+    expect(
+      AppConfiguration.fromEnv({ DERIVED_MARKER: '' })
+        .validate()
+        .filter((warning) => warning.includes('DERIVED_MARKER')),
+    ).toHaveLength(0);
+    expect(
+      AppConfiguration.fromEnv({})
+        .validate()
+        .filter((warning) => warning.includes('DERIVED_MARKER')),
+    ).toHaveLength(0);
   });
 
   it('reads the value rather than merely parsing it, and does not trim it', async () => {

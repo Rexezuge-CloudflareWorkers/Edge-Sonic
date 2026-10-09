@@ -40,7 +40,11 @@ import { NodeDAO, SongDAO, DERIVED_VERSION } from '@edge-sonic/backend-data/dao'
 import { TreeService, nodeRowNeedsWrite, reconcileFolder } from '@edge-sonic/backend-services/index';
 import type { DesiredNodeRow, ScanDeps } from '@edge-sonic/backend-services/index';
 import { ScanBudget } from '@edge-sonic/backend-services/index';
-import { SCAN_CHUNK_SUBSREQUEST_BUDGET, SUBSREQUESTS_PER_FOLDER_BASE, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
+import {
+  SCAN_CHUNK_SUBSREQUEST_BUDGET,
+  SUBSREQUESTS_PER_FOLDER_BASE,
+  WORKER_SUBSREQUEST_CEILING,
+} from '@edge-sonic/backend-runtime/config';
 import { WebDavClient } from '@edge-sonic/webdav';
 import { fakeDav } from './helpers/fakeDav';
 import type { DavResource } from '@edge-sonic/webdav';
@@ -87,7 +91,16 @@ function library(): LibraryRow {
  */
 function rootListing(albums: number): DavResource[] {
   return [
-    { href: ROOT, path: ROOT, isCollection: true, contentLength: null, contentType: null, lastModifiedMs: 1000, etag: '"root"', displayName: null },
+    {
+      href: ROOT,
+      path: ROOT,
+      isCollection: true,
+      contentLength: null,
+      contentType: null,
+      lastModifiedMs: 1000,
+      etag: '"root"',
+      displayName: null,
+    },
     ...Array.from({ length: albums }, (_, index) => ({
       href: `${ROOT}/Artist ${index} - Album ${index}`,
       path: `${ROOT}/Artist ${index} - Album ${index}`,
@@ -308,7 +321,16 @@ function albumListing(album: string, tracks: number, size = 5_000_000): DavResou
     displayName: null,
   });
   return [
-    { href: absolute, path: absolute, isCollection: true, contentLength: null, contentType: null, lastModifiedMs: 2000, etag: '"album"', displayName: null },
+    {
+      href: absolute,
+      path: absolute,
+      isCollection: true,
+      contentLength: null,
+      contentType: null,
+      lastModifiedMs: 2000,
+      etag: '"album"',
+      displayName: null,
+    },
     ...Array.from({ length: tracks }, (_, index) => track(index)),
     // A cover, which is a node and never a song. If the song gate read `has_song` before the
     // audio test, this row would be upserted as a song on every pass, for ever.
@@ -780,7 +802,16 @@ describe('a read-through browse no longer re-walks what it merely looked at', ()
       // The listing is the album and the track the scan already indexed. The browse re-offers the
       // track, and the track is the subject: it must stay `is_scanned = 1`.
       await h.browse(ALBUM, [
-        { href: ALBUM, path: ALBUM, isCollection: true, contentLength: null, contentType: null, lastModifiedMs: 2000, etag: '"album-0"', displayName: null },
+        {
+          href: ALBUM,
+          path: ALBUM,
+          isCollection: true,
+          contentLength: null,
+          contentType: null,
+          lastModifiedMs: 2000,
+          etag: '"album-0"',
+          displayName: null,
+        },
         {
           href: `${ALBUM}/01.flac`,
           path: `${ALBUM}/01.flac`,

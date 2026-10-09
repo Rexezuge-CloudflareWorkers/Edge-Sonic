@@ -64,11 +64,7 @@ type Node = ElementNode | Scalar | null | undefined | false;
 /**
 Build an element node.
 */
-function el(
-  name: string,
-  attrs?: Readonly<Record<string, Scalar | null | undefined>>,
-  children?: readonly Node[],
-): ElementNode {
+function el(name: string, attrs?: Readonly<Record<string, Scalar | null | undefined>>, children?: readonly Node[]): ElementNode {
   return { name, ...(attrs && { attrs }), ...(children && { children }) };
 }
 

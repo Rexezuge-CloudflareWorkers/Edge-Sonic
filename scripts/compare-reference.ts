@@ -137,18 +137,30 @@ function keyUnion(node: unknown, key: string, out = new Map<string, Set<string>>
   }
   if (node && typeof node === 'object') {
     for (const [name, value] of Object.entries(node)) {
-      if (name === key && value && typeof value === 'object') {
-        const items = Array.isArray(value) ? value : [value];
-        const existing = out.get(name) ?? new Set<string>();
-        for (const item of items) {
-          if (item && typeof item === 'object' && !Array.isArray(item)) for (const field of Object.keys(item)) existing.add(field);
-        }
-        out.set(name, existing);
-      }
+      if (name === key && value && typeof value === 'object') recordFields(value, name, out);
       keyUnion(value, key, out);
     }
   }
   return out;
+}
+
+/**
+ * Every field name any element under `name` has ever carried, merged into the set.
+ *
+ * Separate from {@link keyUnion} because this is the answer and that is the search: the
+ * recursion walks the whole document looking for one key, and folding the accumulation into it
+ * meant the walk's `if`s and the union's `if`s shared a nesting level for no reason. A single
+ * element collapsing to a bare object rather than a one-element array is handled here, because
+ * that is a property of the value under the key rather than of the walk that found it.
+ */
+function recordFields(value: object, name: string, out: Map<string, Set<string>>): void {
+  const items = Array.isArray(value) ? value : [value];
+  const existing = out.get(name) ?? new Set<string>();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    for (const field of Object.keys(item)) existing.add(field);
+  }
+  out.set(name, existing);
 }
 
 /**
@@ -191,6 +203,60 @@ function elementNames(node: unknown, out = new Set<string>()): Set<string> {
   return out;
 }
 
+/**
+The elements whose attribute sets are compared, and the wrapper key names treated as boilerplate.
+*/
+const COMPARED_ELEMENTS = ['album', 'song', 'child', 'artist', 'index', 'entry', 'folder', 'musicFolder'] as const;
+
+/**
+ * Everything one endpoint pair disagrees about, as differences.
+ *
+ * Its own function because {@link compare} is a loop over endpoints and this is a comparison of
+ * two bodies, and folding the second into the first put four independent checks inside the loop
+ * that walks them. Each check below answers a different question — the wrapper's key set, each
+ * element's attribute union, the set of element names — so each returns its own differences and
+ * nothing here decides whether the endpoint matched.
+ *
+ * @returns the differences; empty means the two envelopes agree in every way this file measures.
+ */
+function compareOne(label: string, referenceBody: Record<string, unknown>, edgeBody: Record<string, unknown>): Difference[] {
+  const differences: Difference[] = [];
+
+  // The wrapper itself. An empty list and an absent key are different answers, and this is the
+  // only place that difference is visible.
+  const referenceKeys = new Set(Object.keys(referenceBody).filter((key) => !ENVELOPE_KEYS.has(key)));
+  const edgeKeys = new Set(Object.keys(edgeBody).filter((key) => !ENVELOPE_KEYS.has(key)));
+  if (describe(sorted(referenceKeys)) !== describe(sorted(edgeKeys))) {
+    differences.push({
+      endpoint: label,
+      what: 'wrapper keys',
+      detail: `reference=[${sorted(referenceKeys).join(',')}] edge=[${sorted(edgeKeys).join(',')}]`,
+    });
+  }
+
+  // Per-element attribute unions, which is where an undeclared field shows up.
+  for (const element of COMPARED_ELEMENTS) {
+    const a = keyUnion(referenceBody, element).get(element) ?? new Set<string>();
+    const b = keyUnion(edgeBody, element).get(element) ?? new Set<string>();
+    if (a.size === 0 && b.size === 0) continue;
+    const missing = sorted([...a].filter((field) => !b.has(field)));
+    const extra = sorted([...b].filter((field) => !a.has(field)));
+    if (missing.length > 0) differences.push({ endpoint: label, what: `${element} MISSING`, detail: missing.join(',') });
+    if (extra.length > 0) differences.push({ endpoint: label, what: `${element} EXTRA`, detail: extra.join(',') });
+  }
+
+  const referenceNames = sorted(elementNames(referenceBody));
+  const edgeNames = sorted(elementNames(edgeBody));
+  if (describe(referenceNames) !== describe(edgeNames)) {
+    const onlyReference = referenceNames.filter((name) => !edgeNames.includes(name));
+    const onlyEdge = edgeNames.filter((name) => !referenceNames.includes(name));
+    if (onlyReference.length > 0) differences.push({ endpoint: label, what: 'elements MISSING', detail: onlyReference.join(',') });
+    if (onlyEdge.length > 0) differences.push({ endpoint: label, what: 'elements EXTRA', detail: onlyEdge.join(',') });
+  }
+
+  return differences;
+}
+
 interface Difference {
   readonly endpoint: string;
   readonly what: string;
@@ -216,37 +282,7 @@ async function compare(config: Config): Promise<Difference[]> {
       continue;
     }
 
-    // The wrapper itself. An empty list and an absent key are different answers, and
-    // this is the only place that difference is visible.
-    const referenceKeys = new Set(Object.keys(referenceBody).filter((key) => !ENVELOPE_KEYS.has(key)));
-    const edgeKeys = new Set(Object.keys(edgeBody).filter((key) => !ENVELOPE_KEYS.has(key)));
-    if (describe(sorted(referenceKeys)) !== describe(sorted(edgeKeys))) {
-      differences.push({
-        endpoint: label,
-        what: 'wrapper keys',
-        detail: `reference=[${sorted(referenceKeys).join(',')}] edge=[${sorted(edgeKeys).join(',')}]`,
-      });
-    }
-
-    // Per-element attribute unions, which is where an undeclared field shows up.
-    for (const element of ['album', 'song', 'child', 'artist', 'index', 'entry', 'folder', 'musicFolder'] as const) {
-      const a = keyUnion(referenceBody, element).get(element) ?? new Set<string>();
-      const b = keyUnion(edgeBody, element).get(element) ?? new Set<string>();
-      if (a.size === 0 && b.size === 0) continue;
-      const missing = sorted([...a].filter((field) => !b.has(field)));
-      const extra = sorted([...b].filter((field) => !a.has(field)));
-      if (missing.length > 0) differences.push({ endpoint: label, what: `${element} MISSING`, detail: missing.join(',') });
-      if (extra.length > 0) differences.push({ endpoint: label, what: `${element} EXTRA`, detail: extra.join(',') });
-    }
-
-    const referenceNames = sorted(elementNames(referenceBody));
-    const edgeNames = sorted(elementNames(edgeBody));
-    if (describe(referenceNames) === describe(edgeNames)) continue;
-
-    const onlyReference = referenceNames.filter((name) => !edgeNames.includes(name));
-    const onlyEdge = edgeNames.filter((name) => !referenceNames.includes(name));
-    if (onlyReference.length > 0) differences.push({ endpoint: label, what: 'elements MISSING', detail: onlyReference.join(',') });
-    if (onlyEdge.length > 0) differences.push({ endpoint: label, what: 'elements EXTRA', detail: onlyEdge.join(',') });
+    differences.push(...compareOne(label, referenceBody, edgeBody));
   }
 
   return differences;

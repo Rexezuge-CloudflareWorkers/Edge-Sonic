@@ -59,14 +59,18 @@ describe('queue consumer: poison never re-queues', () => {
           return async () => ({ findById: async () => ({ id: 'L1' }) });
         }
         if (token.description === 'ScanService') {
-          return { step: async () => { throw new Error('D1 refused the chunk writes'); } };
+          return {
+            step: async () => {
+              throw new Error('D1 refused the chunk writes');
+            },
+          };
         }
         throw new Error(`unexpected token ${String(token)}`);
       },
     });
-    await expect(
-      consumeQueueMessage({ kind: 'scan-chunk', libraryId: 'L1' }, scopeFor as never),
-    ).rejects.toThrow('D1 refused the chunk writes');
+    await expect(consumeQueueMessage({ kind: 'scan-chunk', libraryId: 'L1' }, scopeFor as never)).rejects.toThrow(
+      'D1 refused the chunk writes',
+    );
   });
 
   it('reports a gone library instead of stepping', async () => {
@@ -78,10 +82,7 @@ describe('queue consumer: poison never re-queues', () => {
         throw new Error(`unexpected token ${String(token)}`);
       },
     });
-    const outcome = await consumeQueueMessage(
-      { kind: 'scan-chunk', libraryId: 'gone' },
-      scopeFor as never,
-    );
+    const outcome = await consumeQueueMessage({ kind: 'scan-chunk', libraryId: 'gone' }, scopeFor as never);
     expect(outcome).toEqual({ handled: false, reason: 'library-gone' });
   });
 });

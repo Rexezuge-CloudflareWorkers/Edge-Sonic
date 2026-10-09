@@ -66,7 +66,9 @@ const BUNDLES: Record<Locale, BackendStrings> = { en };
  * the user cannot tell which one they are reading.
  */
 function getBackendStrings(locale?: string | null): BackendStrings {
-  return typeof locale !== 'string' || locale.length === 0 ? BUNDLES[DEFAULT_LOCALE] : BUNDLES[locale.trim().toLowerCase() as Locale] ?? BUNDLES[DEFAULT_LOCALE];
+  return typeof locale !== 'string' || locale.length === 0
+    ? BUNDLES[DEFAULT_LOCALE]
+    : (BUNDLES[locale.trim().toLowerCase() as Locale] ?? BUNDLES[DEFAULT_LOCALE]);
 }
 
 export { getBackendStrings, BUNDLES, DEFAULT_LOCALE };

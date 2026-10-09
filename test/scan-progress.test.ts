@@ -104,7 +104,7 @@ describe('isAdvancingStatus', () => {
 });
 
 describe('the server answers two questions, and this client mirrors only one of them', () => {
-  it('keeps the alarm\'s answer out of the polling guard', () => {
+  it("keeps the alarm's answer out of the polling guard", () => {
     // `paused` is the one status where the two differ, and both answers are needed: the Durable
     // Object's alarm must stay armed (nothing else advances a scan in production) while the page
     // must stop polling (nothing a client does changes the answer). Asserted from the client side

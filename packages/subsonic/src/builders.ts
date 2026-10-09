@@ -36,7 +36,7 @@
 import { el, elList } from './nodes';
 import { songExtensionAttrs, songExtensionChildren } from './extensions';
 import type { ElementNode } from './nodes';
-import type { Album, Artist, Child, Directory, MusicFolder, Playlist, ScanStatus, Song, SubsonicUserView } from './types';
+import type { Album, Artist, Child, MusicFolder, Playlist, ScanStatus, Song, SubsonicUserView } from './types';
 
 type Attrs = Record<string, string | number | boolean | undefined>;
 
@@ -239,7 +239,12 @@ function albumChildElement(album: Album, parent?: string): ElementNode {
  * defect as the `title`/`isDir` half above, and invisible in a lenient client.
  */
 function albumWithSongs(album: Album, songs: readonly Song[]): ElementNode {
-  return elList('album', 'song', albumAttrs(album), songs.map((song) => songElement(song)));
+  return elList(
+    'album',
+    'song',
+    albumAttrs(album),
+    songs.map((song) => songElement(song)),
+  );
 }
 
 function artistElement(artist: Artist): ElementNode {
@@ -250,15 +255,6 @@ function artistElement(artist: Artist): ElementNode {
     coverArt: artist.coverArt,
     starred: artist.starred,
   });
-}
-
-function directoryElement(directory: Directory): ElementNode {
-  return elList(
-    'directory',
-    'child',
-    { id: directory.id, parent: directory.parent, name: directory.name, starred: directory.starred, playable: directory.playable },
-    directory.children.map((child) => el('child', childAttrs(child))),
-  );
 }
 
 /**
@@ -364,7 +360,6 @@ export {
   albumChildElement,
   albumWithSongs,
   artistElement,
-  directoryElement,
   musicFolderElement,
   playlistElement,
   userElement,

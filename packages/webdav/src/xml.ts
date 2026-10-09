@@ -19,51 +19,41 @@
  * Both failure modes are hard errors, never partial results: a half-parsed
  * `207` would put wrong paths into the index, and index rows become stream
  * targets.
+ *
+ * ### The shape of the reader
+ *
+ * Markup scanning lives in [`xmlCursor.ts`](./xmlCursor.ts): a cursor, and the primitives
+ * that advance it. This file owns the document tree and the parse loop. It used to be one
+ * function doing both, which interleaved character handling with tree handling down to five
+ * levels of nesting for a cognitive complexity of 110 — past the point where "read it and
+ * check it" is a review technique, on the one parser in the repository that reads from a
+ * user-chosen remote origin.
+ *
+ * ### The parse loop
+ *
+ * One loop, one job per iteration: find the next `<`, emit the text before it, then dispatch
+ * on what kind of markup is there. Every construct except a tag **returns the index it
+ * should resume at**, and every tag returns the cursor past its own `>`. That is what keeps
+ * the loop flat — the alternative shape, where each handler mutates a shared index, is how
+ * the loop grew five deep in the first place.
  */
+import { XmlParseError, decodeEntities, fail } from './xmlCursor';
+import { scanOpaqueMarkup, scanTag } from './xmlTag';
+import type { ScannedTag } from './xmlTag';
 
 /**
-Refuse beyond this nesting depth. A real `207` is 4 levels deep.
-*/
+ Refuse beyond this nesting depth. A real `207` is 4 levels deep.
+ */
 const MAX_DEPTH = 32;
 
 /**
-Refuse beyond this document size, to bound a hostile response.
-*/
+ Refuse beyond this document size, to bound a hostile response.
+ */
 const MAX_XML_BYTES = 8 * 1024 * 1024;
 
-const PREDEFINED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-};
-
 /**
- * Decode character and predefined entity references.
- *
- * Anything not in the table is left **verbatim** rather than dropped. A
- * filename containing `&foo;` is a real thing; silently deleting it would point
- * the index at a different file than the one on disk.
+ Drop a namespace prefix, leaving the local name.
  */
-function decodeEntities(value: string): string {
-  if (!value.includes('&')) return value;
-  return value.replaceAll(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, body: string) => {
-    if (body.startsWith('#x') || body.startsWith('#X')) {
-      const code = Number.parseInt(body.slice(2), 16);
-      return Number.isFinite(code) && code >= 0 && code <= 0x10_ff_ff ? String.fromCodePoint(code) : match;
-    }
-    if (body.startsWith('#')) {
-      const code = Number.parseInt(body.slice(1), 10);
-      return Number.isFinite(code) && code >= 0 && code <= 0x10_ff_ff ? String.fromCodePoint(code) : match;
-    }
-    return PREDEFINED_ENTITIES[body.toLowerCase()] ?? match;
-  });
-}
-
-/**
-Drop a namespace prefix, leaving the local name.
-*/
 function localName(name: string): string {
   const colon = name.indexOf(':');
   return colon === -1 ? name : name.slice(colon + 1);
@@ -76,15 +66,37 @@ interface XmlElement {
   text: string;
 }
 
-class XmlParseError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'XmlParseError';
+/**
+ * The open element a tag leaves the reader inside.
+ *
+ * A tag does one of three things to the tree, and it is this function rather than the parse
+ * loop that knows which: close the current element, open a child, or open and immediately
+ * close a child. Keeping that decision here is what lets the loop stay a loop — it becomes
+ * one `if` on whether the markup was a tag, and the three-way tree surgery moves to a
+ * function whose name is the question it answers.
+ *
+ * The depth check belongs here rather than in the loop for the same reason: it is a
+ * precondition of *opening*, not of reading, and a limit that is checked in the loop is a
+ * limit the loop can forget on a path that opens an element.
+ */
+function applyTag(stack: XmlElement[], current: XmlElement, source: string, open: number, tag: ScannedTag): XmlElement {
+  if (source.startsWith('</', open)) {
+    const closed = stack.pop();
+    if (!closed || localName(closed.name) !== localName(tag.name)) {
+      fail(`Mismatched closing tag </${tag.name}>.`);
+    }
+    // Popping past the root is impossible: the root is never matched by a closing tag, so a
+    // stray `</#document>` fails the name check above first.
+    return stack.at(-1) ?? current;
   }
-}
 
-const NAME_START = /[A-Z_:]/i;
-const NAME_CHAR = /[-\w.:]/i;
+  const element: XmlElement = { name: tag.name, attrs: tag.attrs, children: [], text: '' };
+  current.children.push(element);
+  if (tag.selfClosing) return current;
+  if (stack.length >= MAX_DEPTH) fail(`XML nesting deeper than ${MAX_DEPTH}.`);
+  stack.push(element);
+  return element;
+}
 
 /**
  * Parse an XML document into a shallow tree.
@@ -97,129 +109,44 @@ function parseXml(source: string): XmlElement {
   }
 
   const root: XmlElement = { name: '#document', attrs: {}, children: [], text: '' };
+  // `current` rather than `stack.at(-1)`. The stack is still needed for the close check, but
+  // reading the open element off it four times was four non-null assertions resting on an
+  // invariant nothing in the type system checked; one binding and two updates is the same
+  // information with no assertion.
   const stack: XmlElement[] = [root];
+  let current = root;
   let index = 0;
-
-  const fail = (message: string): never => {
-    throw new XmlParseError(message);
-  };
 
   while (index < source.length) {
     const open = source.indexOf('<', index);
 
     if (open === -1) {
-      appendText(stack.at(-1)!, decodeEntities(source.slice(index)));
+      appendText(current, decodeEntities(source.slice(index)));
       break;
     }
 
     if (open > index) {
-      appendText(stack.at(-1)!, decodeEntities(source.slice(index, open)));
+      appendText(current, decodeEntities(source.slice(index, open)));
     }
 
     // A DOCTYPE can declare entities, and is the entry point for every entity
     // attack there is. This server never needs one.
     if (source.startsWith('<!DOCTYPE', open)) fail('DOCTYPE declarations are not accepted.');
 
-    if (source.startsWith('<!--', open)) {
-      const end = source.indexOf('-->', open + 4);
-      if (end === -1) fail('Unterminated comment.');
-      index = end + 3;
-      continue;
-    }
-
-    if (source.startsWith('<![CDATA[', open)) {
-      const end = source.indexOf(']]>', open + 9);
-      if (end === -1) fail('Unterminated CDATA section.');
-      // CDATA is verbatim by definition — no entity decoding, no escaping.
-      appendText(stack.at(-1)!, source.slice(open + 9, end));
-      index = end + 3;
-      continue;
-    }
-
-    // Processing instructions (`<?xml …?>`, `<?xml-stylesheet …?>`) carry no
-    // data this reader uses.
-    if (source.startsWith('<?', open)) {
-      const end = source.indexOf('?>', open + 2);
-      if (end === -1) fail('Unterminated processing instruction.');
-      index = end + 2;
-      continue;
-    }
-
-    const closing = source.startsWith('</', open);
-    let cursor = open + (closing ? 2 : 1);
-
-    if (cursor >= source.length || !NAME_START.test(source[cursor] ?? '')) fail('Malformed tag name.');
-
-    let nameEnd = cursor;
-    while (nameEnd < source.length && NAME_CHAR.test(source[nameEnd])) nameEnd += 1;
-    const name = source.slice(cursor, nameEnd);
-    cursor = nameEnd;
-
-    const attrs: Record<string, string> = {};
-    let selfClosing = false;
-
-    for (;;) {
-      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-      if (cursor >= source.length) fail('Unterminated tag.');
-
-      if (source[cursor] === '>') {
-        cursor += 1;
-        break;
+    const opaque = scanOpaqueMarkup(source, open);
+    if (opaque !== null) {
+      // CDATA is the one construct here that contributes text, and it is contributed
+      // verbatim. Everything else in this branch carries nothing this reader uses.
+      if (source.startsWith('<![CDATA[', open)) {
+        appendText(current, source.slice(open + 9, source.indexOf(']]>', open + 9)));
       }
-      if (source.startsWith('/>', cursor)) {
-        selfClosing = true;
-        cursor += 2;
-        break;
-      }
-      if (closing) fail('Unexpected content in a closing tag.');
-
-      const attrStart = cursor;
-      while (cursor < source.length && NAME_CHAR.test(source[cursor])) cursor += 1;
-      if (cursor === attrStart) fail('Malformed attribute name.');
-      const attrName = source.slice(attrStart, cursor);
-      if (attrName === 'xmlns' || attrName.startsWith('xmlns:')) {
-        // Namespace declarations are accepted and ignored: the reader matches on
-        // local names precisely so that a server choosing `D:` or `d:` cannot
-        // change the result.
-        while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-        if (source[cursor] !== '=') fail('Malformed namespace declaration.');
-        cursor += 1;
-        while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-        const quote = source[cursor];
-        if (quote !== '"' && quote !== "'") fail('Unquoted attribute value.');
-        const end = source.indexOf(quote, cursor + 1);
-        if (end === -1) fail('Unterminated attribute value.');
-        cursor = end + 1;
-        continue;
-      }
-
-      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-      if (source[cursor] !== '=') fail('Malformed attribute.');
-      cursor += 1;
-      while (cursor < source.length && /\s/.test(source[cursor])) cursor += 1;
-
-      const quote = source[cursor];
-      if (quote !== '"' && quote !== "'") fail('Unquoted attribute value.');
-      const valueEnd = source.indexOf(quote, cursor + 1);
-      if (valueEnd === -1) fail('Unterminated attribute value.');
-      attrs[attrName] = decodeEntities(source.slice(cursor + 1, valueEnd));
-      cursor = valueEnd + 1;
-    }
-
-    if (closing) {
-      const current = stack.pop();
-      if (!current || localName(current.name) !== localName(name)) fail(`Mismatched closing tag </${name}>.`);
-      index = cursor;
+      index = opaque;
       continue;
     }
 
-    const element: XmlElement = { name, attrs, children: [], text: '' };
-    stack.at(-1)!.children.push(element);
-    if (!selfClosing) {
-      if (stack.length >= MAX_DEPTH) fail(`XML nesting deeper than ${MAX_DEPTH}.`);
-      stack.push(element);
-    }
-    index = cursor;
+    const tag = scanTag(source, open);
+    current = applyTag(stack, current, source, open, tag);
+    index = tag.end;
   }
 
   if (stack.length !== 1) fail('Unclosed element.');
@@ -250,5 +177,9 @@ function findDescendants(element: XmlElement, name: string, out: XmlElement[] = 
   return out;
 }
 
-export { parseXml, decodeEntities, localName, firstChild, childText, findDescendants, XmlParseError, MAX_DEPTH, MAX_XML_BYTES };
+export { XmlParseError, decodeEntities } from './xmlCursor';
+export type { Cursor } from './xmlCursor';
+export type { ScannedTag } from './xmlTag';
+
+export { MAX_DEPTH, MAX_XML_BYTES, childText, findDescendants, firstChild, localName, parseXml };
 export type { XmlElement };

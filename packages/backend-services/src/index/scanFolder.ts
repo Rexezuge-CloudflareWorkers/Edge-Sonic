@@ -86,9 +86,7 @@ async function reconcileFolder(
   //
   // So a compare must read the table the row it guards lives in. `nodeRowNeedsWrite` always has;
   // the song writer did not, and `changed` was doing a node's job for a song's row.
-  const existing = new Map(
-    (await deps.nodes.listChildrenWithSongPresence(library.id, folder.path)).map((node) => [node.path, node]),
-  );
+  const existing = new Map((await deps.nodes.listChildrenWithSongPresence(library.id, folder.path)).map((node) => [node.path, node]));
 
   const nodeInputs: ScanNodeInput[] = [];
   const songInputs: ScanSongInput[] = [];

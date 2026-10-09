@@ -6,16 +6,16 @@ Scope: wrangler bindings, build output, environment variables, DI. Parent index:
 The invariants that used to sit in the root guide are split by audience. Each is written up
 once, in the guide whose reader needs it:
 
-| Guide | Covers |
-| --- | --- |
+| Guide                                            | Covers                                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------------------- |
 | [`../protocol/AGENTS.md`](../protocol/AGENTS.md) | the Subsonic wire: ids, node model, serializers, the endpoint registry |
-| [`../scanning/AGENTS.md`](../scanning/AGENTS.md) | the walk, the chunk budget, and what a status promises |
-| [`../indexing/AGENTS.md`](../indexing/AGENTS.md) | D1, the DAOs, and the migrations |
-| [`../albums/AGENTS.md`](../albums/AGENTS.md) | what an album **is**: grouping key, id, track order |
-| [`../media/AGENTS.md`](../media/AGENTS.md) | tags, enrichment and artwork |
-| [`../import/AGENTS.md`](../import/AGENTS.md) | moving a player's data in from another Subsonic server |
-| [`../testing/AGENTS.md`](../testing/AGENTS.md) | the suite, the thresholds, and the doubles |
-| this file | bindings, secrets, configuration, DI, the KV cache |
+| [`../scanning/AGENTS.md`](../scanning/AGENTS.md) | the walk, the chunk budget, and what a status promises                 |
+| [`../indexing/AGENTS.md`](../indexing/AGENTS.md) | D1, the DAOs, and the migrations                                       |
+| [`../albums/AGENTS.md`](../albums/AGENTS.md)     | what an album **is**: grouping key, id, track order                    |
+| [`../media/AGENTS.md`](../media/AGENTS.md)       | tags, enrichment and artwork                                           |
+| [`../import/AGENTS.md`](../import/AGENTS.md)     | moving a player's data in from another Subsonic server                 |
+| [`../testing/AGENTS.md`](../testing/AGENTS.md)   | the suite, the thresholds, and the doubles                             |
+| this file                                        | bindings, secrets, configuration, DI, the KV cache                     |
 
 Four more were already written up in an area guide and are **not** repeated here: the
 rate-limit registration order and the two error dialects (`apps/api/AGENTS.md`), the probe's
@@ -69,23 +69,23 @@ scan summary (`apps/api/AGENTS.md`).
   `.github/workflows/backup-d1.yml` exports at 04:15 UTC → xz → AES-256-CBC → S3 and/or
   WebDAV, with a `check-secrets` preflight that fails when a destination is configured
   without `BACKUP_ENCRYPTION_KEY`. That is mandatory rather than advisory because
-  `migrations/0008_squash.sql` describes the in-database credential encryption as *"obfuscation
-  against a D1 dump"* — an unencrypted backup inverts that assumption — and because the dump is
+  `migrations/0008_squash.sql` describes the in-database credential encryption as _"obfuscation
+  against a D1 dump"_ — an unencrypted backup inverts that assumption — and because the dump is
   a listening history (`play_counts`, `now_playing`, `stars`, `ratings`) plus the whole library
   topology. Playbook: `docs/db-backup-recovery.md`.
 - Bindings: D1 `DB`, KV `CACHE`, three Secrets Store secrets, one Durable Object namespace
   (`SCAN`) and — for the import — a second (`IMPORT_DO`) plus a Workflow (`IMPORT_WORKFLOW`).
   **No Queues, no R2, no Vectorize in the templates.** The scan runs on a Durable Object when
   the `SCAN` binding is configured and is otherwise advanced by `getScanStatus`; nothing runs on
-  a *cron*, though `backup-d1.yml` is one — it is a GitHub Actions schedule, not a Worker
+  a _cron_, though `backup-d1.yml` is one — it is a GitHub Actions schedule, not a Worker
   trigger.
 - **The import's Durable Object is a second namespace, not a second name on `SCAN`.** A Durable
-  Object's lifecycle *is* its alarm's, so one namespace would put an import's play-count walk
+  Object's lifecycle _is_ its alarm's, so one namespace would put an import's play-count walk
   and a library scan in the same object, where the walk's terminal `deleteAlarm` silently
-  disarms the scan. The import *pauses* the scan rather than sharing its row budget, so the two
+  disarms the scan. The import _pauses_ the scan rather than sharing its row budget, so the two
   must not be able to reach each other's alarms.
 - **The Workflow and the Durable Object are one feature split by the step ceiling, not by
-  convenience.** A Workflow step is *cached by name*, so `playlist <remoteId>` cannot write the
+  convenience.** A Workflow step is _cached by name_, so `playlist <remoteId>` cannot write the
   same playlist twice — which is the whole reason an imported playlist's id is derived
   (`UUIDUtil.deterministicId`) as well. The play-count walk gets no such guarantee and needs
   ~1 step per album against a **1,024-step** ceiling on Free, so it runs in the Durable Object
@@ -130,17 +130,17 @@ one is present but inert, because that is the case one config edit from being li
 
 ## Optional vars (defaults in `ConfigurationDefaults.ts`)
 
-| Group  | Vars (default)                                                             |
-| ------ | -------------------------------------------------------------------------- |
-| App    | `LOG_LEVEL` (unset), `ENVIRONMENT` (`production`) |
-| Scan   | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`) |
-| Media  | `TAG_READ_BYTES` (`131072`), `TAG_READ_TAIL_BYTES` (`65536`), `WEBDAV_TIMEOUT_MS` (`10000`) |
-| Limits | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`) |
-| Grouping | `ALBUM_GROUP_BY` (`album`), `DERIVED_MARKER` (`""`) |
-| Auth   | `TEAM_DOMAIN`, `POLICY_AUD` (no default — see above)                       |
-| SSRF   | `ALLOW_PRIVATE_WEBDAV_HOSTS` (unset)                                       |
-| Stream | `STREAM_RATE_LIMIT` (`600`), `STREAM_TIMEOUT_MS` (`30000`)                  |
-| Throttle | `AUTH_FAILURE_LIMIT` (`10`), `AUTH_FAILURE_WINDOW_SECONDS` (`900`)      |
+| Group    | Vars (default)                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| App      | `LOG_LEVEL` (unset), `ENVIRONMENT` (`production`)                                                                                    |
+| Scan     | `SCAN_CHUNK_FOLDERS` (`7`), `SCAN_CHUNK_MAX_REQUESTS` (`42`), `SCAN_CHUNK_DEADLINE_MS` (`20000`), `SCAN_ENRICH_MAX_PER_FOLDER` (`8`) |
+| Media    | `TAG_READ_BYTES` (`131072`), `TAG_READ_TAIL_BYTES` (`65536`), `WEBDAV_TIMEOUT_MS` (`10000`)                                          |
+| Limits   | `MAX_LIBRARIES` (`10`), `MAX_PAGE_SIZE` (`500`), `DEFAULT_PAGE_SIZE` (`20`)                                                          |
+| Grouping | `ALBUM_GROUP_BY` (`album`), `DERIVED_MARKER` (`""`)                                                                                  |
+| Auth     | `TEAM_DOMAIN`, `POLICY_AUD` (no default — see above)                                                                                 |
+| SSRF     | `ALLOW_PRIVATE_WEBDAV_HOSTS` (unset)                                                                                                 |
+| Stream   | `STREAM_RATE_LIMIT` (`600`), `STREAM_TIMEOUT_MS` (`30000`)                                                                           |
+| Throttle | `AUTH_FAILURE_LIMIT` (`10`), `AUTH_FAILURE_WINDOW_SECONDS` (`900`)                                                                   |
 
 `DERIVED_MARKER` is appended to an artist or album name this server derived from a file's
 **path** rather than from its tags. Empty by default, and empty is a **decision**: it makes a
@@ -149,7 +149,7 @@ instead of two spellings of it — and it is the only reason `search3` can match
 has not tag-read, since the `_ci` twin no longer carries the suffix. `' (derived)'` keeps the
 guess visible and pays for it with a duplicate entry.
 
-Two things it is *not*, and both were defects before it was a variable:
+Two things it is _not_, and both were defects before it was a variable:
 
 - **It is not trimmed.** It lands in `album_ci` and in a base64url album id, and a marker
   silently trimmed is a marker the operator did not write.
@@ -174,7 +174,7 @@ ratings on those albums are lost. That is stated in `migrations/0008_squash.sql`
 beside the `' (derived)'` literal that is now the only place the old value is written down
 (introduced in `0006`, which that file absorbs).
 
-### Size a subrequest budget against the plan that runs it — and count *everything*
+### Size a subrequest budget against the plan that runs it — and count _everything_
 
 Workers **Free** allows **50 subrequests per invocation**; Paid allows 10,000, raiseable
 to 10M with `limits.subrequests`. A subrequest is any request a Worker makes with the
@@ -191,10 +191,10 @@ the invocation**, with an error no `catch` in this codebase can see.
 > 1,000**, in a separate pool — 1,000 D1 statements plus 50 outbound requests in one invocation
 > survive together, and a DO reached by RPC runs on a fresh budget the caller's ceiling cannot see.
 > Charging D1 against the 50 is therefore **conservatism, not correction**, and it remains the
-> right direction: an *external* overrun kills the invocation, so bounding both by that one is
+> right direction: an _external_ overrun kills the invocation, so bounding both by that one is
 > what cannot take the product down. `SCAN_CHUNK_MAX_REQUESTS = 42` is ~21× stricter than the D1
-> headroom this deployment has. A **D1** overrun also *throws* (`Too many API requests by single
-> Worker invocation`) rather than killing the invocation, so it is diagnosable where an external
+> headroom this deployment has. A **D1** overrun also _throws_ (`Too many API requests by single
+Worker invocation`) rather than killing the invocation, so it is diagnosable where an external
 > one is not — which is what `D1ErrorClassifier` exploits. KV, Secrets Store reads and DO storage
 > were **not** measured. Full account, method and limits:
 > `docs/issues/subrequest-budgets-are-two-not-one.md`.
@@ -204,22 +204,22 @@ ceiling, in `config/subrequests.ts`, with every bound below computed from it by 
 rather than typed beside the code that has to honour it — the same rule `bindChunkSize`
 follows from D1's 100-parameter ceiling.
 
-| Var                            | Default | Derived as                        |
-| ------------------------------ | ------- | --------------------------------- |
-| `SCAN_CHUNK_MAX_REQUESTS`      | `42`    | `50 − 8` for the invocation's own |
-| `SCAN_CHUNK_FOLDERS`           | `7`     | `floor(42 / 6)`, a folder's base   |
-| `SCAN_ENRICH_MAX_PER_FOLDER`   | `8`     | `floor(42 / 5)`, a track's full cost |
-| `MAX_PAGE_SIZE_CEILING`        | `500`   | the statement budget, capped at the protocol maximum |
+| Var                          | Default | Derived as                                           |
+| ---------------------------- | ------- | ---------------------------------------------------- |
+| `SCAN_CHUNK_MAX_REQUESTS`    | `42`    | `50 − 8` for the invocation's own                    |
+| `SCAN_CHUNK_FOLDERS`         | `7`     | `floor(42 / 6)`, a folder's base                     |
+| `SCAN_ENRICH_MAX_PER_FOLDER` | `8`     | `floor(42 / 5)`, a track's full cost                 |
+| `MAX_PAGE_SIZE_CEILING`      | `500`   | the statement budget, capped at the protocol maximum |
 
 The reserve is for authentication, the library grant and `scan_state`, which are spent
 before the walk begins and are not the chunk's to skip. **All three scan vars are clamped
 to their derived ceilings and `validate()` reports the clamp** — a configured maximum is
 not a permission, and the operator surface was actively telling people to raise one of them
-(`stoppedBy: 'requests'` rendered as *"Raise `SCAN_CHUNK_MAX_REQUESTS` to index more per
-poll"*), which on Free converts a chunk that pauses into a chunk the runtime terminates.
+(`stoppedBy: 'requests'` rendered as _"Raise `SCAN_CHUNK_MAX_REQUESTS` to index more per
+poll"_), which on Free converts a chunk that pauses into a chunk the runtime terminates.
 
 `SCAN_CHUNK_DEADLINE_MS` is a different resource and still needed: the ceiling bounds
-*count*, the deadline bounds *time*, and on a slow origin the deadline is what makes a poll
+_count_, the deadline bounds _time_, and on a slow origin the deadline is what makes a poll
 return. `SCAN_CHUNK_FOLDERS` still bounds D1 row writes against the daily allowance as
 well — **100,000 billed rows/day** less a 10% reserve, itself halved per registered library,
 so **90,000** (`subrequests.ts`) — two resources, one number, which is why it is derived rather than typed.
@@ -252,10 +252,10 @@ without a type error and silently never reach the config layer.
 
 ## Secrets: one per feature
 
-| Secret name                            | Binding                                | Guards                        |
-| -------------------------------------- | -------------------------------------- | ----------------------------- |
-| `SUBSONIC_USER_ENCRYPTION_KEY_SECRET`  | `edge-sonic-subsonic-user-encryption-key` | `users.password_ciphertext` |
-| `WEBDAV_ENCRYPTION_KEY_SECRET`         | `edge-sonic-webdav-encryption-key`     | `libraries.password_ciphertext` |
+| Secret name                             | Binding                                     | Guards                               |
+| --------------------------------------- | ------------------------------------------- | ------------------------------------ |
+| `SUBSONIC_USER_ENCRYPTION_KEY_SECRET`   | `edge-sonic-subsonic-user-encryption-key`   | `users.password_ciphertext`          |
+| `WEBDAV_ENCRYPTION_KEY_SECRET`          | `edge-sonic-webdav-encryption-key`          | `libraries.password_ciphertext`      |
 | `SUBSONIC_REMOTE_ENCRYPTION_KEY_SECRET` | `edge-sonic-subsonic-remote-encryption-key` | `import_sources.password_ciphertext` |
 
 Three keys, never fewer. Merging any two would make one of these true, and each is a
@@ -274,7 +274,7 @@ entry, so rotating one key never has to move another.
 
 **The third one needed no edit to `init-secrets.ts`**, and that is what the name shape buys:
 a `*-encryption-key` name gets a generated 32-byte AES-GCM key. Adding an entry to
-`secrets_store_secrets[]` used to require *also* editing a hardcoded list of known names, and
+`secrets_store_secrets[]` used to require _also_ editing a hardcoded list of known names, and
 getting that wrong broke deployment — `init-secrets.ts` threw `Unknown secret`, the rejection
 was swallowed, and the CD step reported success with the failure surfacing two steps later as
 a 10182. **A provisioning script must exit non-zero on failure**: a guard that logs and
@@ -283,7 +283,7 @@ returns 0 is indistinguishable from a guard that passed.
 **The test harness gives the three features three distinct values**, which it did not used
 to. With one value for all three, no test in this repository could detect a merge — and
 `test/user-api.test.ts` has asserted in those words, for both a user password and a library
-password, that "the stored value must be the *user* key's output, so rotating the DAV key
+password, that "the stored value must be the _user_ key's output, so rotating the DAV key
 does not log everyone out". That claim was in the comment and untestable. The rule is
 `fakeKv`'s: **a double must model the platform's distinctions, not only its shapes.**
 
@@ -308,7 +308,7 @@ re-encrypt under a new version, then drop the old one.
 `users` also **used to** carry `token_epoch`, bumped by a password change and read by
 nothing; a previous version of this file called it "the only way to revoke a token". It is
 not, and it could not be: `t` is `md5(password + salt)`, so a password change already
-invalidates every issued token by changing what the token is computed *from*. Revocation is
+invalidates every issued token by changing what the token is computed _from_. Revocation is
 real, and it never needed an epoch. Dropped in `migrations/0010_drop_token_epoch.sql`, which
 also records why an epoch could not have worked even in principle: the column held how many
 times the password had changed, and no credential ever held the count a client was minted
@@ -317,13 +317,13 @@ under, so there was nothing to compare. Asserted as an **absence**
 should be written to read a replacement — the protocol has no field to compare one against.
 
 **A store that is recreated is a new key, and the rows are not.**
-`provisionWranglerResources` mints a *new* `store_id` when the store has to be created,
-and `init-secrets` generates a *new* value into it, while every
+`provisionWranglerResources` mints a _new_ `store_id` when the store has to be created,
+and `init-secrets` generates a _new_ value into it, while every
 `libraries.password_ciphertext` is still ciphertext under the old one. GCM authenticating
 makes that a decryption failure rather than a garbage password, which is the correct
 behaviour - but it makes every library unusable at once, and the only remedy is
 re-entering each password. `init-secrets` deliberately skips an existing secret, so
-re-running the pipeline in place is safe; it is a *new store* that rotates the key. This
+re-running the pipeline in place is safe; it is a _new store_ that rotates the key. This
 is why `probe` names a decryption failure separately from a network one: it is the fault
 an operator is most likely to meet, and the one whose message misleads most if it borrows
 the origin's.
@@ -349,7 +349,7 @@ the origin's.
   `createScanWorkerScope` is a one-line delegation to `createRequestScope`, so "both roots"
   was two entry names for one thing.
 - **A binding that wraps another binding must not take a second meter.** `PlayCountImportWorker`
-  needs a *narrower* budget than the invocation's 50, so it took the scan's approach — but it
+  needs a _narrower_ budget than the invocation's 50, so it took the scan's approach — but it
   built a **local** `SubrequestCounter` for the batch loop's `canAfford` while its DAOs charged
   the **scope's** own counter. Two counters are two numbers that disagree, and the
   disagreement was silent and total: the loop saw 44 remaining on a meter nothing else had
@@ -384,7 +384,7 @@ keys of the form `domain:v1:<parts...>`.
   Re-tagging a track changes its picture and its tags without moving anything else in the
   library, so the file's revision is what actually invalidates; a rescan that finds nothing
   new bumps `index_version` and would orphan every cached image for no reason.
-- **The stronger rule exists and has no user.** A domain caching a *derived aggregate*
+- **The stronger rule exists and has no user.** A domain caching a _derived aggregate_
   should take `scan_state.index_version` as its first key part, so a completed scan makes
   every entry under the old version **structurally unreachable** and invalidation costs
   zero writes rather than a TTL. `libIndex` and `libTree` were the two such domains and
@@ -398,7 +398,7 @@ keys of the form `domain:v1:<parts...>`.
 - **`KvCache` fails soft.** A missing binding and a throwing binding are the same code
   path, and the responses are byte-identical to a warm cache; D1 is what answers.
 - **Every read states its `type`, because `get()`'s default is `text`.** That default is
-  the platform's, it is documented, and it is a *lossy* codec for binary: a stored JPEG
+  the platform's, it is documented, and it is a _lossy_ codec for binary: a stored JPEG
   read back as text has every invalid UTF-8 sequence replaced by U+FFFD and comes back
   three bytes per replacement. `getBytes` therefore asks for `'arrayBuffer'` and
   `getText` for `'text'`, and `KvNamespaceLike.get` carries the parameter so the
@@ -438,12 +438,12 @@ test that now holds it.
   `js/polynomial-redos`, all on data that arrived from an untrusted WebDAV origin:
   `/\/+$/` in `toLibraryPath` (twice — once per operand) and `/\s+[-–—]\s+/` in
   `fromFlatAlbumFolder`. The mechanism is not a nested quantifier, which is why it is easy to
-  miss: an unanchored `/+$` over a run of *n* identical characters makes the engine retry every
-  length the run could have, from each of the *n* start positions inside it. 16 KB costs ~200 ms
+  miss: an unanchored `/+$` over a run of _n_ identical characters makes the engine retry every
+  length the run could have, from each of the _n_ start positions inside it. 16 KB costs ~200 ms
   and 100 KB costs ~8 s, against a **10 ms CPU limit on Workers Free**, and well inside the
   8 MiB body cap `MAX_METADATA_BYTES` already allows — so one hostile `PROPFIND` is an
-  invocation the runtime kills. The rule is *unanchored quantifier, then something that can
-  fail*, and `[gimsuy]` cannot fix it: JS has no possessive quantifier and no atomic group, so
+  invocation the runtime kills. The rule is _unanchored quantifier, then something that can
+  fail_, and `[gimsuy]` cannot fix it: JS has no possessive quantifier and no atomic group, so
   the fix is a scan. Five things, and each is how this one would have collapsed:
   - **A quadratic regex without a nested quantifier is invisible to every linter this
     repository runs.** Probed: `eslint-plugin-regexp`'s `no-super-linear-backtracking` and
@@ -452,8 +452,8 @@ test that now holds it.
     DoS and CodeQL — not a test, and not on every commit — was the only instrument that found
     it. There is no lint rule for "quadratic in the input", so the guard is a measurement.
   - **The expensive shape is the _interior_ run, and the obvious test input is the cheap
-    one.** A *leading* run is consumed by `replace(/^\/+/, '')` before `/+$/` runs; a
-    *trailing* run matches, and V8 fast-paths a successful `/[/]+$/`. Measured at 16,000
+    one.** A _leading_ run is consumed by `replace(/^\/+/, '')` before `/+$/` runs; a
+    _trailing_ run matches, and V8 fast-paths a successful `/[/]+$/`. Measured at 16,000
     slashes: **0.0 ms leading, 0.0 ms trailing, 198 ms interior**. The first version of
     `test/redos-linear-parsing.test.ts` asserted the leading and trailing runs, and both
     passed against the regex it was written to catch — 48 of 48 green. So a guard built on the
@@ -461,10 +461,10 @@ test that now holds it.
     `<base>/<path>`, so the expensive shape is also the ordinary one.
   - **The rewrite is only equivalent because the caller discards what the regex measured.**
     `findAlbumSeparator` returns the **dash's** index rather than the match index because both
-    sides of the split are `.trim()`ed by the caller, so the *extent* of the whitespace runs
+    sides of the split are `.trim()`ed by the caller, so the _extent_ of the whitespace runs
     cannot change the answer. Strip the trim and the equivalence argument goes with it.
   - **A fixture that disagrees with the reader is the finding, and it was the fixture twice.**
-    The oracle is `split('/')`-based and was written *filtering every* empty segment, which
+    The oracle is `split('/')`-based and was written _filtering every_ empty segment, which
     silently normalises the middle of the string; the seeded fuzz caught it on the first
     interior run it met. An inverted `&&`/`||` in the whitespace test was caught the same way.
     Both were bugs in the check, not in the code — which is the argument for the fuzz, since
@@ -476,18 +476,18 @@ test that now holds it.
     equivalence assertion stays green, which is what makes the timing assertion the only thing
     distinguishing a linear implementation from a slow one.
 - **A platform global is invoked bare, never as a stored field.** `WebDavClient` kept
-  the global `fetch` in a field and called it as `this.fetchImpl(...)` — a *method call*,
+  the global `fetch` in a field and called it as `this.fetchImpl(...)` — a _method call_,
   so the receiver was the client rather than the global scope. workerd validates that
   receiver and throws `TypeError: Illegal invocation: function called with incorrect
-  'this' reference.` It broke every WebDAV path in the product — probe, scan, tree,
+'this' reference.` It broke every WebDAV path in the product — probe, scan, tree,
   enrichment, streaming — against a live origin answering `207`. Being a `TypeError`, it
   has no `status`, so it fell through every status-based branch and reached the operator
-  as *"Library is unreachable."*: a fault in **this** server, described as a fault in
+  as _"Library is unreachable."_: a fault in **this** server, described as a fault in
   theirs. The wrapper lives in the constructor, so no call site can reintroduce it, and
   the same mistake is worth grepping for after any refactor that stores a function.
 - **An unawaited promise is not a cheaper version of an awaited one, it is a different
   one.** The artwork cache was the only KV write in the product issued as `void
-  deps.cache.putBytes(...)`, and work a Workers handler does not await is not guaranteed
+deps.cache.putBytes(...)`, and work a Workers handler does not await is not guaranteed
   to run — so the cover cache never populated, and every cell of an album grid re-read
   the origin at up to two ranged reads each against a 50-subrequest ceiling. Same defect
   as voiding `requireForUser`, one level down. Both writes are awaited now, and the
@@ -504,7 +504,7 @@ test that now holds it.
   constants**, so the level was resolved before `env` existed and `logger.debug` could never
   emit in a deployed Worker; the coverage report proved it rather than suggesting it, since
   every `console.*` call sat in an arm reachable only at `minLevel <= 0`. And
-  `TAG_READ_TAIL_BYTES=0` was *reachable but inverted*: it read through a parser whose
+  `TAG_READ_TAIL_BYTES=0` was _reachable but inverted_: it read through a parser whose
   contract is `> 0`, so the documented "0 disables the second read" became the default.
   That parser's `>= 0` sibling had **no callers anywhere** in the repository — the helper
   for that value existing, unused, in the same layer, while the line beside it called the

@@ -1,15 +1,9 @@
-import {
-  
-  SCAN_CHUNK_FOLDER_LIMIT,
-  SCAN_CHUNK_SUBSREQUEST_BUDGET,
-  SCAN_ENRICH_MAX_PER_FOLDER,
-} from './subrequests';
+import { SCAN_CHUNK_FOLDER_LIMIT, SCAN_CHUNK_SUBSREQUEST_BUDGET, SCAN_ENRICH_MAX_PER_FOLDER } from './subrequests';
 
 /**
  * Re-exported rather than re-declared: the derivation and this default are one fact, and a
  * second copy of `MAX_PAGE_SIZE_CEILING` is a second thing that can be wrong.
  */
-
 
 /**
  * The identity `DEMO_MODE` authenticates as when the bypass allow-list permits it.
@@ -202,4 +196,4 @@ Upstream connection/response timeout for streaming, separate from metadata.
 */
 export const DEFAULT_STREAM_TIMEOUT_MS = '30000';
 
-export {MAX_PAGE_SIZE_CEILING} from './subrequests';
+export { MAX_PAGE_SIZE_CEILING } from './subrequests';

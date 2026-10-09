@@ -12,41 +12,41 @@ concrete DAO.
 
 ## The files
 
-| File             | Holds                                                                        |
-| ---------------- | ---------------------------------------------------------------------------- |
-| `dao/BaseDAO.ts` | `withRetry`, `runWriteBatch`, and the ceiling both enforce                     |
-| `dao/rows.ts`    | every row type, plus the `CountRow` / `IndexVersionRow` shapes (a few aggregate
-  shapes live beside the query that produces them, in `songIndex.ts`)                 |
-| `dao/SongDAO.ts` | one song row: its facts, its derived metadata, its lifecycle, its single-row reads |
-| `dao/songEnrichment.ts` | the tracks still owing a tag read: the staleness selection and remaining counts for the library-wide enrichment |
-| `dao/songIndex.ts`| the aggregate reads: a page of albums, a page of artists, the genres         |
-| `dao/albumKeySql.ts`| the album key as SQL: the `GROUP BY` per grouping, and the batch size |
-| `dao/NodeDAO.ts` | the folder tree, the scan frontier, the subtree prune                         |
-| `dao/playlists.ts` | a named, ordered list of songs owned by one user                            |
-| `dao/UserStateDAO.ts` | per-user state: stars, ratings, bookmarks, play queue, now playing, throttle (`AnnotationDAO` + `AuthThrottleDAO`; **playlists are `dao/playlists.ts`**) |
-| `dao/ScanStateDAO.ts` | scan status per library: the frontier's home, the retry counter, the index version |
-| `dao/songDerivation.ts` | `SongDerivationDAO` — re-running the path convention over rows the walk will never revisit |
-| `dao/songMetadata.ts` | the `applyMetadata` patch builder, and `GROUPING_FIELDS` |
-| `dao/songMatch.ts` | the import's lookups: by path, by album title, and which album keys are present |
-| `dao/playCounts.ts` | `PlayCountDAO` |
-| `dao/imports.ts` | `ImportSourceDAO`, `ImportRunDAO`, and `IMPORT_PHASES` |
-| `dao/importProgress.ts` | `ImportPlayCountProgressDAO` — what the operator's import page reads. **Not** the walk's resume point: that is the Durable Object's own storage, and `listAlbums` takes an offset. This row had three writers and **no caller**, so `GET /user/import/:id` reported `playCounts: null` for every real import; `apps/background/src/playCountProgress.ts` is the writing half. |
-| `dao/index.ts` | the barrel every other layer imports rather than a deep path |
-| `crypto/` | `encryptData`, `decryptData`, `isUsableKey` — every stored credential |
-| `utils/` | `D1Types`, `D1Utils`, `D1ErrorClassifier` |
-| `dao/identity.ts` | `UserDAO` and `LibraryDAO` — the two rows with a credential                   |
-| `dao/songSql.ts` | the `songs` upsert statement                                                  |
-| `dao/pathConvention.ts` | the `Artist/Album` and `Artist - Album` naming rules, and `DERIVED_VERSION` |
-| `dao/groupingSource.ts` | whether a row's grouping came from the path or from a tag, and the marker measurements |
-| `dao/songCounts.ts` | how many tracks a library holds — a count is not a row                       |
-| `dao/chunking.ts`| `chunkArray`, for `IN (...)` binding                                          |
-| `dao/songIdLookup.ts` | `IN (...)` id lookups, scoped to one library and across all of them    |
-| `dao/songAlbumDirs.ts` | songs by **directory**, in one batched statement over a whole scope — the starred-album resolution |
-| `dao/sqlLimits.ts`| D1's measured bind-parameter ceiling, and the batch size derived from it    |
-| `dao/indexStats.ts`| `IndexStatsDAO` — what dropping an index would cost, before it is run |
-| `dao/indexDrop.ts` | `IndexDropDAO` — the Danger Zone's `DELETE`s, and what they billed   |
-| `dao/billedRows.ts`| What D1 bills a write as: the row **plus every index entry it rewrote**  |
-| `utils/`         | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                     |
+| File                                                                | Holds                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dao/BaseDAO.ts`                                                    | `withRetry`, `runWriteBatch`, and the ceiling both enforce                                                                                                                                                                                                                                                                                                                    |
+| `dao/rows.ts`                                                       | every row type, plus the `CountRow` / `IndexVersionRow` shapes (a few aggregate                                                                                                                                                                                                                                                                                               |
+| shapes live beside the query that produces them, in `songIndex.ts`) |
+| `dao/SongDAO.ts`                                                    | one song row: its facts, its derived metadata, its lifecycle, its single-row reads                                                                                                                                                                                                                                                                                            |
+| `dao/songEnrichment.ts`                                             | the tracks still owing a tag read: the staleness selection and remaining counts for the library-wide enrichment                                                                                                                                                                                                                                                               |
+| `dao/songIndex.ts`                                                  | the aggregate reads: a page of albums, a page of artists, the genres                                                                                                                                                                                                                                                                                                          |
+| `dao/albumKeySql.ts`                                                | the album key as SQL: the `GROUP BY` per grouping, and the batch size                                                                                                                                                                                                                                                                                                         |
+| `dao/NodeDAO.ts`                                                    | the folder tree, the scan frontier, the subtree prune                                                                                                                                                                                                                                                                                                                         |
+| `dao/playlists.ts`                                                  | a named, ordered list of songs owned by one user                                                                                                                                                                                                                                                                                                                              |
+| `dao/UserStateDAO.ts`                                               | per-user state: stars, ratings, bookmarks, play queue, now playing, throttle (`AnnotationDAO` + `AuthThrottleDAO`; **playlists are `dao/playlists.ts`**)                                                                                                                                                                                                                      |
+| `dao/ScanStateDAO.ts`                                               | scan status per library: the frontier's home, the retry counter, the index version                                                                                                                                                                                                                                                                                            |
+| `dao/songDerivation.ts`                                             | `SongDerivationDAO` — re-running the path convention over rows the walk will never revisit                                                                                                                                                                                                                                                                                    |
+| `dao/songMetadata.ts`                                               | the `applyMetadata` patch builder, and `GROUPING_FIELDS`                                                                                                                                                                                                                                                                                                                      |
+| `dao/songMatch.ts`                                                  | the import's lookups: by path, by album title, and which album keys are present                                                                                                                                                                                                                                                                                               |
+| `dao/playCounts.ts`                                                 | `PlayCountDAO`                                                                                                                                                                                                                                                                                                                                                                |
+| `dao/imports.ts`                                                    | `ImportSourceDAO`, `ImportRunDAO`, and `IMPORT_PHASES`                                                                                                                                                                                                                                                                                                                        |
+| `dao/importProgress.ts`                                             | `ImportPlayCountProgressDAO` — what the operator's import page reads. **Not** the walk's resume point: that is the Durable Object's own storage, and `listAlbums` takes an offset. This row had three writers and **no caller**, so `GET /user/import/:id` reported `playCounts: null` for every real import; `apps/background/src/playCountProgress.ts` is the writing half. |
+| `dao/index.ts`                                                      | the barrel every other layer imports rather than a deep path                                                                                                                                                                                                                                                                                                                  |
+| `crypto/`                                                           | `encryptData`, `decryptData`, `isUsableKey` — every stored credential                                                                                                                                                                                                                                                                                                         |
+| `utils/`                                                            | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                                                                                                                                                                                                                                                                                                                     |
+| `dao/identity.ts`                                                   | `UserDAO` and `LibraryDAO` — the two rows with a credential                                                                                                                                                                                                                                                                                                                   |
+| `dao/songSql.ts`                                                    | the `songs` upsert statement                                                                                                                                                                                                                                                                                                                                                  |
+| `dao/pathConvention.ts`                                             | the `Artist/Album` and `Artist - Album` naming rules, and `DERIVED_VERSION`                                                                                                                                                                                                                                                                                                   |
+| `dao/groupingSource.ts`                                             | whether a row's grouping came from the path or from a tag, and the marker measurements                                                                                                                                                                                                                                                                                        |
+| `dao/songCounts.ts`                                                 | how many tracks a library holds — a count is not a row                                                                                                                                                                                                                                                                                                                        |
+| `dao/chunking.ts`                                                   | `chunkArray`, for `IN (...)` binding                                                                                                                                                                                                                                                                                                                                          |
+| `dao/songIdLookup.ts`                                               | `IN (...)` id lookups, scoped to one library and across all of them                                                                                                                                                                                                                                                                                                           |
+| `dao/songAlbumDirs.ts`                                              | songs by **directory**, in one batched statement over a whole scope — the starred-album resolution                                                                                                                                                                                                                                                                            |
+| `dao/sqlLimits.ts`                                                  | D1's measured bind-parameter ceiling, and the batch size derived from it                                                                                                                                                                                                                                                                                                      |
+| `dao/indexStats.ts`                                                 | `IndexStatsDAO` — what dropping an index would cost, before it is run                                                                                                                                                                                                                                                                                                         |
+| `dao/indexDrop.ts`                                                  | `IndexDropDAO` — the Danger Zone's `DELETE`s, and what they billed                                                                                                                                                                                                                                                                                                            |
+| `dao/billedRows.ts`                                                 | What D1 bills a write as: the row **plus every index entry it rewrote**                                                                                                                                                                                                                                                                                                       |
+| `utils/`                                                            | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                                                                                                                                                                                                                                                                                                                     |
 
 `SongDAO` and `SongIndexDAO` are separate because they answer different-shaped questions.
 `SongDAO` owns one row; `SongIndexDAO` pages over a **group**, which means it runs two
@@ -54,7 +54,7 @@ statements — see the aggregation rule below. Keeping them apart is what makes 
 page-then-fetch pattern readable in one place instead of duplicated five times.
 
 **Layer 0, so the marker is a parameter and not an import.** `backend-data` depends only on
-`shared`, `backend-errors` and `subsonic`, and the configuration layer sits *above* it. So
+`shared`, `backend-errors` and `subsonic`, and the configuration layer sits _above_ it. So
 `deriveFromPath(dirPath, marker)` takes the marker, `SongDAO` and `SongDerivationDAO` take it
 by constructor, and `requestScope.ts` reads `config.getDerivedMarker()` once and passes it to
 both — the same reason `ALBUM_GROUP_BY` is carried per request. `SongDerivationDAO.deriveFor`
@@ -109,7 +109,7 @@ Three things follow, and each is a rule rather than a detail:
   syntax error and dropping the clause would turn "this user can see no library"
   into "every library".
 - **Every batch size subtracts `libraryReserve(scope)`,** because an `IN (?, ?, …)`
-  binds one variable *per library*. The arithmetic fitting while the statement is
+  binds one variable _per library_. The arithmetic fitting while the statement is
   one variable over D1's ceiling is this package's recorded bind defect, twice,
   and a typed `1` is exactly the number that is wrong by the time someone grants
   a second library.
@@ -138,42 +138,42 @@ is pinned there.
   It shipped as a masked `code=0` on the endpoint a player draws its album list from, and
   it was not one client or one page size. `songsForAlbumKeys` bound **two** variables per
   album group, so **any** request for 50 or more albums failed — while `MAX_PAGE_SIZE` is
-  500, so the server was *required* to accept requests it could not answer. `listArtists`
+  500, so the server was _required_ to accept requests it could not answer. `listArtists`
   binds one per artist and its three callers ask for 500, 5,000 and 500, so `getArtists`,
   `getArtist` and `getCoverArt` were each a guaranteed failure on a library with 100+
-  artists. `listIdsIn` was the sharpest of the three: it *did* batch, at 200, under a
+  artists. `listIdsIn` was the sharpest of the three: it _did_ batch, at 200, under a
   comment asserting "SQLite's limit (999 by default)" — a guard that was real and whose
   stated budget was fiction, at twice the ceiling. Three rules:
   - **The batch size is derived, never chosen.** `bindChunkSize(varsPerRow, reserved)` in
     `dao/sqlLimits.ts` is the only place that arithmetic is written, and
-    `test/schema.int.test.ts` asserts *both sides* of the measured edge. A number typed
+    `test/schema.int.test.ts` asserts _both sides_ of the measured edge. A number typed
     beside a query is a number that is wrong by the time somebody raises a page size.
   - **Batch on key boundaries, never row boundaries.** A row-level split returns an album's
     first tracks from one statement and the rest from another, which `groupAlbums` then
     merges — so the counts stay right and nothing reports why.
   - **A chunked fetch cannot inherit the `ORDER BY` it used to inherit from one statement.**
-    Chunks concatenate in the *key page's* order, which is `RANDOM()` for `type=random` and
+    Chunks concatenate in the _key page's_ order, which is `RANDOM()` for `type=random` and
     `mtime_ms DESC` for `type=newest` — neither of which is the sort tuple. So
     `songsForAlbumKeys` re-sorts, making its result a function of `keys` alone. Without
     that, a 40-album library answers sorted and a 400-album one does not, and the same
     endpoint behaves differently depending on how much music the user happens to own.
-- **`node:sqlite` is D1's engine but not D1's *build*, and the suite was blind because of
+- **`node:sqlite` is D1's engine but not D1's _build_, and the suite was blind because of
   it.** The DAOs run against real SQLite precisely so a wrong predicate and a right one can
   be told apart by the query plan — but its `SQLITE_MAX_VARIABLE_NUMBER` is 32,766 against
-  D1's 100, so it is *structurally incapable* of failing the way D1 fails. 500+ tests were
+  D1's 100, so it is _structurally incapable_ of failing the way D1 fails. 500+ tests were
   green throughout a guaranteed 500. `helpers/sqlite.ts` now enforces the ceiling on every
   statement. This is the `fakeDav` receiver mistake one layer down: a double is evidence
-  only to the extent it models the platform's constraints, and modelling *an* SQLite was
-  not the same as modelling *D1's* SQLite.
-- **A write costs a *billed* row, not a row, and `meta.changes` is not that number.** D1's
-  pricing page, definition 6: *"Indexes will add an additional written row when writes include
+  only to the extent it models the platform's constraints, and modelling _an_ SQLite was
+  not the same as modelling _D1's_ SQLite.
+- **A write costs a _billed_ row, not a row, and `meta.changes` is not that number.** D1's
+  pricing page, definition 6: _"Indexes will add an additional written row when writes include
   the indexed column, as there are two rows written: one to the table itself, and one to the
-  index."* So the daily allowance is denominated in the row **plus every index entry it
-  rewrote**, and the multiplier is a property of the *table*: `songs` is ten (nine indexes),
+  index."_ So the daily allowance is denominated in the row **plus every index entry it
+  rewrote**, and the multiplier is a property of the _table_: `songs` is ten (nine indexes),
   `nodes` is four, `scan_state` is two (it declares none at all — only the implicit
   `sqlite_autoindex` for `library_id TEXT PRIMARY KEY`).
   `dao/billedRows.ts` owns that, and four rules keep it true:
-  - **`meta.changes` is SQLite's count of *table rows* touched.** `runWriteBatch` summed it, and
+  - **`meta.changes` is SQLite's count of _table rows_ touched.** `runWriteBatch` summed it, and
     `EnrichmentService` declared a literal `1` because `applyMetadata` returned `void` — so the
     scan's daily budget believed it had ~10x its real headroom on the dominant write path, and
     the platform's refusal arrived first. `WriteBatchResult` therefore carries `billedRows`
@@ -189,15 +189,15 @@ is pinned there.
     the `LIKE 'sqlite_%'` filter the structure comparison uses, or `songs` reads as eight.
   - **One implementation, two call sites.** `runWriteStatement` (single) and `runWriteBatch`
     (batched) both go through `billedRowsFor`, so the two cannot disagree — and each is
-    asserted over real SQLite, because the scan suites meter *doubles* that report their own
+    asserted over real SQLite, because the scan suites meter _doubles_ that report their own
     `billedRows` and never execute the DAO, so reverting the arithmetic turns nothing red there.
-- **What a group *is* is `ALBUM_GROUP_BY`, and the two halves of it are one function.**
+- **What a group _is_ is `ALBUM_GROUP_BY`, and the two halves of it are one function.**
   `albumKeySql.ts` writes the `GROUP BY` and `subsonic/albumKey.ts` derives the key in TypeScript;
   `projection.keyOf` rebuilds the key string from the grouped row so the page's membership and the
   caller's membership cannot disagree. Three things here are invisible in a result and are asserted
   some other way:
   - **`GROUP BY album_artist_ci`, not `COALESCE(album_artist_ci, '')`.** A missing album artist is
-    a *value*, so NULL is its own group. The coercion returns the same rows — `'' IS ''` — and
+    a _value_, so NULL is its own group. The coercion returns the same rows — `'' IS ''` — and
     silently drops `idx_songs_album`, which is a page of albums becoming a scan of the library's
     rows. `EXPLAIN QUERY PLAN` is the only instrument that tells the two apart.
   - **The batch size is derived from the grouping**, because the halves are not the author's to
@@ -206,14 +206,14 @@ is pinned there.
     under the default grouping and 11 under `album_artist`, and neither is a number to type
     beside the query.
   - **The page's tiebreak is the key columns, not `dir_path`.** A directory can hold two album keys
-    under a tag grouping, so `dir_path` was never a *total* order, and a page boundary between two
+    under a tag grouping, so `dir_path` was never a _total_ order, and a page boundary between two
     albums that tie on every term could return one twice or skip it.
 - **Every caller that starts from a set of keys goes through `listForAlbumKeys`, not a local
   grouping.** `getAlbum`, the starred paths, `getArtist` and `search3` each begin with a subset of
   an album's rows, and grouping that subset publishes an album holding one track of a compilation —
   a `songCount`, a `duration` and an `artist` that disagree with every other surface.
 - **Aggregate queries page over groups, then fetch every row of the groups on the page.**
-  A SQL `GROUP BY` returns one *representative row* per group, so counting from it
+  A SQL `GROUP BY` returns one _representative row_ per group, so counting from it
   reports 1 for a real discography. This shipped: every album in the product reported
   `songCount: 1` and its first track's duration. The second query deliberately does **not**
   re-apply the year or genre filter — those choose which albums appear, and a partial
@@ -223,7 +223,7 @@ is pinned there.
   `enriched_at`/`reader_version` together. Doing it in two statements leaves a window
   where a row claims a new mtime with the old duration, and `EnrichmentService` — which
   short-circuits on `enriched_at` — will never re-read it. The text tags are deliberately
-  *kept*: they are the path-convention fallback `getArtists` groups by, and clearing them
+  _kept_: they are the path-convention fallback `getArtists` groups by, and clearing them
   would drop the track out of every group.
 - **A path-derived grouping fills a gap, and never overwrites a tag.** The aggregates
   filter in SQL — `listAlbums` on `album_ci IS NOT NULL AND album_ci <> ''`,
@@ -236,12 +236,12 @@ is pinned there.
   `getArtists`/`getAlbumList2`/`getGenres`/`search3` all answered `[]` while
   `getRandomSongs` — which does not group — returned rows. So `upsertFileFacts` derives
   `album`/`artist` from `dir_path` (`pathConvention.ts`: `Artist/Album`, and the flat
-  `Artist - Album` layout, split on the *first* separator only). Three rules:
+  `Artist - Album` layout, split on the _first_ separator only). Three rules:
   - **`COALESCE(songs.x, excluded.x)`, always.** The existing value wins, so a derived
     name fills a NULL and only a NULL. That is the whole safety argument: a real tag is
     never rolled back to a guess, and a rescan writes nothing — which is what makes it
-    safe to derive on *every* index rather than only on first sight.
-  - **Every `_ci` twin moves in the same statement**, asserted *separately* from the
+    safe to derive on _every_ index rather than only on first sight.
+  - **Every `_ci` twin moves in the same statement**, asserted _separately_ from the
     display values. A guard on `artist` proves nothing about `artist_ci`; dropping
     `COALESCE` from only the twins passes every other assertion, and the result is a row
     that displays correctly and is in no album list.
@@ -281,8 +281,8 @@ is pinned there.
       stamped under the old definition is then read under the new one. Nothing on
       the row records which definition wrote a given stamp, and the two shapes are
       **byte-for-byte identical**: a file tagged `TITLE` but not
-      `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag title *and* `'derived'`, and
-      a tagless enriched file holds a derived title *and* `'derived'`. A guarded
+      `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag title _and_ `'derived'`, and
+      a tagless enriched file holds a derived title _and_ `'derived'`. A guarded
       `title` reads the first as the second's filename guess and destroys a real
       tag — for ever, because `enriched_at` is set and `shouldEnrich` then
       short-circuits the file.
@@ -290,7 +290,7 @@ is pinned there.
       A dedicated `songs.title_source` is the shape that holds **both** "never
       overwrite a tag" and "a corrected derivation still propagates", and the
       schema rules are what stop it: **SQLite has no `ALTER TABLE … ADD COLUMN IF
-      NOT EXISTS`** (measured on 3.53.4, after assuming otherwise), **the baseline**
+NOT EXISTS`** (measured on 3.53.4, after assuming otherwise), **the baseline**
       may not `ALTER`, and editing the locked baseline is the
       `songs.reader_version` defect this package has already paid for once. Worth
       revisiting if a column-adding migration path is ever built.
@@ -302,10 +302,11 @@ is pinned there.
       `IF EXISTS` form precisely because that file is never run twice. Verified on
       workerd's build, not only `node:sqlite`: `wrangler d1 migrations apply --local`
       applies it, reads back 0 `token_epoch` columns and a clean `foreign_key_check`,
-      and a second apply answers *"No migrations to apply!"*. Note what
+      and a second apply answers _"No migrations to apply!"_. Note what
       did **not** relax: **no migration may `DROP TABLE`**, on any file, because D1's
       implicit transaction turns a parent drop into a cascading `DELETE`. `ADD COLUMN`
       is still unavailable for the baseline's own reason, so this buys nothing yet.
+
     - **The suffix is stripped only when it is a container this server indexes**, against a
       transcribed copy of `libraryNames.ts`'s `AUDIO_SUFFIXES` (layer 0 cannot import layer 3,
       so it is a copy pinned by `test/schema.int.test.ts`). Cutting at the last dot instead
@@ -313,26 +314,26 @@ is pinned there.
       "unchanged rescan writes nothing" guarantee rests on.
     - **It carries no marker**, unlike the grouping. The marker exists so a client can tell a
       folder-name guess from a release name, and under a non-empty `DERIVED_MARKER` that
-      deliberately makes two *albums* of one release. A title is the opposite case: the
+      deliberately makes two _albums_ of one release. A title is the opposite case: the
       derived and tagged titles are one track by any reading, so a marked title would put two
       spellings of one song into `search3` and make the derived one unmatchable.
   - **The `Artist - Album` split is a scan, and the scan is only equivalent because the
     caller trims.** `findAlbumSeparator` used to be `/\s+[-–—]\s+/.exec(dirName)`, which is
     quadratic on a folder name that reached this module from an untrusted `DAV:href` — 16 KB
     costs ~280 ms against a 10 ms CPU limit on Workers Free, and `dir_path` is re-read on
-    every upsert *and* on every `songDerivation` poll, so one hostile `PROPFIND` is an
+    every upsert _and_ on every `songDerivation` poll, so one hostile `PROPFIND` is an
     invocation the runtime kills. The replacement returns the **dash's** index rather than the
     regex's match index, and that is sound for one specific reason: **both sides of the split
-    are `.trim()`ed by `fromFlatAlbumFolder`**, so the *extent* of the whitespace runs cannot
+    are `.trim()`ed by `fromFlatAlbumFolder`**, so the _extent_ of the whitespace runs cannot
     change the answer and never has to be measured. That argument dies with the trim — the
-    separator rule is a property of the convention *and* of the caller's cleanup together, not
+    separator rule is a property of the convention _and_ of the caller's cleanup together, not
     of the convention alone. The adversarial input must be a run of spaces followed by a
     **non-dash**: a run ending in a dash matches on the first attempt and costs nothing.
     `test/redos-linear-parsing.test.ts` holds the oracle, the seeded fuzz and the wall-clock
     bound, and it is the **only** guard — `eslint-plugin-regexp`'s
     `no-super-linear-backtracking` is silent on this shape, so a green lint says nothing here.
 - **Deriving at index time was not enough, and the reason is that indexing only happens
-  on change.** Every writer of the grouping columns is gated on the file having *moved*:
+  on change.** Every writer of the grouping columns is gated on the file having _moved_:
   the `Depth: 0` root probe, `isScanned: !changed`, `if (changed)` in `reconcileFolder`,
   and the read-through `getMusicDirectory` path. That gating is **correct** — it is what
   makes a rescan of an unchanged library cost one subrequest — and the consequence is that
@@ -344,7 +345,7 @@ is pinned there.
     when `album` is NULL. The one endpoint that does not group in SQL was the one that
     looked healthy.
   - So `songDerivation.ts` runs the same `deriveFromPath` over rows selected by
-    **`derived_version`**, not by `NULL`, and `ScanService.step` runs it *ahead of* the
+    **`derived_version`**, not by `NULL`, and `ScanService.step` runs it _ahead of_ the
     status check — a fully-scanned library is `idle` and returns without touching the
     walk, so a backfill placed after the check never runs for the libraries that need it.
   - **The selection is on a version because `NULL` cannot express a corrected
@@ -384,7 +385,7 @@ is pinned there.
     first play — a backfill that repairs the grouping by breaking enrichment.
   - **The index write stamps `derived_version` too, and that is load-bearing.** It stamped
     no version, so every row `upsertFileFacts` produced took the migration's `DEFAULT 0`
-    and was *immediately owed* to the backfill — permanently, since the selection is
+    and was _immediately owed_ to the backfill — permanently, since the selection is
     `derived_version < 1`. The backfill's page is one `UPDATE` per row with
     `requireComplete`, so on any library past ~48 owing rows it **refused**, and the refusal
     is thrown from `derivePending`, which runs before `listFrontier`: the walk never ran,
@@ -403,7 +404,7 @@ is pinned there.
     **every** poll, and a table scan there would cost a full `songs` pass on a fully
     repaired library. Asserted with `EXPLAIN QUERY PLAN`.
 - **An applied migration is immutable, and nothing in a `.sql` file says so.** D1 records
-  applied migrations by *filename* in `d1_migrations`, so one that has run is skipped by
+  applied migrations by _filename_ in `d1_migrations`, so one that has run is skipped by
   every later `wrangler d1 migrations apply` — silently. `songs.reader_version` was added
   by editing `0001_edge_sonic_init.sql` after `0001` had been applied, so the column never
   existed in the live database: `applyMetadata` and `UPSERT_FILE_FACTS` both named it,
@@ -418,7 +419,7 @@ is pinned there.
   `migrations/0008_squash.sql` is the baseline, and it never creates `namespaces` or
   `router_backends`, so the broken key is retired rather than carried by a `DROP`. The
   squash is the schema below — 17 tables, plus every column the earlier `ALTER`s added.
-- **A row's enrichment is a function of the bytes *and* the reader, and both go in the
+- **A row's enrichment is a function of the bytes _and_ the reader, and both go in the
   key.** `mtime_ms` alone is correct for the bytes and blind to the reader, so a corrected
   reader reaches no row an earlier one wrote: the file genuinely has not moved, so the
   short-circuit is right and the wrong value is served for ever. It shipped — a deploy
@@ -427,24 +428,24 @@ is pinned there.
   nothing. `songs.reader_version` carries the other input, stamped by `applyMetadata` in
   the **same statement** as the values, because a row whose `enriched_at` moved without it
   is one nothing can re-read. The `songMeta` KV entry carries it for the same reason and
-  because `enrich` consults the cache *before* the row. `SongMetadataInput` lives in
+  because `enrich` consults the cache _before_ the row. `SongMetadataInput` lives in
   `dao/songSql.ts` with the statement it targets, so the columns a patch may write and the
   statement that writes them are read together.
 - **An ordered id list stays ordered.** `id IN (...)` returns rows in index-scan order, so
   `listIdsIn` re-orders to the caller's list. Ids that do not resolve are omitted, not
-  substituted. The re-order happens once over the *merged* result rather than per chunk, so
+  substituted. The re-order happens once over the _merged_ result rather than per chunk, so
   batching is invisible to the caller for the same reason it is in `songsForAlbumKeys`.
 - **A read that reports on a row must not create it.** `ScanStateDAO.ensure` writes an `idle` row
   on first sight, so `GET /user/libraries` uses `listByLibraries` — a plain read — and reports
   `null` for a library with no row. Two reasons, and the second is the one that would have been
   missed: using `ensure` turns every `GET` into a write against the day's row-write allowance on
   a page the operator **polls**; and it destroys the distinction the client depends on, because
-  the row it wrote is exactly the row whose absence means *never scanned*. The same rule as
+  the row it wrote is exactly the row whose absence means _never scanned_. The same rule as
   `songs.countByLibraries`, which omits a library with no tracks rather than defaulting it to
   `0` — a defaulted zero erases the difference between "nothing indexed" and "never looked at".
 - **A D1 statement is a subrequest, so `withRetry` charges one.** Workers Free allows **50
-  subrequests per invocation** and D1 counts its own queries against the same 50 — *Queries
-  per Worker invocation — 1000 (Workers Paid) / 50 (Free)*. Every DAO holds the request
+  subrequests per invocation** and D1 counts its own queries against the same 50 — _Queries
+  per Worker invocation — 1000 (Workers Paid) / 50 (Free)_. Every DAO holds the request
   scope's `SubrequestMeter`, and `withRetry` charges it, because that is the one path every
   statement takes: a charge per call site is a hundred chances to forget one, and a forgotten
   charge has **no symptom at all** until the platform terminates the invocation — the
@@ -453,7 +454,7 @@ is pinned there.
   is right and an over-count costs throughput while an under-count costs availability.
 - **A compare must read the table the row it guards lives in.** `nodeWrite.ts`'s
   `nodeRowNeedsWrite` has always held to this — it reads `nodes` to decide about a `nodes` row —
-  and the scan's *song* writer broke it: `reconcileFolder` gated both writers on `changed`, which
+  and the scan's _song_ writer broke it: `reconcileFolder` gated both writers on `changed`, which
   is `mtimeMoved || etagMoved` read off the **`nodes`** row. The two upserts are separate batches
   and `runWriteBatch` truncates each against the meter's remaining budget independently, so a pass
   can land every node row and truncate the song rows; the next pass then finds the mtimes already
@@ -469,7 +470,7 @@ is pinned there.
     alternative also works and would have forced `SUBSREQUESTS_PER_FOLDER_BASE` (and both constants
     derived from it) up by one, against a ceiling of 50.
   - **`has_song` is `0` for every non-audio child**, because only audio becomes a song. It is
-    therefore only meaningful *after* the caller's audio test — read the other way round it is a
+    therefore only meaningful _after_ the caller's audio test — read the other way round it is a
     guarantee that a `cover.jpg` is upserted as a song on every pass, for ever. Asserted with a
     cover in the fixture.
   - **A join's plan is the only observable difference**, since a wrong join and a right one return
@@ -478,12 +479,12 @@ is pinned there.
     in the rows.
 - **A write batch splits to fit, and reports that it did.** `runWriteBatch` returns
   `WriteBatchResult`, not a count, because a 500-track album is ~1,000 statements against a
-  ceiling of 50 — truncation is the *expected* case on Free, not an edge case. The caller
+  ceiling of 50 — truncation is the _expected_ case on Free, not an edge case. The caller
   acts on it: the scan writes a folder's children first and its own `is_scanned` row last,
   **only if nothing was truncated**, so a half-written folder stays on the frontier. Writes
   with no partial form — a play queue, a playlist's `song_count`, the derivation backfill —
-  pass `requireComplete` and refuse with a `413` instead, because half a queue is a *shorter
-  queue*, which is a wrong answer rather than an unfinished one.
+  pass `requireComplete` and refuse with a `413` instead, because half a queue is a _shorter
+  queue_, which is a wrong answer rather than an unfinished one.
 - **A DAO that constructs another DAO must pass the meter down.** `SongDAO` built its
   `SongIdLookupDAO` with `new SongIdLookupDAO(this.database)`, dropping it — the whole defect
   above, present in the code written to fix it. `BaseDAO` exposes the meter to subclasses so
@@ -491,7 +492,7 @@ is pinned there.
 - **A read whose size the caller chose is clamped; one it did not is refused.**
   `listArtists`' callers ask for 500, 5,000 and 500, so the limit is clamped to what the
   remaining budget can fetch rows for. `songsForAlbumDirs` and `listIdsIn` refuse with a
-  `413`, because the key list *is* the answer and resolving a subset of it is a page that
+  `413`, because the key list _is_ the answer and resolving a subset of it is a page that
   silently omits albums or a queue that silently shortened.
 - **A configured limit is not a bound the queries can honour.** `MAX_PAGE_SIZE` is 500, and
   until the batching above existed a 500-album page was a request the server was obliged to
@@ -499,7 +500,7 @@ is pinned there.
   account whose ceiling was 50: both numbers are read as permissions rather than as
   obligations on the code below them. The ceiling is now **derived** from the statement
   budget in `subrequests.ts` rather than typed here — the old `2200` bounded the page's
-  *group* count while the statement count is driven by its *track* count, so 2,200 albums
+  _group_ count while the statement count is driven by its _track_ count, so 2,200 albums
   cost ~100 statements.
 - **A prune takes the whole subtree, with a trailing `/`.** A folder that disappears takes
   its `dir_path`s deeper than itself with it, so a one-level delete leaves songs indexed
@@ -513,7 +514,7 @@ is pinned there.
   to be tested.
 - **Deleting an index keeps `libraries`, and that is the whole point of it.** `dao/indexDrop.ts`
   empties `songs`, `nodes` and `scan_state` and nothing else. Three things follow from what it
-  does *not* touch, and each is a decision rather than an omission:
+  does _not_ touch, and each is a decision rather than an omission:
   - **The registration and its encrypted WebDAV credential survive.** This is the difference from
     `LibraryDAO.delete`, which cascades `libraries` and with it the only copy of the password —
     so before this, a rejected credential had no remedy but re-registering the origin.
@@ -522,12 +523,12 @@ is pinned there.
     Asserted in `test/index-drop.test.ts` by re-deriving a song id from `(libraryId, path)` with
     a helper that does **not** call the production encoder — a test using the same helper would
     pass even if that helper became a UUID, which is the property the whole decision rests on.
-  - **`scan_state` is deleted rather than reset to `idle`.** Absence *is* a state the operator
+  - **`scan_state` is deleted rather than reset to `idle`.** Absence _is_ a state the operator
     surface reads: `librarySummary` publishes `scan: null` for a library with no row and the SPA
     renders that as "never scanned", which is what an operator wants after an empty index. A row
     reset to `idle` beside `songCount: 0` renders the success-toned "Up to date." next to "0
     tracks indexed" — the contradictory pair `describeScanState`'s `empty` case exists to catch.
-  - **`scan_state` is deleted *first*.** It is the smallest statement and the one whose absence
+  - **`scan_state` is deleted _first_.** It is the smallest statement and the one whose absence
     makes the library read as unscanned, so a reader arriving between the three sees an honestly
     "never scanned" library rather than one reporting progress towards rows being removed.
 - **The projection and the charge are one arithmetic, and the projection has to live here.**
@@ -537,7 +538,7 @@ is pinned there.
   per-table table in the one layer that cannot see it — and the figure is the one an operator
   consents to. `test/index-drop.test.ts` asserts the projection equals the measured total, over
   real SQLite, because a double reporting expected numbers would agree with itself.
-  **A `DELETE`'s `meta.changes` *is* the rows deleted**, which is what makes the measurement
+  **A `DELETE`'s `meta.changes` _is_ the rows deleted**, which is what makes the measurement
   above exact rather than an estimate.
 - **No blanket `.catch(() => null)` on a D1 read.** Only `isMissingSchemaError` may
   degrade; everything else becomes a `DatabaseError`, or an outage reads as "not found".

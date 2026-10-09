@@ -79,9 +79,7 @@ describe('EdgeSonicWorker.onQueue', () => {
   });
 
   it('keeps the two decisions per message: a failure does not redeliver its neighbour', async () => {
-    consumeQueueMessage
-      .mockResolvedValueOnce({ handled: true, kind: 'scan-chunk' })
-      .mockRejectedValueOnce(new Error('boom'));
+    consumeQueueMessage.mockResolvedValueOnce({ handled: true, kind: 'scan-chunk' }).mockRejectedValueOnce(new Error('boom'));
     const worker = new EdgeSonicWorker();
     const good = message({ kind: 'scan-chunk', libraryId: 'L1' });
     const bad = message({ kind: 'scan-chunk', libraryId: 'L2' });
@@ -98,7 +96,6 @@ describe('EdgeSonicWorker.onQueue', () => {
     expect(bad.retried).toBe(true);
   });
 });
-
 
 describe('EdgeSonicWorker.onScheduled', () => {
   it('a failing fanout is logged, never thrown: cron must not redeliver', async () => {

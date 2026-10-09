@@ -210,7 +210,7 @@ function billedRowsForTable(table: string, logicalRows: number): number {
   // map equals the real schema, so in that suite it cannot happen; this branch is what a
   // deployment running a *newer* migration than the code sees, which is exactly when being
   // pessimistic is the only safe answer.
-  const indexes = TABLE_INDEX_COUNTS[table] ?? (MAX_BILLED_ROWS_PER_ROW - 1);
+  const indexes = TABLE_INDEX_COUNTS[table] ?? MAX_BILLED_ROWS_PER_ROW - 1;
   return logicalRows * (1 + indexes);
 }
 

@@ -80,7 +80,7 @@ async function updateLibrary(c: UserContext): Promise<Response> {
 
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
-  const existing = await service.listAll().then((all) => all.find((library) => library.id === id));
+  const existing = await service.findById(id);
   if (!existing) return BaseRoute.jsonError(c, 'Library not found.', 404);
 
   const password = BaseRoute.optionalString(body, 'davPassword', 256);
@@ -114,7 +114,7 @@ async function probeLibrary(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
-  const library = (await service.listAll()).find((candidate) => candidate.id === id);
+  const library = await service.findById(id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   return c.json(await service.probe(library));
 }
@@ -122,7 +122,7 @@ async function probeLibrary(c: UserContext): Promise<Response> {
 async function startScan(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
-  const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
+  const library = await scope.get(Tokens.LibraryService).findById(id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   return c.json(await scope.get(Tokens.ScanDriver).start(library));
 }
@@ -161,7 +161,7 @@ async function scanStatus(c: UserContext): Promise<Response> {
 async function stepScan(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
-  const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
+  const library = await scope.get(Tokens.LibraryService).findById(id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   return c.json(await scope.get(Tokens.ScanDriver).advance(library));
 }
@@ -169,7 +169,7 @@ async function stepScan(c: UserContext): Promise<Response> {
 async function startEnrich(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
-  const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
+  const library = await scope.get(Tokens.LibraryService).findById(id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   return c.json(await scope.get(Tokens.EnrichDriver).start(library));
 }
@@ -199,7 +199,7 @@ async function enrichStatus(c: UserContext): Promise<Response> {
 async function stepEnrich(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
-  const library = (await scope.get(Tokens.LibraryService).listAll()).find((candidate) => candidate.id === id);
+  const library = await scope.get(Tokens.LibraryService).findById(id);
   if (!library) return BaseRoute.jsonError(c, 'Library not found.', 404);
   return c.json(await scope.get(Tokens.EnrichDriver).advance(library));
 }
@@ -239,20 +239,13 @@ async function createUser(c: UserContext): Promise<Response> {
   if (oversized) return BaseRoute.jsonError(c, 'Request body is too large.', 413);
 
   const scope = BaseRoute.getScope(c);
-  const username = BaseRoute.requireString(body, 'username', 64);
-  const password = BaseRoute.requireString(body, 'password', 256);
-  const key = await scope.get(Tokens.UserKey)();
-  const { encryptData } = await import('@edge-sonic/backend-data/crypto');
-  const encrypted = await encryptData(password, key);
-
-  const users = await scope.get(Tokens.UserDAO)();
-  if (await users.findByUsername(username)) {
-    return BaseRoute.jsonError(c, 'A user with that username already exists.', 409);
-  }
-  const created = await users.create({
-    username,
-    passwordCiphertext: encrypted.ciphertext,
-    passwordIv: encrypted.iv,
+  // The service owns the password's encryption, so this route holds no key and no cipher. It
+  // used to reach `backend-data/crypto` through `await import(...)`, which the layer gate could
+  // not see — `no-restricted-imports` reads `ImportDeclaration` nodes, not `ImportExpression`.
+  // See `auth/UserService.ts`.
+  const created = await scope.get(Tokens.UserService).create({
+    username: BaseRoute.requireString(body, 'username', 64),
+    password: BaseRoute.requireString(body, 'password', 256),
     email: BaseRoute.optionalString(body, 'email', 256),
     isAdmin: body.isAdmin === true,
   });

@@ -113,7 +113,13 @@ function packetStarts(page: readonly number[]): number[] {
 One Ogg page carrying every packet given, in order.
 */
 function oggPageWith(packets: readonly Bytes[], flags: number, granule: number, sequence: number): number[] {
-  return oggPageRaw(lacing(packets), packets.flatMap((packet) => [...packet]), flags, granule, sequence);
+  return oggPageRaw(
+    lacing(packets),
+    packets.flatMap((packet) => [...packet]),
+    flags,
+    granule,
+    sequence,
+  );
 }
 
 /**
@@ -127,7 +133,10 @@ function oggPageWith(packets: readonly Bytes[], flags: number, granule: number, 
 function oggPageRaw(segments: readonly number[], body: Bytes, flags: number, granule: number, sequence: number): number[] {
   expect(segments.length).toBeLessThanOrEqual(255);
   return [
-    0x4f, 0x67, 0x67, 0x53, // "OggS"
+    0x4f,
+    0x67,
+    0x67,
+    0x53, // "OggS"
     0x00, // version
     flags,
     ...le(granule, 8),
@@ -305,10 +314,7 @@ describe('Opus: a comment block sharing a page with the identification header', 
     expect(head[27]).toBe(19);
     expect(head[28]).toBe(255);
 
-    const bytes = new Uint8Array([
-      ...head,
-      ...oggPageWith([new Uint8Array(tags.slice(split))], 0x01, 0, 1),
-    ]);
+    const bytes = new Uint8Array([...head, ...oggPageWith([new Uint8Array(tags.slice(split))], 0x01, 0, 1)]);
 
     const read = readOpus(bytes, 1000);
     expect(read.channels).toBe(2);
@@ -348,7 +354,7 @@ describe('A truncated read must not report a duration', () => {
 
   it('returns no duration when the buffer ends mid-page', () => {
     const full = pageClaimingMoreThanItHas(realGranule);
-    const truncated = full.subarray(0, - 3000);
+    const truncated = full.subarray(0, -3000);
 
     const tags = readOpus(truncated, 5_736_100);
 
@@ -546,7 +552,15 @@ function oggFileWithEmbeddedPicture(image: Uint8Array): { file: Uint8Array; tags
 
   // Whole pages of a packet still running: 255 segments of 255, and no terminator.
   while (tags.length - consumed >= PAGE_BODY_LIMIT) {
-    pages.push(...oggPageRaw(Array.from({ length: 255 }, () => 255), tags.slice(consumed, consumed + PAGE_BODY_LIMIT), 0x00, 0, sequence));
+    pages.push(
+      ...oggPageRaw(
+        Array.from({ length: 255 }, () => 255),
+        tags.slice(consumed, consumed + PAGE_BODY_LIMIT),
+        0x00,
+        0,
+        sequence,
+      ),
+    );
     consumed += PAGE_BODY_LIMIT;
     sequence += 1;
   }
@@ -556,9 +570,7 @@ function oggFileWithEmbeddedPicture(image: Uint8Array): { file: Uint8Array; tags
   const rest = tags.length - consumed;
   const trailing = Math.floor(rest / 255);
   const remainder = rest % 255;
-  pages.push(
-    ...oggPageRaw([...Array.from({ length: trailing }, () => 255), remainder], tags.slice(consumed), 0x00, 0, sequence),
-  );
+  pages.push(...oggPageRaw([...Array.from({ length: trailing }, () => 255), remainder], tags.slice(consumed), 0x00, 0, sequence));
   sequence += 1;
 
   // One audio page, so the file has an end-of-stream page a tail read can use.
@@ -646,11 +658,10 @@ describe('The live library: a comment packet larger than any bounded read', () =
     // the packet needs is "no artwork", not a partial picture.
     const located = findPicture(prefix, file.length);
     if (located === null) return;
-    const picture = await materializePicture(
-      located,
-      async (offset, length) => file.slice(offset, offset + Math.floor(length / 2)),
-      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
-    );
+    const picture = await materializePicture(located, async (offset, length) => file.slice(offset, offset + Math.floor(length / 2)), {
+      maxImageBytes: 8 * 1024 * 1024,
+      maxFetchBytes: 16 * 1024 * 1024,
+    });
     expect(picture).toBeNull();
   });
 
@@ -671,11 +682,10 @@ describe('The live library: a comment packet larger than any bounded read', () =
     const located = findPicture(midPrefix, mid.file.length);
     expect(located?.kind).toBe('ogg-comment');
     if (located?.kind !== 'ogg-comment') return;
-    const picture = await materializePicture(
-      located,
-      async (offset, length) => mid.file.slice(offset, offset + length),
-      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
-    );
+    const picture = await materializePicture(located, async (offset, length) => mid.file.slice(offset, offset + length), {
+      maxImageBytes: 8 * 1024 * 1024,
+      maxFetchBytes: 16 * 1024 * 1024,
+    });
     expect(picture?.mimeType).toBe('image/jpeg');
     expect(Buffer.from(picture?.data ?? new Uint8Array(0)).equals(Buffer.from(MID_IMAGE_BYTES))).toBe(true);
   });
@@ -713,11 +723,10 @@ describe('The live library: a comment packet larger than any bounded read', () =
     const located = findPicture(file, file.length);
     expect(located?.kind).toBe('ogg-comment');
     if (located?.kind !== 'ogg-comment') return;
-    const picture = materializePicture(
-      located,
-      async (offset, length) => file.slice(offset, offset + length),
-      { maxImageBytes: 8 * 1024 * 1024, maxFetchBytes: 16 * 1024 * 1024 },
-    );
+    const picture = materializePicture(located, async (offset, length) => file.slice(offset, offset + length), {
+      maxImageBytes: 8 * 1024 * 1024,
+      maxFetchBytes: 16 * 1024 * 1024,
+    });
     return picture.then((resolved) => {
       expect(Buffer.from(resolved?.data ?? new Uint8Array(0)).equals(Buffer.from(IMAGE_BYTES))).toBe(true);
     });

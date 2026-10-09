@@ -31,15 +31,29 @@
 // One import for "talk to a remote Subsonic server": the transport here, the parse rules
 // re-exported from it so a caller cannot reach a second answer about how a collapsed list is read.
 export { RemoteSubsonicClient, RemoteSubsonicError, unwrapEnvelope, asArray } from './remoteClient';
-export type { RemoteSubsonicClientOptions, RemoteSong, RemoteAlbum, RemoteArtist, RemotePlaylist, RemoteBookmark, RemoteQueueEntry } from './remoteClient';
+export type {
+  RemoteSubsonicClientOptions,
+  RemoteSong,
+  RemoteAlbum,
+  RemoteArtist,
+  RemotePlaylist,
+  RemoteBookmark,
+  RemoteQueueEntry,
+} from './remoteClient';
 export { ImportSourceService } from './sourceService';
 export type { SourceStore } from './sourceService';
 export { ci, albumKeyFor, resolveGrouping, matchRemoteAlbums, matchRemoteArtists } from './albumIdentity';
 export type { AlbumMatchStore } from './albumIdentity';
-export { normalizeRemoteBaseUrl, normalizeMountPath, normalizeSourceName, normalizeRemoteUsername, assertRemoteReachable } from './remoteOrigin';
+export {
+  normalizeRemoteBaseUrl,
+  normalizeMountPath,
+  normalizeSourceName,
+  normalizeRemoteUsername,
+  assertRemoteReachable,
+} from './remoteOrigin';
 export { matchRemoteSongs, metadataKeyOf, narrow } from './matchRemoteIds';
 export { runPlaylistsPhase, runStarsPhase, runBookmarksPhase, runPlayQueuePhase } from './phases';
-export { runPlayCountAlbumPhase, runPlayCountPagePhase } from './playCountPhases';
+export { runPlayCountAlbumPhase } from './playCountPhases';
 export { toCandidate, labelOf, unresolvedFor, authorizedSongIds } from './phaseShared';
 export { buildReport, collectUnresolved, parseReport, phase, serializeReport, MAX_REPORTED_UNRESOLVED } from './report';
 export { assertScansIdle, importDailyRowBudget, isImportInFlight, SCANNING_STATUSES } from './importPause';

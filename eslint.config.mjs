@@ -7,7 +7,7 @@ import pluginRegexp from 'eslint-plugin-regexp';
 import eslintConfigPrettier from 'eslint-config-prettier';
 import prettier from 'eslint-plugin-prettier';
 
-export default tseslint.config(
+const config = [
   {
     ignores: [
       'eslint.config.mjs',
@@ -237,8 +237,16 @@ export default tseslint.config(
     rules: {
       // Raise duplicate-string threshold to avoid flagging intentional repeated literals like provider IDs
       'sonarjs/no-duplicate-string': ['warn', { threshold: 5 }],
-      // Cognitive complexity — warn rather than error to allow gradual improvement
-      'sonarjs/cognitive-complexity': ['warn', 20],
+      // Cognitive complexity. **An error**, and it is the default `pnpm run lint` could not see
+      // before: `lint` is `eslint --fix --quiet`, `--quiet` suppresses every warning, and a
+      // complexity *warning* is therefore unenforceable in CI. It was set to `warn` for gradual
+      // improvement and the improvement never arrived, because nothing reported it.
+      //
+      // The twelve violations it was hiding have all been decomposed. The worst was
+      // `webdav/src/xml.ts`'s `parseXml` at **110**, five levels of nesting, in the one parser
+      // that reads from an operator-chosen remote origin. It is now three modules — a cursor, a
+      // tag scanner, and the tree — none of them over 20.
+      'sonarjs/cognitive-complexity': ['error', 20],
       // False positives: connection method names like 'imap-password' and field names like 'password_hash'
       'sonarjs/no-hardcoded-passwords': 'off',
       // Third-party deprecations (e.g. Zod v4 migration) are warnings, not errors
@@ -278,10 +286,7 @@ export default tseslint.config(
       // `it('…', async () => …)` is the Vitest idiom: the runner consumes the
       // returned promise and reports a rejected one as a failed test. Flagging
       // it as an unhandled promise is a false positive in this one position.
-      '@typescript-eslint/no-misused-promises': [
-        'error',
-        { checksVoidReturn: { arguments: false, attributes: false } },
-      ],
+      '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: { arguments: false, attributes: false } }],
       // A test asserting request routing has to name `http://` hosts, and a
       // proxy test has to name a loopback upstream. Both are the subject
       // matter, not leaked configuration.
@@ -434,7 +439,10 @@ export default tseslint.config(
         {
           patterns: [
             { group: ['@edge-sonic/api', '@edge-sonic/api/*'], message: 'backend-services must not import from apps/api' },
-            { group: ['@edge-sonic/background', '@edge-sonic/background/*'], message: 'backend-services must not import from apps/background (lower layer)' },
+            {
+              group: ['@edge-sonic/background', '@edge-sonic/background/*'],
+              message: 'backend-services must not import from apps/background (lower layer)',
+            },
           ],
         },
       ],
@@ -448,9 +456,7 @@ export default tseslint.config(
       'no-restricted-imports': [
         'error',
         {
-          patterns: [
-            { group: ['@edge-sonic/api', '@edge-sonic/api/*'], message: 'apps/background must not import from apps/api' },
-          ],
+          patterns: [{ group: ['@edge-sonic/api', '@edge-sonic/api/*'], message: 'apps/background must not import from apps/api' }],
         },
       ],
     },
@@ -466,8 +472,7 @@ export default tseslint.config(
           patterns: [
             {
               group: ['@edge-sonic/backend-data/dao', '@edge-sonic/backend-data/dao/*'],
-              message:
-                'apps/api must not import DAOs directly; use @edge-sonic/backend-services instead (type-only imports are allowed)',
+              message: 'apps/api must not import DAOs directly; use @edge-sonic/backend-services instead (type-only imports are allowed)',
               allowTypeImports: true,
             },
             {
@@ -492,7 +497,10 @@ export default tseslint.config(
         'error',
         {
           patterns: [
-            { group: ['@edge-sonic/*', '@edge-sonic/**'], message: 'apps/web ships zero backend dependencies — this module is the SPA’s own copy' },
+            {
+              group: ['@edge-sonic/*', '@edge-sonic/**'],
+              message: 'apps/web ships zero backend dependencies — this module is the SPA’s own copy',
+            },
           ],
         },
       ],
@@ -657,4 +665,66 @@ export default tseslint.config(
       'unicorn/prefer-ternary': 'off',
     },
   },
-);
+];
+
+// --- `import()` is a hole in `no-restricted-imports`, and it was load-bearing ---
+//
+// `no-restricted-imports` reads `ImportDeclaration` nodes only. A dynamic `import()` is an
+// `ImportExpression`, and this ESLint version does not report it under that rule at all — which is
+// verified, not assumed: a **static** import of a restricted specifier from the same file is an
+// `error`, and the identical specifier reached through `await import(...)` is silent.
+//
+// The layer gates above are therefore enforced for every syntax except the one that happened to be
+// in use, and it was in use on the credential path: `apps/api/src/user/routes.ts` reached
+// `@edge-sonic/backend-data/crypto` for `encryptData` through `await import(...)`, on a route whose
+// declared reason to exist is not performing a credential operation in the HTTP layer.
+//
+// `no-restricted-syntax` sees `ImportExpression`, so the same boundary is stated a second way here.
+// The specifier list is duplicated from the tables above on purpose: a rule that derived its own
+// banned list from another rule's configuration would be a second source of truth for the layer
+// table, and that table is what `docs/agents/repo/AGENTS.md` documents.
+const RESTRICTED_DYNAMIC_IMPORTS = [
+  { files: ['apps/api/**/*.{ts,js}'], specifiers: ['@edge-sonic/backend-data', '@edge-sonic/backend-data/dao'] },
+  { files: ['apps/web/**/*.{ts,js,tsx,jsx}'], specifiers: ['@edge-sonic/'] },
+  { files: ['apps/background/**/*.{ts,js}'], specifiers: ['@edge-sonic/api'] },
+  { files: ['packages/shared/**/*.{ts,js}'], specifiers: ['@edge-sonic/'] },
+  {
+    files: ['packages/backend-runtime/**/*.{ts,js}'],
+    specifiers: ['@edge-sonic/backend-data', '@edge-sonic/webdav', '@edge-sonic/backend-services', '@edge-sonic/api'],
+  },
+  {
+    files: ['packages/backend-data/**/*.{ts,js}'],
+    specifiers: ['@edge-sonic/backend-runtime', '@edge-sonic/webdav', '@edge-sonic/backend-services', '@edge-sonic/api'],
+  },
+  {
+    files: ['packages/webdav/**/*.{ts,js}'],
+    specifiers: ['@edge-sonic/backend-data', '@edge-sonic/backend-runtime', '@edge-sonic/backend-services', '@edge-sonic/api'],
+  },
+  { files: ['packages/backend-services/**/*.{ts,js}'], specifiers: ['@edge-sonic/api', '@edge-sonic/background'] },
+];
+
+for (const { files, specifiers } of RESTRICTED_DYNAMIC_IMPORTS) {
+  config.push({
+    files,
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        ...specifiers.map((specifier) => ({
+          // Only a string literal. A computed specifier cannot be resolved statically, and a rule
+          // that guessed would be a rule that fires on the wrong file — the tables above still
+          // catch the static form.
+          // The `/` is escaped because the regex literal is written inside a CSS **attribute
+          // selector**, where a bare one closes the selector's bracket expression. An
+          // `esquery` parse error rather than a lint result is what a mistake here produces, so
+          // it is loud — but only once, at config load.
+          selector: `ImportExpression[source.type='Literal'][source.value=/^${specifier.replaceAll('/', '\\/')}/]`,
+          message:
+            'A dynamic `import()` is not covered by no-restricted-imports, so this layer reaches ' +
+            `\`${specifier}\` through the one syntax that gate does not see. Both say no.`,
+        })),
+      ],
+    },
+  });
+}
+
+export default tseslint.config(...config);

@@ -30,5 +30,4 @@ function chunkArray<T>(items: readonly T[], size: number): T[][] {
   return chunks;
 }
 
-
 export { chunkArray };

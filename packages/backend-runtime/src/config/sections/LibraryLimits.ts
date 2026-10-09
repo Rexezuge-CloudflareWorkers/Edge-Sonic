@@ -89,7 +89,10 @@ class ScanLimits {
    * trips it on an account that never raised `limits.subrequests`.
    */
   public getScanChunkMaxRequests(): number {
-    return Math.min(EnvParser.positiveInt(this.env, 'SCAN_CHUNK_MAX_REQUESTS', DEFAULT_SCAN_CHUNK_MAX_REQUESTS), SCAN_CHUNK_SUBSREQUEST_BUDGET);
+    return Math.min(
+      EnvParser.positiveInt(this.env, 'SCAN_CHUNK_MAX_REQUESTS', DEFAULT_SCAN_CHUNK_MAX_REQUESTS),
+      SCAN_CHUNK_SUBSREQUEST_BUDGET,
+    );
   }
 
   /**
@@ -153,7 +156,10 @@ class ScanLimits {
    * path that was already carrying the whole feature.
    */
   public getScanEnrichMaxPerFolder(): number {
-    return Math.min(EnvParser.positiveInt(this.env, 'SCAN_ENRICH_MAX_PER_FOLDER', DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER), SCAN_ENRICH_MAX_PER_FOLDER);
+    return Math.min(
+      EnvParser.positiveInt(this.env, 'SCAN_ENRICH_MAX_PER_FOLDER', DEFAULT_SCAN_ENRICH_MAX_PER_FOLDER),
+      SCAN_ENRICH_MAX_PER_FOLDER,
+    );
   }
 
   /**

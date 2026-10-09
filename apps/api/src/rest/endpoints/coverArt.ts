@@ -53,7 +53,13 @@ async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
 
   // Resolved once and used by both branches, so the sidecar and embedded probes cannot
   // look at different albums of a merged release.
-  const target = await albumTargetFor(library, libraries.map((row) => row.id), decoded.kind, decoded.path, context);
+  const target = await albumTargetFor(
+    library,
+    libraries.map((row) => row.id),
+    decoded.kind,
+    decoded.path,
+    context,
+  );
   const folder = await resolveCoverFolder(library, decoded.kind, decoded.path, target.dirPath, context);
   return await coverForTarget(library, target, folder, context);
 }
@@ -64,7 +70,13 @@ async function getCoverArt(context: RestContext): Promise<PassthroughResponse> {
  * `IdKind.AlbumKey` resolves through the grouping key; `IdKind.Album` is the legacy
  * folder form. Artist ids never reach here — see `artistCover`.
  */
-async function albumTargetFor(library: LibraryRow, scope: LibraryScope, kind: IdKindValue, path: string, context: RestContext): Promise<AlbumTarget> {
+async function albumTargetFor(
+  library: LibraryRow,
+  scope: LibraryScope,
+  kind: IdKindValue,
+  path: string,
+  context: RestContext,
+): Promise<AlbumTarget> {
   if (kind === IdKind.Song) {
     const song = await context.songs.findByPath(library.id, path);
     return { dirPath: song?.dir_path ?? null, songs: song === null ? [] : [song] };

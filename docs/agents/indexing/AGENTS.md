@@ -17,12 +17,12 @@ tables), `migrations/0009_subsonic_import.sql` (3 more), and
 else). **20 tables, 40 index entries** — 20 declared and 20 implicit `sqlite_autoindex_*`,
 because a `TEXT PRIMARY KEY` is one. `PRAGMA foreign_key_check` is clean.
 
-| Table | Index entries | Billed rows per written row |
-| --- | ---: | ---: |
-| `songs` | 9 | **10** |
-| `nodes`, `playlists`, `import_runs` | 3 | 4 |
-| `users`, `libraries`, `user_libraries`, `playlist_entries`, `stars`, `import_sources` | 2 | 3 |
-| the other nine | 1 | 2 |
+| Table                                                                                 | Index entries | Billed rows per written row |
+| ------------------------------------------------------------------------------------- | ------------: | --------------------------: |
+| `songs`                                                                               |             9 |                      **10** |
+| `nodes`, `playlists`, `import_runs`                                                   |             3 |                           4 |
+| `users`, `libraries`, `user_libraries`, `playlist_entries`, `stars`, `import_sources` |             2 |                           3 |
+| the other nine                                                                        |             1 |                           2 |
 
 Those counts live in `dao/billedRows.ts` and are asserted **both ways** against the real
 `sqlite_schema` in `test/schema.int.test.ts`, so a migration that adds an index turns the
@@ -38,10 +38,10 @@ joined or restructured to reach 3NF, and the reason that is a sentence rather th
 the last paragraph of this section. The exceptions are columns, in two kinds, and they are not
 the same kind of problem:
 
-| Deviation | Columns | Why it exists |
-| --- | ---: | --- |
-| `_ci` twins | 10 | an indexable lowercased twin, because `lower(col)` cannot use one |
-| stored aggregates | 4 | a number the writer already holds and the reader would re-derive |
+| Deviation         | Columns | Why it exists                                                     |
+| ----------------- | ------: | ----------------------------------------------------------------- |
+| `_ci` twins       |      10 | an indexable lowercased twin, because `lower(col)` cannot use one |
+| stored aggregates |       4 | a number the writer already holds and the reader would re-derive  |
 
 **The 10 `_ci` columns** are transitive dependencies on their twin — `name → name_ci` — and are
 the textbook violation. Enumerated from `PRAGMA table_info` over both applied migrations, not
@@ -54,15 +54,15 @@ They back **nine declared indexes**, which is the whole reason they are stored r
 computed — `idx_songs_album` alone needs two of them, and it is the index that keeps
 `getArtists`/`getAlbumList2` from sorting on every request:
 
-| Table | Index | `_ci` columns |
-| --- | --- | ---: |
-| `songs` | `idx_songs_album` | **2** |
-| `songs` | `idx_songs_artist` | 1 |
-| `songs` | `idx_songs_genre` · `idx_songs_title_ci` · `idx_songs_album_title_ci` | 1 each |
-| `nodes` | `idx_nodes_parent_ci` | 1 |
-| `users` | `idx_users_username_ci` | 1 |
-| `libraries` | `idx_libraries_slug_ci` | 1 |
-| `import_sources` | `idx_import_sources_username_ci` | 1 |
+| Table            | Index                                                                 | `_ci` columns |
+| ---------------- | --------------------------------------------------------------------- | ------------: |
+| `songs`          | `idx_songs_album`                                                     |         **2** |
+| `songs`          | `idx_songs_artist`                                                    |             1 |
+| `songs`          | `idx_songs_genre` · `idx_songs_title_ci` · `idx_songs_album_title_ci` |        1 each |
+| `nodes`          | `idx_nodes_parent_ci`                                                 |             1 |
+| `users`          | `idx_users_username_ci`                                               |             1 |
+| `libraries`      | `idx_libraries_slug_ci`                                               |             1 |
+| `import_sources` | `idx_import_sources_username_ci`                                      |             1 |
 
 **The 4 aggregates** are `playlists.song_count`, `playlists.duration`,
 `scan_state.scanned_count` and `scan_state.total_count` — each derivable from
@@ -79,15 +79,15 @@ constraint rejects `Alice`/`alice` and uses a covering index; `GENERATED ALWAYS 
 (lower(col)) STORED` indexes cleanly. Neither is equivalent to what is stored, because the
 twins hold **JavaScript's** `toLowerCase()` and SQLite's `lower()` and `NOCASE` are ASCII-only:
 
-| Input | JS `toLowerCase()` | SQLite `lower()` | `NOCASE` equal? |
-| --- | --- | --- | ---: |
-| `MiXeD` | `mixed` | `mixed` | 1 |
-| `ÉCLAIR` | `éclair` | `Éclair` | **0** |
-| `İSTANBUL` | `i̇stanbul` | `İstanbul` | **0** |
-| `ΣΊΣΥΦΟΣ` | `σίσυφος` | `ΣΊΣΥΦΟΣ` | **0** |
+| Input      | JS `toLowerCase()` | SQLite `lower()` | `NOCASE` equal? |
+| ---------- | ------------------ | ---------------- | --------------: |
+| `MiXeD`    | `mixed`            | `mixed`          |               1 |
+| `ÉCLAIR`   | `éclair`           | `Éclair`         |           **0** |
+| `İSTANBUL` | `i̇stanbul`         | `İstanbul`       |           **0** |
+| `ΣΊΣΥΦΟΣ`  | `σίσυφος`          | `ΣΊΣΥΦΟΣ`        |           **0** |
 
 Measured on **3.53.4** — the engine `test/helpers/sqlite.ts` runs the suite against, and the
-version the `ADD COLUMN IF NOT EXISTS` finding below was measured on. D1's *build* has not been
+version the `ADD COLUMN IF NOT EXISTS` finding below was measured on. D1's _build_ has not been
 measured for this, and the difference between the two has cost this repository a defect before;
 treat a claim about D1 from this table as unproven.
 
@@ -135,7 +135,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   justification and a Unicode table — see
   [Normalisation](#normalisation-and-the-fourteen-columns-that-do-not-obey-it).
 - **The album/artist/genre queries page over groups, then fetch every row of the groups
-  on the page.** A SQL `GROUP BY` returns one *representative row* per group, so the
+  on the page.** A SQL `GROUP BY` returns one _representative row_ per group, so the
   counts computed from it are 1 for a real discography. This shipped once: every album in
   the product reported `songCount: 1` and its first track's duration.
 - **An ordered id list stays ordered.** `id IN (...)` returns rows in index-scan order, so
@@ -144,14 +144,14 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **A chunked fetch cannot inherit an `ORDER BY`, so the order is rebuilt from the key
   list.** This is `listIdsIn`'s trick and `songsForAlbumKeys`' now, and the failure it
   replaced is the same one the comparator caused: re-sorting by a tuple that leads with a
-  *different* column substitutes *alphabetical by artist* for whatever was asked. Assert
+  _different_ column substitutes _alphabetical by artist_ for whatever was asked. Assert
   the **concatenation** of consecutive pages, not any one page's order — a re-sort leaves
   every individual page looking plausible.
 - **Never rebuild a parent table.** D1 runs each migration in an implicit transaction,
   so `PRAGMA foreign_keys = OFF` is unavailable and a `DROP TABLE <parent>` becomes a
   `DELETE FROM parent` that fires every cascade beneath it. Only a child may be rebuilt.
 - **An applied migration is immutable, and nothing in a `.sql` file says so.** D1 records
-  applied migrations by *filename* in `d1_migrations`, so a migration that has run is
+  applied migrations by _filename_ in `d1_migrations`, so a migration that has run is
   skipped by every later `wrangler d1 migrations apply` — silently, with no warning. An
   applied migration is therefore immutable in fact while being an ordinary text file in
   appearance. `songs.reader_version` was added by editing `0001`; the column never reached
@@ -161,7 +161,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   through 489 passing tests. Two rules, and the second exists because the first did not
   stop it:
   - **A migration change is a new numbered file, and only the baseline may not `ALTER`.** These
-  are two rules, and the second exists because the first did not stop it:
+    are two rules, and the second exists because the first did not stop it:
   - **A schema change is a new numbered file.** Never an edit to one that has shipped.
   - **The baseline may contain nothing but no-ops against a full schema**, because it is the
     file that actually executes against production: `d1_migrations` records the absorbed
@@ -179,9 +179,9 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     gap has cost this repository a defect before: `wrangler d1 migrations apply --local`
     applied it, `pragma_table_info('users')` reads back 0 `token_epoch` columns with
     `pragma_foreign_key_check` clean and both `users` indexes intact, and a second apply
-    answers *"No migrations to apply!"*. An `ALTER` in the **baseline** is still caught —
+    answers _"No migrations to apply!"_. An `ALTER` in the **baseline** is still caught —
     that assertion reads the baseline alone, and was verified by injecting one.
-  - **What did *not* relax: no migration may `DROP TABLE`, on any file.** D1's implicit
+  - **What did _not_ relax: no migration may `DROP TABLE`, on any file.** D1's implicit
     transaction turns a parent drop into a `DELETE FROM parent` firing every cascade beneath
     it — `users` parents ten tables — so a drop that looks like a schema change is in fact an
     unrecoverable mass `DELETE`. That assertion still reads the whole set, deliberately.
@@ -192,10 +192,10 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     `pnpm run migrations:lock` records a newly-added file and **refuses to touch an
     existing entry**, so it cannot quietly bless an edit the operator just made. There is
     deliberately no `--force`: a write that could adopt a new digest for a file already
-    applied *is* the bug, offered as a flag.
+    applied _is_ the bug, offered as a flag.
 - **Eight migrations were squashed into one baseline, and the cost is stated rather than
   absorbed.** `migrations/0008_squash.sql` holds the combined schema of every file before
-  it and those files are deleted. A lock can stop an *edit*; nothing stopped the file count
+  it and those files are deleted. A lock can stop an _edit_; nothing stopped the file count
   growing. Three things the squash had to get right, each of which the next one collapses:
   - **It is not a concatenation.** `d1_migrations` records the absorbed filenames, so they
     are skipped and the squash is unapplied — it runs against production databases that
@@ -212,7 +212,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     one. `lock-check.ts` fails on a duplicate prefix, which is what forced this.
   - **It omits 0006's data migration, and that omission is checked rather than assumed.**
     On a fresh database `songs` is empty; on an existing one 0006 already stamped every row
-    it matched. Asserted by seeding the old marker rows *between* 0005 and 0006 — seeding
+    it matched. Asserted by seeding the old marker rows _between_ 0005 and 0006 — seeding
     them afterwards tests nothing, because 0006 has already run.
 
   The cost: D1's `d1_migrations` on an existing database still lists the eight absorbed
@@ -220,13 +220,14 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   history, which is what makes adopting a baseline safe — and it is why the baseline is a
   deliberate act recorded in the lock, not a formatting change.
   The suite was blind to all of it because it `exec`'d one hardcoded migration file, which
-  cannot tell *a new migration* from *an edit to an old one* — both produce identical
+  cannot tell _a new migration_ from _an edit to an old one_ — both produce identical
   bytes on the database it is building. `test/helpers/migrations.ts` reads the **directory
   sorted**, which is what Wrangler does, and reading it immediately exposed a second
   problem: `0001_router_init.sql` is inherited dead code that declares `users` with an
   incompatible shape and left `router_backends` with a **foreign key that does not
   resolve** (`users(email)` against a nullable, non-unique column), so
   `PRAGMA foreign_key_check` failed outright on the real schema. Dropped in `0003`.
+
 - **Provenance is a column, because the marker became configuration and a `LIKE` is not a
   string.** The guard above used to be `col LIKE '%' || DERIVED_MARKER` — reading the
   suffix back out of the stored value — and `DERIVED_MARKER` is now an env var, because an
@@ -237,10 +238,10 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the string guard, both measured over real SQLite against the real statement before the
   column was added:
   | `DERIVED_MARKER` | `Bonobo (derived)` | `Bonobo` | `Black Sands (Remastered)` |
-  | --- | --- | --- | --- |
-  | `' (derived)'`   | replaced | kept | **kept** |
-  | `''`             | replaced | replaced | **→ replaced** |
-  | `'_ (guess)'`    | **kept** | kept | kept |
+  | ---------------- | ------------------ | -------- | -------------------------- |
+  | `' (derived)'`   | replaced           | kept     | **kept**                   |
+  | `''`             | replaced           | replaced | **→ replaced**             |
+  | `'_ (guess)'`    | **kept**           | kept     | kept                       |
   - **An empty marker is a match-all**, so the shipped default would have replaced every
     real `ALBUMARTIST` in the library — silently, on every poll, and past the first page.
   - **Any other marker is a `LIKE` pattern, not a literal.** `'_ (guess)'` is `'%_ (guess)'`,
@@ -256,7 +257,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     whenever it writes any of the three, and that is the writer whose absence is a data-loss
     defect rather than a stale one. Three assertions, one per input, in
     `test/schema.int.test.ts`; all three go red against the `LIKE` guard, and the `%`/`_` case
-    carries a *stale* marked value rather than a NULL for the reason above — seeded as a NULL
+    carries a _stale_ marked value rather than a NULL for the reason above — seeded as a NULL
     it is filled by `col IS NULL` whatever the pattern is, so it passes against the defect it
     exists to catch.
   - **Changing the marker is a migration, and it costs stars.** It re-derives every wholly
@@ -266,12 +267,12 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     the only place it is written down (it was introduced in `0006`, which that file absorbs).
 - **A limit the platform imposes is not a number the code may choose.** `MAX_PAGE_SIZE` is
   500 and D1 binds 100 parameters, so a 500-album page was a request this server was
-  *obliged* to accept and could not answer. Same shape as `SCAN_CHUNK_MAX_REQUESTS` being
+  _obliged_ to accept and could not answer. Same shape as `SCAN_CHUNK_MAX_REQUESTS` being
   1,000 against a 50-subrequest ceiling: a configured maximum read as a permission rather
   than as an obligation on everything below it. A chunk bound is a claim about the code
   beneath it, and it is only true if something measures it.
   The variable form of it was still live: `MAX_PAGE_SIZE` is env-raisable, and past a
-  certain size a page is not *slow*, it is unservable — one grouped query plus
+  certain size a page is not _slow_, it is unservable — one grouped query plus
   `ceil(N / groupsPerStatement)` more, and D1 queries are subrequests. So it is clamped to
   `MAX_PAGE_SIZE_CEILING`, whose own docstring derives the number from the two platform
   limits rather than picking a comfortable one, and `validate()` **reports the clamp**
@@ -293,7 +294,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `D1PreparedStatement` and read `statement.sql` off it to work out which table a write bills
   against. **workerd's statement has no `sql`** — `types/defines/d1.d.ts` declares `bind`,
   `first`, `run`, `all`, `raw`, and Cloudflare's `prepare()` reference calls the return value
-  *"an object which only contains methods"* — so `sql` was `undefined` on every real write and
+  _"an object which only contains methods"_ — so `sql` was `undefined` on every real write and
   `stripLeadingNoise` threw `TypeError: Cannot read properties of undefined (reading 'replace')`.
   Every write that measured its cost died: the frontier seed, the index write, enrichment, the
   derived-grouping backfill, playlist totals, play counts, the play queue. The scan could not
@@ -304,18 +305,18 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   other two would have collapsed:
   - **A structural type that claims the platform satisfies it is a claim about the platform, and
     nothing was checking.** `D1PreparedStatement` declared `sql: string` as **required**, under
-    a comment asserting *"Real D1Database satisfies these structurally"* — which was false.
+    a comment asserting _"Real D1Database satisfies these structurally"_ — which was false.
     `requestScope.ts`'s `env.DB as D1Queryable` is what let it compile: the local type is a
     **superset** of the platform's, so a cast is legal in that direction and the disagreement
     is never reported. `wrangler types` is the instrument, and it says so in
     `worker-configuration.d.ts` in this very repository.
   - **The one double in the suite modelled the type this repository wrote, not the one it runs
-    against.** `test/helpers/sqlite.ts` returned a statement *with* a `sql`, which is why 1,270
+    against.** `test/helpers/sqlite.ts` returned a statement _with_ a `sql`, which is why 1,270
     tests were green while the entire write half of the product was down. The double now carries
     exactly the platform's four members, and `test/schema.int.test.ts` asserts that list **both
     ways** against a written-out copy of workerd's declaration — derived from the double, it
     would compare the double with itself. See the testing guide for the second half of this:
-    the double's `bind()` returned `this` while Cloudflare's returns a new statement, so *any*
+    the double's `bind()` returned `this` while Cloudflare's returns a new statement, so _any_
     fix that hung the SQL off the statement object (a `WeakMap`, a `defineProperty`) would have
     passed the suite and failed in production.
   - **The SQL travels beside the statement, from the one place that has it.** `BaseDAO.prepare`

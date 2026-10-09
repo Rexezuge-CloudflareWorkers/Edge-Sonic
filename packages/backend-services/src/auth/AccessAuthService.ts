@@ -175,7 +175,8 @@ class AccessAuthService {
     if (!audience) throw new UnauthorizedError('Missing required JWT verification configuration.');
     // Multiple audiences are not supported, and a comma-joined value would fail
     // inside `jwtVerify` with a message that reads like a bad signature.
-    if (audience.includes(',')) throw new UnauthorizedError('Multiple JWT audiences are not supported. Configure a single POLICY_AUD value.');
+    if (audience.includes(','))
+      throw new UnauthorizedError('Multiple JWT audiences are not supported. Configure a single POLICY_AUD value.');
 
     try {
       const { payload } = await jwtVerify(token, AccessAuthService.jwksFor(issuer), { issuer, audience });

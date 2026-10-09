@@ -19,7 +19,14 @@
  * rather than as partial writes.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { runBookmarksPhase, runPlayCountAlbumPhase, runPlayQueuePhase, runPlaylistsPhase, runStarsPhase, labelOf } from '@edge-sonic/backend-services/import';
+import {
+  runBookmarksPhase,
+  runPlayCountAlbumPhase,
+  runPlayQueuePhase,
+  runPlaylistsPhase,
+  runStarsPhase,
+  labelOf,
+} from '@edge-sonic/backend-services/import';
 import type { PhaseContext, PhaseStore, RemoteSubsonicClient } from '@edge-sonic/backend-services/import';
 import type { SongRow } from '@edge-sonic/backend-data/dao';
 import type { RemoteAlbum, RemoteArtist } from '@edge-sonic/backend-services/import';
@@ -35,7 +42,9 @@ function recordingStore(local: readonly SongRow[], granted = new Set(['L1'])) {
   const store: PhaseStore = {
     findByPaths: async (libraryId, paths) => local.filter((row) => row.library_id === libraryId && paths.includes(row.path)),
     findByAlbumTitle: async (libraryId, pairs) =>
-      local.filter((row) => row.library_id === libraryId && pairs.some(([album, title]) => row.album_ci === album && row.title_ci === title)),
+      local.filter(
+        (row) => row.library_id === libraryId && pairs.some(([album, title]) => row.album_ci === album && row.title_ci === title),
+      ),
     grantedLibraryIds: async () => granted,
     songsByIds: async (ids) => local.filter((row) => ids.includes(row.id)),
     findPlaylistById: async () => null,
@@ -141,13 +150,45 @@ function contextFor(store: PhaseStore, remote: Partial<RemoteSubsonicClient>, ov
 describe('an unresolved item is named, and the name is what a person reads', () => {
   it('lists the track that did not match rather than only counting it', async () => {
     const { store } = recordingStore([
-      localSong({ id: 's1', title: 'Holocene', title_ci: 'holocene', album: 'Bloom', album_ci: 'bloom', artist: 'Mogwai', artist_ci: 'mogwai' }),
+      localSong({
+        id: 's1',
+        title: 'Holocene',
+        title_ci: 'holocene',
+        album: 'Bloom',
+        album_ci: 'bloom',
+        artist: 'Mogwai',
+        artist_ci: 'mogwai',
+      }),
     ]);
     const context = contextFor(store, {
       getPlaylists: async () => [{ id: 'p1', name: 'Road trip', comment: null, isPublic: false, songCount: 2 }],
       getPlaylist: async () => [
-        { id: 'r1', path: null, title: 'Holocene', album: 'Bloom', artist: 'Mogwai', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null },
-        { id: 'r2', path: null, title: 'A Track We Do Not Have', album: 'Nowhere', artist: 'Nobody', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null },
+        {
+          id: 'r1',
+          path: null,
+          title: 'Holocene',
+          album: 'Bloom',
+          artist: 'Mogwai',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: null,
+          userRating: null,
+          starred: null,
+        },
+        {
+          id: 'r2',
+          path: null,
+          title: 'A Track We Do Not Have',
+          album: 'Nowhere',
+          artist: 'Nobody',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: null,
+          userRating: null,
+          starred: null,
+        },
       ],
     });
 
@@ -167,7 +208,21 @@ describe('an unresolved item is named, and the name is what a person reads', () 
   it('labels a song with nothing but an id as that id, rather than an empty string', () => {
     // An empty label renders as a blank row in a list of named ones, which is the same defect
     // `NodeDAO.listRoots` had with the library root.
-    expect(labelOf({ id: 'r9', path: null, title: null, album: null, artist: null, track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null })).toBe('r9');
+    expect(
+      labelOf({
+        id: 'r9',
+        path: null,
+        title: null,
+        album: null,
+        artist: null,
+        track: null,
+        discNumber: null,
+        duration: null,
+        playCount: null,
+        userRating: null,
+        starred: null,
+      }),
+    ).toBe('r9');
   });
 
   it('imports an empty remote playlist as an empty playlist, not as a failure', async () => {
@@ -197,7 +252,19 @@ describe('a playlist keeps its order, and a repeat keeps its repeat', () => {
       getPlaylists: async () => [{ id: 'p1', name: 'Ordered', comment: null, isPublic: false, songCount: 3 }],
       // Reversed on the wire, because `IN (...)` and a matcher both reorder.
       getPlaylist: async () =>
-        ['c', 'a', 'b'].map((id) => ({ id: `r-${id}`, path: null, title: id.toUpperCase(), album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null })),
+        ['c', 'a', 'b'].map((id) => ({
+          id: `r-${id}`,
+          path: null,
+          title: id.toUpperCase(),
+          album: 'X',
+          artist: 'Y',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: null,
+          userRating: null,
+          starred: null,
+        })),
     });
 
     await runPlaylistsPhase(context, 'p1');
@@ -214,7 +281,20 @@ describe('a playlist keeps its order, and a repeat keeps its repeat', () => {
     const { store, writes } = recordingStore([song]);
     const context = contextFor(store, {
       getPlaylists: async () => [{ id: 'p1', name: 'Twice', comment: null, isPublic: false, songCount: 2 }],
-      getPlaylist: async () => [1, 2].map(() => ({ id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null })),
+      getPlaylist: async () =>
+        [1, 2].map(() => ({
+          id: 'r1',
+          path: null,
+          title: 'A',
+          album: 'X',
+          artist: 'Y',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: null,
+          userRating: null,
+          starred: null,
+        })),
     });
 
     const outcome = await runPlaylistsPhase(context, 'p1');
@@ -253,7 +333,21 @@ describe('an imported playlist id is derived, so a retried step rewrites rather 
     const { store, writes } = recordingStore([song]);
     const context = contextFor(store, {
       getPlaylists: async () => [{ id: 'p1', name: 'Retry me', comment: null, isPublic: false, songCount: 1 }],
-      getPlaylist: async () => [{ id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null }],
+      getPlaylist: async () => [
+        {
+          id: 'r1',
+          path: null,
+          title: 'A',
+          album: 'X',
+          artist: 'Y',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: null,
+          userRating: null,
+          starred: null,
+        },
+      ],
     });
 
     await runPlaylistsPhase(context, 'p1');
@@ -292,7 +386,21 @@ describe('a song outside a granted library is not written, and is counted as dro
     const { store, writes } = recordingStore([song], new Set<string>());
     const context = contextFor(store, {
       getPlaylists: async () => [{ id: 'p1', name: 'Forbidden', comment: null, isPublic: false, songCount: 1 }],
-      getPlaylist: async () => [{ id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null }],
+      getPlaylist: async () => [
+        {
+          id: 'r1',
+          path: null,
+          title: 'A',
+          album: 'X',
+          artist: 'Y',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: null,
+          userRating: null,
+          starred: null,
+        },
+      ],
     });
 
     const outcome = await runPlaylistsPhase(context, 'p1');
@@ -313,7 +421,21 @@ describe('stars carry the remote instant, so a retry does not reorder the favour
     const starred = new Date('2021-03-04T05:06:07Z').toISOString();
     const context = contextFor(store, {
       getStarred: async () => ({
-        songs: [{ id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred }],
+        songs: [
+          {
+            id: 'r1',
+            path: null,
+            title: 'A',
+            album: 'X',
+            artist: 'Y',
+            track: null,
+            discNumber: null,
+            duration: null,
+            playCount: null,
+            userRating: null,
+            starred,
+          },
+        ],
         albums: [],
         artists: [],
       }),
@@ -323,7 +445,9 @@ describe('stars carry the remote instant, so a retry does not reorder the favour
 
     // `stars.starred_at` is a sort key — `getStarred` orders by it — so stamping `nowSeconds()`
     // per item would move every star to the top of the list in import order.
-    expect((writes.find((write) => write.kind === 'star')?.payload as { starredAt: number }).starredAt).toBe(Math.floor(Date.parse(starred) / 1000));
+    expect((writes.find((write) => write.kind === 'star')?.payload as { starredAt: number }).starredAt).toBe(
+      Math.floor(Date.parse(starred) / 1000),
+    );
   });
 
   it('writes a rating only inside 1..5, because 0 means "unrated" on the wire', async () => {
@@ -332,8 +456,32 @@ describe('stars carry the remote instant, so a retry does not reorder the favour
     const context = contextFor(store, {
       getStarred: async () => ({
         songs: [
-          { id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: 4, starred: null },
-          { id: 'r2', path: null, title: 'B', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: 0, starred: null },
+          {
+            id: 'r1',
+            path: null,
+            title: 'A',
+            album: 'X',
+            artist: 'Y',
+            track: null,
+            discNumber: null,
+            duration: null,
+            playCount: null,
+            userRating: 4,
+            starred: null,
+          },
+          {
+            id: 'r2',
+            path: null,
+            title: 'B',
+            album: 'X',
+            artist: 'Y',
+            track: null,
+            discNumber: null,
+            duration: null,
+            playCount: null,
+            userRating: 0,
+            starred: null,
+          },
         ],
         albums: [],
         artists: [],
@@ -378,7 +526,25 @@ describe('bookmarks keep their position, and a missing one is zero rather than i
     const song = localSong({ id: 'a', title: 'A', title_ci: 'a', album: 'X', album_ci: 'x', artist: 'Y', artist_ci: 'y' });
     const { store, writes } = recordingStore([song]);
     const context = contextFor(store, {
-      getBookmarks: async () => [{ song: { id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null }, positionMs: 42_000, comment: 'again' }],
+      getBookmarks: async () => [
+        {
+          song: {
+            id: 'r1',
+            path: null,
+            title: 'A',
+            album: 'X',
+            artist: 'Y',
+            track: null,
+            discNumber: null,
+            duration: null,
+            playCount: null,
+            userRating: null,
+            starred: null,
+          },
+          positionMs: 42_000,
+          comment: 'again',
+        },
+      ],
     });
 
     await runBookmarksPhase(context);
@@ -391,7 +557,25 @@ describe('bookmarks keep their position, and a missing one is zero rather than i
     const song = localSong({ id: 'a', title: 'A', title_ci: 'a', album: 'X', album_ci: 'x', artist: 'Y', artist_ci: 'y' });
     const { store, writes } = recordingStore([song]);
     const context = contextFor(store, {
-      getBookmarks: async () => [{ song: { id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null }, positionMs: null, comment: null }],
+      getBookmarks: async () => [
+        {
+          song: {
+            id: 'r1',
+            path: null,
+            title: 'A',
+            album: 'X',
+            artist: 'Y',
+            track: null,
+            discNumber: null,
+            duration: null,
+            playCount: null,
+            userRating: null,
+            starred: null,
+          },
+          positionMs: null,
+          comment: null,
+        },
+      ],
     });
 
     await runBookmarksPhase(context);
@@ -402,7 +586,9 @@ describe('bookmarks keep their position, and a missing one is zero rather than i
 
 describe('the play queue is ordered by its remote position, not by arrival', () => {
   it('sorts by `position` and replaces wholesale', async () => {
-    const songs = ['a', 'b'].map((id) => localSong({ id, title: id.toUpperCase(), title_ci: id, album: 'X', album_ci: 'x', artist: 'Y', artist_ci: 'y' }));
+    const songs = ['a', 'b'].map((id) =>
+      localSong({ id, title: id.toUpperCase(), title_ci: id, album: 'X', album_ci: 'x', artist: 'Y', artist_ci: 'y' }),
+    );
     const { store, writes } = recordingStore(songs);
     const context = contextFor(store, {
       getPlayQueue: async () => ({
@@ -411,8 +597,38 @@ describe('the play queue is ordered by its remote position, not by arrival', () 
         // the album and title the matcher needs — a queue entry narrowed to `{ id, position }`
         // would match nothing and write an empty queue while reporting success.
         entries: [
-          { song: { id: 'r2', path: null, title: 'B', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null }, position: '2' as unknown as number },
-          { song: { id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: null, userRating: null, starred: null }, position: '1' as unknown as number },
+          {
+            song: {
+              id: 'r2',
+              path: null,
+              title: 'B',
+              album: 'X',
+              artist: 'Y',
+              track: null,
+              discNumber: null,
+              duration: null,
+              playCount: null,
+              userRating: null,
+              starred: null,
+            },
+            position: '2' as unknown as number,
+          },
+          {
+            song: {
+              id: 'r1',
+              path: null,
+              title: 'A',
+              album: 'X',
+              artist: 'Y',
+              track: null,
+              discNumber: null,
+              duration: null,
+              playCount: null,
+              userRating: null,
+              starred: null,
+            },
+            position: '1' as unknown as number,
+          },
         ],
         currentId: 'r1',
         positionMs: 12_000,
@@ -432,7 +648,21 @@ describe('play counts are absolute, never added', () => {
     const song = localSong({ id: 'a', title: 'A', title_ci: 'a', album: 'X', album_ci: 'x', artist: 'Y', artist_ci: 'y' });
     const { store, writes } = recordingStore([song]);
     const context = contextFor(store, {
-      getAlbumSongs: async () => [{ id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: 12, userRating: null, starred: null }],
+      getAlbumSongs: async () => [
+        {
+          id: 'r1',
+          path: null,
+          title: 'A',
+          album: 'X',
+          artist: 'Y',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: 12,
+          userRating: null,
+          starred: null,
+        },
+      ],
     });
 
     const outcome = await runPlayCountAlbumPhase(context, { id: 'al1', name: 'X' });
@@ -446,7 +676,21 @@ describe('play counts are absolute, never added', () => {
     // everywhere is saying the truth about a library nobody listens to.
     const { store, writes } = recordingStore([]);
     const context = contextFor(store, {
-      getAlbumSongs: async () => [{ id: 'r1', path: null, title: 'A', album: 'X', artist: 'Y', track: null, discNumber: null, duration: null, playCount: 0, userRating: null, starred: null }],
+      getAlbumSongs: async () => [
+        {
+          id: 'r1',
+          path: null,
+          title: 'A',
+          album: 'X',
+          artist: 'Y',
+          track: null,
+          discNumber: null,
+          duration: null,
+          playCount: 0,
+          userRating: null,
+          starred: null,
+        },
+      ],
     });
 
     const outcome = await runPlayCountAlbumPhase(context, { id: 'al1', name: 'Unplayed' });

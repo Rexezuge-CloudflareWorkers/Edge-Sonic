@@ -29,20 +29,20 @@ is the only thing the release's tracks share.
 The layout is a per-artist rip: the folder is named after the track's performer, so one release is
 one directory per artist. Across the library:
 
-| Album name | Folders | Tracks |
-| --- | --- | --- |
-| `Ex-Otogibanashi` | 2 | 3 |
-| `MementoMori (メメントモリ)` | 6 | 6 |
-| `超かぐや姫！` | 5 | 5 |
-| `魔法少女ノ魔女裁判 コンプリートオリジナルサウンドトラック` | 6 | 9 |
-| 5 more | 2 each | |
+| Album name                                                  | Folders | Tracks |
+| ----------------------------------------------------------- | ------- | ------ |
+| `Ex-Otogibanashi`                                           | 2       | 3      |
+| `MementoMori (メメントモリ)`                                | 6       | 6      |
+| `超かぐや姫！`                                              | 5       | 5      |
+| `魔法少女ノ魔女裁判 コンプリートオリジナルサウンドトラック` | 6       | 9      |
+| 5 more                                                      | 2 each  |        |
 
 80 album rows for **71 distinct `ALBUM` values**.
 
 ## Why it shipped
 
 Album membership was `songs.dir_path`. `listAlbums` did `GROUP BY dir_path`, and `groupAlbums` keyed
-on `dir_path` — which was a *deliberate* unification. `listAlbums` used to group on
+on `dir_path` — which was a _deliberate_ unification. `listAlbums` used to group on
 `(album_artist_ci, album_ci)` while the caller regrouped by `dir_path`, and the disagreement between
 them shipped a page holding between one and five albums. Commit `36cc0f3` fixed it by making both
 sides `dir_path`, and its message said what that left open:
@@ -52,13 +52,13 @@ sides `dir_path`, and its message said what that left open:
 > not a protocol one, and it wants its own change.
 
 So the defect was a deferred decision, and the deferral was the defect: nothing recorded that the
-library layout which makes it *correct* — one folder per release — is a layout, not a law.
+library layout which makes it _correct_ — one folder per release — is a layout, not a law.
 
 ## Why a setting rather than a fix
 
 There is no right answer. A library with one folder per release and a consistent `ALBUM` tag
 answers identically under `folder` and `album`. A DJ set of 400 folders with sloppy tags answers
-*wrongly* under `album`, which merges them. And the reference server makes the same choice
+_wrongly_ under `album`, which merges them. And the reference server makes the same choice
 explicit and configurable:
 
 > You can group albums by musicbrainz_albumid, discogs_release_id, folder, or any other tag you
@@ -76,7 +76,7 @@ which is the argument for exposing the choice rather than picking one silently.
 Less than it looks, and the mode's docstring says so:
 
 - For a library with **no `ALBUMARTIST` anywhere** — which is this one — `album_artist` and `album`
-  are the same grouping. A missing album artist is one *value* (`(NULL, album)`), not a wildcard.
+  are the same grouping. A missing album artist is one _value_ (`(NULL, album)`), not a wildcard.
 - On a **per-artist folder layout**, `upsertFileFacts` derives `album_artist` from the folder, and
   the folder is named after the performer — so `album_artist` reproduces the split even with the tag
   absent.
@@ -99,7 +99,7 @@ the mechanism for correcting a derivation, and the mechanism was not used here.
 
 **Not fixed in this change**, deliberately: bumping `DERIVED_VERSION` makes every row re-selected,
 and `applyDerivation` runs with `requireComplete: true` against a ~42-statement budget, so a library
-larger than the budget would fail the backfill on *every* poll. That is a separate fix with its own
+larger than the budget would fail the backfill on _every_ poll. That is a separate fix with its own
 blast radius, and it changes `album_artist` for every deployment.
 
 ## The second defect, which is not a grouping question at all
@@ -115,7 +115,7 @@ disc=2 trk=14 Cherry Bomb
 ```
 
 `getAlbum` sorted by `(track, name)`; `groupAlbums` sorted by `(disc, track, name)`; `getCoverArt`'s
-artwork probe sorted by `(track, name)` *deliberately, to match `getAlbum`*. The two copies missing
+artwork probe sorted by `(track, name)` _deliberately, to match `getAlbum`_. The two copies missing
 `disc` therefore matched each other, so no comparison between surfaces disagreed and nothing
 anywhere reported an error. Every field in the response is correct and the order is wrong.
 

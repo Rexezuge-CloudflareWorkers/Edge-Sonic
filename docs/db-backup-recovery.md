@@ -20,7 +20,7 @@ The run is split into four jobs so a broken destination never blocks the other:
 
 > [!IMPORTANT]
 >
-> - **Encryption is required, not optional.** The dump holds `users.password_ciphertext` and `libraries.password_ciphertext`, which are AES-256-GCM — and `migrations/0008_squash.sql` describes that as *"obfuscation against a D1 dump, not protection against a full worker compromise"*. An unencrypted backup inverts that assumption: dump plus the Secrets Store is a complete credential set for every Subsonic user and every WebDAV origin, and the WebDAV key is read on every scan and every stream. Separately, the dump is a listening history — `play_counts`, `play_queue`, `now_playing`, `stars`, `ratings`, `auth_failures`, and the full library topology in `nodes` and `songs`. So the workflow refuses to run without `BACKUP_ENCRYPTION_KEY`. See [What a backup contains](#what-a-backup-contains).
+> - **Encryption is required, not optional.** The dump holds `users.password_ciphertext` and `libraries.password_ciphertext`, which are AES-256-GCM — and `migrations/0008_squash.sql` describes that as _"obfuscation against a D1 dump, not protection against a full worker compromise"_. An unencrypted backup inverts that assumption: dump plus the Secrets Store is a complete credential set for every Subsonic user and every WebDAV origin, and the WebDAV key is read on every scan and every stream. Separately, the dump is a listening history — `play_counts`, `play_queue`, `now_playing`, `stars`, `ratings`, `auth_failures`, and the full library topology in `nodes` and `songs`. So the workflow refuses to run without `BACKUP_ENCRYPTION_KEY`. See [What a backup contains](#what-a-backup-contains).
 > - **An empty database is refused, not backed up.** Provisioning auto-creates a missing D1 database, so a backup scheduled against a fresh fork would create one and then upload its empty dump — a green run every night and nothing to restore. `export-d1` reads what the provisioning step reported creating and fails if the D1 database is in that list.
 > - **Manual trigger required for the first run:** scheduled workflows only start after you run the workflow once from the Actions tab (GitHub → Actions → Backup D1 Database → Run workflow).
 > - **Keep backups off this Cloudflare account.** The Worker, its D1 database, and the Secrets Store holding the WebDAV encryption key all live in one account. Storing backups in R2 in that _same_ account means a single suspension or ban takes down production and recovery alike. Use a different S3-compatible provider (AWS S3, Backblaze B2, MinIO) or a separate Cloudflare account.
@@ -47,13 +47,13 @@ These already exist for Continuous Deployment; the same values work here.
 
 #### S3-compatible storage (optional)
 
-| Secret                 | Required     | Description                                                                                                                                    |
-| ---------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `S3_ACCESS_KEY_ID`     | yes (for S3) | S3 access key ID                                                                                                                                 |
-| `S3_SECRET_ACCESS_KEY` | yes (for S3) | S3 secret access key                                                                                                                             |
-| `S3_BUCKET`            | yes (for S3) | Bucket name                                                                                                                                      |
-| `S3_REGION`            | no           | Defaults to `auto`, which is what R2 expects. Set it only for providers that need a concrete region (Backblaze B2: `us-west-000`, Wasabi, …)   |
-| `S3_ENDPOINT`          | no           | Custom endpoint URL. Required for S3-compatible services (MinIO, R2, Backblaze B2)                                                             |
+| Secret                 | Required     | Description                                                                                                                                  |
+| ---------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `S3_ACCESS_KEY_ID`     | yes (for S3) | S3 access key ID                                                                                                                             |
+| `S3_SECRET_ACCESS_KEY` | yes (for S3) | S3 secret access key                                                                                                                         |
+| `S3_BUCKET`            | yes (for S3) | Bucket name                                                                                                                                  |
+| `S3_REGION`            | no           | Defaults to `auto`, which is what R2 expects. Set it only for providers that need a concrete region (Backblaze B2: `us-west-000`, Wasabi, …) |
+| `S3_ENDPOINT`          | no           | Custom endpoint URL. Required for S3-compatible services (MinIO, R2, Backblaze B2)                                                           |
 
 Keep the bucket private. The workflow uploads with the `aws s3 cp` CLI, so bucket policy must allow `PutObject` and `DeleteObject` for the configured key.
 
@@ -94,19 +94,19 @@ Backups land in `<WEBDAV_BASE_PATH>/production/`.
 
 Everything in the D1 database, in one encrypted file.
 
-| Table                          | Contents                                                                    | Sensitivity                                              |
-| ------------------------------ | --------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `users`                        | Usernames, **encrypted** passwords, email, admin/enabled flags               | Credentials (encrypted), PII                             |
-| `libraries`                    | WebDAV origins, paths, usernames, **encrypted** passwords                    | Credentials (encrypted), network topology                |
-| `nodes`                        | Every folder path in every library                                           | Library topology                                         |
-| `songs`                        | Every track's path, tags, duration, bitrate                                  | Library contents                                         |
-| `play_counts`, `now_playing`, `play_queue`, `play_queue_entries`               | What each user listens to, and when                                          | Listening history                                        |
-| `stars`, `ratings`, `bookmarks` | Per-user favourites, scores, playback positions                              | Taste and usage history                                  |
-| `playlists`, `playlist_entries` | User-created playlists                                                       | Personal organization                                   |
-| `auth_failures`                | Failed-authentication counters by identity                                   | Security telemetry                                      |
-| `settings`                     | Server-wide settings                                                         | Low                                                     |
+| Table                                                            | Contents                                                       | Sensitivity                               |
+| ---------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------- |
+| `users`                                                          | Usernames, **encrypted** passwords, email, admin/enabled flags | Credentials (encrypted), PII              |
+| `libraries`                                                      | WebDAV origins, paths, usernames, **encrypted** passwords      | Credentials (encrypted), network topology |
+| `nodes`                                                          | Every folder path in every library                             | Library topology                          |
+| `songs`                                                          | Every track's path, tags, duration, bitrate                    | Library contents                          |
+| `play_counts`, `now_playing`, `play_queue`, `play_queue_entries` | What each user listens to, and when                            | Listening history                         |
+| `stars`, `ratings`, `bookmarks`                                  | Per-user favourites, scores, playback positions                | Taste and usage history                   |
+| `playlists`, `playlist_entries`                                  | User-created playlists                                         | Personal organization                     |
+| `auth_failures`                                                  | Failed-authentication counters by identity                     | Security telemetry                        |
+| `settings`                                                       | Server-wide settings                                           | Low                                       |
 
-No credential is stored in plaintext — but that is exactly why the **backup** must be encrypted. The in-database encryption is described in the schema as *obfuscation against a D1 dump*, so it protects a database at rest and protects nothing once the dump is in someone else's hands.
+No credential is stored in plaintext — but that is exactly why the **backup** must be encrypted. The in-database encryption is described in the schema as _obfuscation against a D1 dump_, so it protects a database at rest and protects nothing once the dump is in someone else's hands.
 
 Backups do **not** contain the Secrets Store. The two `*-encryption-key` secrets and the WebDAV signing secret live there, and a backup cannot be decrypted without `BACKUP_ENCRYPTION_KEY` (which is also not in the database).
 
@@ -164,10 +164,10 @@ Then browse in a real client. A restored `users` row whose password no longer de
 
 D1 has its own point-in-time recovery, and it is **not a substitute for the daily backup** on a Free-plan account.
 
-| Plan                | Time Travel window |
-| ------------------- | ------------------ |
-| Workers Free        | **7 days**         |
-| Workers Paid        | 30 days            |
+| Plan         | Time Travel window |
+| ------------ | ------------------ |
+| Workers Free | **7 days**         |
+| Workers Paid | 30 days            |
 
 With the default `BACKUP_RETENTION_DAYS` of 30, Time Travel on Free covers roughly a fifth of the retention window, and it is gone entirely the moment the daily job fails. Treat Time Travel as the fast path for "something happened in the last week" and the backups as the record.
 
@@ -195,17 +195,17 @@ A backup you have never restored is a hypothesis. Once a month:
 
 ## Troubleshooting
 
-| Symptom                                                   | Cause and fix                                                                                             |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Every job skipped, run green                              | No destination secret is set. Intentional — see [above](#backup-destination-secrets).                       |
-| `check-secrets` fails on `BACKUP_ENCRYPTION_KEY`           | A destination is configured without an encryption key. Set it; the workflow will not upload plaintext.       |
-| `check-secrets` fails on `CLOUDFLARE_API_TOKEN`            | A destination is configured without Cloudflare credentials. The token needs `Account → D1: Edit`.            |
-| `export-d1` refuses with "created by the provisioning step" | The D1 database did not exist. Deploy once, then the next scheduled run backs it up.                       |
-| `Resolve D1 Database` cannot read the database            | The Cloudflare token lacks `D1: Edit`, or the account id is wrong.                                         |
-| S3 upload fails on an empty region                        | Set `S3_REGION`, or leave it unset — the default `auto` is what R2 expects.                                 |
-| `Upload Backup Artifact` fails with "no files found"      | The filename shape moved. It must match `edge-sonic_prod_*.sql.xz.enc`; see `scripts/backup/naming.ts`.    |
-| Decryption fails with a bad magic                         | `BACKUP_ENCRYPTION_KEY` is not the one used at backup time. It cannot be recovered.                         |
-| WebDAV upload fails with 401                              | `WEBDAV_VENDOR` does not match the host, so rclone negotiates the wrong auth flavour. Try `nextcloud`.     |
+| Symptom                                                     | Cause and fix                                                                                           |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Every job skipped, run green                                | No destination secret is set. Intentional — see [above](#backup-destination-secrets).                   |
+| `check-secrets` fails on `BACKUP_ENCRYPTION_KEY`            | A destination is configured without an encryption key. Set it; the workflow will not upload plaintext.  |
+| `check-secrets` fails on `CLOUDFLARE_API_TOKEN`             | A destination is configured without Cloudflare credentials. The token needs `Account → D1: Edit`.       |
+| `export-d1` refuses with "created by the provisioning step" | The D1 database did not exist. Deploy once, then the next scheduled run backs it up.                    |
+| `Resolve D1 Database` cannot read the database              | The Cloudflare token lacks `D1: Edit`, or the account id is wrong.                                      |
+| S3 upload fails on an empty region                          | Set `S3_REGION`, or leave it unset — the default `auto` is what R2 expects.                             |
+| `Upload Backup Artifact` fails with "no files found"        | The filename shape moved. It must match `edge-sonic_prod_*.sql.xz.enc`; see `scripts/backup/naming.ts`. |
+| Decryption fails with a bad magic                           | `BACKUP_ENCRYPTION_KEY` is not the one used at backup time. It cannot be recovered.                     |
+| WebDAV upload fails with 401                                | `WEBDAV_VENDOR` does not match the host, so rclone negotiates the wrong auth flavour. Try `nextcloud`.  |
 
 ## Related
 

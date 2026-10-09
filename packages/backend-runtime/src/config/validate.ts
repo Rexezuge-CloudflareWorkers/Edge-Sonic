@@ -25,17 +25,8 @@
 import { EnvParser } from './EnvParser';
 import { isAlbumGrouping, ALBUM_GROUPINGS } from '@edge-sonic/subsonic';
 import { isLogLevel } from '../logger';
-import {
-  MAX_PAGE_SIZE_CEILING,
-} from './ConfigurationDefaults';
-import {
-  SCAN_CHUNK_FOLDER_LIMIT,
-  SCAN_CHUNK_SUBSREQUEST_BUDGET,
-  SCAN_ENRICH_MAX_PER_FOLDER,
-  SUBSREQUESTS_PER_ENRICHED_TRACK,
-  SUBSREQUESTS_PER_FOLDER_BASE,
-  WORKER_SUBSREQUEST_CEILING,
-} from './subrequests';
+import { clampWarningsFor } from './validateClamps';
+import { authBypassWarnings, privateHostWarnings } from './validateAuth';
 import type { AuthConfig } from './sections/AuthConfig';
 import type { LibraryLimits, RequestLimits, ScanLimits } from './sections/LibraryLimits';
 
@@ -78,25 +69,38 @@ function isParsableTeamDomain(value: string): boolean {
   }
 }
 
-function validateConfiguration(library: LibraryLimits, scan: ScanLimits, requests: RequestLimits, auth: AuthConfig, env: unknown): string[] {
+/**
+ * Keys whose value must parse as a positive integer.
+ *
+ * `TAG_READ_TAIL_BYTES` is deliberately **absent**: its contract is `>= 0`, because zero is a
+ * supported value that disables the Ogg tail read, and `isValidPositiveInt` would report zero
+ * as invalid. Two contracts, two checks — see {@link validateConfiguration}.
+ */
+const POSITIVE_INT_KEYS: readonly string[] = [
+  'MAX_LIBRARIES',
+  'WEBDAV_TIMEOUT_MS',
+  'SCAN_CHUNK_FOLDERS',
+  'SCAN_CHUNK_MAX_REQUESTS',
+  'SCAN_CHUNK_DEADLINE_MS',
+  'SCAN_ENRICH_MAX_PER_FOLDER',
+  'TAG_READ_BYTES',
+  'MAX_PAGE_SIZE',
+  'DEFAULT_PAGE_SIZE',
+  'STREAM_RATE_LIMIT',
+  'STREAM_TIMEOUT_MS',
+  'AUTH_FAILURE_LIMIT',
+  'AUTH_FAILURE_WINDOW_SECONDS',
+];
 
+function validateConfiguration(
+  library: LibraryLimits,
+  scan: ScanLimits,
+  requests: RequestLimits,
+  auth: AuthConfig,
+  env: unknown,
+): string[] {
   const warnings: string[] = [];
-  const numericKeys = [
-    'MAX_LIBRARIES',
-    'WEBDAV_TIMEOUT_MS',
-    'SCAN_CHUNK_FOLDERS',
-    'SCAN_CHUNK_MAX_REQUESTS',
-    'SCAN_CHUNK_DEADLINE_MS',
-    'SCAN_ENRICH_MAX_PER_FOLDER',
-    'TAG_READ_BYTES',
-    'MAX_PAGE_SIZE',
-    'DEFAULT_PAGE_SIZE',
-    'STREAM_RATE_LIMIT',
-    'STREAM_TIMEOUT_MS',
-    'AUTH_FAILURE_LIMIT',
-    'AUTH_FAILURE_WINDOW_SECONDS',
-  ];
-  for (const key of numericKeys) {
+  for (const key of POSITIVE_INT_KEYS) {
     if (!EnvParser.isValidPositiveInt(env, key)) {
       warnings.push(`Invalid configuration: ${key} must be a positive integer`);
     }
@@ -112,49 +116,9 @@ function validateConfiguration(library: LibraryLimits, scan: ScanLimits, request
     warnings.push('Invalid configuration: TAG_READ_TAIL_BYTES must be a non-negative integer (0 disables the Ogg tail read)');
   }
 
-  // A page size above what one invocation can answer is a **failed** request, not a slow
-  // one, so the clamp is reported rather than applied quietly. Reported separately from
-  // the list above because the configured value *is* a valid positive integer — it is
-  // the request it implies that is unservable, and nothing else here would say so.
-  const requestedPageSize = requests.getRequestedMaxPageSize();
-  if (requestedPageSize > MAX_PAGE_SIZE_CEILING) {
-    warnings.push(
-      `Configuration: MAX_PAGE_SIZE=${requestedPageSize} exceeds the ${MAX_PAGE_SIZE_CEILING} this server can answer in one request; ` +
-        `it is clamped. A page is a promise to answer, not a budget to spend — raise it only with ` +
-        `limits.subrequests in the wrangler config.`,
-    );
-  }
-
-  // The three scan bounds, clamped for the same reason and reported for the same reason.
-  //
-  // The scan's is the sharper case, because the operator surface *tells people to raise this
-  // one*: `stoppedBy: 'requests'` renders as "Paused at the per-chunk request limit. Raise
-  // SCAN_CHUNK_MAX_REQUESTS to index more per poll." On a Free-plan account that advice is
-  // actively harmful — the platform's ceiling is 50 and cannot be raised from here — so a
-  // deployment that took it would get chunks terminated by the runtime instead of paused by
-  // their own budget. The clamp makes the advice harmless and the warning says why.
-  const requestedChunkRequests = scan.getRequestedScanChunkMaxRequests();
-  if (requestedChunkRequests > SCAN_CHUNK_SUBSREQUEST_BUDGET) {
-    warnings.push(
-      `Configuration: SCAN_CHUNK_MAX_REQUESTS=${requestedChunkRequests} exceeds the ${SCAN_CHUNK_SUBSREQUEST_BUDGET} a chunk may spend ` +
-        `under the platform's ${WORKER_SUBSREQUEST_CEILING}-subrequest ceiling; it is clamped. Workers Free does not raise that ceiling, ` +
-        `so a chunk that spends more is terminated rather than slowed.`,
-    );
-  }
-  const requestedChunkFolders = scan.getRequestedScanChunkFolders();
-  if (requestedChunkFolders > SCAN_CHUNK_FOLDER_LIMIT) {
-    warnings.push(
-      `Configuration: SCAN_CHUNK_FOLDERS=${requestedChunkFolders} exceeds the ${SCAN_CHUNK_FOLDER_LIMIT} a chunk can afford at ` +
-        `${SUBSREQUESTS_PER_FOLDER_BASE} subrequests a folder; it is clamped. Raising it cannot make a chunk finish.`,
-    );
-  }
-  const requestedEnrichCap = scan.getRequestedScanEnrichMaxPerFolder();
-  if (requestedEnrichCap > SCAN_ENRICH_MAX_PER_FOLDER) {
-    warnings.push(
-      `Configuration: SCAN_ENRICH_MAX_PER_FOLDER=${requestedEnrichCap} exceeds the ${SCAN_ENRICH_MAX_PER_FOLDER} a chunk can afford at ` +
-        `${SUBSREQUESTS_PER_ENRICHED_TRACK} subrequests a track; it is clamped.`,
-    );
-  }
+  // Reported separately from the loop above because the configured value *is* a valid positive integer —
+  // it is the request it implies that is unservable, and nothing else here would say so.
+  warnings.push(...clampWarningsFor(scan, requests));
 
   // `LOG_LEVEL` is checked separately because it is an enum rather than a number, and
   // because it is the one variable whose value was silently unobservable: both loggers
@@ -220,12 +184,7 @@ function validateConfiguration(library: LibraryLimits, scan: ScanLimits, request
   // The bypass present but inert is the dangerous direction: one edit to
   // ENVIRONMENT away from authenticating everyone as a fixed identity. An
   // *active* bypass is the intended local setup and is not reported.
-  if (!auth.isBypassAllowed() && (auth.getDevAuthEmail() !== null || auth.isDemoMode())) {
-    warnings.push(
-      `Security: DEV_AUTH_EMAIL/DEMO_MODE is set while ENVIRONMENT=${auth.getEnvironment()}. ` +
-        `The bypass is ignored in this environment; remove the variable so it cannot become live if ENVIRONMENT changes.`,
-    );
-  }
+  warnings.push(...authBypassWarnings(auth));
 
   // An unparsable TEAM_DOMAIN silently degrades JWT verification into a 401 for
   // every real user, which reads as an Access outage rather than a typo.
@@ -238,29 +197,8 @@ function validateConfiguration(library: LibraryLimits, scan: ScanLimits, request
     warnings.push('Invalid configuration: POLICY_AUD must be a single audience; multiple values are not supported');
   }
 
-  const allowPrivate = library.getAllowPrivateWebdavHosts();
+  warnings.push(...privateHostWarnings(library, auth));
 
-  // Production plus private hosts re-opens the SSRF surface the default exists
-  // to close, and the credential angle is what makes it worse than usual: the
-  // worker attaches the stored WebDAV password to every request to that origin.
-  if (!auth.isBypassAllowed() && allowPrivate === true) {
-    warnings.push(
-      `Security: ALLOW_PRIVATE_WEBDAV_HOSTS=true while ENVIRONMENT=${auth.getEnvironment()}. ` +
-        `Libraries may target loopback and private-network origins, and the worker sends the stored WebDAV credential to them.`,
-    );
-  }
-  if (allowPrivate === true && auth.isBypassAllowed()) {
-    warnings.push(
-      `Note: ALLOW_PRIVATE_WEBDAV_HOSTS=true has no effect while ENVIRONMENT=${auth.getEnvironment()} (private hosts are already allowed).`,
-    );
-  }
-  if (allowPrivate === false && !auth.isBypassAllowed()) {
-    warnings.push(
-      `Note: ALLOW_PRIVATE_WEBDAV_HOSTS=false has no effect while ENVIRONMENT=${auth.getEnvironment()} (private hosts are already denied).`,
-    );
-  }
-
-  
   return warnings;
 }
 

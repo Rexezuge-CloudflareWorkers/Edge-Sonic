@@ -25,10 +25,10 @@
  *   D1 write allowance,
  * - cleared on success, so one typo does not lock a user out.
  */
-import { DatabaseError,  } from '@edge-sonic/backend-errors';
+import { DatabaseError } from '@edge-sonic/backend-errors';
 import { decryptData, timingSafeEqualStrings } from '@edge-sonic/backend-data/crypto';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
-import {  ErrorCode, md5Hex, SubsonicError } from '@edge-sonic/subsonic';
+import { ErrorCode, md5Hex, SubsonicError } from '@edge-sonic/subsonic';
 
 interface AuthThrottle {
   countRecentFailures(identity: string, oldestBucket: number, currentBucket: number): Promise<number>;
@@ -82,7 +82,13 @@ class SubsonicAuthService {
    *   when the throttle has engaged. Both are indistinguishable to a caller by
    *   design — see the note in `throttleOrThrow`.
    */
-  public async authenticate(input: { username: string; token: string | null; salt: string | null; legacyPassword: string | null; clientIp: string }): Promise<UserRow> {
+  public async authenticate(input: {
+    username: string;
+    token: string | null;
+    salt: string | null;
+    legacyPassword: string | null;
+    clientIp: string;
+  }): Promise<UserRow> {
     const identity = throttleIdentity(input.username, input.clientIp);
     const now = this.deps.now ? this.deps.now() : nowSeconds();
     const bucket = Math.floor(now / this.deps.windowSeconds);
@@ -155,7 +161,12 @@ class SubsonicAuthService {
    * empty salt — `md5(password + "")` would be a *valid* token for an attacker
    * who chose an empty salt, and the protocol has no reason to accept it.
    */
-  private async verifyCredential(user: UserRow, token: string | null, salt: string | null, legacyPassword: string | null): Promise<boolean> {
+  private async verifyCredential(
+    user: UserRow,
+    token: string | null,
+    salt: string | null,
+    legacyPassword: string | null,
+  ): Promise<boolean> {
     const key = await this.deps.resolveKey();
 
     let password: string;
@@ -210,7 +221,7 @@ function throttleIdentity(username: string, clientIp: string): string {
   return `${(hash >>> 0).toString(16).padStart(8, '0')}${(hash2 >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-export { SubsonicAuthService, throttleIdentity,   };
+export { SubsonicAuthService, throttleIdentity };
 
-export {UnauthorizedError} from '@edge-sonic/backend-errors';
-export {decodeLegacyPassword} from '@edge-sonic/subsonic';
+export { UnauthorizedError } from '@edge-sonic/backend-errors';
+export { decodeLegacyPassword } from '@edge-sonic/subsonic';

@@ -109,10 +109,7 @@ class NodeDAO extends BaseDAO {
   public async find(libraryId: string, path: string): Promise<NodeRow | null> {
     return await this.withRetry(
       async () =>
-        await this.database
-          .prepare('SELECT * FROM nodes WHERE library_id = ? AND path = ?')
-          .bind(libraryId, path)
-          .first<NodeRow>(),
+        await this.database.prepare('SELECT * FROM nodes WHERE library_id = ? AND path = ?').bind(libraryId, path).first<NodeRow>(),
       'nodes.find',
     );
   }
@@ -280,10 +277,7 @@ class NodeDAO extends BaseDAO {
   public async countByLibrary(libraryId: string): Promise<number> {
     const row = await this.withRetry(
       async () =>
-        await this.database
-          .prepare('SELECT COUNT(*) AS cnt FROM nodes WHERE library_id = ?')
-          .bind(libraryId)
-          .first<{ cnt: number }>(),
+        await this.database.prepare('SELECT COUNT(*) AS cnt FROM nodes WHERE library_id = ?').bind(libraryId).first<{ cnt: number }>(),
       'nodes.countByLibrary',
     );
     return row?.cnt ?? 0;

@@ -1,10 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": [
-      "ES2022",
-      "DOM"
-    ],
+    "lib": ["ES2022", "DOM"],
     "module": "ES2022",
     "moduleResolution": "Bundler",
     "resolveJsonModule": true,
@@ -17,30 +14,14 @@
     "strict": true,
     "skipLibCheck": true,
     "paths": {
-      "@edge-sonic/shared": [
-        "../shared/src"
-      ],
-      "@edge-sonic/shared/*": [
-        "../shared/src/*"
-      ],
-      "@edge-sonic/backend-errors": [
-        "../backend-errors/src"
-      ],
-      "@edge-sonic/backend-errors/*": [
-        "../backend-errors/src/*"
-      ],
-      "@edge-sonic/backend-runtime": [
-        "../backend-runtime/src"
-      ],
-      "@edge-sonic/backend-runtime/*": [
-        "../backend-runtime/src/*"
-      ]
+      "@edge-sonic/shared": ["../shared/src"],
+      "@edge-sonic/shared/*": ["../shared/src/*"],
+      "@edge-sonic/backend-errors": ["../backend-errors/src"],
+      "@edge-sonic/backend-errors/*": ["../backend-errors/src/*"],
+      "@edge-sonic/backend-runtime": ["../backend-runtime/src"],
+      "@edge-sonic/backend-runtime/*": ["../backend-runtime/src/*"]
     }
   },
-  "include": [
-    "src/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
 }

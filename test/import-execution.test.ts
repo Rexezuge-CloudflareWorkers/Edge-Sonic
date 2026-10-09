@@ -84,7 +84,9 @@ let handle: ReturnType<typeof sqliteQueryable>;
 
 function migrated(): ReturnType<typeof sqliteQueryable> {
   const opened = sqliteQueryable();
-  for (const file of readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort()) {
+  for (const file of readdirSync(MIGRATIONS)
+    .filter((name) => name.endsWith('.sql'))
+    .sort()) {
     execScript(opened, readFileSync(`${MIGRATIONS}/${file}`, 'utf8'));
   }
   return opened;
@@ -99,7 +101,8 @@ A run with a real source, a real user and a real library.
 */
 async function seedRun(options: { sourceId?: string; userId?: string } = {}): Promise<{ runId: string; sourceId: string; userId: string }> {
   const users = new UserDAO(handle.db);
-  const userId = options.userId ?? (await users.create({ username: `u${users.list.length}`, passwordCiphertext: 'c', passwordIv: 'iv' })).id;
+  const userId =
+    options.userId ?? (await users.create({ username: `u${users.list.length}`, passwordCiphertext: 'c', passwordIv: 'iv' })).id;
   const libraryId = (
     await new LibraryDAO(handle.db).create({
       slug: `lib${options.sourceId ?? 'x'}`,
@@ -166,7 +169,14 @@ function remoteAlbums(albums: readonly FakeAlbum[]) {
     /**
     A page at `offset`, like `getAlbumList2?offset=&size=`.
     */
-    page: (offset: number, size: number) => albums.slice(offset, offset + size).map((album) => ({ id: album.id, name: album.name ?? album.id, artist: album.artist ?? album.songs[0]?.artist ?? 'Unknown', artistId: null, songCount: album.songs.length })),
+    page: (offset: number, size: number) =>
+      albums.slice(offset, offset + size).map((album) => ({
+        id: album.id,
+        name: album.name ?? album.id,
+        artist: album.artist ?? album.songs[0]?.artist ?? 'Unknown',
+        artistId: null,
+        songCount: album.songs.length,
+      })),
     songsOf: (albumId: string) =>
       (albums.find((album) => album.id === albumId)?.songs ?? []).map((song) => ({
         id: song.id,
@@ -296,7 +306,12 @@ describe('PlayCountImportWorker', () => {
     // Twenty albums — **more** than one batch of seven — so the re-arm branch runs and the cursor is
     // what carries the walk across alarms. A fixture of one page would settle after one album and
     // never reach the branch this is about.
-    const remote = remoteAlbums(Array.from({ length: 20 }, (_, index) => ({ id: `a${index}`, songs: [{ id: `s${index}`, title: `Track ${index}`, album: 'X', artist: 'Y' }] })));
+    const remote = remoteAlbums(
+      Array.from({ length: 20 }, (_, index) => ({
+        id: `a${index}`,
+        songs: [{ id: `s${index}`, title: `Track ${index}`, album: 'X', artist: 'Y' }],
+      })),
+    );
     const { runId } = await seedRun();
     const ctx = fakeCtx();
     const worker = new PlayCountImportWorker(ctx as never, envFor(handle) as never);
@@ -348,7 +363,9 @@ describe('PlayCountImportWorker', () => {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const json = (body: unknown): Response => Response.json(body, { status: 200, headers: { 'content-type': 'application/json' } });
         if (/getAlbumList2/.test(url)) return json({ 'subsonic-response': { status: 'ok', albumList2: { album: remote.page(0, 500) } } });
-        return json({ 'subsonic-response': { status: 'ok', album: { song: [{ id: 's0', title: 'Unheard', album: 'X', artist: 'Y', playCount: 0 }] } } });
+        return json({
+          'subsonic-response': { status: 'ok', album: { song: [{ id: 's0', title: 'Unheard', album: 'X', artist: 'Y', playCount: 0 }] } },
+        });
       }),
     );
 
@@ -510,7 +527,13 @@ describe('PlayCountImportWorker', () => {
         if (/getAlbumList2/.test(url)) {
           const offset = Number.parseInt(new URL(url).searchParams.get('offset') ?? '0', 10);
           const size = Number.parseInt(new URL(url).searchParams.get('size') ?? '500', 10);
-          const albums = Array.from({ length: 8 }, (_, index) => ({ id: `a${index}`, name: `Album ${index}`, artist: 'Y', artistId: null, songCount: 1 }));
+          const albums = Array.from({ length: 8 }, (_, index) => ({
+            id: `a${index}`,
+            name: `Album ${index}`,
+            artist: 'Y',
+            artistId: null,
+            songCount: 1,
+          }));
           return json({ 'subsonic-response': { status: 'ok', albumList2: { album: albums.slice(offset, offset + size) } } });
         }
         if (/getAlbum\b/.test(url)) {
@@ -523,7 +546,11 @@ describe('PlayCountImportWorker', () => {
     );
     const setPlayCounts = vi
       .spyOn(PlayCountDAO.prototype, 'setPlayCounts')
-      .mockRejectedValueOnce(new SubrequestBudgetExhaustedError('Writing 10 rows for playCounts.setPlayCounts needs 10 subrequests and 5 remain in this invocation.'));
+      .mockRejectedValueOnce(
+        new SubrequestBudgetExhaustedError(
+          'Writing 10 rows for playCounts.setPlayCounts needs 10 subrequests and 5 remain in this invocation.',
+        ),
+      );
 
     await worker.alarm();
 
@@ -587,7 +614,11 @@ describe('PlayCountImportWorker', () => {
     stubFetch(remoteAlbums([{ id: 'a0', name: 'Huge Album', songs: [{ id: 's0', title: 'Track 0', album: 'X', artist: 'Y' }] }]));
     const setPlayCounts = vi
       .spyOn(PlayCountDAO.prototype, 'setPlayCounts')
-      .mockRejectedValue(new SubrequestBudgetExhaustedError('Writing 40 rows for playCounts.setPlayCounts needs 40 subrequests and 38 remain in this invocation.'));
+      .mockRejectedValue(
+        new SubrequestBudgetExhaustedError(
+          'Writing 40 rows for playCounts.setPlayCounts needs 40 subrequests and 38 remain in this invocation.',
+        ),
+      );
 
     await worker.alarm();
 
@@ -651,10 +682,13 @@ describe('LibraryImportWorkflow', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        Response.json({ 'subsonic-response': { status: 'ok', starred2: { song: [{ id: 'r1', title: 'Gone', album: 'Nowhere', artist: 'Nobody' }] } } }, {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        }),
+        Response.json(
+          { 'subsonic-response': { status: 'ok', starred2: { song: [{ id: 'r1', title: 'Gone', album: 'Nowhere', artist: 'Nobody' }] } } },
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        ),
       ),
     );
 
@@ -684,12 +718,28 @@ describe('LibraryImportWorkflow', () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         if (/getPlaylists/.test(url)) {
-          return Response.json({ 'subsonic-response': { status: 'ok', playlists: { playlist: [{ id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' }] } } }, {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          });
+          return Response.json(
+            {
+              'subsonic-response': {
+                status: 'ok',
+                playlists: {
+                  playlist: [
+                    { id: 'p1', name: 'One' },
+                    { id: 'p2', name: 'Two' },
+                  ],
+                },
+              },
+            },
+            {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            },
+          );
         }
-        return Response.json({ 'subsonic-response': { status: 'ok', playlist: { entry: [] } } }, { status: 200, headers: { 'content-type': 'application/json' } });
+        return Response.json(
+          { 'subsonic-response': { status: 'ok', playlist: { entry: [] } } },
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
       }),
     );
 
@@ -723,11 +773,23 @@ describe('LibraryImportWorkflow', () => {
     const step = fakeStep();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok', playlist: { entry: [] } } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+      vi.fn(async () =>
+        Response.json(
+          { 'subsonic-response': { status: 'ok', playlist: { entry: [] } } },
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
     );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    const payload = { runId, sourceId, userId, libraryIds: [libraryId], phases: ['playlists' as ImportPhase], playlistIds: ['p1'] } as never;
+    const payload = {
+      runId,
+      sourceId,
+      userId,
+      libraryIds: [libraryId],
+      phases: ['playlists' as ImportPhase],
+      playlistIds: ['p1'],
+    } as never;
     await workflow.run({ payload } as never, step as never);
     await workflow.run({ payload } as never, step as never);
 
@@ -747,7 +809,10 @@ describe('LibraryImportWorkflow', () => {
     // `NonRetryableError`, so the engine records a **failed** instance rather than burning three
     // attempts on a row that will not come back — and rather than reporting success.
     await expect(
-      workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never),
+      workflow.run(
+        { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['bookmarks'], playlistIds: [] } } as never,
+        fakeStep() as never,
+      ),
     ).rejects.toBeInstanceOf(NonRetryableError);
   });
 
@@ -762,36 +827,44 @@ describe('LibraryImportWorkflow', () => {
     const received: string[] = [];
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+      vi.fn(async () =>
+        Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } }),
+      ),
     );
 
-    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, {
-      ...envFor(handle),
-      // A DO namespace stub that records the `start`, which is the whole point of the step: it
-      // must happen **once**, outside `step.do`, because a step that "completed" but whose object
-      // was never started would be cached and never re-run.
-      //
-      // `start` reads `request.runId` rather than closing over `name`, because the double's job
-      // is to be the class. The first version took no argument and returned `{ runId: name }`, so
-      // it agreed with a caller that passed **nothing** — and `stub.start()` with no payload threw
-      // `Cannot read properties of undefined (reading 'runId')` on a real Durable Object, before
-      // the `put` and before the alarm. A double that shares the caller's assumption is not a
-      // guard on the call; it is a second copy of the bug.
-      IMPORT_DO: {
-        getByName: (name: string) => {
-          started.push(name);
-          return {
-            start: async (request: { readonly runId: string }) => {
-              // Throws exactly as `PlayCountImportWorker.start` does when the payload is absent.
-              received.push(request.runId);
-              return { runId: request.runId };
-            },
-          };
+    const workflow = new LibraryImportWorkflow(
+      fakeCtx().executionContext as never,
+      {
+        ...envFor(handle),
+        // A DO namespace stub that records the `start`, which is the whole point of the step: it
+        // must happen **once**, outside `step.do`, because a step that "completed" but whose object
+        // was never started would be cached and never re-run.
+        //
+        // `start` reads `request.runId` rather than closing over `name`, because the double's job
+        // is to be the class. The first version took no argument and returned `{ runId: name }`, so
+        // it agreed with a caller that passed **nothing** — and `stub.start()` with no payload threw
+        // `Cannot read properties of undefined (reading 'runId')` on a real Durable Object, before
+        // the `put` and before the alarm. A double that shares the caller's assumption is not a
+        // guard on the call; it is a second copy of the bug.
+        IMPORT_DO: {
+          getByName: (name: string) => {
+            started.push(name);
+            return {
+              start: async (request: { readonly runId: string }) => {
+                // Throws exactly as `PlayCountImportWorker.start` does when the payload is absent.
+                received.push(request.runId);
+                return { runId: request.runId };
+              },
+            };
+          },
         },
-      },
-    } as never);
+      } as never,
+    );
 
-    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['playCounts'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run(
+      { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['playCounts'], playlistIds: [] } } as never,
+      fakeStep() as never,
+    );
 
     const runs = new ImportRunDAO(handle.db);
     const run = await runs.findById(runId);
@@ -822,22 +895,33 @@ describe('LibraryImportWorkflow', () => {
     const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok', starred2: {} } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+      vi.fn(async () =>
+        Response.json(
+          { 'subsonic-response': { status: 'ok', starred2: {} } },
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
     );
 
-    const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, {
-      ...envFor(handle),
-      // The DO refuses the start. The other phases still ran, and their report lines must survive.
-      IMPORT_DO: {
-        getByName: () => ({
-          start: async () => {
-            throw new Error('Durable Object storage is unavailable.');
-          },
-        }),
-      },
-    } as never);
+    const workflow = new LibraryImportWorkflow(
+      fakeCtx().executionContext as never,
+      {
+        ...envFor(handle),
+        // The DO refuses the start. The other phases still ran, and their report lines must survive.
+        IMPORT_DO: {
+          getByName: () => ({
+            start: async () => {
+              throw new Error('Durable Object storage is unavailable.');
+            },
+          }),
+        },
+      } as never,
+    );
 
-    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars', 'playCounts'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run(
+      { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars', 'playCounts'], playlistIds: [] } } as never,
+      fakeStep() as never,
+    );
 
     const runs = new ImportRunDAO(handle.db);
     const run = await runs.findById(runId);
@@ -869,11 +953,16 @@ describe('LibraryImportWorkflow', () => {
     const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+      vi.fn(async () =>
+        Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } }),
+      ),
     );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['bookmarks'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run(
+      { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['bookmarks'], playlistIds: [] } } as never,
+      fakeStep() as never,
+    );
 
     const runs = new ImportRunDAO(handle.db);
     expect((await runs.findById(runId))?.status).toBe('completed');
@@ -885,10 +974,18 @@ describe('LibraryImportWorkflow', () => {
     const { runId, sourceId, userId } = await seedRun();
     const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
     const step = fakeStep();
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({ 'subsonic-response': { status: 'ok' } }, { status: 200, headers: { 'content-type': 'application/json' } }),
+      ),
+    );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: [], playlistIds: [] } } as never, step as never);
+    await workflow.run(
+      { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: [], playlistIds: [] } } as never,
+      step as never,
+    );
 
     // **No steps at all**. A phase the operator left out is skipped, not run-and-found-empty —
     // so the report cannot show a category they did not ask for as imported.
@@ -904,7 +1001,12 @@ describe('LibraryImportWorkflow', () => {
     const libraryId = (await new LibraryDAO(handle.db).list())[0]?.id ?? '';
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => Response.json({ 'subsonic-response': { status: 'ok', starred2: {} } }, { status: 200, headers: { 'content-type': 'application/json' } })),
+      vi.fn(async () =>
+        Response.json(
+          { 'subsonic-response': { status: 'ok', starred2: {} } },
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+      ),
     );
 
     const runs = new ImportRunDAO(handle.db);
@@ -917,13 +1019,23 @@ describe('LibraryImportWorkflow', () => {
           sourceName: 'Old server',
           targetUsername: 'ann',
           finished: false,
-          phases: [phase({ phase: 'stars', status: 'partial', unresolvedCount: 1, unresolved: [{ category: 'star', context: 'starred', remoteId: 'r1', label: 'Gone', reason: 'not-found' }] })],
+          phases: [
+            phase({
+              phase: 'stars',
+              status: 'partial',
+              unresolvedCount: 1,
+              unresolved: [{ category: 'star', context: 'starred', remoteId: 'r1', label: 'Gone', reason: 'not-found' }],
+            }),
+          ],
         }),
       ),
     );
 
     const workflow = new LibraryImportWorkflow(fakeCtx().executionContext as never, envFor(handle) as never);
-    await workflow.run({ payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars'], playlistIds: [] } } as never, fakeStep() as never);
+    await workflow.run(
+      { payload: { runId, sourceId, userId, libraryIds: [libraryId], phases: ['stars'], playlistIds: [] } } as never,
+      fakeStep() as never,
+    );
 
     const stored = parseReport(await runs.readReport(runId));
     // **One** line named `stars`, not two.

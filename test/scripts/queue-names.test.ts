@@ -25,7 +25,10 @@ describe('queueNamesIn: what the deploy creates', () => {
     expect(
       queueNamesIn({
         queues: {
-          producers: [{ binding: 'A', queue: '' }, { binding: 'B', queue: 'q2' }],
+          producers: [
+            { binding: 'A', queue: '' },
+            { binding: 'B', queue: 'q2' },
+          ],
           consumers: [{ queue: 'q1' }, { queue: 'q2' }],
         },
       }),

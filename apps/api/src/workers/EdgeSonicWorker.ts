@@ -49,7 +49,7 @@ import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { errorResponse, resolveFormat } from '@edge-sonic/subsonic';
+import { API_BASE_PATH, errorResponse, resolveFormat } from '@edge-sonic/subsonic';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { registerUserRoutes } from '../user/routes';
 import { userAuthentication, registerUserRateLimits, registerRestRateLimits, scopeMiddleware, securityHeaders } from '../middleware';
@@ -102,7 +102,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
     app.onError((error, c) => {
       console.error('Unhandled worker error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
       const url = new URL(c.req.url);
-      if (!url.pathname.startsWith('/rest/')) {
+      if (!url.pathname.startsWith(`${API_BASE_PATH}/`)) {
         // The **user** API, which is a JSON surface whose client reads the status. A
         // blanket 500 here threw away the whole error taxonomy: a missing field, a
         // duplicate slug, and a grant for a library that does not exist all became
@@ -184,14 +184,18 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
     // `/rest/*` authenticates itself, inside the dispatcher, because the
     // credentials arrive as Subsonic parameters rather than as headers. A Hono
     // middleware here would have to parse the query string a second time.
-    app.all('/rest/*', async (c) => {
+    app.all(`${API_BASE_PATH}/*`, async (c) => {
       const outcome = await dispatchRest(c, new URL(c.req.url).pathname, c.req.raw);
       return outcome instanceof Response ? outcome : outcome.response;
     });
 
     // A bare `/rest` is a client mistake, not an endpoint. Answered with the
     // envelope so the client can report it.
-    app.all('/rest', (c) =>
+    //
+    // `API_BASE_PATH` rather than a literal, in all four places above: `subsonic/constants.ts`
+    // declares it with the reasoning and nothing read it, while these four were the only spellings
+    // of the prefix in the router. Two spellings of one path is a path that can move.
+    app.all(API_BASE_PATH, (c) =>
       errorResponse(toSubsonicError(new Error('No endpoint named')), {
         format: resolveFormat(new URL(c.req.url).searchParams.get('f')),
         jsonpCallback: null,
@@ -200,7 +204,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
 
     app.notFound((c) => {
       const url = new URL(c.req.url);
-      if (url.pathname.startsWith('/rest/')) {
+      if (url.pathname.startsWith(`${API_BASE_PATH}/`)) {
         return errorResponse(toSubsonicError(new Error('No such endpoint')), {
           format: resolveFormat(url.searchParams.get('f')),
           jsonpCallback: url.searchParams.get('callback'),
@@ -245,7 +249,10 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
         await consumeQueueMessage(message.body, () => createScanWorkerScope(env));
         message.ack?.();
       } catch (error) {
-        console.error('[queue] message failed; it will be retried, and dead-lettered once the retry budget is spent:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
+        console.error(
+          '[queue] message failed; it will be retried, and dead-lettered once the retry budget is spent:',
+          ErrorSanitizationUtil.sanitizeErrorForLogging(error),
+        );
         message.retry?.();
       }
     }

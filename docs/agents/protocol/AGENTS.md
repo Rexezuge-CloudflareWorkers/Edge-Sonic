@@ -13,15 +13,21 @@ and a decoder written from the schema rather than from our own output; see
 
 ## The registry, measured
 
-`apps/api/src/rest/endpoints/index.ts` holds three maps. The counts are asserted in
-`test/endpoint-registry.test.ts`; re-derive rather than trust them if one moves.
+`apps/api/src/rest/endpoints/index.ts` holds three maps. The counts are asserted **by numeral** in
+`test/endpoint-counts.test.ts` — the totals and the per-kind split. `test/endpoint-registry.test.ts`
+asserts the registry's _shape_ (disjointness, a reason per entry, `ENDPOINT_NAMES` completeness) and
+carries no numerals, so before that file existed this table's numbers were asserted nowhere and could
+have moved silently.
 
-| Map | Entries | Answers |
-| --- | ---: | --- |
-| `IMPLEMENTED` | 43 | the real thing |
-| `UNIMPLEMENTED` | 20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
-| `EMPTY_RESULT` | 7 | an empty wrapper, after validating the request |
-| `ENDPOINT_NAMES` | 70 | — |
+Moving one is deliberate, and the guide is where it is recorded: adding an endpoint changes the total,
+and changing an endpoint's **kind** changes the split. Both now fail a test.
+
+| Map              | Entries | Answers                                                                 |
+| ---------------- | ------: | ----------------------------------------------------------------------- |
+| `IMPLEMENTED`    |      43 | the real thing                                                          |
+| `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
+| `EMPTY_RESULT`   |       7 | an empty wrapper, after validating the request                          |
+| `ENDPOINT_NAMES` |      70 | —                                                                       |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
 `code=70` from this registry is unreachable. It is still reached two other ways, both
@@ -55,11 +61,11 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   one.** `AlbumID3` published `title` and `isDir`; `song.type` published `mediaType`'s
   value. A lenient client drops an unknown attribute and a strict one ignores it, so the
   suite stayed green through all three — and `type="song"` was a value outside `type`'s
-  own enumeration, in the one field every client filters on to decide what a row *is*, so
+  own enumeration, in the one field every client filters on to decide what a row _is_, so
   a player asking `type == "music"` saw an empty library. **The only instrument that
   finds this class is a reference server**: the fact "this attribute is not in the schema"
   exists in the schema, and the schema is not in this repository. `scripts/
-  compare-reference.ts` reads the same call off a configured reference and compares
+compare-reference.ts` reads the same call off a configured reference and compares
   attribute key sets; committed rather than run once, because a difference reported there
   is a difference a client hits.
 - **Two spellings of one question are answered with different element types, and one
@@ -68,7 +74,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the same way. One `albumAttrs` published the union, so every album in `getAlbumList2`
   carried two attributes its schema does not declare. **The test that would have caught
   it could not**, because it asserted the two endpoints agree by reading `title` off one
-  and `name` off the other — so it passed *because* they disagreed, and could only hold
+  and `name` off the other — so it passed _because_ they disagreed, and could only hold
   while each carried the field it was reading and neither carried the other's. So
   `groupAlbums` returns models and the caller picks the builder, because the wrapper is
   the only thing that knows which element type it is; and the parity assertion compares
@@ -77,7 +83,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `getLyrics`, `getLyricsBySongId`, `getArtistInfo`, `getArtistInfo2`, `getTopSongs`,
   `getInternetRadioStations` and `getShares` answered `code=70` while being endpoints a
   client calls routinely — `getLyrics` on every track — so `code=70` said the server had
-  *failed* where the truth was that there is nothing to report. `EMPTY_RESULT` answers each with its own
+  _failed_ where the truth was that there is nothing to report. `EMPTY_RESULT` answers each with its own
   wrapper and no items, after validating the request: an unresolvable `id` is `code=70`
   and an absent required parameter is `code=10`, because "the lyrics of that song do not
   exist" and "that song has no lyrics" look identical in a response and mean opposite
@@ -94,14 +100,14 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   which reads as "no data" rather than "wrong key". Both names are stated.
 - **An OpenSubsonic array whose wrapper and child are the same word is a bare array.**
   `Child.artists` is `"artists": [{…}]`, not `{"artists":{"artist":[…]}}`: a Subsonic list
-  wrapper puts the value under the *child's* key (`albumList2.album`), and here the wrapper
+  wrapper puts the value under the _child's_ key (`albumList2.album`), and here the wrapper
   and the child are the same word in two grammatical forms, so the array belongs at the
   **wrapper's**. `elArray` exists for it and pairs with `array: true`, which collapses the
   wrapper's single occurrence back to the array it already is. A client whose model is
   `artists: List<Artist>` reads an object and throws — the same failure mode as an absent
   key, and equally invisible from here.
 - **Advertising an extension is a claim, and a default is not an absence.** The spec asks a
-  server supporting a field to return it *with an empty default* so clients can detect
+  server supporting a field to return it _with an empty default_ so clients can detect
   support, which makes `bitDepth: 0` the "correct" answer for a column that does not exist.
   So the published set is drawn from two constraints — a client branches on it when
   rendering, and the value already exists — and `bitDepth` is excluded because
@@ -111,13 +117,13 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **The XML namespace is `http://`, and its absence is invisible here.** It shipped
   missing entirely, and an undeclared namespace is still well-formed XML, so every parser
   in this suite accepted the document and a lenient client ignores the attribute — while a
-  client that resolves element names *against* the namespace, which is what the protocol's
+  client that resolves element names _against_ the namespace, which is what the protocol's
   own schema tells it to do, finds no elements at all. The constant was also `https://`,
   where the protocol published `http://`; a namespace is an identifier and not an address,
   so "correcting" it is undetectable on every client that ignores it and fatal on the ones
   that resolve against it. Declared on the **root element only** — in the serializer's root
   handling, never in `attrs`, which would put it in the JSON too.
-- **A repeated child of a *record* element is a list too, and it is invisible at n≥2.**
+- **A repeated child of a _record_ element is a list too, and it is invisible at n≥2.**
   `elList` states the repeated child's name, and a **wrapper** always goes through it — so
   the empty case and the one-item case were both covered. A record element has no
   `listKey` of its own, and `childrenToJsonObject` collapses a single undeclared child to
@@ -129,7 +135,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   album. Two things hid it, and each is its own rule:
   - **A fixture with two items cannot see a collapse.** The suite's album holds two
     tracks, so the array path rendered everywhere it was looked at, and the two `getAlbum`
-    tests asserted album *attributes* — never `album.song`. Assert **both** sizes, or the
+    tests asserted album _attributes_ — never `album.song`. Assert **both** sizes, or the
     guard is a fixture rather than a rule. `test/subsonic-protocol.test.ts` and
     `test/endpoints.test.ts` both do.
   - **The declaration cannot move into the shared builder.** The serializer cannot tell a
@@ -142,7 +148,8 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 
   A repeated child is declared wherever it is attached; the wrapper's `listKey` only ever
   described the wrapper.
-- **The same album, built once.** `getAlbum` and every album *list* publish the same `id`,
+
+- **The same album, built once.** `getAlbum` and every album _list_ publish the same `id`,
   name and `created`, read from the same first track — and they were two literals, which
   had already diverged: `getAlbum`'s omitted `created`. A client declaring
   `@SerialName("created") val createdAt: Instant` (no `?`, no default) then failed on
@@ -150,9 +157,9 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   surface. `albumModel` is the single construction; `test/endpoints.test.ts` asserts the
   two endpoints publish the same attribute **key set**, so the next field to drift fails
   there rather than on a client.
-- **A non-nullable field with no default is a *missing-key* failure.** It is not caught by
-  checking the types of the fields that *are* present, and kotlinx.serialization raises
-  `MissingFieldException` only *after* the loop over present keys — so a second defect in
+- **A non-nullable field with no default is a _missing-key_ failure.** It is not caught by
+  checking the types of the fields that _are_ present, and kotlinx.serialization raises
+  `MissingFieldException` only _after_ the loop over present keys — so a second defect in
   the same response hides behind the first. `test/client-decoding.test.ts` models
   required-vs-defaulted from the client's own declaration for this reason: a decoder that
   only checks types passes forever against a response missing a key.
@@ -162,8 +169,8 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `[{"id": 0}]` in JSON, because an element carrying an attribute is a record to every
   serializer. It shipped, and the symptom was the worst available one: a client whose
   `User` model is `folder: List<Int>` throws **inside its login path**, so a correct
-  server that had answered `ping` and authenticated correctly reported *"failed to
-  connect, check your credentials"*. A wrong shape in a scalar field is
+  server that had answered `ping` and authenticated correctly reported _"failed to
+  connect, check your credentials"_. A wrong shape in a scalar field is
   indistinguishable from a wrong password, so the shape is stated in the builder —
   `el('folder', {}, [index])` — rather than inferred, exactly as `elList` takes a
   `listKey`. Asserted in `test/client-decoding.test.ts`, which decodes our real answers
@@ -178,7 +185,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   the same defect as the subrequest bound that lived in a comment. Asserted in
   `test/music-folder-index.test.ts`, paired with the shape assertions because shapes
   alone pass again on two surfaces that disagree.
-- **An omitted `musicFolderId` means *all* of them, and a group id cannot name one.**
+- **An omitted `musicFolderId` means _all_ of them, and a group id cannot name one.**
   Two rules and one measurement. A user with two libraries used to get the first one
   from every un-scoped read, and the case that settles it is a **release split across
   both**: track 01 in one, track 03 in the other, so folder 0 held half the album,
@@ -197,8 +204,9 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   caller's grants — in `test/library-union.test.ts`, with the round trip through a
   **stored annotation written before the re-key** so "clients keep working" is a
   measurement and not a hope.
+
 - **A repeated child lives where the schema puts it, and the suite reads the schema.**
-  `getIndexes` nested the folders as `shortcut` children *inside* the letter `index`
+  `getIndexes` nested the folders as `shortcut` children _inside_ the letter `index`
   groups; the schema puts `shortcut` directly under `indexes` and `artist` under
   `index`. No client reads `index.shortcut`, so the whole alphabetical browse was empty
   on a client that works everywhere else — and the suite asserted the wrong shape,
@@ -235,13 +243,13 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   that was stored correctly. `getStarred` deliberately does not expand artist stars, so
   `getArtists` was the only surface that reports them and it reported nothing. The lookup
   was a `Set<string>`, which made `undefined` the only value the mapper could produce: a
-  type making the wrong answer the only available one *is* a field saying it is missing.
+  type making the wrong answer the only available one _is_ a field saying it is missing.
   `AnnotationLookup.stars` is a `Map` of id to epoch second, and `stars.starred_at` was
   already stored and already the sort key — it was simply never selected.
 - **An endpoint registry nothing asserts is not a contract.** `ENDPOINT_NAMES` and
   `UNIMPLEMENTED` were imported by no test file, so 20 endpoints' absent-endpoint answers were
   correct by luck and a name in both maps — routed by whichever was assigned last — was
-  invisible. The root guide recorded this gap as *found and not fixed*; it is fixed, in
+  invisible. The root guide recorded this gap as _found and not fixed_; it is fixed, in
   `test/endpoint-registry.test.ts`, which asserts the registry's shape rather than any one
   endpoint's behaviour.
 - **A shared builder is the point; a copy is a decision deferred until it disagrees.**
@@ -258,5 +266,5 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - [`apps/api/AGENTS.md`](../../../apps/api/AGENTS.md) — routing, the two error dialects,
   rate-limit order, and the endpoints that build these elements
 - [`packages/subsonic/`](../../../packages/subsonic/README.md) — the package itself
-- [`docs/issues/album-identity.md`](../../issues/album-identity.md) — what an album *is*,
+- [`docs/issues/album-identity.md`](../../issues/album-identity.md) — what an album _is_,
   which several invariants above depend on

@@ -15,7 +15,6 @@ import { BaseDAO } from './BaseDAO';
 import type { StarItemType } from './rows';
 import { nowSeconds } from './identity';
 
-
 class AnnotationDAO extends BaseDAO {
   /**
    * The user's starred ids, with **when** each was starred.
@@ -109,7 +108,9 @@ class AnnotationDAO extends BaseDAO {
     return new Map((result.results ?? []).map((row) => [row.item_id, row.rating]));
   }
 
-  public async listBookmarks(userId: string): Promise<Array<{ song_id: string; position_ms: number; comment: string | null; created_at: number; updated_at: number }>> {
+  public async listBookmarks(
+    userId: string,
+  ): Promise<Array<{ song_id: string; position_ms: number; comment: string | null; created_at: number; updated_at: number }>> {
     const result = await this.withRetry(
       async () =>
         await this.database
@@ -151,7 +152,13 @@ class AnnotationDAO extends BaseDAO {
    * operation, so a client that adds a track sends the entire list, and a diffing
    * implementation would have to guess which of the two shapes it received.
    */
-  public async savePlayQueue(input: { userId: string; songIds: readonly string[]; currentSongId: string | null; positionMs: number; changed: string }): Promise<void> {
+  public async savePlayQueue(input: {
+    userId: string;
+    songIds: readonly string[];
+    currentSongId: string | null;
+    positionMs: number;
+    changed: string;
+  }): Promise<void> {
     const timestamp = nowSeconds();
     const statements = [this.prepare('DELETE FROM play_queue_entries WHERE user_id = ?').bind(input.userId)];
     input.songIds.forEach((songId, position) => {
@@ -175,7 +182,9 @@ class AnnotationDAO extends BaseDAO {
   /**
   The saved queue, in order. Empty when nothing is saved.
   */
-  public async listPlayQueue(userId: string): Promise<{ currentSongId: string | null; positionMs: number; changedAt: number | null; songIds: string[] }> {
+  public async listPlayQueue(
+    userId: string,
+  ): Promise<{ currentSongId: string | null; positionMs: number; changedAt: number | null; songIds: string[] }> {
     const head = await this.withRetry(
       async () =>
         await this.database
@@ -200,7 +209,13 @@ class AnnotationDAO extends BaseDAO {
     };
   }
 
-  public async setNowPlaying(input: { userId: string; username: string; songId: string | null; playerName: string | null; playerId: string | null }): Promise<void> {
+  public async setNowPlaying(input: {
+    userId: string;
+    username: string;
+    songId: string | null;
+    playerName: string | null;
+    playerId: string | null;
+  }): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database
@@ -214,7 +229,9 @@ class AnnotationDAO extends BaseDAO {
     );
   }
 
-  public async listNowPlaying(): Promise<Array<{ username: string; player_name: string | null; player_id: string | null; minutes_ago: number; song_id: string | null }>> {
+  public async listNowPlaying(): Promise<
+    Array<{ username: string; player_name: string | null; player_id: string | null; minutes_ago: number; song_id: string | null }>
+  > {
     // `minutes_ago` is computed in SQL from `updated_at`, so a stale row reports
     // as minutes-old rather than as "now" forever.
     const result = await this.withRetry(
@@ -315,14 +332,13 @@ class AuthThrottleDAO extends BaseDAO {
    */
   public async pruneOldBuckets(identity: string, oldestBucket: number): Promise<number> {
     const result = await this.withRetry(
-      async () => await this.database.prepare('DELETE FROM auth_failures WHERE identity = ? AND bucket < ?').bind(identity, oldestBucket).run(),
+      async () =>
+        await this.database.prepare('DELETE FROM auth_failures WHERE identity = ? AND bucket < ?').bind(identity, oldestBucket).run(),
       'throttle.pruneOldBuckets',
     );
     return result.meta?.changes ?? 0;
   }
 }
-
-
 
 export { AnnotationDAO, AuthThrottleDAO };
 // Re-exported so `@edge-sonic/backend-data/dao` keeps one import path for all three.
@@ -331,5 +347,4 @@ export { AnnotationDAO, AuthThrottleDAO };
 // god-file limit.
 export { ScanStateDAO } from './ScanStateDAO';
 
-
-export {type StarItemType} from './rows';
+export { type StarItemType } from './rows';

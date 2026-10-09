@@ -15,17 +15,17 @@ scan never completed: `getScanStatus` reported `scanning: true` for as long as a
 ## The arithmetic
 
 Workers Free allows **50 subrequests per invocation**, and a D1 statement is one of them — D1 states
-its own limit as *queries per Worker invocation — 1000 (Paid) / 50 (Free)*. A chunk is capped at
+its own limit as _queries per Worker invocation — 1000 (Paid) / 50 (Free)_. A chunk is capped at
 `50 − 8` = 42. Before one folder's own row can be written, a chunk has spent:
 
-| spent | statement |
-| ---: | --- |
-| 1 | `scanState.ensure` |
-| 1 | the derivation backfill's read |
-| 1 | `listFrontier` |
-| 1 | `PROPFIND Depth: 1` |
-| 1 | `listChildren`, to diff against |
-| 45 | the node write batch — `fitCount` = `50 − 5` |
+| spent | statement                                    |
+| ----: | -------------------------------------------- |
+|     1 | `scanState.ensure`                           |
+|     1 | the derivation backfill's read               |
+|     1 | `listFrontier`                               |
+|     1 | `PROPFIND Depth: 1`                          |
+|     1 | `listChildren`, to diff against              |
+|    45 | the node write batch — `fitCount` = `50 − 5` |
 
 So a folder with **45 or more entries** cannot have its own row written in the chunk that walks it:
 the batch is truncated at exactly the point where the last statement would fit.
@@ -33,15 +33,15 @@ the batch is truncated at exactly the point where the last statement would fit.
 Truncation is the expected case and it is supposed to be resumable. The next chunk re-lists the
 folder and writes only what is missing. **It did not**, because `reconcileFolder` built one input
 per child of the folder and had no comparison of its own — so the rows it had already written were
-the rows it re-offered *first*, the truncation landed on the same offset every time, and the
+the rows it re-offered _first_, the truncation landed on the same offset every time, and the
 progress available on the next pass was zero.
 
 | pass | rows written | root `is_scanned` | frontier |
-| ---: | ---: | ---: | --- |
-| 1 | 48 | 0 | 7 |
-| 2 | 48 | 0 | 7 |
-| 3 | 48 | 0 | 7 |
-| … | | | |
+| ---: | -----------: | ----------------: | -------- |
+|    1 |           48 |                 0 | 7        |
+|    2 |           48 |                 0 | 7        |
+|    3 |           48 |                 0 | 7        |
+|    … |              |                   |          |
 
 Measured, driving the real `reconcileFolder` and the real `NodeDAO` over `node:sqlite` with a real
 `SubrequestCounter(50)`. `231,620 ÷ 45 ≈ 5,147` chunks, which at the alarm's one-second cadence is
@@ -59,7 +59,7 @@ was handed, which had exactly one folder in it), and `rowsWritten` is only visib
 
 > **Does this node row need rewriting?** Answered by the child's own mtime and etag.
 
-There was no such branch. `TreeService.persistChildren` *did* have one — and the two disagreed, so
+There was no such branch. `TreeService.persistChildren` _did_ have one — and the two disagreed, so
 even a test importing both would have found two answers.
 
 `TreeService`'s header claimed the invariant that would have caught it:
@@ -81,7 +81,7 @@ The two halves are load-bearing in this order, and the order is why neither fix 
 
 ### 3. A read-through browse put every folder back on the frontier
 
-`persistChildren` wrote `is_scanned = 0` for every child, so a client merely *looking at* the root
+`persistChildren` wrote `is_scanned = 0` for every child, so a client merely _looking at_ the root
 put all 80 album folders back on the scan frontier and the scan re-walked them — once per browse, on
 a `GET`, spending the same daily allowance. The flag means "someone descended into this", and that
 path demonstrably has not: it read a `Depth: 1` listing and nothing below it.
@@ -103,7 +103,7 @@ place the two can meet.
 Two doubles, each blind in a different direction.
 
 `test/scan-budget.test.ts`'s `nodes.upsertMany` double **skipped** rows whose mtime, etag and
-`is_scanned` matched — a faithful model of the statement *with* the guard this adds, and an
+`is_scanned` matched — a faithful model of the statement _with_ the guard this adds, and an
 unfaithful model of the one that shipped. Every row-write count in that suite was therefore fiction,
 in the optimistic direction. `test/scan-incremental.test.ts` runs with `chunkMaxRequests: 10_000` and
 a double that always reports `truncated: false`, so truncation never happens there at all.
@@ -113,7 +113,7 @@ whose ceiling is high enough that the bound never fires cannot see the bound.
 
 ## What holds now
 
-- One comparison, `nodeRowNeedsWrite`, used by both writers — and the two writers' *descent* logic
+- One comparison, `nodeRowNeedsWrite`, used by both writers — and the two writers' _descent_ logic
   stays separate, because "does this row need writing" and "does this folder need opening" are
   different questions.
 - `NodeDAO.UPSERT` carries a `WHERE` naming every column it writes except `updated_at`, so the

@@ -115,7 +115,11 @@ describe('reset, which the drop calls before it deletes anything', () => {
      */
     const { ctx, storage } = fakeState();
     await workerFor(ctx).startScan('L1');
-    await ctx.storage.put('memory', { day: new Date().toISOString().slice(0, 10), rows: 0, pause: { resumeAt: Date.now() + 60_000, reason: 'Paused.' } });
+    await ctx.storage.put('memory', {
+      day: new Date().toISOString().slice(0, 10),
+      rows: 0,
+      pause: { resumeAt: Date.now() + 60_000, reason: 'Paused.' },
+    });
 
     const worker = workerFor(ctx);
     // The overlay is visible before the reset, which is what makes the assertion below a

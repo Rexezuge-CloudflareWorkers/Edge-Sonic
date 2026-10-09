@@ -98,7 +98,6 @@ export {
   parseVorbisCommentSource,
   findVorbisComment,
   findVorbisCommentExtent,
-  walkVorbisCommentList,
   walkVorbisCommentSource,
   contiguousSource,
 } from './vorbisComment';

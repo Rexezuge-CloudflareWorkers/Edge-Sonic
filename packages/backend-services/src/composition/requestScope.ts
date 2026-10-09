@@ -10,11 +10,28 @@ import { AppConfiguration, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backen
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
-import { AnnotationDAO, AuthThrottleDAO, ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, NodeDAO, PlayCountDAO, PlaylistDAO, ScanStateDAO, SongDAO, SongDerivationDAO, SongIndexDAO, SongMatchDAO, UserDAO } from '@edge-sonic/backend-data/dao';
+import {
+  AnnotationDAO,
+  AuthThrottleDAO,
+  ImportPlayCountProgressDAO,
+  ImportRunDAO,
+  ImportSourceDAO,
+  LibraryDAO,
+  NodeDAO,
+  PlayCountDAO,
+  PlaylistDAO,
+  ScanStateDAO,
+  SongDAO,
+  SongDerivationDAO,
+  SongIndexDAO,
+  SongMatchDAO,
+  UserDAO,
+} from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@edge-sonic/backend-data/utils';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';
+import { UserService } from '../auth/UserService';
 import { LibraryService } from '../library/LibraryService';
 import type { ScanControl } from '../library/IndexDropService';
 import type { ScanDriver } from '../library/ScanDriver';
@@ -174,14 +191,14 @@ function createRequestScope(
   );
 
   /**
- * The Danger Zone's drop and its cost projection.
- *
- * Two lines here, and the rest of it is in `bindIndexDrop.ts`. Which is where the DAOs are
- * built and why `scanFor` arrives as a parameter — a Durable Object stub is `apps/api`'s to
- * construct, so Layer 3 takes the resolver rather than reading `env`. The argument this call
- * keeps is the forwarding of the **meter**, because a DAO without one still works and nothing
- * would say its writes went uncharged.
- */
+   * The Danger Zone's drop and its cost projection.
+   *
+   * Two lines here, and the rest of it is in `bindIndexDrop.ts`. Which is where the DAOs are
+   * built and why `scanFor` arrives as a parameter — a Durable Object stub is `apps/api`'s to
+   * construct, so Layer 3 takes the resolver rather than reading `env`. The argument this call
+   * keeps is the forwarding of the **meter**, because a DAO without one still works and nothing
+   * would say its writes went uncharged.
+   */
   bindIndexDrop(scope, db, subrequests, scanFor);
 
   // The optional `onRequest` is the caller's subrequest meter. It is threaded here
@@ -231,7 +248,8 @@ function createRequestScope(
       },
       songs: {
         upsertFileFacts: async (inputs) => (await scope.get(Tokens.SongDAO)()).upsertFileFacts(inputs),
-        deleteInDirectoryNotIn: async (libraryId, dirPath, keep) => (await scope.get(Tokens.SongDAO)()).deleteInDirectoryNotIn(libraryId, dirPath, keep),
+        deleteInDirectoryNotIn: async (libraryId, dirPath, keep) =>
+          (await scope.get(Tokens.SongDAO)()).deleteInDirectoryNotIn(libraryId, dirPath, keep),
         deleteSubtree: async (libraryId, dirPath) => (await scope.get(Tokens.SongDAO)()).deleteSubtree(libraryId, dirPath),
         countByLibrary: async (libraryId) => (await scope.get(Tokens.SongDAO)()).countByLibrary(libraryId),
       },
@@ -260,7 +278,8 @@ function createRequestScope(
       // truncating, so an oversized page is not a slow repair but a permanent failure that
       // fires before `listFrontier` and stops the walk running at all. See `deriveBackfill`.
       derivation: {
-        listNeedingDerivation: async (libraryId, limit) => (await scope.get(Tokens.SongDerivationDAO)()).listNeedingDerivation(libraryId, limit),
+        listNeedingDerivation: async (libraryId, limit) =>
+          (await scope.get(Tokens.SongDerivationDAO)()).listNeedingDerivation(libraryId, limit),
         // An instance method rather than a static one, so the configured marker is used. A
         // static `deriveFor` could only have read a module constant, which is the value the
         // operator is explicitly no longer forced to take.
@@ -319,7 +338,21 @@ function createRequestScope(
   scope.bindValue(Tokens.AccessAuthService, new AccessAuthService(env, config));
 
   // The import feature's wiring, with its reasoning beside the code it is about. See `bindImport.ts`.
-bindImport(scope, config, subrequests);
+  bindImport(scope, config, subrequests);
+
+  // The user password's encryption, owned here for the same reason `LibraryService` owns the
+  // WebDAV credential's: `apps/api` may not import `backend-data`'s values, and the route that
+  // used to reach `crypto` dynamically had a layer gate that did not see the `import()`.
+  scope.bindValue(
+    Tokens.UserService,
+    new UserService(
+      {
+        findByUsername: async (username) => (await scope.get(Tokens.UserDAO)()).findByUsername(username),
+        create: async (input) => (await scope.get(Tokens.UserDAO)()).create(input),
+      },
+      userKey,
+    ),
+  );
 
   scope.bindValue(
     Tokens.SubsonicAuthService,
@@ -329,7 +362,8 @@ bindImport(scope, config, subrequests);
         findByUsername: async (username) => (await scope.get(Tokens.UserDAO)()).findByUsername(username),
       },
       throttle: {
-        countRecentFailures: async (identity, oldest, current) => (await scope.get(Tokens.AuthThrottleDAO)()).countRecentFailures(identity, oldest, current),
+        countRecentFailures: async (identity, oldest, current) =>
+          (await scope.get(Tokens.AuthThrottleDAO)()).countRecentFailures(identity, oldest, current),
         recordFailure: async (identity, bucket) => (await scope.get(Tokens.AuthThrottleDAO)()).recordFailure(identity, bucket),
         clearFailures: async (identity) => (await scope.get(Tokens.AuthThrottleDAO)()).clearFailures(identity),
         pruneOldBuckets: async (identity, oldest) => (await scope.get(Tokens.AuthThrottleDAO)()).pruneOldBuckets(identity, oldest),
@@ -349,5 +383,4 @@ bindImport(scope, config, subrequests);
 
 export { createRequestScope };
 
-
-export {type RequestScopeEnv} from './serviceFactory';
+export { type RequestScopeEnv } from './serviceFactory';

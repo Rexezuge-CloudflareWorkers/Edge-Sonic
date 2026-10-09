@@ -41,22 +41,6 @@ export const probeLibrary = (id: string): Promise<ProbeResult> => apiPost(`/libr
 export const startLibraryScan = (id: string): Promise<ScanStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/scan`);
 
 /**
- * Read one library's scan state.
- *
- * `GET /user/libraries/:id/scan` is a passive read and is still the right call for a
- * one-off question — a support request about a single library, a script. It is **not** what
- * the library page uses, because that page shows every library and polls them, and N reads
- * a tick against a 60-request-per-minute bucket is the wrong shape when one list call already
- * carries every library's state.
- *
- * Kept as a named export rather than inlined at its (presently zero) call site because the
- * route is part of the operator API and is asserted in `test/user-api.test.ts`; deleting the
- * wrapper because nothing in this repo happens to call it today would make the *route* look
- * unused to the next reader, and it is not.
- */
-export const libraryScanStatus = (id: string): Promise<ScanStateSummary> => apiGet(`/libraries/${encodeURIComponent(id)}/scan`);
-
-/**
  * Advance one scan chunk.
  *
  * A `POST` for the same reason `probeLibrary` is: it performs live outbound requests
@@ -80,16 +64,12 @@ export const stepLibraryScan = (id: string): Promise<ScanStateSummary> => apiPos
  */
 export const startLibraryEnrich = (id: string): Promise<EnrichStateSummary> => apiPost(`/libraries/${encodeURIComponent(id)}/enrich`);
 
-/**
- * Read one library's enrichment state.
- *
- * A passive read, like `libraryScanStatus`, and — unlike the scan's — nothing calls it: the
- * enrichment state arrives on `GET /user/libraries` and `LibrariesView` polls that one list, so a
- * second read would be a second round trip for the same fact. The route exists and stays; this
- * wrapper does not, because an export with no caller is a second vocabulary to keep in sync and
- * its own comment used to argue for keeping it on the grounds that deleting it would make the
- * **route** look unused — which is a comment about the next reader, not about this file.
- */
+// Two wrappers that are deliberately absent: `libraryScanStatus` and `libraryEnrichStatus`. Both
+// read one library's state where `GET /user/libraries` already carries every library's state, and
+// the library page polls that one list — so a per-library read is a second round trip for a fact
+// the page already holds. The **routes** stay, because they are part of the operator API and are
+// asserted in `test/user-api.test.ts`; it is only the browser-side wrappers that nothing calls,
+// and an export with no caller is a second vocabulary to keep in sync.
 
 /**
  * Advance one enrichment chunk.

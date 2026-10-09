@@ -148,16 +148,5 @@ function isD1ErrorRetryable(errorMessage: string): boolean {
   return false;
 }
 
-// Fail-closed helper (hardening): distinguishes "unit fake missing a table
-// or column" (safe to degrade to [] / fallback query) from genuine D1
-// failures (must propagate as DatabaseError, never silent []). Production
-// D1 always carries the full baseline schema (0021+); the classifier now
-// guards fake-DB shapes and deploy skew, not legacy migrations.
-// Callers must only swallow `true` here; everything else rethrows.
-function isMissingSchemaError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
-  return /no\s+such\s+(?:table|column|index)/i.test(message);
-}
-
-export { isD1ErrorRetryable, isMissingSchemaError, isD1DailyLimitError, nextMidnightUtc, DAILY_LIMIT_PATTERN };
+export { isD1ErrorRetryable, isD1DailyLimitError, nextMidnightUtc, DAILY_LIMIT_PATTERN };
 export type { D1DailyLimit };

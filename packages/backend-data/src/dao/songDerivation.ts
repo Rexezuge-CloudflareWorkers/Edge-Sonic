@@ -177,7 +177,11 @@ class SongDerivationDAO extends BaseDAO {
    * value is the same for the whole request and a derivation that used two markers inside
    * one page would write a grouping split across both spellings.
    */
-  constructor(database: D1Queryable, private readonly derivedMarker: string, subrequests: SubrequestMeter = UNMETERED_SUBREQUESTS) {
+  constructor(
+    database: D1Queryable,
+    private readonly derivedMarker: string,
+    subrequests: SubrequestMeter = UNMETERED_SUBREQUESTS,
+  ) {
     super(database, subrequests);
   }
 
@@ -216,52 +220,50 @@ class SongDerivationDAO extends BaseDAO {
     const statements = writes.map((write) => {
       const artistCi = write.artist?.toLowerCase() ?? null;
       const albumCi = write.album?.toLowerCase() ?? null;
-      return this
-        .prepare(APPLY_DERIVATION)
-        .bind(
-          // `title` first, in the same order as the `SET` list above it. Positional
-          // binding is why the two are one fact: every `?` below has exactly one
-          // counterpart there, and a pair that drifts is a statement that writes one
-          // column's guard with another's value.
-          //
-          // **Fill-once, and deliberately unguarded.** `grouping_source` cannot guard these
-          // two without widening what it means from three columns to four, and every row
-          // already stamped under the old definition would then be read under the new one.
-          // A file tagged `TITLE` but not `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag
-          // title *and* `'derived'`, and a tagless enriched file holds a derived title *and*
-          // `'derived'` — indistinguishable on the row, so a guard here deletes the first,
-          // for ever, because `enriched_at` is set.
-          //
-          // A dedicated provenance column is the shape that would hold both, and the schema
-          // rules are what stop it: SQLite has no `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
-          // (measured on 3.53.4), a migration may not `ALTER`, and editing the locked
-          // baseline is the `songs.reader_version` defect. So the title pays for its safety
-          // with a rule that is **not versioned**: a corrected `deriveTitleFromFileName`
-          // cannot reach a title this derivation already wrote. Asserted in
-          // `test/schema.int.test.ts`, so the cost is a claim and not a surprise.
-          write.title,
-          write.title.toLowerCase(),
-          GROUPING_SOURCE_DERIVED,
-          write.artist,
-          GROUPING_SOURCE_DERIVED,
-          artistCi,
-          GROUPING_SOURCE_DERIVED,
-          write.album,
-          GROUPING_SOURCE_DERIVED,
-          albumCi,
-          // `album_artist` mirrors the derived artist: `getArtist` groups on it, so an
-          // album with a NULL album-artist column does not appear under the artist a
-          // client navigated to.
-          GROUPING_SOURCE_DERIVED,
-          write.artist,
-          GROUPING_SOURCE_DERIVED,
-          artistCi,
-          GROUPING_SOURCE_DERIVED,
-          GROUPING_SOURCE_DERIVED,
-          version,
-          timestamp,
-          write.id,
-        );
+      return this.prepare(APPLY_DERIVATION).bind(
+        // `title` first, in the same order as the `SET` list above it. Positional
+        // binding is why the two are one fact: every `?` below has exactly one
+        // counterpart there, and a pair that drifts is a statement that writes one
+        // column's guard with another's value.
+        //
+        // **Fill-once, and deliberately unguarded.** `grouping_source` cannot guard these
+        // two without widening what it means from three columns to four, and every row
+        // already stamped under the old definition would then be read under the new one.
+        // A file tagged `TITLE` but not `ARTIST`/`ALBUM`/`ALBUMARTIST` holds a real tag
+        // title *and* `'derived'`, and a tagless enriched file holds a derived title *and*
+        // `'derived'` — indistinguishable on the row, so a guard here deletes the first,
+        // for ever, because `enriched_at` is set.
+        //
+        // A dedicated provenance column is the shape that would hold both, and the schema
+        // rules are what stop it: SQLite has no `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
+        // (measured on 3.53.4), a migration may not `ALTER`, and editing the locked
+        // baseline is the `songs.reader_version` defect. So the title pays for its safety
+        // with a rule that is **not versioned**: a corrected `deriveTitleFromFileName`
+        // cannot reach a title this derivation already wrote. Asserted in
+        // `test/schema.int.test.ts`, so the cost is a claim and not a surprise.
+        write.title,
+        write.title.toLowerCase(),
+        GROUPING_SOURCE_DERIVED,
+        write.artist,
+        GROUPING_SOURCE_DERIVED,
+        artistCi,
+        GROUPING_SOURCE_DERIVED,
+        write.album,
+        GROUPING_SOURCE_DERIVED,
+        albumCi,
+        // `album_artist` mirrors the derived artist: `getArtist` groups on it, so an
+        // album with a NULL album-artist column does not appear under the artist a
+        // client navigated to.
+        GROUPING_SOURCE_DERIVED,
+        write.artist,
+        GROUPING_SOURCE_DERIVED,
+        artistCi,
+        GROUPING_SOURCE_DERIVED,
+        GROUPING_SOURCE_DERIVED,
+        version,
+        timestamp,
+        write.id,
+      );
     });
     // All-or-nothing, unlike the index write. A partially stamped backfill would leave rows
     // that are neither derived nor un-derived, and the selection is on `derived_version` — so

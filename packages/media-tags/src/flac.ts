@@ -72,8 +72,7 @@ function readFlac(bytes: Uint8Array, fileSize: number | null): AudioTags {
   const duration = streamInfo.sampleRate > 0 ? streamInfo.totalSamples / streamInfo.sampleRate : null;
   // FLAC is variable bitrate by definition, so the only way to report a bitrate
   // is size over duration. `fileSize` is what makes that possible from a prefix.
-  const bitrate =
-    duration !== null && duration > 0 && fileSize !== null ? Math.round((fileSize * 8) / duration / 1000) : null;
+  const bitrate = duration !== null && duration > 0 && fileSize !== null ? Math.round((fileSize * 8) / duration / 1000) : null;
 
   return {
     ...EMPTY_TAGS,

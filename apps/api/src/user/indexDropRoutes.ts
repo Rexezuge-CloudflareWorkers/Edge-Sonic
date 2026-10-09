@@ -87,10 +87,12 @@ async function dropLibraryIndex(c: UserContext): Promise<Response> {
   const id = requireParam(c, 'id');
   const scope = BaseRoute.getScope(c);
   const service = scope.get(Tokens.LibraryService);
-  // `some`, not `find`: the row itself is not used, only its existence. `deleteLibrary` below in
-  // `routes.ts` binds the row because `LibraryService.delete` takes an id and validating it is
-  // what it does — here the existence check is the whole reason this read is here at all.
-  if ((await service.listAll()).every((candidate) => candidate.id !== id)) return BaseRoute.jsonError(c, 'Library not found.', 404);
+  // One indexed read, not `listAll().every(...)`. `listAll()` is a full `SELECT * FROM libraries`,
+  // so the check was fetching every row — including `password_ciphertext` and `password_iv` —
+  // to decide whether one primary key exists. `deleteLibrary` in `routes.ts` binds the row
+  // because `LibraryService.delete` takes an id and validating it is what it does; here only the
+  // existence matters, so only the existence is read.
+  if ((await service.findById(id)) === null) return BaseRoute.jsonError(c, 'Library not found.', 404);
   const outcome = await scope.get(Tokens.IndexDropService).dropLibrary(id);
   return c.json({ ok: true, ...outcome });
 }

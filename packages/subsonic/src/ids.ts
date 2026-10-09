@@ -203,24 +203,6 @@ function normalizeRelativePath(path: string): string | null {
 }
 
 /**
- * Decode a path that may carry percent-encoding, then normalize it.
- *
- * Decoding is done here and nowhere else so that the value stored in D1 and the
- * value used to build a WebDAV URL are the same string. A path kept in its
- * encoded form in one place and decoded in another is how a traversal check
- * ends up validating a different string than the one that gets fetched.
- */
-function decodeAndNormalizePath(raw: string): string | null {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(raw);
-  } catch {
-    return null;
-  }
-  return normalizeRelativePath(decoded);
-}
-
-/**
 Build a Subsonic ID.
 */
 function encodeId(kind: IdKindValue, libraryId: string, path: string): string {
@@ -303,7 +285,6 @@ export {
   encodeId,
   decodeId,
   normalizeRelativePath,
-  decodeAndNormalizePath,
   LIBRARY_ID_PATTERN,
   SPANNING_LIBRARY_ID,
   SEPARATOR,

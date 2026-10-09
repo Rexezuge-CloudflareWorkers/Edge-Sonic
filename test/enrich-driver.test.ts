@@ -123,7 +123,11 @@ describe('EnrichDriver: the object-backed strategy', () => {
     const calls: string[] = [];
     const { env } = enrichNamespace(calls);
     const { runner } = recordingEnrichRunner();
-    const driver = resolveEnrichDriver(env, () => runner, async () => 0);
+    const driver = resolveEnrichDriver(
+      env,
+      () => runner,
+      async () => 0,
+    );
 
     await driver.start(LIBRARY);
     await driver.advance(LIBRARY);
@@ -136,7 +140,11 @@ describe('EnrichDriver: the object-backed strategy', () => {
     const calls: string[] = [];
     const { env } = enrichNamespace(calls);
     const { runner } = recordingEnrichRunner();
-    const driver = resolveEnrichDriver(env, () => runner, async () => 0);
+    const driver = resolveEnrichDriver(
+      env,
+      () => runner,
+      async () => 0,
+    );
 
     await driver.start(LIBRARY);
     await driver.advance(LIBRARY);
@@ -150,7 +158,11 @@ describe('EnrichDriver: the object-backed strategy', () => {
     const calls: string[] = [];
     const { env } = enrichNamespace(calls);
     const { runner } = recordingEnrichRunner();
-    const result = await resolveEnrichDriver(env, () => runner, async () => 0).stateForLibraryList('L1');
+    const result = await resolveEnrichDriver(
+      env,
+      () => runner,
+      async () => 0,
+    ).stateForLibraryList('L1');
     expect(result?.lastError).toBe('getStatus');
     expect(calls).toStrictEqual(['getStatus']);
   });
@@ -162,22 +174,51 @@ describe('EnrichDriver: the choice itself', () => {
     const calls: string[] = [];
     const { env } = enrichNamespace(calls);
 
-    expect(resolveEnrichDriver({}, () => runner, async () => 0)).toBeInstanceOf(InProcessEnrichDriver);
-    expect(resolveEnrichDriver({ ENRICH: undefined }, () => runner, async () => 0)).toBeInstanceOf(InProcessEnrichDriver);
-    expect(resolveEnrichDriver(env, () => runner, async () => 0)).toBeInstanceOf(DurableObjectEnrichDriver);
+    expect(
+      resolveEnrichDriver(
+        {},
+        () => runner,
+        async () => 0,
+      ),
+    ).toBeInstanceOf(InProcessEnrichDriver);
+    expect(
+      resolveEnrichDriver(
+        { ENRICH: undefined },
+        () => runner,
+        async () => 0,
+      ),
+    ).toBeInstanceOf(InProcessEnrichDriver);
+    expect(
+      resolveEnrichDriver(
+        env,
+        () => runner,
+        async () => 0,
+      ),
+    ).toBeInstanceOf(DurableObjectEnrichDriver);
   });
 
   it('charges one subrequest per RPC, and none for the in-process branch', async () => {
     const charges: string[] = [];
-    const meter = { charge: (_n?: number, kind?: string): void => void charges.push(kind ?? '?') } as unknown as Parameters<typeof resolveEnrichDriver>[3];
+    const meter = { charge: (_n?: number, kind?: string): void => void charges.push(kind ?? '?') } as unknown as Parameters<
+      typeof resolveEnrichDriver
+    >[3];
     const calls: string[] = [];
     const { env } = enrichNamespace(calls);
     const { runner } = recordingEnrichRunner();
 
-    await resolveEnrichDriver({}, () => runner, async () => 0).readState('L1');
+    await resolveEnrichDriver(
+      {},
+      () => runner,
+      async () => 0,
+    ).readState('L1');
     expect(charges, 'an RPC that did not happen spent nothing').toStrictEqual([]);
 
-    await resolveEnrichDriver(env, () => runner, async () => 0, meter).readState('L1');
+    await resolveEnrichDriver(
+      env,
+      () => runner,
+      async () => 0,
+      meter,
+    ).readState('L1');
     expect(charges).toStrictEqual(['rpc']);
   });
 });

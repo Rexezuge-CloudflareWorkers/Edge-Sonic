@@ -79,14 +79,8 @@ class IndexDropDAO extends BaseDAO {
       this.prepare('DELETE FROM scan_state WHERE library_id = ?').bind(libraryId),
       'indexDrop.scanState',
     );
-    const songs = await this.runWriteStatement(
-      this.prepare('DELETE FROM songs WHERE library_id = ?').bind(libraryId),
-      'indexDrop.songs',
-    );
-    const nodes = await this.runWriteStatement(
-      this.prepare('DELETE FROM nodes WHERE library_id = ?').bind(libraryId),
-      'indexDrop.nodes',
-    );
+    const songs = await this.runWriteStatement(this.prepare('DELETE FROM songs WHERE library_id = ?').bind(libraryId), 'indexDrop.songs');
+    const nodes = await this.runWriteStatement(this.prepare('DELETE FROM nodes WHERE library_id = ?').bind(libraryId), 'indexDrop.nodes');
     return {
       songs: songs.changes,
       nodes: nodes.changes,

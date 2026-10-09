@@ -146,12 +146,16 @@ interface ResolvedArt {
  * fetch a range and sniff it had no way to satisfy it. The bounds are still decided here,
  * where the cost is budgeted.
  */
-async function materialize(client: WebDavClient, source: ArtSource, located: PictureSource, timeoutMs: number): Promise<EmbeddedPicture | null> {
-  return await materializePicture(
-    located,
-    async (offset, length) => await client.readRange(source.path, offset, length, timeoutMs),
-    { maxImageBytes: ART_MAX_BYTES, maxFetchBytes: ART_MAX_FETCH_BYTES },
-  );
+async function materialize(
+  client: WebDavClient,
+  source: ArtSource,
+  located: PictureSource,
+  timeoutMs: number,
+): Promise<EmbeddedPicture | null> {
+  return await materializePicture(located, async (offset, length) => await client.readRange(source.path, offset, length, timeoutMs), {
+    maxImageBytes: ART_MAX_BYTES,
+    maxFetchBytes: ART_MAX_FETCH_BYTES,
+  });
 }
 
 /**

@@ -91,7 +91,15 @@ interface FlacOptions {
 }
 
 function buildFlac(options: FlacOptions = {}): Uint8Array {
-  const { sampleRate = 44_100, channels = 2, bitDepth = 16, totalSamples = 44_100 * 180, fileSize, comments = {}, extraComments = [] } = options;
+  const {
+    sampleRate = 44_100,
+    channels = 2,
+    bitDepth = 16,
+    totalSamples = 44_100 * 180,
+    fileSize,
+    comments = {},
+    extraComments = [],
+  } = options;
 
   // STREAMINFO is 34 bytes: min block size u16, max block size u16, min frame size
   // u24, max frame size u24, then one 64-bit run packing 20/3/5/36 bits, then a
@@ -122,7 +130,10 @@ function buildFlac(options: FlacOptions = {}): Uint8Array {
 
   // Vorbis comment block: vendor string, count, then length-prefixed pairs.
   const vendor = encoder.encode('edge-sonic-test');
-  const entries = [...Object.entries(comments).map(([key, value]) => encoder.encode(`${key}=${value}`)), ...extraComments.map((entry) => encoder.encode(entry))];
+  const entries = [
+    ...Object.entries(comments).map(([key, value]) => encoder.encode(`${key}=${value}`)),
+    ...extraComments.map((entry) => encoder.encode(entry)),
+  ];
   let commentLength = 4 + vendor.length + 4;
   for (const entry of entries) commentLength += 4 + entry.length;
   const comment = new Uint8Array(commentLength);
@@ -222,7 +233,10 @@ describe('FLAC', () => {
     // song count beside it is worse than an absent one. Edge whitespace is kept as
     // read: the reference server preserves it in place (`Holiday Holiday / Tragic
     // Drops `), so trimming would trade agreement for tidiness.
-    const tags = readAudioTags(buildFlac({ comments: { TITLE: 'Holocene', ARTIST: 'Bon Iver ', ALBUM: 'For Emma ', GENRE: ' ' } }), 30_000_000);
+    const tags = readAudioTags(
+      buildFlac({ comments: { TITLE: 'Holocene', ARTIST: 'Bon Iver ', ALBUM: 'For Emma ', GENRE: ' ' } }),
+      30_000_000,
+    );
     expect(tags.artist).toBe('Bon Iver ');
     expect(tags.album).toBe('For Emma ');
     expect(tags.genre).toBeNull();

@@ -219,7 +219,11 @@ class PlaylistDAO extends BaseDAO {
     assignments.push('updated_at = ?');
     values.push(nowSeconds(), id);
     await this.withRetry(
-      async () => await this.database.prepare(`UPDATE playlists SET ${assignments.join(', ')} WHERE id = ?`).bind(...values).run(),
+      async () =>
+        await this.database
+          .prepare(`UPDATE playlists SET ${assignments.join(', ')} WHERE id = ?`)
+          .bind(...values)
+          .run(),
       'playlists.updateMeta',
     );
   }
@@ -314,15 +318,13 @@ class PlaylistDAO extends BaseDAO {
   */
   private async refreshTotals(playlistId: string, statements: readonly TrackedStatement[]): Promise<void> {
     const timestamp = nowSeconds();
-    const totals = this
-      .prepare(
-        `UPDATE playlists SET
+    const totals = this.prepare(
+      `UPDATE playlists SET
            song_count = (SELECT COUNT(*) FROM playlist_entries WHERE playlist_id = ?),
            duration = (SELECT COALESCE(SUM(s.duration), 0) FROM playlist_entries e INNER JOIN songs s ON s.id = e.song_id WHERE e.playlist_id = ?),
            updated_at = ?
          WHERE id = ?`,
-      )
-      .bind(playlistId, playlistId, timestamp, playlistId);
+    ).bind(playlistId, playlistId, timestamp, playlistId);
     const all = [...statements, totals];
     // The `totals` recompute is the statement that makes `song_count` and `duration` agree
     // with the entries, so a batch that stopped before it would publish a playlist whose

@@ -25,6 +25,7 @@ import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import type { AccessAuthService } from '../auth/AccessAuthService';
 import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
+import type { UserService } from '../auth/UserService';
 import type { LibraryService } from '../library/LibraryService';
 import type { IndexDropService } from '../library/IndexDropService';
 import type { ScanDriver } from '../library/ScanDriver';
@@ -122,6 +123,7 @@ const Tokens = {
   MatchRemoteArtists: Symbol('MatchRemoteArtists') as Token<RemoteArtistMatcher>,
 
   SubsonicAuthService: Symbol('SubsonicAuthService') as Token<SubsonicAuthService>,
+  UserService: Symbol('UserService') as Token<UserService>,
   /**
    * Cloudflare Access, for `/user/*`. A token like every other service: resolved
    * from the scope rather than constructed at the call site, so it is reachable
@@ -208,8 +210,14 @@ const Tokens = {
 /**
 The two matchers, as the shapes the composition root binds.
 */
-type RemoteAlbumMatcher = (libraryId: LibraryScope, albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>) => Promise<Map<string, string>>;
-type RemoteArtistMatcher = (libraryId: LibraryScope, artists: ReadonlyArray<{ id: string; name: string | null }>) => Promise<Map<string, string>>;
+type RemoteAlbumMatcher = (
+  libraryId: LibraryScope,
+  albums: ReadonlyArray<{ id: string; name: string | null; artist: string | null }>,
+) => Promise<Map<string, string>>;
+type RemoteArtistMatcher = (
+  libraryId: LibraryScope,
+  artists: ReadonlyArray<{ id: string; name: string | null }>,
+) => Promise<Map<string, string>>;
 
 export { Tokens };
 export type { RemoteAlbumMatcher, RemoteArtistMatcher };

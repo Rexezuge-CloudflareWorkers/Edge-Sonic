@@ -37,121 +37,8 @@
 import { bindChunkSize } from '@edge-sonic/backend-data/dao';
 import { chunkArray } from '@edge-sonic/backend-data/dao';
 import type { LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
-
-/**
-How a local row was found, so the operator report can say which strategy worked.
-*/
-type MatchStrategy = 'path' | 'metadata' | null;
-
-/**
-One remote song, reduced to what matching needs.
-*/
-interface MatchCandidate {
-  readonly remoteId: string;
-  readonly path: string | null;
-  readonly artist: string | null;
-  readonly album: string | null;
-  readonly title: string | null;
-  readonly discNumber: number | null;
-  readonly track: number | null;
-}
-
-/**
-The outcome for one remote id, whether it resolved or not.
-*/
-interface MatchOutcome {
-  readonly remoteId: string;
-  /**
-  The local song id, or `null` when nothing resolved.
-  */
-  readonly songId: string | null;
-  readonly strategy: MatchStrategy;
-  /**
-   * Why it did not resolve, or `null` when it did.
-   *
-   * `'ambiguous'` is kept distinct from `'not-found'` because they are different problems
-   * with different remedies: a track that is absent needs re-tagging or a rescan, and one
-   * that matched two candidates needs the operator to say which they meant.
-   */
-  readonly reason: 'not-found' | 'ambiguous' | null;
-}
-
-/**
-What the store has to answer, so a test can supply only this.
-*/
-interface MatchStore {
-  /**
-   * Rows whose `path` is one of these, within one library.
-   *
-   * **Exact and case-sensitive**, and that is not a simplification: a WebDAV origin on Linux
-   * is case-sensitive, so `Album/track.flac` and `album/track.flac` are two files and
-   * lowercasing would merge them into one match.
-   */
-  findByPaths(libraryId: LibraryScope, paths: readonly string[]): Promise<SongRow[]>;
-  /**
-   * Rows whose `(album_ci, title_ci)` is one of these pairs, within one library.
-   *
-   * One statement per chunk derived from `bindChunkSize`, and **not** one per candidate: a
-   * 500-song playlist is 500 single-row lookups against a ceiling that permits 50 per
-   * invocation, so an unbatched version would be a guaranteed failure on the very phase that
-   * matters most.
-   */
-  findByAlbumTitle(libraryId: LibraryScope, pairs: ReadonlyArray<readonly [string, string]>): Promise<SongRow[]>;
-}
-
-/**
- * Lowercase a tag for comparison, or `null` when absent.
- *
- * Absent rather than `''` deliberately: `''` is a value that would match every other
- * untagged row, and a group under the empty name is the same defect `NodeDAO.listRoots` had
- * with the library root — a blank entry at the top of a list that should not have one.
- */
-function ci(value: string | null | undefined): string | null {
-  if (value === null || value === undefined) return null;
-  const trimmed = value.trim();
-  if (trimmed.length === 0) return null;
-  return trimmed.toLowerCase();
-}
-
-/**
- * The metadata key for one remote song.
- *
- * `null` when either half is missing, because a key built from a null half matches every row
- * that has the other — a wildcard where a value was required.
- */
-function metadataKeyOf(candidate: MatchCandidate): readonly [string, string] | null {
-  const album = ci(candidate.album);
-  const title = ci(candidate.title);
-  if (album === null || title === null) return null;
-  return [album, title];
-}
-
-/**
- * Narrow candidates by disc and track.
- *
- * Applied only when the remote published both a value and the candidates disagree on it.
- * A remote that omits `track` narrows nothing, and a remote that omits it while the local
- * library has it must not narrow to nothing — which is why the narrowing is skipped
- * entirely rather than applied against `null`.
- */
-function narrow(candidates: readonly SongRow[], candidate: MatchCandidate): SongRow[] {
-  if (candidates.length <= 1) return [...candidates];
-
-  if (candidate.discNumber !== null) {
-    const byDisc = candidates.filter((row) => row.disc === candidate.discNumber);
-    // Only narrow when it actually narrowed. A library with no disc tags has `disc = NULL`
-    // on every row, and filtering for `1` would empty the set — turning a resolvable match
-    // into a reported one, which is the failure this whole module is careful about.
-    if (byDisc.length > 0) return byDisc;
-  }
-
-  if (candidate.track !== null) {
-    const byTrack = candidates.filter((row) => row.track === candidate.track);
-    if (byTrack.length > 0) return byTrack;
-  }
-
-  return [...candidates];
-}
+import { metadataKeyOf, narrow } from './matchKeys';
+import type { MatchCandidate, MatchOutcome, MatchStore } from './matchTypes';
 
 /**
 Pairs per statement: two bound variables each, plus the `library_id`.
@@ -178,29 +65,152 @@ const PAIRS_PER_STATEMENT = bindChunkSize(2);
 const NUL = '\0';
 
 /**
- * Resolve a page of remote songs to local ids.
+The unresolved verdict, in the one place it is built, so its call sites cannot drift.
+*/
+function notFound(remoteId: string): MatchOutcome {
+  return { remoteId, songId: null, strategy: null, reason: 'not-found' };
+}
+
+/**
+ * The composite map key for a metadata match.
  *
- * One page rather than one song, because the alternative is a statement per song against the
- * same ceiling that makes the batching in `songIdLookup.ts` load-bearing. Two statements per
- * page regardless of size: the path lookup and the metadata lookup.
+ * A function because both halves of the lookup build this string — the candidate side and the
+ * row side — and the two must agree byte for byte or every candidate reads as `not-found`
+ * against rows that are present. Written out twice it is a separator that can differ.
  */
-async function matchRemoteSongs(
+function compositeKeyOf([album, title]: readonly [string, string]): string {
+  return `${album}${NUL}${title}`;
+}
+
+/**
+ * Group the unresolved candidates by the `(album, title)` key metadata matching uses.
+ *
+ * **Bucketed, not keyed to one candidate**, because two remote songs can share an
+ * `(album, title)` pair — a compilation crediting one title twice, two cuts of a song. This
+ * was a `Map<string, MatchCandidate>` whose second `set` **overwrote the first**: the
+ * overwritten candidate never entered the lookup, was therefore never searched, and was then
+ * labelled `not-found` by the catch-all. A verdict for an item this function never looked
+ * up, which is the one failure the module exists to prevent — and it is measured, not
+ * theoretical: an import reported both copies of one track as `not-found` while the row was
+ * indexed under exactly that name.
+ *
+ * A candidate with no metadata key is absent from the map rather than bucketed under a null:
+ * it has nothing to be matched on, and the catch-all is what reports it.
+ */
+function bucketByMetadataKey(candidates: readonly MatchCandidate[]): Map<string, MatchCandidate[]> {
+  const pairs = new Map<string, MatchCandidate[]>();
+  for (const candidate of candidates) {
+    const key = metadataKeyOf(candidate);
+    if (key === null) continue;
+    const composite = compositeKeyOf(key);
+    const bucket = pairs.get(composite);
+    if (bucket) bucket.push(candidate);
+    else pairs.set(composite, [candidate]);
+  }
+  return pairs;
+}
+
+/**
+ * One statement per {@link PAIRS_PER_STATEMENT} distinct keys, and the local rows each key
+ * matched, bucketed the same way the candidates were.
+ *
+ * One representative per key drives the statement, so the batch is unchanged: two candidates
+ * sharing a key share a query, and asking twice spends a statement to re-ask the same question.
+ */
+async function fetchRowsByKey(
   store: MatchStore,
   libraryId: LibraryScope,
-  candidates: readonly MatchCandidate[],
-): Promise<MatchOutcome[]> {
-  const outcomes = new Map<string, MatchOutcome>();
-  const unresolved: MatchCandidate[] = [];
-
-  // Deduplicated because a 40-track playlist drawn from a 10-track album repeats every id
-  // forty times, and one lookup per *occurrence* is one lookup per play in the worst case.
-  const unique = new Map<string, MatchCandidate>();
-  for (const candidate of candidates) {
-    if (!unique.has(candidate.remoteId)) unique.set(candidate.remoteId, candidate);
+  pairs: Map<string, MatchCandidate[]>,
+): Promise<Map<string, SongRow[]>> {
+  const representatives = [...pairs.values()].map((bucket) => bucket[0]);
+  const rowsByKey = new Map<string, SongRow[]>();
+  for (const chunk of chunkArray(representatives, PAIRS_PER_STATEMENT)) {
+    const rows = await store.findByAlbumTitle(
+      libraryId,
+      chunk.map((candidate) => metadataKeyOf(candidate)).filter((key): key is readonly [string, string] => key !== null),
+    );
+    for (const row of rows) {
+      // A row with a NULL `album_ci` or `title_ci` is **skipped**, not bucketed under the
+      // string `"null"`. `metadataKeyOf` refuses a candidate with either half missing, so every
+      // real key is built from two present values — which means a NULL-bearing row was being
+      // filed under a key no candidate can produce, except when the other half really was the
+      // text `null`: a track titled "null" matched an unenriched row with `title_ci IS NULL`
+      // purely because a null had been interpolated into a template literal.
+      //
+      // Skipping is also the rule the rest of this module already states — an unenriched row
+      // carries no name to match on — so the fix removes an accident rather than adding a
+      // policy. `title_ci` in particular is populated by path derivation precisely so that a
+      // row the enrichment read never reached can still match.
+      if (row.album_ci === null || row.title_ci === null) continue;
+      const composite = compositeKeyOf([row.album_ci, row.title_ci]);
+      const bucket = rowsByKey.get(composite);
+      if (bucket) bucket.push(row);
+      else rowsByKey.set(composite, [row]);
+    }
   }
-  const pending = [...unique.values()];
+  return rowsByKey;
+}
 
-  // --- Strategy one: the path, which is exact. ---
+/**
+ * Record one verdict per candidate sharing a key.
+ *
+ * **Every** candidate in a bucket, not just its representative. The representative chose the
+ * query; it does not get to answer for its twin, because `narrow` reads the candidate's own
+ * `discNumber`/`track` and two candidates sharing an `(album, title)` are exactly the pair
+ * that can be told apart by those. Resolving the bucket once and copying the outcome would also
+ * report `ambiguous` for a pair the narrowing separates, which is the recoverable information
+ * this module exists to preserve.
+ */
+function resolveBucket(outcomes: Map<string, MatchOutcome>, bucket: readonly MatchCandidate[], rows: readonly SongRow[]): void {
+  for (const candidate of bucket) {
+    const narrowed = narrow(rows, candidate);
+    if (narrowed.length === 1) {
+      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: narrowed[0].id, strategy: 'metadata', reason: null });
+    } else if (narrowed.length > 1) {
+      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'ambiguous' });
+    } else {
+      outcomes.set(candidate.remoteId, notFound(candidate.remoteId));
+    }
+  }
+}
+
+/**
+ * Strategy two: the metadata key, which is a guess and is reported as one.
+ */
+async function matchByMetadata(
+  store: MatchStore,
+  libraryId: LibraryScope,
+  outcomes: Map<string, MatchOutcome>,
+  unresolved: readonly MatchCandidate[],
+): Promise<void> {
+  const pairs = bucketByMetadataKey(unresolved);
+  const rowsByKey = await fetchRowsByKey(store, libraryId, pairs);
+  for (const [composite, bucket] of pairs) {
+    resolveBucket(outcomes, bucket, rowsByKey.get(composite) ?? []);
+  }
+
+  // Anything with no metadata key and no path never entered either loop.
+  for (const candidate of unresolved) {
+    if (!outcomes.has(candidate.remoteId)) {
+      outcomes.set(candidate.remoteId, notFound(candidate.remoteId));
+    }
+  }
+}
+
+/**
+ * Strategy one: the path, which is exact.
+ *
+ * Returns the candidates the path did **not** resolve rather than the ones it did. That
+ * direction is deliberate: every later step is about the leftovers, so returning the leftovers
+ * means the caller reads one list instead of comparing two.
+ */
+async function matchByPath(
+  store: MatchStore,
+  libraryId: LibraryScope,
+  outcomes: Map<string, MatchOutcome>,
+  pending: readonly MatchCandidate[],
+): Promise<MatchCandidate[]> {
+  const unresolved: MatchCandidate[] = [];
   const withPath = pending.filter((candidate) => candidate.path !== null && candidate.path.length > 0);
   const byPath = await store.findByPaths(
     libraryId,
@@ -225,82 +235,55 @@ async function matchRemoteSongs(
       unresolved.push(candidate);
     }
   }
-
-  // --- Strategy two: the metadata key, which is a guess and is reported as one. ---
-  //
-  // **Bucketed, not keyed to one candidate**, because two remote songs can share an
-  // `(album, title)` pair — a compilation crediting one title twice, two cuts of a song.
-  // This was a `Map<string, MatchCandidate>` whose second `set` **overwrote the first**:
-  // the overwritten candidate never entered `pendingByKey`, was therefore never looked
-  // up, and was then labelled `not-found` by the catch-all below. A verdict for an item
-  // this function never searched, which is the one failure the module exists to
-  // prevent — and it is measured, not theoretical: an import reported both copies of one
-  // track as `not-found` while the row was indexed under exactly that name.
-  //
-  // One representative per key still drives the statement, so the batch is unchanged: two
-  // candidates sharing a key share a query, and asking twice spends a statement to
-  // re-ask the same question.
-  const pairs = new Map<string, MatchCandidate[]>();
-  for (const candidate of unresolved) {
-    const key = metadataKeyOf(candidate);
-    if (key === null) continue;
-    const composite = `${key[0]}${NUL}${key[1]}`;
-    const bucket = pairs.get(composite);
-    if (bucket) bucket.push(candidate);
-    else pairs.set(composite, [candidate]);
-  }
-
-  const pendingByKey = [...pairs.values()].map((bucket) => bucket[0]);
-  const rowsByKey = new Map<string, SongRow[]>();
-  for (const chunk of chunkArray(pendingByKey, PAIRS_PER_STATEMENT)) {
-    const rows = await store.findByAlbumTitle(libraryId, chunk.map(metadataKeyOf).filter((key): key is readonly [string, string] => key !== null));
-    for (const row of rows) {
-      const key = `${row.album_ci}${NUL}${row.title_ci}`;
-      const bucket = rowsByKey.get(key);
-      if (bucket) bucket.push(row);
-      else rowsByKey.set(key, [row]);
-    }
-  }
-
-  // **Every** candidate in a bucket, not just its representative. The representative chose
-  // the query; it does not get to answer for its twin, because `narrow` reads the
-  // candidate's own `discNumber`/`track` and two candidates sharing an `(album, title)`
-  // are exactly the pair that can be told apart by those. Resolving the bucket once and
-  // copying the outcome would also report `ambiguous` for a pair the narrowing separates,
-  // which is the recoverable information this module exists to preserve.
-  for (const [composite, bucket] of pairs) {
-    const candidates = rowsByKey.get(composite) ?? [];
-    for (const candidate of bucket) {
-      const rows = narrow(candidates, candidate);
-      if (rows.length === 1) {
-        outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: rows[0].id, strategy: 'metadata', reason: null });
-      } else if (rows.length > 1) {
-        outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'ambiguous' });
-      } else {
-        outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'not-found' });
-      }
-    }
-  }
-
-  // Anything with no metadata key and no path never entered either loop.
-  for (const candidate of unresolved) {
-    if (!outcomes.has(candidate.remoteId)) {
-      outcomes.set(candidate.remoteId, { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'not-found' });
-    }
-  }
-
-  /**
- * One outcome per **occurrence**, not per distinct id.
- *
- * The lookups are de-duplicated — a 40-track playlist drawn from a 10-track album repeats every
- * id four times, and one lookup per occurrence is one lookup per play in the worst case — but the
- * *result* is not. A playlist legitimately lists the same track twice, and returning one outcome
- * for two entries would drop the repeat and produce a **shorter playlist** than the remote
- * described: a wrong answer rather than an unfinished one, and indistinguishable from a list the
- * user deliberately trimmed.
- */
-return candidates.map((candidate) => outcomes.get(candidate.remoteId) ?? { remoteId: candidate.remoteId, songId: null, strategy: null, reason: 'not-found' as const });
+  return unresolved;
 }
 
-export { matchRemoteSongs, metadataKeyOf, narrow, ci };
-export type { MatchCandidate, MatchOutcome, MatchStore, MatchStrategy };
+/**
+ * Resolve a page of remote songs to local ids.
+ *
+ * One page rather than one song, because the alternative is a statement per song against the
+ * same ceiling that makes the batching in `songIdLookup.ts` load-bearing. Two statements per
+ * page regardless of size: the path lookup and the metadata lookup.
+ *
+ * Three steps and one projection, in the order their confidence decreases — path, then
+ * metadata, then the catch-all — and each is a named function so the order is readable rather
+ * than inferred from the shape of one long body.
+ */
+async function matchRemoteSongs(
+  store: MatchStore,
+  libraryId: LibraryScope,
+  candidates: readonly MatchCandidate[],
+): Promise<MatchOutcome[]> {
+  const outcomes = new Map<string, MatchOutcome>();
+
+  // Deduplicated because a 40-track playlist drawn from a 10-track album repeats every id
+  // forty times, and one lookup per *occurrence* is one lookup per play in the worst case.
+  const unique = new Map<string, MatchCandidate>();
+  for (const candidate of candidates) {
+    if (!unique.has(candidate.remoteId)) unique.set(candidate.remoteId, candidate);
+  }
+  const pending = [...unique.values()];
+
+  const unresolved = await matchByPath(store, libraryId, outcomes, pending);
+  await matchByMetadata(store, libraryId, outcomes, unresolved);
+
+  /**
+   * One outcome per **occurrence**, not per distinct id.
+   *
+   * The lookups are de-duplicated — a 40-track playlist drawn from a 10-track album repeats every
+   * id four times, and one lookup per occurrence is one lookup per play in the worst case — but the
+   * *result* is not. A playlist legitimately lists the same track twice, and returning one outcome
+   * for two entries would drop the repeat and produce a **shorter playlist** than the remote
+   * described: a wrong answer rather than an unfinished one, and indistinguishable from a list the
+   * user deliberately trimmed.
+   */
+  return candidates.map((candidate) => outcomes.get(candidate.remoteId) ?? notFound(candidate.remoteId));
+}
+
+export { matchRemoteSongs };
+// Re-exported so the published surface of this module is unchanged by the split. A caller
+// importing `metadataKeyOf` from here keeps working, and `test/import-matching.test.ts` keeps
+// asserting against the same path it did.
+export { ci, metadataKeyOf, narrow } from './matchKeys';
+// Re-exported so the published surface is unchanged by the split.
+export type { MatchCandidate, MatchOutcome, MatchStore, MatchStrategy } from './matchTypes';

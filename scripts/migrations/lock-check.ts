@@ -292,6 +292,49 @@ function duplicatePrefixes(names: readonly string[]): Finding[] {
 }
 
 /**
+ * Files whose digest disagrees with the lock.
+ *
+ * Three ways to be skipped and each is a rule rather than an omission: the file is new (no
+ * recorded digest), the digest already agrees, or the file is at or before the baseline — a
+ * squash rewrites its own file, and that is the whole reason a baseline exists.
+ */
+function editedFindings(
+  files: readonly MigrationFile[],
+  locked: Readonly<Record<string, string>>,
+  baseline: string | undefined,
+): Finding[] {
+  const findings: Finding[] = [];
+  for (const file of files) {
+    const recorded = locked[file.name];
+    if (recorded === undefined || recorded === file.digest || isSubsumed(file.name, baseline)) continue;
+    findings.push({
+      kind: 'edited',
+      subject: file.name,
+      detail: `was locked as ${recorded} but is now ${file.digest}. It is incremental, so D1 has already applied it to a live database and will never apply this. Restore the file, or carry the change in a new NNNN_ migration.`,
+    });
+  }
+  return findings;
+}
+
+/**
+ * Files on disk that the lock does not carry.
+ *
+ * Only meaningful once there is a lock to be missing an entry from: a file unlocked because the
+ * whole lock is absent is already covered by the `absent` finding, and reporting it twice tells
+ * the operator to fix one problem twice.
+ */
+function unlockedFindings(files: readonly MigrationFile[], inLock: ReadonlySet<string>): Finding[] {
+  return files
+    .filter((file) => !inLock.has(file.name))
+    .map((file) => ({
+      kind: 'unlocked' as const,
+      subject: file.name,
+      detail:
+        'is not in the lock. D1 will apply it to a database that has not seen it, and nothing here can say what it contained. Run with --write to record it.',
+    }));
+}
+
+/**
  * Compares the migrations on disk against the lock.
  *
  * Reports every problem rather than the first, so one run tells the operator the
@@ -337,35 +380,16 @@ export function checkMigrations(
   // checks on migrations that have not been squashed yet.
   const baseline = computedBaseline;
 
-  for (const file of files) {
-    const recorded = locked[file.name];
-    if (recorded === undefined || recorded === file.digest) {
-      continue;
-    }
-    if (isSubsumed(file.name, baseline)) {
-      // A squash rewrites its own file; that is what the baseline is for.
-      continue;
-    }
-    findings.push({
-      kind: 'edited',
-      subject: file.name,
-      detail: `was locked as ${recorded} but is now ${file.digest}. It is incremental, so D1 has already applied it to a live database and will never apply this. Restore the file, or carry the change in a new NNNN_ migration.`,
-    });
-  }
+  findings.push(...editedFindings(files, locked, baseline));
 
   // Only meaningful once there is a lock to be missing an entry from. A file
   // unlocked because the whole lock is absent is already covered by that finding.
+  // Only meaningful once there is a lock to be missing an entry from. A file unlocked because
+  // the whole lock is absent is already covered by the `absent` finding, and reporting it twice
+  // tells the operator to fix one problem twice.
   const missing = usable ? files.filter((file) => !inLock.has(file.name)) : [];
-
   if (usable) {
-    for (const file of missing) {
-      findings.push({
-        kind: 'unlocked',
-        subject: file.name,
-        detail:
-          'is not in the lock. D1 will apply it to a database that has not seen it, and nothing here can say what it contained. Run with --write to record it.',
-      });
-    }
+    findings.push(...unlockedFindings(files, inLock));
   }
 
   for (const name of inLock) {
@@ -385,12 +409,7 @@ export function checkMigrations(
   // A file sorting before the newest locked one can never reach a database that
   // has already applied that newest one, so its statements would only run on a
   // fresh build — the same silent split the checksum exists to prevent.
-  let cutoff: string | undefined;
-  for (const name of inLock) {
-    if (cutoff === undefined || name > cutoff) {
-      cutoff = name;
-    }
-  }
+  const cutoff = [...inLock].sort((a, b) => a.localeCompare(b)).at(-1);
   for (const name of names) {
     if (cutoff !== undefined && name < cutoff && !inLock.has(name)) {
       findings.push({

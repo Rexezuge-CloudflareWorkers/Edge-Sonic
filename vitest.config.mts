@@ -10,7 +10,22 @@ export default defineConfig({
     // re-listed: `test` is a workspace project and therefore has its own. Without
     // this, `test/**/*.test.ts` reaches into `test/node_modules` and tries to run
     // other packages' own suites.
-    exclude: ['**/node_modules/**', '**/dist/**', 'test/integration/**'],
+    //
+    // `*.int.test.ts` is **included**, and there is no second suite.
+    //
+    // There were two: `vitest.config.mts` and `test/integration/vitest.config.mts`, and the
+    // three `*.int.test.ts` files matched `include` in **both** — 221 tests run twice, in two CI
+    // jobs. The second config's own comment conceded the point: *"the coverage floor belongs to
+    // the root suite, which is the one that runs every file"* — while its `exclude` listed
+    // `test/integration/**`, which matched that *directory* and so excluded nothing at all, the
+    // files being at `test/` root.
+    //
+    // Excluding them here instead fixed the double run and **cost 1.35 points of statements**
+    // (89.88 → 88.53, below the floor) because those 221 tests were carrying real coverage — the
+    // schema suite alone is 4,388 lines of assertions over the SQL layer. A green measurement of
+    // a subset is not a better measurement; it is a smaller one. So the duplicate suite is gone:
+    // one suite, every file once, and the one that enforces the floor.
+    exclude: ['**/node_modules/**', '**/dist/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov', 'html'],
@@ -57,13 +72,22 @@ export default defineConfig({
         // Raise these as coverage grows. Never lower them to excuse a regression in
         // code that is already covered.
         //
-        // Set from a measurement of 89.33/78.93/92.07/92.49, floored to whole
-        // percent (statements/branches/functions/lines). The last step added
-        // queue-consumer, playlist, D1-retry and rate-limit tests and removed
-        // a dead batched-count DAO method.
-        // The function floor is the one left behind, because 91 would sit above the
-        // measurement. Branch coverage is what moves most when code is added, so a floor a
-        // routine PR trips is a floor people learn to ignore.
+        // Set from a measurement of 90.40/79.70/93.69/93.34, floored to whole
+        // percent (statements/branches/functions/lines). The previous recorded measurement,
+        // 89.62/79.08/92.46/92.74, was **stale in both files** that quote it — this one and
+        // `docs/agents/testing/AGENTS.md` — by a margin small enough that nobody noticed and
+        // large enough that both were wrong, which is the recorded failure of this repository
+        // applied to its own coverage numbers.
+        //
+        // Two things moved it. Dead code went: 21 exports with no caller, the whole
+        // `D1Utils` retry classification inlined into its caller, and `runPlayCountPagePhase`.
+        // Tests arrived for what nothing reached: the XML parser's own refusals, the
+        // configuration validator's whole report, the metadata bucket key, the Pages proxy, and
+        // the per-library lookup's cost.
+        //
+        // The branch floor is the one left behind, because 80 would sit above the measurement.
+        // Branch coverage is what moves most when code is added, so a floor a routine PR trips is
+        // a floor people learn to ignore.
         //
         // Raised from 78/65/79/80, then 79/66/81/82, then 85/73/90/89 — each the previous
         // *measured* value rather than numbers chosen to be comfortable. The 85/73/90/89

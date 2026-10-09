@@ -41,7 +41,13 @@ interface LibraryWire {
   isEnabled: boolean;
   songCount: number;
   scan: { status: 'idle' | 'scanning' | 'failed' | 'stalled'; scanned: number; lastError: string | null } | null;
-  enrich: { status: 'idle' | 'enriching' | 'failed' | 'stalled' | 'paused'; enriched: number; remaining: number; lastError: string | null; resumeAt: number | null } | null;
+  enrich: {
+    status: 'idle' | 'enriching' | 'failed' | 'stalled' | 'paused';
+    enriched: number;
+    remaining: number;
+    lastError: string | null;
+    resumeAt: number | null;
+  } | null;
   createdAt: number;
 }
 

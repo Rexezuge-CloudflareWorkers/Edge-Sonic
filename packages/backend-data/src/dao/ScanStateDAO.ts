@@ -63,7 +63,8 @@ class ScanStateDAO extends BaseDAO {
    */
   public async countByLibrary(libraryId: string): Promise<number> {
     const row = await this.withRetry(
-      async () => await this.database.prepare('SELECT COUNT(*) AS cnt FROM scan_state WHERE library_id = ?').bind(libraryId).first<CountRow>(),
+      async () =>
+        await this.database.prepare('SELECT COUNT(*) AS cnt FROM scan_state WHERE library_id = ?').bind(libraryId).first<CountRow>(),
       'scanState.countByLibrary',
     );
     return row?.cnt ?? 0;
@@ -247,12 +248,7 @@ class ScanStateDAO extends BaseDAO {
    * this from `rowsWritten > 0` would make `index_version` a function of how many times a
    * library was rescanned. See `FolderWrites` in `scanTypes.ts`.
    */
-  public async saveProgress(
-    libraryId: string,
-    scannedDelta: number,
-    cursorPath: string | null,
-    indexChanged: boolean,
-  ): Promise<void> {
+  public async saveProgress(libraryId: string, scannedDelta: number, cursorPath: string | null, indexChanged: boolean): Promise<void> {
     await this.withRetry(
       async () =>
         await this.database

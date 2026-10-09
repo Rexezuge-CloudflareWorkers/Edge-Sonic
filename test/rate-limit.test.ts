@@ -447,17 +447,41 @@ describe('a budget read from the environment', () => {
     app.get('/probe', (c) => c.json({ ok: true }));
 
     // Over budget: the second request is refused.
-    const overBudget = await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '1.1.1.1' } }), { BUDGET: '1' } as never, executionContext);
+    const overBudget = await app.fetch(
+      new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '1.1.1.1' } }),
+      { BUDGET: '1' } as never,
+      executionContext,
+    );
     expect(overBudget.status).toBe(200);
-    expect((await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '1.1.1.1' } }), { BUDGET: '1' } as never, executionContext)).status).toBe(429);
+    expect(
+      (
+        await app.fetch(
+          new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '1.1.1.1' } }),
+          { BUDGET: '1' } as never,
+          executionContext,
+        )
+      ).status,
+    ).toBe(429);
     resetRateLimitForTests();
 
     // A different budget for the same route, on a fresh bucket. If the resolver were
     // ignored in favour of a captured value this would still be 429.
-    const other = await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '2.2.2.2' } }), { BUDGET: '50' } as never, executionContext);
+    const other = await app.fetch(
+      new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '2.2.2.2' } }),
+      { BUDGET: '50' } as never,
+      executionContext,
+    );
     expect(other.status).toBe(200);
     for (let attempt = 0; attempt < 20; attempt += 1) {
-      expect((await app.fetch(new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '2.2.2.2' } }), { BUDGET: '50' } as never, executionContext)).status).toBe(200);
+      expect(
+        (
+          await app.fetch(
+            new Request(`${ORIGIN_URL}/probe`, { headers: { CFConnectingIP: '2.2.2.2' } }),
+            { BUDGET: '50' } as never,
+            executionContext,
+          )
+        ).status,
+      ).toBe(200);
     }
   });
 

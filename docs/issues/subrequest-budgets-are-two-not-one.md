@@ -13,8 +13,8 @@ for shipping. It was also, as of2026-10-05, **measurably wrong in the direction 
 chose** — and this file records what a real Free account actually does, because the
 whole argument for the pessimistic reading was that nobody had checked.
 
-This is the account's own doctrine applied to itself: *a comment is not a
-measurement*, and neither is a doc page quoted from a second one.
+This is the account's own doctrine applied to itself: _a comment is not a
+measurement_, and neither is a doc page quoted from a second one.
 
 ## Method
 
@@ -32,10 +32,10 @@ the accounting model.
 
 Two shapes of failure had to be told apart, and they are different ceilings:
 
-| Shape | Meaning |
-| --- | --- |
-| `error code: 1101`, no handler output | invocation **killed**, uncatchable |
-| `Too many API requests by single Worker invocation` | **thrown and catchable** |
+| Shape                                               | Meaning                            |
+| --------------------------------------------------- | ---------------------------------- |
+| `error code: 1101`, no handler output               | invocation **killed**, uncatchable |
+| `Too many API requests by single Worker invocation` | **thrown and catchable**           |
 
 ### A measurement bug worth recording
 
@@ -44,11 +44,11 @@ more as `killed`, at a combined 1,400. That was **the probe's fault, not the
 platform's**. The poll used a fixed `sleep`, and "still running" and "killed" both
 read as a missing outcome marker — so a slow probe was scored as a dead one.
 
-Polling to a *final verdict* instead, the same probe survived 3/3.
+Polling to a _final verdict_ instead, the same probe survived 3/3.
 
 This is `docs/agents/testing/AGENTS.md`'s rule about assertions and doubles applied
 to a measurement harness, and it is worth stating because the wrong result was
-*more alarming and therefore more believable* than the right one. A harness that
+_more alarming and therefore more believable_ than the right one. A harness that
 cannot distinguish "not finished" from "failed" does not produce a weak
 conclusion; it produces a confident wrong one.
 
@@ -60,45 +60,45 @@ marker.
 
 **External subrequests and internal-service calls are drawn from separate budgets.**
 
-| Budget | Ceiling (Free) | Overrun |
-| --- | --- | --- |
-| External `fetch` | **50** | Kills the invocation, uncatchable |
-| D1 statements | **1,000** | **Throws**, catchable |
+| Budget           | Ceiling (Free) | Overrun                           |
+| ---------------- | -------------- | --------------------------------- |
+| External `fetch` | **50**         | Kills the invocation, uncatchable |
+| D1 statements    | **1,000**      | **Throws**, catchable             |
 
-Both are per *invocation*. A Durable Object RPC runs the callee on a **fresh**
+Both are per _invocation_. A Durable Object RPC runs the callee on a **fresh**
 budget, and the caller's ceiling is untouched by whatever the callee spent.
 
 ### Evidence: external fetch is 50, everywhere
 
-| Probe | Result |
-| --- | --- |
-| Plain Worker, 50 fetches | survived |
-| Plain Worker, 51 fetches | **killed** (`error code: 1101`) |
-| DO via RPC, 50 fetches inside | survived |
-| DO via RPC, 51 fetches inside | **threw** `Too many subrequests by single Worker invocation` |
-| DO alarm chain, 50 per round × 3 rounds | all 3 rounds completed |
-| DO alarm chain, 51 per round | round 1 threw |
+| Probe                                   | Result                                                       |
+| --------------------------------------- | ------------------------------------------------------------ |
+| Plain Worker, 50 fetches                | survived                                                     |
+| Plain Worker, 51 fetches                | **killed** (`error code: 1101`)                              |
+| DO via RPC, 50 fetches inside           | survived                                                     |
+| DO via RPC, 51 fetches inside           | **threw** `Too many subrequests by single Worker invocation` |
+| DO alarm chain, 50 per round × 3 rounds | all 3 rounds completed                                       |
+| DO alarm chain, 51 per round            | round 1 threw                                                |
 
 ### Evidence: D1 is 1,000, and it is a different ceiling
 
-| Probe | Result |
-| --- | --- |
-| Plain Worker, 1,000 statements | survived |
-| Plain Worker, 1,001 statements | **threw** `Too many API requests…` |
-| Plain Worker, 1,000 D1 + 50 external, one invocation | survived |
-| Workflow 700 D1 + DO 700 D1 (1,400 combined) | survived, 3/3 |
-| Workflow 1,000 D1 + DO 1,000 D1 (2,000 combined) | survived |
+| Probe                                                | Result                             |
+| ---------------------------------------------------- | ---------------------------------- |
+| Plain Worker, 1,000 statements                       | survived                           |
+| Plain Worker, 1,001 statements                       | **threw** `Too many API requests…` |
+| Plain Worker, 1,000 D1 + 50 external, one invocation | survived                           |
+| Workflow 700 D1 + DO 700 D1 (1,400 combined)         | survived, 3/3                      |
+| Workflow 1,000 D1 + DO 1,000 D1 (2,000 combined)     | survived                           |
 
 The last two rows are decisive. Under a shared pool of 1,000, a combined 1,400
 would have died. It did not, twice, and neither did 2,000.
 
 ### Evidence: the DO's spend does not propagate to the caller
 
-| Probe | Result |
-| --- | --- |
-| Workflow 50 external + DO 40 external (90 combined) | survived, 2/2 |
-| Workflow 50 external + DO 50 external (100 combined) | survived, 2/2 |
-| Workflow 50 external + DO 51 external | threw **inside the DO**; the Workflow's own 50 unaffected |
+| Probe                                                | Result                                                    |
+| ---------------------------------------------------- | --------------------------------------------------------- |
+| Workflow 50 external + DO 40 external (90 combined)  | survived, 2/2                                             |
+| Workflow 50 external + DO 50 external (100 combined) | survived, 2/2                                             |
+| Workflow 50 external + DO 51 external                | threw **inside the DO**; the Workflow's own 50 unaffected |
 
 `apps/api/src/workers/scanStubs.ts` charges `meter?.charge(1, 'rpc')` per DO stub.
 **That charge is correct** — an RPC is one subrequest to the caller — and the
@@ -127,7 +127,7 @@ actually bounds.
 
 **The code is not wrong and nothing is broken by it.** A ceiling that is too
 small costs throughput, and this one was chosen for exactly that reason. What is
-wrong is the *stated reason*: `subrequests.ts` says it charges D1 and KV against
+wrong is the _stated reason_: `subrequests.ts` says it charges D1 and KV against
 the 50 because that is the pessimistic reading, and the measurement shows the
 pessimistic reading was not required. A future reader deciding whether to raise
 the budget is being told the platform would kill invocations at 50 D1 statements,
@@ -139,7 +139,7 @@ which is false.
 
 > Exceeding it does not slow a request down and does not raise a catchable error:
 > the runtime terminates the invocation with `Too many subrequests by single
-> Worker invocation`.
+Worker invocation`.
 
 True of the external ceiling. **False of the D1 one**, which throws and is caught
 by an ordinary `try`.
@@ -147,7 +147,7 @@ by an ordinary `try`.
 This must not be read as licence to catch and continue. A catchable limit is
 still a limit, and code that swallows it has converted a loud failure into a quiet
 one — which is this repository's most repeated lesson. What it does mean is that a
-**D1** overrun is *diagnosable*: classifiable, reportable, convertible into the
+**D1** overrun is _diagnosable_: classifiable, reportable, convertible into the
 `paused` status the daily-allowance mechanism already models. An **external**
 overrun is not, and remains the failure mode that must be avoided by
 construction rather than handled.
@@ -214,8 +214,8 @@ number was never checked against the thing it claims to measure"** — the
 repository shipped a fix derived from one doc page's ambiguity, correctly reasoned,
 and it was wrong by a factor of twenty.
 
-The two-step rule that would have caught it: *quote the platform's figure*, then
-*measure the figure this deployment actually gets*. The first was done twice, from
+The two-step rule that would have caught it: _quote the platform's figure_, then
+_measure the figure this deployment actually gets_. The first was done twice, from
 two pages that disagreed. The second was not done at all, on either reading, and
 the asymmetry argument was offered in place of it — which is a reasonable thing to
 do when a measurement is unavailable and not a substitute for one.
@@ -227,8 +227,8 @@ this deployment actually has. That is **not** a defect. A ceiling that is too sm
 costs throughput; a ceiling that is too large costs invocations, and the asymmetry
 argument that produced this budget was correct about which error is worse.
 
-What was wrong was narrower and more specific: the budget was justified as *forced*
-by the platform when it was *chosen* in the face of an ambiguity. Those have
+What was wrong was narrower and more specific: the budget was justified as _forced_
+by the platform when it was _chosen_ in the face of an ambiguity. Those have
 different consequences. A forced constraint is a wall to design around; a chosen
 conservatism is a knob somebody will eventually be invited to turn, and the reason
 it was not turned earlier is that the reasoning said it could not be.
@@ -240,7 +240,7 @@ conservatism would be pushing the product toward the ceiling that actually kills
 invocations. The new assertion records the headroom being given up and says plainly
 that giving it up is the safe direction.
 
-The generalisation of *that*: **a conservative choice is still a choice, and
+The generalisation of _that_: **a conservative choice is still a choice, and
 documenting it as a platform constraint transfers the decision to nobody.** The
 next person who reads "the platform allows 50" will believe it, and act on it, in
 perpetuity.

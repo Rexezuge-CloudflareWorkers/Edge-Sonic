@@ -15,7 +15,17 @@
  * `subsonic/albumKey.ts`. Both variants follow it, so a client that sends either gets the
  * same albums with the same ids.
  */
-import { albumChildElement, albumElement, el, elList, ErrorCode, folderDirOfAlbumId, resolveAlbumId, songElement, SubsonicError } from '@edge-sonic/subsonic';
+import {
+  albumChildElement,
+  albumElement,
+  el,
+  elList,
+  ErrorCode,
+  folderDirOfAlbumId,
+  resolveAlbumId,
+  songElement,
+  SubsonicError,
+} from '@edge-sonic/subsonic';
 import type { Album, ElementNode } from '@edge-sonic/subsonic';
 import type { LibraryRow, LibraryScope, SongRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
@@ -67,7 +77,9 @@ const ALBUM_ORDER_BY: Readonly<Record<string, readonly string[]>> = {
  * every album in `getAlbumList2` where the schema declares neither.
  */
 function renderAlbums(albums: readonly Album[], wrapperName: 'albumList' | 'albumList2'): ElementNode[] {
-  return wrapperName === 'albumList' ? albums.map((album) => albumChildElement(album, album.artistId)) : albums.map((album) => albumElement(album));
+  return wrapperName === 'albumList'
+    ? albums.map((album) => albumChildElement(album, album.artistId))
+    : albums.map((album) => albumElement(album));
 }
 
 /**
@@ -103,7 +115,10 @@ async function albumList(context: RestContext, wrapperName: 'albumList' | 'album
   if (type === 'starred') {
     const starredIds = await context.annotations.listStarred(context.user.id, 'album');
     const annotations = await annotationsFor(context, starredIds.length > 0);
-    return respond(context, elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, libraries, scope, starredIds, annotations), wrapperName)));
+    return respond(
+      context,
+      elList(wrapperName, 'album', {}, renderAlbums(await starredAlbums(context, libraries, scope, starredIds, annotations), wrapperName)),
+    );
   }
 
   const needsRange = type === 'byYear' || type === 'byGenre';
@@ -207,8 +222,8 @@ async function getRandomSongs(context: RestContext): Promise<EnvelopeResponse> {
   const toYear = context.params.int('toYear', Number.MAX_SAFE_INTEGER);
   const rows = await context.songs.listRandom(scope, {
     genreCi: genre ? genre.toLowerCase() : null,
-    ...((fromYear !== Number.MIN_SAFE_INTEGER) && { fromYear }),
-    ...((toYear !== Number.MAX_SAFE_INTEGER) && { toYear }),
+    ...(fromYear !== Number.MIN_SAFE_INTEGER && { fromYear }),
+    ...(toYear !== Number.MAX_SAFE_INTEGER && { toYear }),
     limit: size,
   });
   return respond(context, elList('randomSongs', 'song', {}, await songNodes(context, libraries, rows)));
@@ -343,5 +358,3 @@ const listEndpoints = {
 };
 
 export { listEndpoints, getAlbumList, getAlbumList2, getRandomSongs, getSongsByGenre, getGenres, getStarred, getStarred2, getNowPlaying };
-
-

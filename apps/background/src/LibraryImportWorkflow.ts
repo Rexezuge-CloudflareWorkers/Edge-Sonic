@@ -88,7 +88,8 @@ type ImportStub = DurableObjectStub & PlayCountImportWorker;
  * `completed` over a play-count phase that never started. Each kind maps to exactly one terminal
  * state in {@link LibraryImportWorkflow.settle}.
  */
-type WalkOutcome = { readonly kind: 'not-configured' } | { readonly kind: 'outstanding' } | { readonly kind: 'failed'; readonly reason: string };
+type WalkOutcome =
+  { readonly kind: 'not-configured' } | { readonly kind: 'outstanding' } | { readonly kind: 'failed'; readonly reason: string };
 
 /**
 The event payload. Serializable, so it crosses the Workflow's storage as JSON.
@@ -133,7 +134,8 @@ const STEP_RETRIES = { limit: 3, delay: '10 seconds', backoff: 'exponential' } a
  * it, and the literal names the phase, because "the import failed" is the one sentence that
  * leaves an operator with no next step.
  */
-const WALK_START_FAILED = 'The play-count walk could not be started, so no play counts were read. The other phases in this report are unaffected.';
+const WALK_START_FAILED =
+  'The play-count walk could not be started, so no play counts were read. The other phases in this report are unaffected.';
 
 class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWorkflowPayload> {
   public async run(event: Readonly<WorkflowEvent<ImportWorkflowPayload>>, step: WorkflowStep): Promise<{ readonly runId: string }> {
@@ -229,7 +231,12 @@ class LibraryImportWorkflow extends WorkflowEntrypoint<Cloudflare.Env, ImportWor
    * and a Workflow instance hibernates between steps. A field would carry that password through
    * storage the platform does not encrypt for us.
    */
-  private async phaseContext(context: { runId: string; sourceId: string; userId: string; libraryIds: readonly string[] }): Promise<PhaseContext> {
+  private async phaseContext(context: {
+    runId: string;
+    sourceId: string;
+    userId: string;
+    libraryIds: readonly string[];
+  }): Promise<PhaseContext> {
     const scope = createScanWorkerScope(this.env);
     // The **same** service the route used to list the remote's playlists, for the same row and
     // therefore the same key. Two readers of one stored credential is two implementations of

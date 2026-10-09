@@ -60,7 +60,11 @@ beforeEach(async () => {
   vi.unstubAllGlobals();
 });
 
-async function call(path: string, init: RequestInit = {}, overrides: Record<string, unknown> = {}): Promise<{ status: number; body: Record<string, unknown> }> {
+async function call(
+  path: string,
+  init: RequestInit = {},
+  overrides: Record<string, unknown> = {},
+): Promise<{ status: number; body: Record<string, unknown> }> {
   const response = await harness.fetch(`${ORIGIN}${path}`, overrides, init);
   const text = await response.text();
   return { status: response.status, body: text.length === 0 ? {} : (JSON.parse(text) as Record<string, unknown>) };
@@ -170,11 +174,15 @@ describe('registering an import source', () => {
   it('refuses a duplicate remote account with a conflict rather than storing two', async () => {
     await seedSource('alice');
 
-    const response = await harness.fetch(`${ORIGIN}/user/import/sources`, {}, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: 'A different label', baseUrl: 'https://other.example.com', username: 'ALICE', password: 'x' }),
-    });
+    const response = await harness.fetch(
+      `${ORIGIN}/user/import/sources`,
+      {},
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ name: 'A different label', baseUrl: 'https://other.example.com', username: 'ALICE', password: 'x' }),
+      },
+    );
     const { status } = { status: response.status };
 
     // Two sources sharing a *credential* is what would quietly import one server's data into
@@ -336,11 +344,15 @@ describe('the read surface, and what it must not spend', () => {
     // would have made this and a refused URL share one status.
     await seedSource('alice');
 
-    const response = await harness.fetch(`${ORIGIN}/user/import/sources`, {}, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ name: 'Another label', baseUrl: 'https://other.example.com', username: 'ALICE', password: 'x' }),
-    });
+    const response = await harness.fetch(
+      `${ORIGIN}/user/import/sources`,
+      {},
+      {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ name: 'Another label', baseUrl: 'https://other.example.com', username: 'ALICE', password: 'x' }),
+      },
+    );
 
     expect(response.status).toBe(409);
   });
@@ -539,5 +551,5 @@ describe('the routes are guarded by Access, and a Subsonic credential does not s
     const response = await harness.fetch(`${ORIGIN}/user/import?${token}`, PRODUCTION, {});
 
     expect(response.status).toBe(401);
-});
+  });
 });

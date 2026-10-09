@@ -148,7 +148,9 @@ async function enrichChanged(
       // denominated in **billed** rows, `songs` bills ten per row written, and a
       // caller-incremented `1` here would under-report the single most expensive write in a
       // chunk by a factor of ten.
-      const written = await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () => budget.charge());
+      const written = await enrich(library, { id: input.id, path: input.path, size: input.size, mtimeMs: input.mtimeMs }, () =>
+        budget.charge(),
+      );
       rowsWritten += written.rowsWritten;
       billedRows += written.billedRows;
     } catch {
