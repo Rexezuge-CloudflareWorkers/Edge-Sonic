@@ -163,7 +163,7 @@ function fakeKv(initial: Record<string, string> = {}, options: FakeKvOptions = {
     },
     async delete(key: string): Promise<unknown> {
       calls.delete += 1;
-      return options.failAll ? (await refuse()) : store.delete(key);
+      return options.failAll ? await refuse() : store.delete(key);
     },
     async list(listing: KvListOptions): Promise<{ keys: Array<{ name: string }>; list_complete: boolean }> {
       calls.list += 1;

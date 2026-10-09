@@ -48,7 +48,12 @@ import { Tokens } from './tokens';
  * `backend-data`'s class shape, and the four methods it actually uses are a narrower and more
  * stable contract than either DAO is.
  */
-function bindIndexDrop(scope: Container, db: D1Queryable, subrequests: SubrequestMeter, scanFor?: (libraryId: string) => ScanControl | null): void {
+function bindIndexDrop(
+  scope: Container,
+  db: D1Queryable,
+  subrequests: SubrequestMeter,
+  scanFor?: (libraryId: string) => ScanControl | null,
+): void {
   const store = { stats: new IndexStatsDAO(db, subrequests), drop: new IndexDropDAO(db, subrequests) };
   scope.bindValue(Tokens.IndexStore, store);
   scope.bindValue(

@@ -67,7 +67,14 @@ describe('createPlaylist', () => {
 
   it('returns the playlist with its entries in the client’s order', async () => {
     const { body } = await harness.rest('createPlaylist', { name: 'Mix', songId: `${HOLOCENE},${SKINNY_LOVE}` });
-    const playlist = payload<{ id: string; name: string; songCount: number; duration: number; public: boolean; entry: Array<{ id: string }> | { id: string } }>(body, 'playlist');
+    const playlist = payload<{
+      id: string;
+      name: string;
+      songCount: number;
+      duration: number;
+      public: boolean;
+      entry: Array<{ id: string }> | { id: string };
+    }>(body, 'playlist');
     expect(playlist.name).toBe('Mix');
     expect(playlist.songCount).toBe(2);
     // The two tracks' durations, summed — progress bars are arithmetic.
@@ -104,7 +111,10 @@ describe('updatePlaylist', () => {
   });
 
   it('removes by position, highest first, so the order sent does not matter', async () => {
-    const created = await harness.rest('createPlaylist', { name: 'Mix', songId: `${SKINNY_LOVE},${HOLOCENE},${subsonicId('s', `${ALBUM_DIR}/cover.jpg`)}` });
+    const created = await harness.rest('createPlaylist', {
+      name: 'Mix',
+      songId: `${SKINNY_LOVE},${HOLOCENE},${subsonicId('s', `${ALBUM_DIR}/cover.jpg`)}`,
+    });
     const id = payload<{ id: string }>(created.body, 'playlist').id;
 
     // Removing indices 0 and 2, sent in the *low* order on purpose: the DAO must

@@ -38,8 +38,7 @@ export const createImportSource = (body: {
   musicFolderId?: string;
 }): Promise<{ id: string; name: string; baseUrl: string }> => apiPost('/import/sources', body);
 
-export const deleteImportSource = (id: string): Promise<{ ok: true }> =>
-  apiDelete(`/import/sources/${encodeURIComponent(id)}`);
+export const deleteImportSource = (id: string): Promise<{ ok: true }> => apiDelete(`/import/sources/${encodeURIComponent(id)}`);
 
 export const listImports = (): Promise<{ runs: ImportRunSummary[] }> => apiGet('/import');
 
@@ -62,5 +61,5 @@ interface ImportRunDetail {
   readonly report: ImportReport | null;
 }
 
-export type { ImportRunDetail,     };
-export {type ImportPhase, type ImportReport, type ImportRunSummary, type ImportSourceSummary} from '../types';
+export type { ImportRunDetail };
+export { type ImportPhase, type ImportReport, type ImportRunSummary, type ImportSourceSummary } from '../types';

@@ -198,19 +198,61 @@ const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
   // No list at all: the protocol types this payload as a single `value`, so the wrapper is a
   // record and carries nothing. It also takes no `id` — the protocol lets it fall back to
   // `artist` and `title` — so there is nothing to validate.
-  getLyrics: { wrapper: 'lyrics', listKeys: null, idKinds: null, requiredParams: [], reason: 'this track has no lyrics, and none are embedded' },
-  getLyricsBySongId: { wrapper: 'lyricsList', listKeys: ['structuredLyrics'], idKinds: ['s'], requiredParams: [], reason: 'this track has no lyrics, and none are embedded' },
+  getLyrics: {
+    wrapper: 'lyrics',
+    listKeys: null,
+    idKinds: null,
+    requiredParams: [],
+    reason: 'this track has no lyrics, and none are embedded',
+  },
+  getLyricsBySongId: {
+    wrapper: 'lyricsList',
+    listKeys: ['structuredLyrics'],
+    idKinds: ['s'],
+    requiredParams: [],
+    reason: 'this track has no lyrics, and none are embedded',
+  },
   // `getArtistInfo` takes an artist **or** an album id, per the protocol, so both are
   // accepted and neither is demanded.
-  getArtistInfo: { wrapper: 'artistInfo', listKeys: ['biography', 'similarArtist'], idKinds: ['ar', 'al'], requiredParams: [], reason: 'last.fm artist info is not configured' },
-  getArtistInfo2: { wrapper: 'artistInfo2', listKeys: ['biography', 'similarArtist'], idKinds: ['ar'], requiredParams: [], reason: 'last.fm artist info is not configured' },
+  getArtistInfo: {
+    wrapper: 'artistInfo',
+    listKeys: ['biography', 'similarArtist'],
+    idKinds: ['ar', 'al'],
+    requiredParams: [],
+    reason: 'last.fm artist info is not configured',
+  },
+  getArtistInfo2: {
+    wrapper: 'artistInfo2',
+    listKeys: ['biography', 'similarArtist'],
+    idKinds: ['ar'],
+    requiredParams: [],
+    reason: 'last.fm artist info is not configured',
+  },
   // Keyed on an artist *name*, so there is no id to resolve and nothing to validate.
-  getTopSongs: { wrapper: 'topSongs', listKeys: ['song'], idKinds: null, requiredParams: ['artist'], reason: 'last.fm charts are not configured' },
-  getInternetRadioStations: { wrapper: 'internetRadioStations', listKeys: ['internetRadioStation'], idKinds: null, requiredParams: [], reason: 'no internet radio stations are configured' },
+  getTopSongs: {
+    wrapper: 'topSongs',
+    listKeys: ['song'],
+    idKinds: null,
+    requiredParams: ['artist'],
+    reason: 'last.fm charts are not configured',
+  },
+  getInternetRadioStations: {
+    wrapper: 'internetRadioStations',
+    listKeys: ['internetRadioStation'],
+    idKinds: null,
+    requiredParams: [],
+    reason: 'no internet radio stations are configured',
+  },
   // Sharing is not implemented, so there is nothing to share and nothing to list. Here rather
   // than in `UNIMPLEMENTED` because this is a listing a client reads on every dashboard:
   // `code=70` there reads as "sharing is broken" rather than "you have no shares".
-  getShares: { wrapper: 'shares', listKeys: ['share'], idKinds: null, requiredParams: [], reason: 'sharing is not implemented, so there are none' },
+  getShares: {
+    wrapper: 'shares',
+    listKeys: ['share'],
+    idKinds: null,
+    requiredParams: [],
+    reason: 'sharing is not implemented, so there are none',
+  },
 };
 
 const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {
@@ -347,11 +389,20 @@ const ENDPOINTS: Record<string, RestHandler> = new Proxy(IMPLEMENTED, {
     return undefined;
   },
   has(target, property: string) {
-    return Reflect.has(target, property) || property in UNIMPLEMENTED || property in EMPTY_RESULT;
+    // `hasOwn`, like the `get` trap above — and this one was the last to be changed.
+    //
+    // `Reflect.has` and `in` both **walk the prototype chain**, so this answered `true` for every
+    // name `Object.prototype` carries: `'toString' in ENDPOINTS` was `true` while
+    // `ENDPOINTS.toString` was `undefined`. Nothing reads the registry with `in` today, so it
+    // leaked nothing — but two traps answering differently about one name are two answers, and the
+    // comment above claimed all three tables already asked with `hasOwn`.
+    return Object.hasOwn(IMPLEMENTED, property) || Object.hasOwn(UNIMPLEMENTED, property) || Object.hasOwn(EMPTY_RESULT, property);
   },
 });
 
-const ENDPOINT_NAMES: readonly string[] = [...Object.keys(IMPLEMENTED), ...Object.keys(UNIMPLEMENTED), ...Object.keys(EMPTY_RESULT)].sort((a, b) => a.localeCompare(b));
+const ENDPOINT_NAMES: readonly string[] = [...Object.keys(IMPLEMENTED), ...Object.keys(UNIMPLEMENTED), ...Object.keys(EMPTY_RESULT)].sort(
+  (a, b) => a.localeCompare(b),
+);
 
 export { ENDPOINTS, ENDPOINT_NAMES, UNIMPLEMENTED, EMPTY_RESULT, PLAIN_TEXT_BODIES };
 export type { RestHandler, AbsentKind, AbsentEndpoint };

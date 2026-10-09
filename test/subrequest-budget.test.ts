@@ -119,7 +119,9 @@ const D1_MEASURED_CEILING = 1000;
  */
 function seeded(): ReturnType<typeof sqliteQueryable> {
   const handle = sqliteQueryable();
-  for (const file of readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort()) {
+  for (const file of readdirSync(MIGRATIONS)
+    .filter((name) => name.endsWith('.sql'))
+    .sort()) {
     execScript(handle, readFileSync(`${MIGRATIONS}/${file}`, 'utf8'));
   }
   void handle.db
@@ -328,9 +330,9 @@ describe('every bound is derived from the one platform number', () => {
     expect(ENRICH_TRACKS_PER_CHUNK).toBe(
       Math.floor((SCAN_CHUNK_SUBSREQUEST_BUDGET - SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD) / SUBSREQUESTS_PER_ENRICHED_TRACK),
     );
-    expect(
-      SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD + ENRICH_TRACKS_PER_CHUNK * SUBSREQUESTS_PER_ENRICHED_TRACK,
-    ).toBeLessThanOrEqual(SCAN_CHUNK_SUBSREQUEST_BUDGET);
+    expect(SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD + ENRICH_TRACKS_PER_CHUNK * SUBSREQUESTS_PER_ENRICHED_TRACK).toBeLessThanOrEqual(
+      SCAN_CHUNK_SUBSREQUEST_BUDGET,
+    );
     // And the overhead counts what the chunk actually spends: the idle-only guard's read,
     // the page itself, and the remaining count the progress display is built from.
     expect(SUBSREQUESTS_PER_ENRICH_CHUNK_OVERHEAD).toBe(3);
@@ -453,7 +455,7 @@ describe('a D1 statement is a subrequest', () => {
 });
 
 describe('the wiring', () => {
-  it('gives both composition roots\' DAOs a real counter', () => {
+  it("gives both composition roots' DAOs a real counter", () => {
     // `createScanWorkerScope` is `createRequestScope`, so there is one composition root to
     // assert — but the assertion exists because an unmetered DAO is invisible: it works, it
     // returns the right rows, and it spends nothing the budget can see.
@@ -522,7 +524,20 @@ describe('a read whose size the caller chose is clamped, and one it did not is r
     for (let index = 0; index < count; index += 1) {
       const artist = `Artist ${String(index).padStart(4, '0')}`;
       void insert
-        .bind(`s${index}`, `Artist ${index}/${artist}.flac`, `Artist ${index}`, `${artist}.flac`, `${artist}.flac`, artist, artist.toLowerCase(), artist, artist.toLowerCase(), artist, artist.toLowerCase(), 1)
+        .bind(
+          `s${index}`,
+          `Artist ${index}/${artist}.flac`,
+          `Artist ${index}`,
+          `${artist}.flac`,
+          `${artist}.flac`,
+          artist,
+          artist.toLowerCase(),
+          artist,
+          artist.toLowerCase(),
+          artist,
+          artist.toLowerCase(),
+          1,
+        )
         .run();
     }
     return handle;
@@ -558,7 +573,12 @@ describe('a read whose size the caller chose is clamped, and one it did not is r
     // error were reworded, and the thing that matters is that this is the budget error and not
     // a `DatabaseError` — because the two want opposite responses, and only one of them is the
     // client's request being too large.
-    await expect(songs.listIdsIn('L1', Array.from({ length: 500 }, (_, index) => `s${index}`))).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
+    await expect(
+      songs.listIdsIn(
+        'L1',
+        Array.from({ length: 500 }, (_, index) => `s${index}`),
+      ),
+    ).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
     handle.close();
   });
 });
@@ -572,7 +592,15 @@ describe('the guards have teeth', () => {
     const handle = seeded();
     const meter = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
     const dao = new NodeDAO(handle.db, meter);
-    const inputs = Array.from({ length: 10 }, (_, index) => ({ libraryId: 'L1', path: `A/${index}`, parentPath: 'A', name: String(index), mtimeMs: 1, etag: null, depth: 2 }));
+    const inputs = Array.from({ length: 10 }, (_, index) => ({
+      libraryId: 'L1',
+      path: `A/${index}`,
+      parentPath: 'A',
+      name: String(index),
+      mtimeMs: 1,
+      etag: null,
+      depth: 2,
+    }));
 
     await dao.upsertMany(inputs);
 
@@ -590,7 +618,15 @@ describe('the guards have teeth', () => {
     const handle = seeded();
     const meter = new SubrequestCounter(6);
     const dao = new NodeDAO(handle.db, meter);
-    const inputs = Array.from({ length: 10 }, (_, index) => ({ libraryId: 'L1', path: `A/${index}`, parentPath: 'A', name: String(index), mtimeMs: 1, etag: null, depth: 2 }));
+    const inputs = Array.from({ length: 10 }, (_, index) => ({
+      libraryId: 'L1',
+      path: `A/${index}`,
+      parentPath: 'A',
+      name: String(index),
+      mtimeMs: 1,
+      etag: null,
+      depth: 2,
+    }));
 
     const result = await dao.upsertMany(inputs);
 

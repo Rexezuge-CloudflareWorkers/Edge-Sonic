@@ -114,12 +114,4 @@ function basename(path: string): string {
   return slash === -1 ? path : path.slice(slash + 1);
 }
 
-export {
-  AUDIO_SUFFIXES,
-  COVER_NAMES,
-  isAudioFile,
-  suffixOf,
-  parentOf,
-  depthOf,
-  basename,
-};
+export { AUDIO_SUFFIXES, COVER_NAMES, isAudioFile, suffixOf, parentOf, depthOf, basename };

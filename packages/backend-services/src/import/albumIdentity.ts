@@ -70,7 +70,8 @@ function albumKeyFor(albumArtist: string | null, album: string | null, grouping:
   const artistCi = ci(albumArtist);
   // `albumKeySpec` is written against a *row*, so the pair is assembled in that shape rather
   // than re-deriving the key here — the whole point is that this module has no second answer.
-  return albumKeySpec({ dir_path: '', album: albumCi, album_ci: albumCi, album_artist: artistCi, album_artist_ci: artistCi }, grouping).string;
+  return albumKeySpec({ dir_path: '', album: albumCi, album_ci: albumCi, album_artist: artistCi, album_artist_ci: artistCi }, grouping)
+    .string;
 }
 
 /**
@@ -83,7 +84,9 @@ function albumKeyFor(albumArtist: string | null, album: string | null, grouping:
  * imported album differently from every album already on the server.
  */
 function resolveGrouping(value: string | undefined): AlbumGroupingValue {
-  return value === AlbumGrouping.Folder || value === AlbumGrouping.Album || value === AlbumGrouping.AlbumArtist ? value : AlbumGrouping.Album;
+  return value === AlbumGrouping.Folder || value === AlbumGrouping.Album || value === AlbumGrouping.AlbumArtist
+    ? value
+    : AlbumGrouping.Album;
 }
 
 /**

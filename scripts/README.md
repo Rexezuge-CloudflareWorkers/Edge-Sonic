@@ -4,15 +4,15 @@ Repo tooling, grouped by **who runs it**. Every script is TypeScript except
 `check-god-files.mjs`, and all of them are covered by `pnpm run lint` and
 `pnpm run typecheck:scripts`.
 
-| Directory     | Runs from             | Purpose                                                                              |
-| ------------- | --------------------- | ------------------------------------------------------------------------------------ |
-| `lib/`        | imported              | Reusable helpers. No side effects on import.                                          |
-| `build/`      | `pnpm install`, CI    | Keeps a fresh clone typecheckable, and checks the built shell before it is deployed. |
-| `deploy/`     | `deploy-worker` job   | Materialize `wrangler.jsonc` and provision its resources and secrets.                 |
-| `i18n/`       | a human, or CI        | Web locale validation (also in `pnpm run checks` and the `locales` CI job).           |
-| `migrations/` | a human, or CI        | The migration checksum lock. See `../docs/agents/indexing/AGENTS.md`.                 |
-| `backup/`     | `backup-d1` job       | Export, encrypt, upload and prune the nightly dump. The preflight fails a configured
-  destination with no `BACKUP_ENCRYPTION_KEY`. See `../docs/db-backup-recovery.md`.          |
+| Directory                                                                         | Runs from           | Purpose                                                                              |
+| --------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------------------------ |
+| `lib/`                                                                            | imported            | Reusable helpers. No side effects on import.                                         |
+| `build/`                                                                          | `pnpm install`, CI  | Keeps a fresh clone typecheckable, and checks the built shell before it is deployed. |
+| `deploy/`                                                                         | `deploy-worker` job | Materialize `wrangler.jsonc` and provision its resources and secrets.                |
+| `i18n/`                                                                           | a human, or CI      | Web locale validation (also in `pnpm run checks` and the `locales` CI job).          |
+| `migrations/`                                                                     | a human, or CI      | The migration checksum lock. See `../docs/agents/indexing/AGENTS.md`.                |
+| `backup/`                                                                         | `backup-d1` job     | Export, encrypt, upload and prune the nightly dump. The preflight fails a configured |
+| destination with no `BACKUP_ENCRYPTION_KEY`. See `../docs/db-backup-recovery.md`. |
 
 `check-god-files.mjs` and `compare-reference.ts` sit at the root: the first is run by
 `node` from three places and has no siblings, the second is an operator tool for
@@ -36,10 +36,10 @@ comparing this server's answers against a reference Subsonic deployment.
 | `wrangler-config/types.ts`     | `wrangler.jsonc` paths, placeholder ids (`DEFAULT_UUID`, `DEFAULT_HEX_ID`), config interfaces.        |
 | `wrangler-config/cli.ts`       | `runWrangler`, `parseJsonArray`.                                                                      |
 | `wrangler-config/patches.ts`   | Read/rewrite `wrangler.jsonc`; `WRANGLER_JSONC` / `WRANGLER_PATCH_JSON` / `WRANGLER_VARS_PATCH_JSON`. |
-| `wrangler-config/resources.ts` | Create missing D1 / KV / Queues / Vectorize / Secrets Store resources and patch their ids in.           |
-| `wrangler-table.ts`            | Parses the `cli-table3` output `wrangler` prints for `secrets-store …`.                                 |
+| `wrangler-config/resources.ts` | Create missing D1 / KV / Queues / Vectorize / Secrets Store resources and patch their ids in.         |
+| `wrangler-table.ts`            | Parses the `cli-table3` output `wrangler` prints for `secrets-store …`.                               |
 | `github-actions.ts`            | `setOutput`, `logError`, `fail`. No `@actions/*` dependency, so scripts stay runnable locally.        |
-| `cli-args.ts`                  | Flag parsing, for scripts that take flags.                                                             |
+| `cli-args.ts`                  | Flag parsing, for scripts that take flags.                                                            |
 
 `DEFAULT_UUID` is the single definition of the placeholder D1 id. `deploy/` writes a real
 id over it, and the backup workflow's `resolve-d1-target.ts` refuses to export while it
@@ -96,7 +96,7 @@ plus the two raw placeholder ids.
 ## A check that cannot fail is not a check
 
 Every rule in `i18n/` and `migrations/` has a paired test that runs the comparison
-against a value that is *wrong*, and asserts the finding names the file or key it is
+against a value that is _wrong_, and asserts the finding names the file or key it is
 about. The reason is not theoretical: `locale-checks.ts`'s parser shipped two broken
 shapes while this directory was being laid out, and **neither was caught by a test**,
 because the parser had no test.
@@ -109,4 +109,4 @@ because the parser had no test.
 
 Both are now pinned, along with a third found by a test written afterwards: a default
 matched by searching forward rather than at the position the key ended at picks up a
-*later* call's comma and default. If you add a rule, add the case that makes it go red.
+_later_ call's comma and default. If you add a rule, add the case that makes it go red.

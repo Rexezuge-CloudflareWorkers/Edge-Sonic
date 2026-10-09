@@ -78,7 +78,9 @@ describe('the Subsonic envelope', () => {
   });
 
   it('honours f=xml and escapes untrusted values', async () => {
-    const response = await get(`${ORIGIN}/rest/getMusicDirectory.view?${new URLSearchParams({ u: USERNAME, t: EXPECTED_TOKEN, s: SALT, v: '1.16.1', f: 'xml', id: subsonicId('dir', ALBUM_DIR) })}`);
+    const response = await get(
+      `${ORIGIN}/rest/getMusicDirectory.view?${new URLSearchParams({ u: USERNAME, t: EXPECTED_TOKEN, s: SALT, v: '1.16.1', f: 'xml', id: subsonicId('dir', ALBUM_DIR) })}`,
+    );
     expect(response.headers.get('content-type')).toContain('text/xml');
     const xml = await response.text();
     expect(xml).toContain('<?xml version="1.0" encoding="UTF-8"?>');
@@ -141,9 +143,7 @@ describe('authentication', () => {
 
   it('accepts the legacy cleartext password', async () => {
     // The spec allows `p` instead of `t`+`s`, and some clients still send it.
-    const response = await get(
-      `${ORIGIN}/rest/ping.view?${new URLSearchParams({ u: USERNAME, p: PASSWORD, v: '1.16.1', f: 'json' })}`,
-    );
+    const response = await get(`${ORIGIN}/rest/ping.view?${new URLSearchParams({ u: USERNAME, p: PASSWORD, v: '1.16.1', f: 'json' })}`);
     expect(response.status).toBe(200);
     expect(((await response.json()) as SubsonicBody)['subsonic-response'].status).toBe('ok');
   });
@@ -278,7 +278,10 @@ describe('route order', () => {
     // can only break clients, and a browser never issues the real request after a
     // failed preflight.
     const response = await harness.worker.fetch(
-      new Request(`${ORIGIN}/rest/ping.view`, { method: 'OPTIONS', headers: { origin: 'https://app.example', 'access-control-request-method': 'GET' } }),
+      new Request(`${ORIGIN}/rest/ping.view`, {
+        method: 'OPTIONS',
+        headers: { origin: 'https://app.example', 'access-control-request-method': 'GET' },
+      }),
       env() as never,
       executionContext,
     );
@@ -444,7 +447,10 @@ describe('browsing', () => {
 
   it('serves getMusicDirectory with files as children and no WebDAV request', async () => {
     const { body } = await rest('getMusicDirectory', { id: subsonicId('dir', ALBUM_DIR) });
-    const directory = body['subsonic-response'].directory as { name: string; child: Array<{ title: string; isDir: boolean; duration: number }> };
+    const directory = body['subsonic-response'].directory as {
+      name: string;
+      child: Array<{ title: string; isDir: boolean; duration: number }>;
+    };
     expect(directory.name).toBe('For Emma');
     const skinnyLove = directory.child.find((child) => child.title === 'Skinny Love');
     expect(skinnyLove?.isDir).toBe(false);
@@ -523,7 +529,15 @@ describe('the cache is never load-bearing', () => {
     // earlier check would be ignored for that reason, and would prove less.
     await harness.cache.ns.put(
       `songMeta:v1:${SKINNY_LOVE}`,
-      JSON.stringify({ mtimeMs: 1000, readerVersion: READER_VERSION, durationSeconds: 9999, bitrateKbps: 1, sampleRate: 44_100, channels: 2, container: 'flac' }),
+      JSON.stringify({
+        mtimeMs: 1000,
+        readerVersion: READER_VERSION,
+        durationSeconds: 9999,
+        bitrateKbps: 1,
+        sampleRate: 44_100,
+        channels: 2,
+        container: 'flac',
+      }),
     );
     await harness.cache.ns.put('songMeta:v1:nonsense:artists', 'not json at all');
     const poisoned = await (await get(restUrl('getSong', { id: SKINNY_LOVE }))).text();
@@ -559,7 +573,11 @@ describe('the cache is never load-bearing', () => {
   it('answers identically when every cache operation throws', async () => {
     const failing = fakeKv({}, { failAll: true });
     const withDeadCache = await (
-      await harness.worker.fetch(new Request(restUrl('getSong', { id: SKINNY_LOVE })), { ...env(), CACHE: failing.ns } as never, executionContext)
+      await harness.worker.fetch(
+        new Request(restUrl('getSong', { id: SKINNY_LOVE })),
+        { ...env(), CACHE: failing.ns } as never,
+        executionContext,
+      )
     ).text();
     const healthy = await (await get(restUrl('getSong', { id: SKINNY_LOVE }))).text();
 

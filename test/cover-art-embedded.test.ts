@@ -41,7 +41,9 @@ import type { DavEntry } from './helpers/fakeDav';
  * would produce something that still sniffs as a JPEG but is not one, which is why the
  * length is asserted alongside the magic.
  */
-const COVER = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9]);
+const COVER = Uint8Array.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9,
+]);
 
 /**
  * Audio-frame filler: no `fLaC` magic, so `findPicture` reports no picture. This is what
@@ -87,7 +89,16 @@ function blockHeader(type: number, length: number, last = false): number[] {
  */
 function flacWithCover(cover: Uint8Array): Uint8Array {
   const body = pictureBlock(cover);
-  return Uint8Array.from(concat(ascii('fLaC'), blockHeader(0, 34), Array.from({length: 34}, () => 0), blockHeader(6, body.length, true), body, Array.from({length: 4096}, () => 0)));
+  return Uint8Array.from(
+    concat(
+      ascii('fLaC'),
+      blockHeader(0, 34),
+      Array.from({ length: 34 }, () => 0),
+      blockHeader(6, body.length, true),
+      body,
+      Array.from({ length: 4096 }, () => 0),
+    ),
+  );
 }
 
 /**
@@ -100,7 +111,9 @@ function flacWithCover(cover: Uint8Array): Uint8Array {
  *   passthrough prefers the origin's type, so a mismatched fixture reports the
  *   embedded picture's type and looks like the sidecar was ignored.
  */
-function originTree(options: { sidecar?: { name: string; bytes: Uint8Array } | null; trackBytes?: Uint8Array; mtime?: number } = {}): Record<string, DavEntry[]> {
+function originTree(
+  options: { sidecar?: { name: string; bytes: Uint8Array } | null; trackBytes?: Uint8Array; mtime?: number } = {},
+): Record<string, DavEntry[]> {
   const track = options.trackBytes ?? flacWithCover(COVER);
   // The key the artwork cache is built from is the track's own revision — mtime **and**
   // size — so a caller staging two fixtures must vary one of them or the second is
@@ -114,7 +127,14 @@ function originTree(options: { sidecar?: { name: string; bytes: Uint8Array } | n
   ];
   const sidecar = options.sidecar === undefined ? { name: 'cover.jpg', bytes: COVER } : options.sidecar;
   if (sidecar !== null) {
-    entries.push({ path: `${ALBUM_PATH}/${sidecar.name}`, size: sidecar.bytes.byteLength, contentType: 'image/png', mtime: 1000, etag: '"e"', body: sidecar.bytes });
+    entries.push({
+      path: `${ALBUM_PATH}/${sidecar.name}`,
+      size: sidecar.bytes.byteLength,
+      contentType: 'image/png',
+      mtime: 1000,
+      etag: '"e"',
+      body: sidecar.bytes,
+    });
   }
   return { [ALBUM_PATH]: entries };
 }
@@ -130,7 +150,18 @@ let originalFetch: typeof fetch;
  * a `NOT NULL` constraint — which is the DAO's schema knowledge doing its job.
  */
 async function addCoverNode(name: string): Promise<void> {
-  await new NodeDAO(harness.db.db).upsertMany([{ libraryId: LIBRARY_ID, path: `${ALBUM_DIR}/${name}`, parentPath: ALBUM_DIR, name, mtimeMs: 1000, etag: '"e"', depth: 3, isScanned: true }]);
+  await new NodeDAO(harness.db.db).upsertMany([
+    {
+      libraryId: LIBRARY_ID,
+      path: `${ALBUM_DIR}/${name}`,
+      parentPath: ALBUM_DIR,
+      name,
+      mtimeMs: 1000,
+      etag: '"e"',
+      depth: 3,
+      isScanned: true,
+    },
+  ]);
 }
 
 /**
@@ -185,7 +216,9 @@ describe('getCoverArt with embedded artwork', () => {
     // the placeholder even though the artist's album carries an embedded picture.
     const artistId = harness.ids.artist;
     const { body } = await harness.rest('getArtists');
-    const artists = (body['subsonic-response'] as Record<string, unknown>).artists as { index: Array<{ artist: Array<{ id: string; coverArt?: string }> }> };
+    const artists = (body['subsonic-response'] as Record<string, unknown>).artists as {
+      index: Array<{ artist: Array<{ id: string; coverArt?: string }> }>;
+    };
     const mine = artists.index.flatMap((group) => group.artist).find((entry) => entry.id === artistId);
     expect(mine?.coverArt, 'getArtists publishes no coverArt for the artist').toBe(artistId);
 
@@ -337,7 +370,9 @@ describe('getCoverArt with embedded artwork', () => {
       // `.length`, so `value.length > 0` is `undefined > 0` and silently filters the entry
       // out. A green assertion that measured nothing is the failure mode this file exists
       // to catch, so it does not get to commit one.
-      const stored = [...held.cache.entries().values()].map((value) => (typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value)));
+      const stored = [...held.cache.entries().values()].map((value) =>
+        typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value),
+      );
       expect(stored.map((value) => value.byteLength)).toContain(COVER.length);
     } finally {
       globalThis.fetch = originalFetch;
@@ -467,10 +502,30 @@ describe('getCoverArt with embedded artwork', () => {
     // and size, which is exactly what the test below is about — and the second would be
     // answered out of the first's cache entry before the assertion could see anything.
     const formats = [
-      { name: 'tiff (little-endian)', revision: 3001, mimeType: 'image/tiff', bytes: Uint8Array.from([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00]) },
-      { name: 'tiff (big-endian)', revision: 3002, mimeType: 'image/tiff', bytes: Uint8Array.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08]) },
-      { name: 'avif', revision: 3003, mimeType: 'image/avif', bytes: Uint8Array.from([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]) },
-      { name: 'heif', revision: 3004, mimeType: 'image/heif', bytes: Uint8Array.from([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0]) },
+      {
+        name: 'tiff (little-endian)',
+        revision: 3001,
+        mimeType: 'image/tiff',
+        bytes: Uint8Array.from([0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00]),
+      },
+      {
+        name: 'tiff (big-endian)',
+        revision: 3002,
+        mimeType: 'image/tiff',
+        bytes: Uint8Array.from([0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08]),
+      },
+      {
+        name: 'avif',
+        revision: 3003,
+        mimeType: 'image/avif',
+        bytes: Uint8Array.from([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66, 0, 0, 0, 0]),
+      },
+      {
+        name: 'heif',
+        revision: 3004,
+        mimeType: 'image/heif',
+        bytes: Uint8Array.from([0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0]),
+      },
     ];
 
     for (const format of formats) {

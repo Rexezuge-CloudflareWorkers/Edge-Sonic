@@ -105,14 +105,14 @@ interface ScanDerivationStore {
    */
   deriveFor(rows: readonly DerivableRow[]): Promise<readonly DerivationWrite[]>;
   /**
- * Stamp a page of rows, reporting **both** what changed and what it cost.
- *
- * `WriteBatchResult` rather than a count, because the scan's daily budget is denominated in
- * *billed* rows and this is a `songs` write — ten of them per row changed, against an
- * allowance that refuses every query on the account once it is spent. Returning a bare count
- * is what made the caller guess, and the guess was a tenth of the truth.
- */
-applyDerivation(writes: readonly DerivationWrite[]): Promise<WriteBatchResult>;
+   * Stamp a page of rows, reporting **both** what changed and what it cost.
+   *
+   * `WriteBatchResult` rather than a count, because the scan's daily budget is denominated in
+   * *billed* rows and this is a `songs` write — ten of them per row changed, against an
+   * allowance that refuses every query on the account once it is spent. Returning a bare count
+   * is what made the caller guess, and the guess was a tenth of the truth.
+   */
+  applyDerivation(writes: readonly DerivationWrite[]): Promise<WriteBatchResult>;
 }
 
 interface ScanDeps {
@@ -364,4 +364,4 @@ export type {
 };
 export { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES };
 
-export {type ChunkStopReason} from './scanBudget';
+export { type ChunkStopReason } from './scanBudget';

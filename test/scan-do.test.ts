@@ -170,7 +170,10 @@ describe('ScanWorker', () => {
     // the mock agrees with itself.
     failing = false;
     vi.restoreAllMocks();
-    const state = await harness.db.db.prepare('SELECT status, last_error FROM scan_state WHERE library_id = ?').bind('L1').first<{ status: string; last_error: string | null }>();
+    const state = await harness.db.db
+      .prepare('SELECT status, last_error FROM scan_state WHERE library_id = ?')
+      .bind('L1')
+      .first<{ status: string; last_error: string | null }>();
     expect(state?.last_error, 'the reason must be readable by the operator surface').toContain('D1 unavailable');
 
     // Recovery: D1 and the origin are back, and the chain that survived the fault is the
@@ -261,7 +264,8 @@ describe('a spent D1 daily allowance', () => {
    * until midnight UTC, so the whole product is down and Subsonic authentication goes with it.
    * That is what the two answers below are about.
    */
-  const LIMIT_ERROR = "Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
+  const LIMIT_ERROR =
+    "Your account has exceeded D1's free tier daily row write limit. Upgrade to a paid plan or wait until tomorrow (midnight UTC) to continue.";
 
   /**
    * Make every D1 statement fail with the platform's message.

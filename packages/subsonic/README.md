@@ -3,24 +3,24 @@
 The Subsonic REST API **v1.16.1**: ids, the envelope, the node model, three serializers,
 the error codes and MD5. Layer 0 — no dependency on anything in this repository.
 
-Everything a client reads passes through here, which is why the rules about *shape* live in
+Everything a client reads passes through here, which is why the rules about _shape_ live in
 [`docs/agents/protocol/AGENTS.md`](../../docs/agents/protocol/AGENTS.md). A wrong envelope
 answers `200`, renders plausibly, and is invisible from inside the server.
 
 ## What is here
 
-| Module | Role |
-| --- | --- |
-| `nodes.ts` | the element builders — `el`, `elList`, `elArray`, and what each shape means |
-| `serialize.ts` | XML / JSON / JSONP from one tree, so the three cannot disagree |
-| `envelope.ts` | `successResponse` / `errorResponse`, and the three formats' outer wrapper |
-| `builders.ts` | the protocol's records: albums, songs, `musicFolder`, `playlist` |
-| `ids.ts` | `encodeId` / `decodeId`, and the eight id kinds |
-| `albumKey.ts` | the album grouping key, as a value |
-| `params.ts` | query-parameter coercion — and why `int` and `optionalInt` differ |
-| `errors.ts` | the error codes and their HTTP statuses |
-| `extensions.ts` | which OpenSubsonic extensions this server advertises, and why |
-| `md5.ts`, `sha256.ts`, `constants.ts`, `types.ts` | |
+| Module                                            | Role                                                                        |
+| ------------------------------------------------- | --------------------------------------------------------------------------- |
+| `nodes.ts`                                        | the element builders — `el`, `elList`, `elArray`, and what each shape means |
+| `serialize.ts`                                    | XML / JSON / JSONP from one tree, so the three cannot disagree              |
+| `envelope.ts`                                     | `successResponse` / `errorResponse`, and the three formats' outer wrapper   |
+| `builders.ts`                                     | the protocol's records: albums, songs, `musicFolder`, `playlist`            |
+| `ids.ts`                                          | `encodeId` / `decodeId`, and the eight id kinds                             |
+| `albumKey.ts`                                     | the album grouping key, as a value                                          |
+| `params.ts`                                       | query-parameter coercion — and why `int` and `optionalInt` differ           |
+| `errors.ts`                                       | the error codes and their HTTP statuses                                     |
+| `extensions.ts`                                   | which OpenSubsonic extensions this server advertises, and why               |
+| `md5.ts`, `sha256.ts`, `constants.ts`, `types.ts` |                                                                             |
 
 ## The one model, three serializers
 
@@ -29,12 +29,12 @@ cannot be fixed in one format and left in another: there is no per-format builde
 
 The three shapes a child element can be, and only three:
 
-| Built as | Renders | Example |
-| --- | --- | --- |
-| `el(name, attrs)` | a record | `musicFolder` |
-| `el(name, {}, [value])` | a bare scalar | `user.folder`'s entries |
-| `elList(name, listKey, attrs, children)` | an object with a declared list at `listKey` | `getAlbum`'s `song` |
-| `elArray(name, attrs, children)` | a **bare array** at the parent's key | `openSubsonicExtensions` |
+| Built as                                 | Renders                                     | Example                  |
+| ---------------------------------------- | ------------------------------------------- | ------------------------ |
+| `el(name, attrs)`                        | a record                                    | `musicFolder`            |
+| `el(name, {}, [value])`                  | a bare scalar                               | `user.folder`'s entries  |
+| `elList(name, listKey, attrs, children)` | an object with a declared list at `listKey` | `getAlbum`'s `song`      |
+| `elArray(name, attrs, children)`         | a **bare array** at the parent's key        | `openSubsonicExtensions` |
 
 An element carrying an attribute is a record to every serializer, and the serializer cannot
 tell a record's scalar child from a record's list child — so the builder that knows says so.

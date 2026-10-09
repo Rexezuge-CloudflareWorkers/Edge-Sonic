@@ -45,7 +45,7 @@ identity must not work as a streaming credential, and a Subsonic password must n
 the user API.
 
 **`Cf-Access-Authenticated-User-Email` is never trusted.** Cloudflare documents it as a
-*response* header it sets; read back as a *request* header, any caller can name
+_response_ header it sets; read back as a _request_ header, any caller can name
 themselves. Asserted in `test/user-auth.test.ts` with a forged header, and again with a
 forged `Cookie` beside it.
 
@@ -72,7 +72,7 @@ way to send that credential to `169.254.169.254` or to an internal service. Plai
 
 `probe` is the only place an operator can find out why a library does not work, and it
 used to wrap all three steps in one `try`, so every failure without an HTTP status
-collapsed into *"Library is unreachable."* That is a claim about the operator's WebDAV
+collapsed into _"Library is unreachable."_ That is a claim about the operator's WebDAV
 server, and it is false for three of the four causes: `resolveKey` refusing (a
 misconfigured deployment), `decryptData` failing (a rotated key over an existing row),
 and `assertReachable` refusing (an SSRF-policy decision, where the origin was never
@@ -84,11 +84,11 @@ wraps. The messages are constructors in `library/probeOutcome.ts` rather than br
 in the service, because the taxonomy is the thing worth reading in one place, and
 because a wording change should not be a diff through three call sites. Two rules keep
 it honest: **no cause text and no upstream body ever reaches the operator** — a GCM
-failure message names the operation and nothing else — and *"unreachable"* is produced by
+failure message names the operation and nothing else — and _"unreachable"_ is produced by
 exactly one branch, so the word means something when it appears.
 
 `assertReachable`'s own `NotFoundError` is unchanged. Its indistinguishability from a
-missing row is deliberate on `/rest`; only the way the *operator* surface renders it
+missing row is deliberate on `/rest`; only the way the _operator_ surface renders it
 changed, and the operator can already see the row in their own list.
 
 A timeout arrives as a `WebDavError(408)` rather than a bare abort — see
@@ -104,7 +104,7 @@ nor an HTTP status.
 - **`reset` the scan object, delete, then `charge` it.** The order is a race, not a style choice:
   a live alarm fires every second, and one that fires between the two deletes writes the index
   back. `charge` comes last because it needs the figure the deletes measured.
-- **A global drop charges each object its *share*, not the whole bill.** `dailyRowWriteShare`
+- **A global drop charges each object its _share_, not the whole bill.** `dailyRowWriteShare`
   divides the allowance by library count, so on a three-library deployment an object told the
   whole 55,000-row figure pauses itself at 300% of a share sized for a third of it — three of
   three scans refusing immediately after an operator emptied their index. The weights come from
@@ -141,19 +141,19 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   **less an invocation reserve**: Workers Free allows **50 subrequests per invocation**, and
   a subrequest is a `fetch`, a **D1 statement**, a KV operation, a DO RPC or a Secrets Store
   read. **Measured 2026-10-05, there are two budgets and this charges against the external
-  one deliberately**: D1 has 1,000 of its own and an overrun *throws* rather than killing
+  one deliberately**: D1 has 1,000 of its own and an overrun _throws_ rather than killing
   the invocation, so bounding by the 50 is ~21× conservative and errs toward availability.
   See `docs/agents/runtime/AGENTS.md`.
-  `chunkDeadlineMs` (default 20 s) is what makes a poll *return* on a slow origin.
+  `chunkDeadlineMs` (default 20 s) is what makes a poll _return_ on a slow origin.
   `chunkFolders` (default 7) is **derived** from that same ceiling rather than typed beside
-  it: 40 folders is ~240 subrequests. It was once documented as a bound on the day's *row
-  writes*, which it has never been.
+  it: 40 folders is ~240 subrequests. It was once documented as a bound on the day's _row
+  writes_, which it has never been.
   The loop checks `budget.canAfford()` before each folder — at a folder's whole base cost of
   6, not at its one `PROPFIND`, because a chunk that starts a folder it cannot finish does
   not get a slow folder, it gets a terminated invocation — and before each enriched track at
   five, and **leaves early** rather than running itself out. A cold scan of 1,000 folders /
   5,000 tracks bills roughly **61,000** rows against the Free plan's 100,000/day — ten per
-  `songs` row rather than one, because D1 charges the row *and* every index entry it rewrote.
+  `songs` row rather than one, because D1 charges the row _and_ every index entry it rewrote.
   Survivable because the scan is chunked and resumable, and because every later scan writes zero
   rows.
 - **Every subrequest is measured, not asserted.** `WebDavClient` charges a caller supplied
@@ -181,14 +181,14 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   were a credential failure.
 - **The song writer's compare reads `songs`, and a compare that reads the wrong table loses a
   track.** `reconcileFolder` gates both writers on `changed`, which is `mtimeMoved || etagMoved`
-  off the **`nodes`** row. That is the right question about a *file* and the wrong question about a
-  *song row*, and the two writers' batches truncate independently — so a pass can land every node
+  off the **`nodes`** row. That is the right question about a _file_ and the wrong question about a
+  _song row_, and the two writers' batches truncate independently — so a pass can land every node
   row and truncate the song rows, and the next pass finds the mtimes current, offers nothing, and
   closes the folder. It shipped: **117 `nodes` rows against 116 `songs` rows** on a live library,
   one track invisible to every aggregate with no error and no way to recover it. So the gate is
   `changed || songRowMissing`, where `songRowMissing` is `known?.has_song !== 1` read from
   `NodeDAO.listChildrenWithSongPresence` — the **same** read the node compare uses, so it costs no
-  extra subrequest and `SUBSREQUESTS_PER_FOLDER_BASE` stays at 6. `songRowMissing` sits *after* the
+  extra subrequest and `SUBSREQUESTS_PER_FOLDER_BASE` stays at 6. `songRowMissing` sits _after_ the
   `isAudioFile` test, which is load-bearing in the permissive direction: `has_song` is `0` for every
   non-audio child, so reading it first would offer `cover.jpg` to the song upsert for ever.
   `songRowMissing` is a **second** reason to write and not a replacement — a folder whose two planes
@@ -204,11 +204,11 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   than an edge case.
 - **The operator surface can advance a scan.** `POST /user/libraries/:id/scan/step`
   runs one chunk. `/rest/getScanStatus` was the only caller of `step`, so an operator
-  clicking "Rescan" started a scan that only progressed while some *Subsonic client*
+  clicking "Rescan" started a scan that only progressed while some _Subsonic client_
   happened to be polling. That route is also the only place `stoppedBy` is readable,
   because the Subsonic `scanStatus` element carries just `scanning` and `count`.
 - **A poll backfills the derived grouping before it does anything else.** `step` runs
-  `deriveBackfill` *ahead of* `decideStep`, and that placement is the fix rather than a
+  `deriveBackfill` _ahead of_ `decideStep`, and that placement is the fix rather than a
   detail. Every writer of `album`/`artist` is gated on a file having changed, so a library
   nobody has touched since it was indexed has nothing left to change and never derives its
   grouping — and a fully scanned library is `idle`, which returns without touching the
@@ -228,28 +228,28 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   operator is explicitly no longer forced to take. `backend-services` is above `backend-data`,
   so the value is read once at the composition root and threaded down by constructor.
 - **The backfill shares the chunk's budget, and its page is sized from it.** It runs
-  *first*, so it competes with the walk for the same 42 statements, and its write is **one
+  _first_, so it competes with the walk for the same 42 statements, and its write is **one
   `UPDATE` per row** with `requireComplete` — it refuses rather than truncating, because the
   selection is on `derived_version` and a partial page leaves rows re-selected for ever.
   A page of `200` therefore fitted on **no chunk under any configuration**, so every library
   past ~48 owing rows threw `SubrequestBudgetExhaustedError` out of `derivePending` — which
-  runs *before* `listFrontier`, so the walk never ran a folder, `step`'s catch recorded a scan
+  runs _before_ `listFrontier`, so the walk never ran a folder, `step`'s catch recorded a scan
   failure, `isAdvancing('failed')` is `true`, and `getScanStatus` answered `scanning: true`
   for ever on a library of ~100 tracks. Four rules, and each is how the others collapse:
   - **The page is `SCAN_DERIVE_MAX_ROWS_PER_CHUNK`**, derived in `subrequests.ts` as
     `42 − SUBSREQUESTS_PER_CHUNK_OVERHEAD(4) − SUBSREQUESTS_PER_FOLDER_BASE(6) = 32`. A number
     typed beside the loop is wrong by the time the ceiling moves.
-  - **`SUBSREQUESTS_PER_CHUNK_OVERHEAD` counts the two statements that *bracket* the walk**
+  - **`SUBSREQUESTS_PER_CHUNK_OVERHEAD` counts the two statements that _bracket_ the walk**
     (`listFrontier` and `saveProgress`), not only the ones before it. Leave them out and the
     page is 35, which leaves 5 of a folder's 6 — the loop's `canAfford` refuses, and the
     chunk returns `scanning` having visited **zero** folders. Same symptom as the throw, no
     error anywhere, and what a fix that only deleted the throw would have shipped.
   - **`derivePending` checks `canAfford(rows.length)` and returns `0`.** The derived size
-    bounds a chunk that has spent nothing; what decides whether *this* chunk can take the
+    bounds a chunk that has spent nothing; what decides whether _this_ chunk can take the
     page is what it has already spent. Returning rather than throwing is the difference
     between a slow repair and a dead scan, and the rows are exactly the next poll's.
   - **It is charged against both bounds** — the wall-clock deadline, because D1 latency is
-    real, and the subrequest ceiling, because a D1 statement *is* one. The claim that this
+    real, and the subrequest ceiling, because a D1 statement _is_ one. The claim that this
     phase "cannot spend" the ceiling is what let the oversized batch exist at all.
 - **`saveProgress` takes a delta: `scanned_count = scanned_count + ?`.** It was `= ?`,
   read-modify-written by every chunk, while `fail` one method below already incremented its
@@ -267,7 +267,7 @@ library, alarm-chained); without the `SCAN` binding the advancer is a direct
   used to, and that made one bad chunk permanent: the frontier sat intact in D1 and
   nothing read it again, so 80 albums stayed at one scanned folder for the life of the
   deployment. It was invisible because `getScanStatus` derived `scanning` from the status,
-  which is what a client reads as *stop polling* — so the client stopped too. Bounded by
+  which is what a client reads as _stop polling_ — so the client stopped too. Bounded by
   `scan_state.consecutive_failures` (`MAX_CONSECUTIVE_FAILURES`), because unbounded is the
   opposite defect: a revoked credential re-attempted on every poll for ever, spending the
   operator's subrequest budget to reach the same conclusion each time. `stalled` is a
@@ -297,7 +297,7 @@ client to ask is answered from D1.
 `index/EnrichmentService.ts` reads a **bounded prefix** of a file's bytes — never the whole
 file — and derives duration, bitrate, sample rate, and channels from the container header.
 For Ogg it then reads a bounded **tail** (`readTail`, `TAG_READ_TAIL_BYTES`), because the
-granule position that carries the file's length is in the *last* page's header. Two range
+granule position that carries the file's length is in the _last_ page's header. Two range
 reads over one file, not two parses: the sample rate, channels and pre-skip come from the
 prefix read and the tail reuses them. Without the tail read the duration is `null` rather
 than wrong, because a client seeks by it.
@@ -313,7 +313,7 @@ than wrong, because a client seeks by it.
   that rots silently when a column is added.
 - **`is_scanned` has two writers and one key, and a matching mtime cannot say which.**
   `reconcileFolder` used to write `isScanned: !changed`, reading a child's stored mtime as
-  proof the child had been reconciled. But `nodes.mtime_ms` is written by the scan *and* by
+  proof the child had been reconciled. But `nodes.mtime_ms` is written by the scan _and_ by
   `TreeService`'s read-through browse, from the same `Depth: 1` PROPFIND — and the scan
   writes it having descended, while the browse writes it having read nothing below. So a
   browse-materialized library closed every one of its own folders on the first scan chunk
@@ -322,13 +322,13 @@ than wrong, because a client seeks by it.
   "does this row need rewriting" is separated from "does this folder need descending".
   `start`'s incrementality short-circuit got the matching floor, because a completed scan
   that indexed nothing is not evidence the library is current — `scanned_count` counts
-  folders *visited*, so that walk leaves it at `1`. See the parent index.
-  - **The flag has two writers, so the flag's *values* are a decision and not a default.**
+  folders _visited_, so that walk leaves it at `1`. See the parent index.
+  - **The flag has two writers, so the flag's _values_ are a decision and not a default.**
     `persistChildren` wrote `0` for every child, which meant a client merely looking at the
     root put all eighty album folders back on the frontier and the scan re-walked them — once
     per browse, on a `GET`. It now **preserves** the stored value and writes `0` only for a row
     it creates, which is what keeps `needsDescent`'s invariant intact for a folder discovered by
-    browsing alone. Its *own*-row write is the opposite case and stays `0`: that folder's mtime
+    browsing alone. Its _own_-row write is the opposite case and stays `0`: that folder's mtime
     moved, so its contents moved, so it genuinely has not been reconciled.
   - **The compare is one function, and the two writers are the reason.** `nodeWrite.ts` owns
     it because `reconcileFolder` described one in a comment without having it, which made a
@@ -341,18 +341,18 @@ than wrong, because a client seeks by it.
   `step` caught the refusal, tried to record it with a write that could not succeed, returned
   `failed`, and the alarm re-armed a second later, ~86,400 times before the reset.
   - **`willResumeWithoutAPoll` and `isAdvancing` are two questions, and `paused` splits them.**
-    The alarm asks *will this resume by itself?* (`true`); `getScanStatus`'s `scanning` asks
-    *will my poll buy anything?* (`false` — polling cannot move a clock). One predicate for both
+    The alarm asks _will this resume by itself?_ (`true`); `getScanStatus`'s `scanning` asks
+    _will my poll buy anything?_ (`false` — polling cannot move a clock). One predicate for both
     is the mirror of the defect that made `scanning` mean "did this call do work".
   - **`step`, `start` and `status` all branch on it before touching `scan_state`**, because the
-    fault *is* a refusal to write. Recording it costs a statement that cannot succeed and spends
+    fault _is_ a refusal to write. Recording it costs a statement that cannot succeed and spends
     a retry budget meant for faults.
-  - **It is paced *before* the platform refuses, not only survived after.** A correct chunk bills
+  - **It is paced _before_ the platform refuses, not only survived after.** A correct chunk bills
     a few hundred rows at ~1/second, so the Free plan's 100,000-row day is a couple of hours of
     scanning on a 5,000-track library — the limit is reached by design. `SCAN_DAILY_ROW_WRITE_BUDGET`
-    is the platform allowance less a 10% reserve, divided by the number of *registered* libraries
+    is the platform allowance less a 10% reserve, divided by the number of _registered_ libraries
     because D1's is per account.
-  - **The budget is denominated in *billed* rows, and the guard used to count table rows.** D1
+  - **The budget is denominated in _billed_ rows, and the guard used to count table rows.** D1
     charges a write as the row plus every index entry it rewrote, and `songs` has nine — so the
     allowance was being read as ~10x larger than it was, on the dominant write path. `ChunkResult`
     and `ScanDailyBudget` therefore carry **both** counts: `rowsWritten` is progress (what
@@ -372,11 +372,11 @@ than wrong, because a client seeks by it.
 
 - **Enrichment is not what makes a library browsable, and treating it as though it were
   is why it shipped broken.** The aggregates filter on the `_ci` columns in SQL, so a
-  track this module has not read is *absent* from `getArtists`, `getAlbumList2` and
+  track this module has not read is _absent_ from `getArtists`, `getAlbumList2` and
   `search3` — not shown with a blank name. Since the read is one ranged request per track
   and is bounded twice over, most rows of a real library are unenriched for a long time,
   and the whole tag-organized half of the protocol answers `[]` while `getRandomSongs`,
-  which does not group, returns rows happily. So the artist and album the WebDAV *path*
+  which does not group, returns rows happily. So the artist and album the WebDAV _path_
   already carries are derived at index time instead (`pathConvention.ts` in
   `backend-data`), and this module's real tags overwrite that fallback when it runs.
   The two are the same fact read by two means, and the path is always available while the
@@ -443,31 +443,31 @@ Bringing one user's player data in from **another Subsonic server**. Operator-tr
 `/user/import/*`; the execution is `apps/background`'s `LibraryImportWorkflow` (a Workflow) and
 `PlayCountImportWorker` (a Durable Object).
 
-| File | Owns |
-| --- | --- |
-| `remoteOrigin.ts` | the SSRF gate on an operator-supplied host, and the mount path |
-| `remoteParse.ts` | the **pure** parse rules for a response this repository does not control |
-| `remoteClient.ts` | the transport: URL, token auth, timeout, body limit, subrequest charge |
-| `sourceService.ts` | registering an instance, and the one reader of its stored credential |
-| `matchRemoteIds.ts` | turning a foreign id into a local one — path, then metadata |
-| `albumIdentity.ts` | the album and artist id matchers, under the configured grouping |
-| `phases.ts` | playlists, stars, bookmarks, the play queue |
-| `playCountPhases.ts` | the album and page halves of the play-count walk |
-| `phaseShared.ts` | the two decisions every phase makes: grant-filtering, and naming failures |
-| `report.ts` | the per-phase report, with every unresolved item **named** |
-| `importPause.ts` | refusing to run beside a scan |
+| File                 | Owns                                                                      |
+| -------------------- | ------------------------------------------------------------------------- |
+| `remoteOrigin.ts`    | the SSRF gate on an operator-supplied host, and the mount path            |
+| `remoteParse.ts`     | the **pure** parse rules for a response this repository does not control  |
+| `remoteClient.ts`    | the transport: URL, token auth, timeout, body limit, subrequest charge    |
+| `sourceService.ts`   | registering an instance, and the one reader of its stored credential      |
+| `matchRemoteIds.ts`  | turning a foreign id into a local one — path, then metadata               |
+| `albumIdentity.ts`   | the album and artist id matchers, under the configured grouping           |
+| `phases.ts`          | playlists, stars, bookmarks, the play queue                               |
+| `playCountPhases.ts` | the album and page halves of the play-count walk                          |
+| `phaseShared.ts`     | the two decisions every phase makes: grant-filtering, and naming failures |
+| `report.ts`          | the per-phase report, with every unresolved item **named**                |
+| `importPause.ts`     | refusing to run beside a scan                                             |
 
 ### The invariant the module exists to hold
 
 **An unresolved id is reported, never substituted, and never silently dropped.** Every phase
-returns the *named* items it could not match, with the reason. A playlist that lost three tracks
+returns the _named_ items it could not match, with the reason. A playlist that lost three tracks
 is a **wrong answer** rather than an unfinished one, and it is indistinguishable from one the user
 deliberately shortened — so the operator gets a list rather than a count, and the cap
 (`MAX_REPORTED_UNRESOLVED`) bounds the names while the count stays exact.
 
 ### Path first, then metadata — and the order is backwards from the intuition
 
-Path is *exact*; metadata is a *guess*. So path is tried first and the guess is a fallback, and
+Path is _exact_; metadata is a _guess_. So path is tried first and the guess is a fallback, and
 the report says which strategy fired, because telling an operator an exact match is a guess is
 its own kind of wrong.
 
@@ -476,7 +476,7 @@ because publishing it leaks the storage layout of someone's WebDAV bucket. So pa
 against third-party sources and **never** against another Edge-Sonic, and the fallback is what
 carries a same-product migration.
 
-**The fallback is a guess about a *stored* value, so it is only as good as what the row holds.**
+**The fallback is a guess about a _stored_ value, so it is only as good as what the row holds.**
 Its key is `(album_ci, title_ci)` and both halves are read in SQL, which makes two requirements
 that no test of the decision itself would catch:
 
@@ -506,7 +506,7 @@ track narrow the candidates when the remote publishes them, and the narrowing is
 than applied against `null`, because a library with no disc tags has `disc = NULL` everywhere and
 filtering for `1` would turn a resolvable match into a reported one.
 
-### An album id is derived through the *same* key this server publishes
+### An album id is derived through the _same_ key this server publishes
 
 `albumKeyFor` calls `subsonic/albumKey.ts`'s `albumKeySpec` and nothing else, and
 `SongMatchDAO.findPresentAlbumKeys` **confirms existence** before an id is minted. Two
@@ -536,7 +536,7 @@ The measured case was a release split across two libraries, so the track the
 operator's own client could play was one the report said did not exist.
 
 `ALBUM_GROUP_BY=folder` is the exception and takes the first library of the scope:
-under that grouping an album *is* a directory, so there is no id that spans sources.
+under that grouping an album _is_ a directory, so there is no id that spans sources.
 That narrowing is stated in `spanningLibraryIdFor` rather than left to the reader.
 
 ### `remoteParse` is separate from `remoteClient` because it is pure
@@ -544,7 +544,7 @@ That narrowing is stated in `spanningLibraryIdFor` rather than left to the reade
 No `fetch`, no credential, no state — so every rule is testable from the Node suite with no Workers
 runtime and no double, which is the same reason `packages/subsonic` is Layer 0. The two shapes it
 must survive are a **single-element list collapsing to a bare object** (a one-track playlist read
-naively imports as an *empty* one) and a **protocol error arriving as HTTP 200** (a wrong password
+naively imports as an _empty_ one) and a **protocol error arriving as HTTP 200** (a wrong password
 reads as "no playlists", and the import reports success having imported nothing).
 
 Token auth, never `p=`: a password in a query string lands in the remote's access log and every
@@ -553,7 +553,7 @@ proxy's between here and there, and that is invisible from here.
 ### `sourceService` owns the credential, because `apps/api` may not
 
 Two readers of one stored secret is two implementations of "decrypt it", free to disagree about
-which key — and the credential *is* read twice: the route lists the remote's playlists before the
+which key — and the credential _is_ read twice: the route lists the remote's playlists before the
 Workflow starts, and the Workflow reads it per step. A Workflow payload is persisted by the
 platform, so a password can never be part of one. The client is built **per call**, never cached:
 it holds the plaintext password for its lifetime.

@@ -86,11 +86,10 @@ function multistatus(entries: readonly DavEntry[], options: { prefix?: string; h
     const href = `${base}${suffix}`;
     const properties = [
       entry.collection ? `<${prefix}:resourcetype><${prefix}:collection/></${prefix}:resourcetype>` : `<${prefix}:resourcetype/>`,
-      ...(['getcontentlength', 'getcontenttype', 'getlastmodified', 'getetag', 'displayname'] as const)
-        .map((property) => {
-          const value = propValue(entry, property);
-          return value === null ? '' : `<${prefix}:${property}>${value}</${prefix}:${property}>`;
-        }),
+      ...(['getcontentlength', 'getcontenttype', 'getlastmodified', 'getetag', 'displayname'] as const).map((property) => {
+        const value = propValue(entry, property);
+        return value === null ? '' : `<${prefix}:${property}>${value}</${prefix}:${property}>`;
+      }),
     ].join('');
 
     return [

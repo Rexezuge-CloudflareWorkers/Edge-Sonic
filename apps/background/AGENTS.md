@@ -3,18 +3,28 @@
 Scope: `apps/background/**`. Parent index: `../../AGENTS.md`. Bindings, secrets and the platform
 limits are in `docs/agents/runtime/AGENTS.md`, which this file defers to.
 
-Three Worker classes, and **the split between them is one decision**, not an accident of which file
-was opened first.
+**Five** platform classes — four Durable Objects and one Workflow — and **the split between them
+is one decision**, not an accident of which file was opened first.
 
-| File | Owns |
-| --- | --- |
-| `ScanWorker.ts` | advancing one library's index, one bounded chunk per alarm |
-| `LibraryImportWorkflow.ts` | the import's **bounded** phases: playlists, stars, bookmarks, queue |
-| `PlayCountImportWorker.ts` | the import's **unbounded** half: walking a remote's albums for play counts |
-| `ScanWorkerFactory.ts` | the composition root both classes build their scope through |
-| `scanPause.ts` | the scan's day-row-write budget and the pause a spent allowance implies |
-| `queueConsumers.ts` | the queue consumer and the cron fanout: pure dispatch, a scope factory injected |
-| `scanIndexDrop.ts` | the two `ScanWorker` RPCs the Danger Zone's drop calls, and the ordering they must be called in |
+This said "Three Worker classes" and listed seven rows. The two that were missing are the two a
+reader most needed to be told about, because each is the reason a namespace exists:
+`EnrichWorker` (the `ENRICH` namespace, its own migration tag `v1000000003`) and `MediaWorker`
+(the `MEDIA_DO` namespace, which exists so a `getCoverArt` cannot queue behind a scan's input
+gate). A reader counting namespaces against this table got two that did not appear.
+
+| File                                                              | Namespace         | Owns                                                                                            |
+| ----------------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `ScanWorker.ts`                                                   | `SCAN`            | advancing one library's index, one bounded chunk per alarm                                      |
+| `EnrichWorker.ts`                                                 | `ENRICH`          | library-wide tag enrichment, one bounded chunk per alarm; the scan's own mirror                 |
+| `MediaWorker.ts`                                                  | `MEDIA_DO`        | `getSong` tag parse and `getCoverArt`, kept **off** the request path by a dedicated object      |
+| `LibraryImportWorkflow.ts`                                        | `IMPORT_WORKFLOW` | the import's **bounded** phases: playlists, stars, bookmarks, queue                             |
+| `PlayCountImportWorker.ts`                                        | `IMPORT_DO`       | the import's **unbounded** half: walking a remote's albums for play counts                      |
+| `ScanWorkerFactory.ts`                                            | —                 | the composition root every class above builds its scope through                                 |
+| `scanPause.ts`                                                    | —                 | the scan's day-row-write budget and the pause a spent allowance implies                         |
+| `queueConsumers.ts`                                               | —                 | the queue consumer and the cron fanout: pure dispatch, a scope factory injected                 |
+| `scanIndexDrop.ts`                                                | —                 | the two `ScanWorker` RPCs the Danger Zone's drop calls, and the ordering they must be called in |
+| `importPhaseStore.ts`                                             | —                 | the production `PhaseStore` the Workflow writes through                                         |
+| `playCountWalk.ts` / `playCountRetry.ts` / `playCountProgress.ts` | —                 | the unbounded walk's own decisions, its retry budget, and its progress row                      |
 
 ## A drop stops this object **before** the D1 deletes, and charges it after
 
@@ -23,12 +33,12 @@ was opened first.
 
 - **The alarm is deleted first.** It fires every second. One that fires between the delete of
   `songs` and the delete of `nodes` finds a frontier describing rows that no longer exist,
-  walks the origin and writes fresh song rows — landing *after* the delete meant to have removed
+  walks the origin and writes fresh song rows — landing _after_ the delete meant to have removed
   them. The operator is told their index is empty and it is not, and nothing records that anything
   happened. The alarm has to be deleted from **this** object for the result to be a fact rather
   than a race.
 - **The held pause is cleared with it.** `getStatus` overlays a pause over the stored status,
-  because a pause is usually *caused* by D1 refusing writes and so cannot be recorded in the row
+  because a pause is usually _caused_ by D1 refusing writes and so cannot be recorded in the row
   it would override. One surviving a drop renders "paused until 00:00 UTC" over an empty library,
   and the operator's only conclusion is that the drop failed.
 - **The day's billed-row count is deliberately kept, and then added to.** Deleting an index
@@ -50,15 +60,15 @@ The reasoning lives in `scanIndexDrop.ts` and the two methods on `ScanWorker` ar
 delegations, because `ScanWorker` is over the god-file limit and the answer to that is to move a
 block that does not belong rather than to shorten the blocks that do.
 
-## The scan's stored count is in *billed* rows
+## The scan's stored count is in _billed_ rows
 
 `scanPause.ts` holds the day's row-write count so the scan paces itself against D1's allowance, and
-what it stores is `result.billedRows` — **not** `rowsWritten`. D1 bills a write as the row *plus
-every index entry it rewrote*, so a `songs` row costs ten rows of allowance; counting table rows
+what it stores is `result.billedRows` — **not** `rowsWritten`. D1 bills a write as the row _plus
+every index entry it rewrote_, so a `songs` row costs ten rows of allowance; counting table rows
 told this budget it had ~10x its real headroom before the platform refused every query on the account
 until midnight UTC.
 
-The stored key is unchanged, deliberately: the unit was always *meant* to be D1's and was populated
+The stored key is unchanged, deliberately: the unit was always _meant_ to be D1's and was populated
 with the wrong number by accident, and a stored counter whose meaning changes is a migration
 question. `billedRows.ts` in `backend-data` owns the arithmetic.
 
@@ -66,7 +76,7 @@ question. `billedRows.ts` in `backend-data` owns the arithmetic.
 
 **A Workflow step is cached by name**, so `playlist <remoteId>` cannot write the same playlist
 twice — which is the whole problem, because "create this playlist" is not idempotent and
-`PlaylistDAO.create` mints a v4. That is why an imported playlist's id is *derived*
+`PlaylistDAO.create` mints a v4. That is why an imported playlist's id is _derived_
 (`UUIDUtil.deterministicId`) as well: the cache is the platform's half of the guarantee and the
 derived id is this repository's half, and either alone would leave a retry writing a second
 playlist.
@@ -92,7 +102,7 @@ Two facts about that call, and both shipped broken:
   alarm**, and the walk never began. The throw landed before the first `put`, so there was
   nothing to retry and nothing to resume. `stub.start()` is now `stub.start({ runId })` against
   `DurableObjectStub & PlayCountImportWorker`, the `scanStubs.ts` pattern: a hand-written
-  `{ start(): Promise<unknown> }` declared *no* parameter, so the call that was wrong typechecked
+  `{ start(): Promise<unknown> }` declared _no_ parameter, so the call that was wrong typechecked
   and the class was the only party that disagreed. A Durable Object's name is a routing
   decision; nothing turns it into an argument.
 - **A start that fails settles the run `failed`, and the walk outcome is three answers.** A
@@ -139,18 +149,17 @@ so a field would carry that password through storage the platform does not encry
 `test/mocks/cloudflare-workers.ts` stores the `ctx` and `env` it is constructed with, so a test can
 construct the real class over a fake context and call `alarm()` / `run()` itself. A base that only
 knew about types would make every class here untestable outside Miniflare — and these two files are
-where the import's *scheduling* lives, whose every defect is a **silent wedge** rather than an
+where the import's _scheduling_ lives, whose every defect is a **silent wedge** rather than an
 error. The fakes model the two load-bearing platform facts: `setAlarm` is a **recorded schedule**
 (a fake that fired immediately would make every batch loop run to exhaustion, the exact behaviour
 the bound prevents) and `step.do` is **cached by name**.
 
-
 ## The queue is a bounded retry path, and poison is acked, failure is retried
 
 `consumeQueueMessage` validates a message's **shape** and refuses anything it cannot use —
-an unknown kind, a library that no longer exists. Those are *acked*: redelivery cannot fix
+an unknown kind, a library that no longer exists. Those are _acked_: redelivery cannot fix
 either, and acking is what keeps poison from re-queueing forever. A message whose
-*processing* fails throws, so Cloudflare's `max_retries: 3` applies and an exhausted
+_processing_ fails throws, so Cloudflare's `max_retries: 3` applies and an exhausted
 message lands in `edge-sonic-scan-dlq`. The previous consumer caught every error and
 acked, which dropped each failed chunk silently and never ran the budget. Import used to
 have its own queue with the opposite defect: a producer that was never wired and a

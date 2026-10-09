@@ -94,10 +94,7 @@ function formatEnrichResumeAt(resumeAt: number | null | undefined): string | nul
  * All three come from the single `enrich` value so they cannot disagree — the defect
  * `describeProbe` records, where the badge and the notice were computed separately.
  */
-function describeEnrichState(
-  enrich: LibraryEnrichSummary | null,
-  labels: EnrichLabels = ENRICH_LABELS,
-): EnrichPresentation {
+function describeEnrichState(enrich: LibraryEnrichSummary | null, labels: EnrichLabels = ENRICH_LABELS): EnrichPresentation {
   // No run was ever started and tracks remain. There is no count to report and an action
   // to suggest — which is why this is not folded into `idle`.
   if (enrich === null) {

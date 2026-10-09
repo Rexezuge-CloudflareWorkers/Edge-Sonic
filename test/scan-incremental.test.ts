@@ -29,7 +29,13 @@ import { MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-servi
 import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { DERIVED_VERSION, GROUPING_SOURCE_DERIVED, billedRowsForTable, deriveFromPath, deriveTitleFromFileName } from '@edge-sonic/backend-data/dao';
+import {
+  DERIVED_VERSION,
+  GROUPING_SOURCE_DERIVED,
+  billedRowsForTable,
+  deriveFromPath,
+  deriveTitleFromFileName,
+} from '@edge-sonic/backend-data/dao';
 import type { NodeInput, SongUpsertInput } from '@edge-sonic/backend-data/dao';
 import type { ChildNodeRow, LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import type { ScanDeps } from '@edge-sonic/backend-services/index';
@@ -99,7 +105,9 @@ function createIndex() {
       nodes: {
         find: async (_libraryId: string, path: string) => db(() => nodes.get(nodeKey(path)) ?? null),
         listChildren: async (_libraryId: string, parentPath: string) =>
-          db(() => [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci))),
+          db(() =>
+            [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci)),
+          ),
         // The reconcile diff, and it reports **both** planes. Derived from `songs` rather than
         // from `nodes` because that is where the answer lives — a compare that read the node row
         // to decide about a song row is a proxy the two tables can disagree about, and they do
@@ -128,57 +136,62 @@ function createIndex() {
         // The scan frontier: unscanned folders, shallowest first. This ordering is
         // what makes a partial scan produce a browsable top of the tree.
         listFrontier: async (_libraryId: string, limit: number) =>
-          db(() => [...nodes.values()].filter((node) => node.is_scanned === 0).sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path)).slice(0, limit)),
+          db(() =>
+            [...nodes.values()]
+              .filter((node) => node.is_scanned === 0)
+              .sort((a, b) => a.depth - b.depth || a.path.localeCompare(b.path))
+              .slice(0, limit),
+          ),
         upsertMany: async (inputs: readonly NodeInput[]) =>
           db(() => {
-          let changed = 0;
-          for (const raw of inputs) {
-            const input = raw as {
-              libraryId: string;
-              path: string;
-              parentPath: string;
-              name: string;
-              mtimeMs: number | null;
-              etag: string | null;
-              depth: number;
-              isScanned?: boolean;
-            };
-            const key = nodeKey(input.path);
-            const existing = nodes.get(key);
-            // An unchanged row is not counted as a write, because the whole point is
-            // that an unchanged folder costs nothing.
-            if (
-              existing !== undefined &&
-              existing.mtime_ms === input.mtimeMs &&
-              existing.etag === input.etag &&
-              existing.is_scanned === (input.isScanned ? 1 : 0)
-            ) {
-              continue;
+            let changed = 0;
+            for (const raw of inputs) {
+              const input = raw as {
+                libraryId: string;
+                path: string;
+                parentPath: string;
+                name: string;
+                mtimeMs: number | null;
+                etag: string | null;
+                depth: number;
+                isScanned?: boolean;
+              };
+              const key = nodeKey(input.path);
+              const existing = nodes.get(key);
+              // An unchanged row is not counted as a write, because the whole point is
+              // that an unchanged folder costs nothing.
+              if (
+                existing !== undefined &&
+                existing.mtime_ms === input.mtimeMs &&
+                existing.etag === input.etag &&
+                existing.is_scanned === (input.isScanned ? 1 : 0)
+              ) {
+                continue;
+              }
+              nodes.set(key, {
+                library_id: LIBRARY_ID,
+                path: input.path,
+                parent_path: input.parentPath,
+                name: input.name,
+                name_ci: input.name.toLowerCase(),
+                mtime_ms: input.mtimeMs,
+                etag: input.etag,
+                depth: input.depth,
+                is_scanned: input.isScanned ? 1 : 0,
+                created_at: existing?.created_at ?? 0,
+                updated_at: 0,
+              });
+              changed += 1;
             }
-            nodes.set(key, {
-              library_id: LIBRARY_ID,
-              path: input.path,
-              parent_path: input.parentPath,
-              name: input.name,
-              name_ci: input.name.toLowerCase(),
-              mtime_ms: input.mtimeMs,
-              etag: input.etag,
-              depth: input.depth,
-              is_scanned: input.isScanned ? 1 : 0,
-              created_at: existing?.created_at ?? 0,
-              updated_at: 0,
-            });
-            changed += 1;
-          }
-          writes.nodes += changed;
-          // `billedRows` is the *measurement*, not a copy of `changes`: D1 charges the table row
-          // plus every index entry it rewrote, and `nodes` carries three, so one row is four
-          // rows of allowance. The daily budget is denominated in these. Deriving it here from
-          // the same constant the DAO uses (`billedRowsForTable`) is what keeps this double from
-          // being a *second* implementation of the schema — the class of defect this file has
-          // already recorded twice on this column.
-          return { changes: changed, written: inputs.length, truncated: false, billedRows: billedRowsForTable('nodes', changed) };
-        }, inputs.length),
+            writes.nodes += changed;
+            // `billedRows` is the *measurement*, not a copy of `changes`: D1 charges the table row
+            // plus every index entry it rewrote, and `nodes` carries three, so one row is four
+            // rows of allowance. The daily budget is denominated in these. Deriving it here from
+            // the same constant the DAO uses (`billedRowsForTable`) is what keeps this double from
+            // being a *second* implementation of the schema — the class of defect this file has
+            // already recorded twice on this column.
+            return { changes: changed, written: inputs.length, truncated: false, billedRows: billedRowsForTable('nodes', changed) };
+          }, inputs.length),
         patch: async (_libraryId: string, path: string, patch: Record<string, unknown>) => {
           const node = nodes.get(nodeKey(path));
           if (!node) return;
@@ -192,7 +205,9 @@ function createIndex() {
           // The folder's own row is never a child. For the library root,
           // `path === parentPath === ''`, so omitting this clause deletes the root
           // during its own reconciliation — the bug this double exists to not hide.
-          const doomed = [...nodes.values()].filter((node) => node.parent_path === parentPath && node.path !== parentPath && !keepSet.has(node.path));
+          const doomed = [...nodes.values()].filter(
+            (node) => node.parent_path === parentPath && node.path !== parentPath && !keepSet.has(node.path),
+          );
           for (const node of doomed) nodes.delete(nodeKey(node.path));
           writes.nodes += doomed.length;
           return doomed.length;
@@ -201,97 +216,111 @@ function createIndex() {
           const doomed = [...nodes.values()].filter((node) => node.path === path || node.path.startsWith(`${path}/`));
           for (const node of doomed) nodes.delete(nodeKey(node.path));
           writes.nodes += doomed.length;
-          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('nodes', doomed.length) };
+          return {
+            changes: doomed.length,
+            written: doomed.length,
+            truncated: false,
+            billedRows: billedRowsForTable('nodes', doomed.length),
+          };
         },
         countByLibrary: async () => db(() => nodes.size),
       },
       songs: {
         upsertFileFacts: async (inputs: readonly SongUpsertInput[]) =>
           db(() => {
-          let changed = 0;
-          for (const raw of inputs) {
-            const input = raw as { id: string; path: string; size: number; mtimeMs: number; name: string; contentType: string | null; suffix: string; dirPath: string };
-            // Keyed by path, like the real `ON CONFLICT (library_id, path)`, and the
-            // existing id preserved: ids are derived from the path, so a rescan
-            // computes the same value — but the row keeps what it has regardless,
-            // which is what keeps a legacy row long until the backfill rotates it.
-            // Keying this double by `input.id` modelled the old reversible scheme,
-            // where the same path always produced the same id.
-            const existing = songs.get(input.path);
-            if (existing !== undefined && existing.size === input.size && existing.mtime_ms === input.mtimeMs) continue;
-            const derived = deriveFromPath(input.dirPath, DERIVED_MARKER);
-            songs.set(input.path, {
-              id: existing?.id ?? input.id,
-              library_id: LIBRARY_ID,
-              path: input.path,
-              dir_path: input.dirPath,
-              name: input.name,
-              name_ci: input.name.toLowerCase(),
-              size: input.size,
-              mtime_ms: input.mtimeMs,
-              content_type: input.contentType,
-              suffix: input.suffix,
-              // Derived from the file's `name`, because the real `UPSERT_FILE_FACTS` derives
-              // it — and it did not, once, which is why a whole import reported 113 of 118
-              // starred tracks `not-found` on a library where they were indexed under the
-              // title this product was displaying to the user the entire time. `title_ci` was
-              // written by `applyMetadata` alone, so a row nothing had range-read held NULL
-              // in both, and `search3` (filters on `title_ci`) and `findByAlbumTitle`
-              // (matches on `(album_ci, title_ci)`) could not see it. `null` here is the same
-              // defect in a double: it would agree with itself and with neither production,
-              // and this file is where that was already caught twice.
-              title: deriveTitleFromFileName(input.name),
-              title_ci: deriveTitleFromFileName(input.name).toLowerCase(),
-              // Derived from `dir_path`, because the real `UPSERT_FILE_FACTS` derives them
-              // — this double had `null` here while the statement filled the columns, and
-              // that disagreement is the reason the first attempt at the grouping fix was
-              // invisible: the suite agreed with itself and with neither production. A
-              // double must model the platform, and the platform derives.
-              artist: derived.artist,
-              artist_ci: derived.artist?.toLowerCase() ?? null,
-              album: derived.album,
-              album_ci: derived.album?.toLowerCase() ?? null,
-              album_artist: derived.artist,
-              album_artist_ci: derived.artist?.toLowerCase() ?? null,
-              track: null,
-              disc: null,
-              year: null,
-              genre: null,
-              genre_ci: null,
-              duration: 0,
-              bitrate: 0,
-              sample_rate: null,
-              channels: null,
-              enriched_at: null,
-              // 0, which is what the real upsert writes for a row whose bytes moved. A
-              // non-zero value here would make this double disagree with the statement
-              // about which rows need re-reading — and that disagreement is invisible
-              // until a reader changes.
-              reader_version: 0,
-              // The real `UPSERT_FILE_FACTS` stamps `DERIVED_VERSION` on both the `INSERT`
-              // and the `ON CONFLICT` clause, so a row the indexer just wrote is not also
-              // owed to the backfill. It did not, once: the statement left the column at the
-              // migration's `DEFAULT 0`, and because the backfill's selection is
-              // `derived_version < 1`, *every row this double wrote* was permanently owed —
-              // which is the failure `test/schema.int.test.ts` now runs the real statement
-              // over real SQLite to catch. This double agreeing with production about the
-              // very column under repair is therefore not cosmetic: it is the only reason
-              // this file stayed green through it.
-              derived_version: DERIVED_VERSION,
-              // The real `UPSERT_FILE_FACTS` stamps `'derived'` on the `INSERT`: a row it
-              // created cannot hold a value any tag supplied. The backfill's guard reads this
-              // column, so a double that omits it produces a row nothing may ever correct —
-              // the "a double may disagree with production about the very column under
-              // repair" defect, on the third such column.
-              grouping_source: GROUPING_SOURCE_DERIVED,
-              created_at: 0,
-              updated_at: 0,
-            });
-            changed += 1;
-          }
-          writes.songs += changed;
-          return { changes: changed, written: inputs.length, truncated: false, billedRows: billedRowsForTable('songs', changed) };
-        }, inputs.length),
+            let changed = 0;
+            for (const raw of inputs) {
+              const input = raw as {
+                id: string;
+                path: string;
+                size: number;
+                mtimeMs: number;
+                name: string;
+                contentType: string | null;
+                suffix: string;
+                dirPath: string;
+              };
+              // Keyed by path, like the real `ON CONFLICT (library_id, path)`, and the
+              // existing id preserved: ids are derived from the path, so a rescan
+              // computes the same value — but the row keeps what it has regardless,
+              // which is what keeps a legacy row long until the backfill rotates it.
+              // Keying this double by `input.id` modelled the old reversible scheme,
+              // where the same path always produced the same id.
+              const existing = songs.get(input.path);
+              if (existing !== undefined && existing.size === input.size && existing.mtime_ms === input.mtimeMs) continue;
+              const derived = deriveFromPath(input.dirPath, DERIVED_MARKER);
+              songs.set(input.path, {
+                id: existing?.id ?? input.id,
+                library_id: LIBRARY_ID,
+                path: input.path,
+                dir_path: input.dirPath,
+                name: input.name,
+                name_ci: input.name.toLowerCase(),
+                size: input.size,
+                mtime_ms: input.mtimeMs,
+                content_type: input.contentType,
+                suffix: input.suffix,
+                // Derived from the file's `name`, because the real `UPSERT_FILE_FACTS` derives
+                // it — and it did not, once, which is why a whole import reported 113 of 118
+                // starred tracks `not-found` on a library where they were indexed under the
+                // title this product was displaying to the user the entire time. `title_ci` was
+                // written by `applyMetadata` alone, so a row nothing had range-read held NULL
+                // in both, and `search3` (filters on `title_ci`) and `findByAlbumTitle`
+                // (matches on `(album_ci, title_ci)`) could not see it. `null` here is the same
+                // defect in a double: it would agree with itself and with neither production,
+                // and this file is where that was already caught twice.
+                title: deriveTitleFromFileName(input.name),
+                title_ci: deriveTitleFromFileName(input.name).toLowerCase(),
+                // Derived from `dir_path`, because the real `UPSERT_FILE_FACTS` derives them
+                // — this double had `null` here while the statement filled the columns, and
+                // that disagreement is the reason the first attempt at the grouping fix was
+                // invisible: the suite agreed with itself and with neither production. A
+                // double must model the platform, and the platform derives.
+                artist: derived.artist,
+                artist_ci: derived.artist?.toLowerCase() ?? null,
+                album: derived.album,
+                album_ci: derived.album?.toLowerCase() ?? null,
+                album_artist: derived.artist,
+                album_artist_ci: derived.artist?.toLowerCase() ?? null,
+                track: null,
+                disc: null,
+                year: null,
+                genre: null,
+                genre_ci: null,
+                duration: 0,
+                bitrate: 0,
+                sample_rate: null,
+                channels: null,
+                enriched_at: null,
+                // 0, which is what the real upsert writes for a row whose bytes moved. A
+                // non-zero value here would make this double disagree with the statement
+                // about which rows need re-reading — and that disagreement is invisible
+                // until a reader changes.
+                reader_version: 0,
+                // The real `UPSERT_FILE_FACTS` stamps `DERIVED_VERSION` on both the `INSERT`
+                // and the `ON CONFLICT` clause, so a row the indexer just wrote is not also
+                // owed to the backfill. It did not, once: the statement left the column at the
+                // migration's `DEFAULT 0`, and because the backfill's selection is
+                // `derived_version < 1`, *every row this double wrote* was permanently owed —
+                // which is the failure `test/schema.int.test.ts` now runs the real statement
+                // over real SQLite to catch. This double agreeing with production about the
+                // very column under repair is therefore not cosmetic: it is the only reason
+                // this file stayed green through it.
+                derived_version: DERIVED_VERSION,
+                // The real `UPSERT_FILE_FACTS` stamps `'derived'` on the `INSERT`: a row it
+                // created cannot hold a value any tag supplied. The backfill's guard reads this
+                // column, so a double that omits it produces a row nothing may ever correct —
+                // the "a double may disagree with production about the very column under
+                // repair" defect, on the third such column.
+                grouping_source: GROUPING_SOURCE_DERIVED,
+                created_at: 0,
+                updated_at: 0,
+              });
+              changed += 1;
+            }
+            writes.songs += changed;
+            return { changes: changed, written: inputs.length, truncated: false, billedRows: billedRowsForTable('songs', changed) };
+          }, inputs.length),
         deleteInDirectoryNotIn: async (_libraryId: string, dirPath: string, keep: readonly string[]) => {
           const keepSet = new Set(keep);
           const doomed = db(() => [...songs.values()].filter((song) => song.dir_path === dirPath && !keepSet.has(song.path)));
@@ -299,7 +328,12 @@ function createIndex() {
           for (const song of doomed) songs.delete(song.path);
           writes.songs += doomed.length;
           subrequests.charge(doomed.length, 'd1');
-          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
+          return {
+            changes: doomed.length,
+            written: doomed.length,
+            truncated: false,
+            billedRows: billedRowsForTable('songs', doomed.length),
+          };
         },
         // Recursive, like the real one: a vanished folder takes its songs with it,
         // and their `dir_path` is deeper than the folder itself.
@@ -307,7 +341,12 @@ function createIndex() {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath || song.dir_path.startsWith(`${dirPath}/`));
           for (const song of doomed) songs.delete(song.path);
           writes.songs += doomed.length;
-          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
+          return {
+            changes: doomed.length,
+            written: doomed.length,
+            truncated: false,
+            billedRows: billedRowsForTable('songs', doomed.length),
+          };
         },
         countByLibrary: async () => db(() => songs.size),
       },
@@ -322,7 +361,16 @@ function createIndex() {
           // `changed: 0`, because the flag is per-scan and a new scan is a new question.
           // Carrying the previous scan's answer forward would bump on the first no-op
           // rescan and never again — the DAO zeroes it here for that reason.
-          state = { ...state, status: 'scanning', total_count: total, scanned_count: 0, cursor_path: null, last_error: null, consecutive_failures: 0, changed: 0 };
+          state = {
+            ...state,
+            status: 'scanning',
+            total_count: total,
+            scanned_count: 0,
+            cursor_path: null,
+            last_error: null,
+            consecutive_failures: 0,
+            changed: 0,
+          };
           writes.state += 1;
         },
         // A **delta**, like the DAO. This double assigned it, which is the DAO's own
@@ -428,7 +476,6 @@ function sampleTree(mtimeBase = 1_000_000, albumMtimes: number[] = [2000, 3000, 
   return tree;
 }
 
-
 /**
  * Move a folder's `getlastmodified`, and that of every ancestor up to the root.
  *
@@ -474,11 +521,20 @@ describe('the scan enriches the tracks it changed', () => {
   /**
   A scan over the shared `dav`, recording what it was asked to enrich.
   */
-  function scanWith(enrichMaxPerFolder: number, onEnrich?: (facts: { id: string; path: string; size: number; mtimeMs: number }) => Promise<number | void>): ScanService {
+  function scanWith(
+    enrichMaxPerFolder: number,
+    onEnrich?: (facts: { id: string; path: string; size: number; mtimeMs: number }) => Promise<number | void>,
+  ): ScanService {
     return new ScanService({
       ...index.deps,
       clientFor: async (_library, onRequest) =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
+        new (await import('@edge-sonic/webdav')).WebDavClient(
+          row.base_url,
+          row.root_path,
+          { username: 'u', password: 'p' },
+          dav.fetch,
+          onRequest,
+        ),
       timeoutMs: 1000,
       ...UNBOUNDED_CHUNK,
       enrichSong: async (_library, facts, onRequest) => {
@@ -704,7 +760,13 @@ describe('ScanService', () => {
     service = new ScanService({
       ...index.deps,
       clientFor: async (_library, onRequest) =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
+        new (await import('@edge-sonic/webdav')).WebDavClient(
+          row.base_url,
+          row.root_path,
+          { username: 'u', password: 'p' },
+          dav.fetch,
+          onRequest,
+        ),
       timeoutMs: 1000,
       ...UNBOUNDED_CHUNK,
       // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
@@ -902,12 +964,7 @@ describe('ScanService', () => {
     // Four requests: the root probe, the root listing, the artist folder, and the one
     // album that changed. The two untouched albums are reconciled from the artist
     // folder's listing and are never opened — which is the whole claim.
-    expect(dav.propfinds).toEqual([
-      '/dav/music',
-      '/dav/music',
-      '/dav/music/Blur',
-      '/dav/music/Blur/Holocene',
-    ]);
+    expect(dav.propfinds).toEqual(['/dav/music', '/dav/music', '/dav/music/Blur', '/dav/music/Blur/Holocene']);
     expect(dav.propfinds).not.toContain('/dav/music/Blur/Blur');
     expect(dav.propfinds).not.toContain('/dav/music/Blur/For Emma');
     // The changed track is rewritten; the untouched ones are not.
@@ -980,7 +1037,13 @@ describe('ScanService', () => {
     const failingService = new ScanService({
       ...index.deps,
       clientFor: async (_library, onRequest) =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch, onRequest),
+        new (await import('@edge-sonic/webdav')).WebDavClient(
+          row.base_url,
+          row.root_path,
+          { username: 'u', password: 'p' },
+          failing.fetch,
+          onRequest,
+        ),
       timeoutMs: 1000,
       ...UNBOUNDED_CHUNK,
       // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
@@ -1029,7 +1092,13 @@ describe('ScanService', () => {
     return new ScanService({
       ...index.deps,
       clientFor: async (_library, onRequest) =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, failing.fetch, onRequest),
+        new (await import('@edge-sonic/webdav')).WebDavClient(
+          row.base_url,
+          row.root_path,
+          { username: 'u', password: 'p' },
+          failing.fetch,
+          onRequest,
+        ),
       timeoutMs: 1000,
       ...UNBOUNDED_CHUNK,
       enrichMaxPerFolder: 0,
@@ -1066,7 +1135,11 @@ describe('ScanService', () => {
       // `idle` without walking the frontier would satisfy a status-only assertion.
       dav.setTree(sampleTree());
       expect(await drain(service)).toBe('idle');
-      expect([...index.songs.values()].map((song) => song.path).sort()).toEqual(['Blur/01.flac', 'Blur/02.flac', 'For Emma/01.flac', 'For Emma/02.flac', 'Holocene/01.flac', 'Holocene/02.flac'].map((leaf) => `Blur/${leaf}`).sort());
+      expect([...index.songs.values()].map((song) => song.path).sort()).toEqual(
+        ['Blur/01.flac', 'Blur/02.flac', 'For Emma/01.flac', 'For Emma/02.flac', 'Holocene/01.flac', 'Holocene/02.flac']
+          .map((leaf) => `Blur/${leaf}`)
+          .sort(),
+      );
     });
 
     it('gives up after a bounded number of retries, and says so', async () => {
@@ -1085,7 +1158,10 @@ describe('ScanService', () => {
       // `failed` while the budget lasts, `stalled` once it is spent — and `stalled` is
       // the state that does *not* get retried, so a client polling to decide whether to
       // keep going is not told to keep going.
-      expect(statuses).toEqual([...Array.from({ length: MAX_CONSECUTIVE_FAILURES - 1 }, () => 'failed'), ...Array.from({ length: 3 }, () => 'stalled')]);
+      expect(statuses).toEqual([
+        ...Array.from({ length: MAX_CONSECUTIVE_FAILURES - 1 }, () => 'failed'),
+        ...Array.from({ length: 3 }, () => 'stalled'),
+      ]);
 
       // And it stops touching the network, which is the point of the bound. The
       // counter is the observable: a poll that re-attempted the request would raise it
@@ -1154,7 +1230,13 @@ describe('ScanService', () => {
         ...index.deps,
         derivation: store,
         clientFor: async (_library, onRequest) =>
-          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
+          new (await import('@edge-sonic/webdav')).WebDavClient(
+            row.base_url,
+            row.root_path,
+            { username: 'u', password: 'p' },
+            dav.fetch,
+            onRequest,
+          ),
         timeoutMs: 1000,
         ...UNBOUNDED_CHUNK,
         ...chunk,
@@ -1194,7 +1276,11 @@ describe('ScanService', () => {
             return state.remaining.slice(0, limit).map((id) => ({ id, dir_path: dirPaths[id] ?? '', name: names[id] ?? '' }));
           },
           async deriveFor(rows: readonly { id: string; dir_path: string; name: string }[]) {
-            return rows.map((row) => ({ id: row.id, title: deriveTitleFromFileName(row.name), ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
+            return rows.map((row) => ({
+              id: row.id,
+              title: deriveTitleFromFileName(row.name),
+              ...deriveFromPath(row.dir_path, DERIVED_MARKER),
+            }));
           },
           applyDerivation: async (writes: readonly { id: string }[]) => {
             // `requireComplete`, so this is a refusal and not a truncation. Nothing is
@@ -1211,7 +1297,12 @@ describe('ScanService', () => {
             // and a scan that repaired a large library spends this phase's whole output against
             // the day's allowance — so a double reporting `writes.length` billed would make this
             // suite unable to see a ten-fold overrun on the very path that spends the most.
-            return { changes: writes.length, written: writes.length, truncated: false, billedRows: billedRowsForTable('songs', writes.length) };
+            return {
+              changes: writes.length,
+              written: writes.length,
+              truncated: false,
+              billedRows: billedRowsForTable('songs', writes.length),
+            };
           },
         },
       };
@@ -1397,7 +1488,13 @@ describe('ScanService', () => {
     const goneService = new ScanService({
       ...index.deps,
       clientFor: async (_library, onRequest) =>
-        new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, gone.fetch, onRequest),
+        new (await import('@edge-sonic/webdav')).WebDavClient(
+          row.base_url,
+          row.root_path,
+          { username: 'u', password: 'p' },
+          gone.fetch,
+          onRequest,
+        ),
       timeoutMs: 1000,
       ...UNBOUNDED_CHUNK,
       // 0 keeps these cases about the walk: none of them supplies an `enrichSong`.
@@ -1436,7 +1533,13 @@ describe('ScanService', () => {
       oneAtATime = new ScanService({
         ...index.deps,
         clientFor: async (_library, onRequest) =>
-          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest),
+          new (await import('@edge-sonic/webdav')).WebDavClient(
+            row.base_url,
+            row.root_path,
+            { username: 'u', password: 'p' },
+            dav.fetch,
+            onRequest,
+          ),
         timeoutMs: 1000,
         ...UNBOUNDED_CHUNK,
         chunkFolders: 1,
@@ -1587,7 +1690,13 @@ describe('ScanService', () => {
       const emptyService = new ScanService({
         ...index.deps,
         clientFor: async (_library, onRequest) =>
-          new (await import('@edge-sonic/webdav')).WebDavClient(row.base_url, row.root_path, { username: 'u', password: 'p' }, emptyDav.fetch, onRequest),
+          new (await import('@edge-sonic/webdav')).WebDavClient(
+            row.base_url,
+            row.root_path,
+            { username: 'u', password: 'p' },
+            emptyDav.fetch,
+            onRequest,
+          ),
         timeoutMs: 1000,
         ...UNBOUNDED_CHUNK,
         enrichMaxPerFolder: 0,

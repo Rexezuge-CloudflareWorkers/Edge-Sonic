@@ -98,7 +98,7 @@ describe('the headers on a real response', () => {
       // The SPA ships inline scripts and styles from the Vite build, so 'unsafe-inline'
       // is load-bearing until the build emits stable hashes.
       expect(csp).toContain("script-src 'self' 'unsafe-inline'");
-      expect(csp).toContain('frame-ancestors \'none\'');
+      expect(csp).toContain("frame-ancestors 'none'");
     } finally {
       harness.close();
     }

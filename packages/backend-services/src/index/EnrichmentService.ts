@@ -192,7 +192,14 @@ class EnrichmentService {
       if (song.enriched_at === null || song.reader_version !== READER_VERSION) {
         // Measured, not declared: a cached replay is still a `songs` write, and a scan that
         // restored a library from a backup replays one of these per track.
-        const written = await this.persist(song, cached.durationSeconds, cached.bitrateKbps, cached.sampleRate, cached.channels, tagsFromCachedEnrichment(cached));
+        const written = await this.persist(
+          song,
+          cached.durationSeconds,
+          cached.bitrateKbps,
+          cached.sampleRate,
+          cached.channels,
+          tagsFromCachedEnrichment(cached),
+        );
         return { tags: null, rowsWritten: written.changes, billedRows: written.billedRows };
       }
       return NO_ENRICHMENT_WRITTEN;
@@ -237,7 +244,12 @@ class EnrichmentService {
    * `row` is `null` when the caller has no row to write metadata through — the scan
    * writes by id, which is all a freshly upserted row needs.
    */
-  private async readAndPersist(library: LibraryRow, row: SongRow | null, facts: EnrichFacts, onRequest?: () => void): Promise<EnrichmentOutcome> {
+  private async readAndPersist(
+    library: LibraryRow,
+    row: SongRow | null,
+    facts: EnrichFacts,
+    onRequest?: () => void,
+  ): Promise<EnrichmentOutcome> {
     // Counted by the closure rather than by its callers, because `write` is the only place in
     // the service that issues an `UPDATE`, and every answer about rows written has to be the same
     // answer.
@@ -300,9 +312,10 @@ class EnrichmentService {
     // optional, and `undefined` is not `null`: an MP3 read that found no Xing frame would
     // otherwise skip the tail read and be written with no duration and no attempt to get
     // one.
-    const tail = tags.durationSeconds === null || tags.durationSeconds === undefined
-      ? await this.tailDuration(library, facts, tags, onRequest)
-      : { duration: tags.durationSeconds, transient: false };
+    const tail =
+      tags.durationSeconds === null || tags.durationSeconds === undefined
+        ? await this.tailDuration(library, facts, tags, onRequest)
+        : { duration: tags.durationSeconds, transient: false };
     // A transient tail failure leaves no trace either — not even the good prefix tags, for the
     // same permanence as the prefix case above. The next call does both reads again.
     if (tail.transient) return NO_ENRICHMENT_WRITTEN;
@@ -334,12 +347,7 @@ class EnrichmentService {
    * request meter is threaded into, so a tail read is charged against the same subrequest
    * ceiling as the `PROPFIND` that found the file.
    */
-  private async tailDuration(
-    library: LibraryRow,
-    facts: EnrichFacts,
-    tags: AudioTags,
-    onRequest?: () => void,
-  ): Promise<TailDuration> {
+  private async tailDuration(library: LibraryRow, facts: EnrichFacts, tags: AudioTags, onRequest?: () => void): Promise<TailDuration> {
     const client = await this.deps.clientFor(library, onRequest);
     return await resolveTailDuration(client, facts, tags, this.deps.readTailBytes, this.deps.timeoutMs);
   }
@@ -362,7 +370,6 @@ class EnrichmentService {
       tags,
     );
   }
-
 }
 
 export { EnrichmentService };

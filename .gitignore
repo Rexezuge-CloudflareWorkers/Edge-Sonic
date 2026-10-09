@@ -77,3 +77,8 @@ tsconfig.tsbuildinfo
 
 # Local agent scratch
 .codex
+
+# Core dumps. `prettier` over this tree needs `--max-old-space-size` (see the
+# `format` scripts) because `worker-configuration.d.ts` alone is 600 KB, and a
+# heap exhaustion here writes a multi-gigabyte `core.<pid>` into the worktree.
+core.*

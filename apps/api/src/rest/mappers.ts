@@ -46,7 +46,9 @@ has already established the value is non-null uses the `!` form rather than inve
 second helper with a different contract.
 */
 function toIso(epochSeconds: number | null | undefined): string | undefined {
-  return epochSeconds === null || epochSeconds === undefined || epochSeconds <= 0 ? undefined : new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  return epochSeconds === null || epochSeconds === undefined || epochSeconds <= 0
+    ? undefined
+    : new Date(epochSeconds * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function suffixOfPath(path: string): string {

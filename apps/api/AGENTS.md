@@ -26,7 +26,7 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
   (the aggregate reads), plus `params`, `format`, `pageSize` and `maxOffset`.
 - `src/rest/mappers.ts` — song rows to protocol records, and the names both a song element and the
   artist grouping derive. `src/rest/artistIndex.ts` — the artist half (`groupArtistRows`,
-  `artistIndexGroups`), split out because it is *artist* work and the two are the shared half of
+  `artistIndexGroups`), split out because it is _artist_ work and the two are the shared half of
   `getArtists` and `getIndexes`. `src/rest/albumIdentity.ts` — what an album **is** for one request:
   `albumIdentity` for one library and `identityPerLibrary` for a granted set. `src/rest/paging.ts` —
   the derived `maxOffset`, with the reason an offset needs a ceiling at all.
@@ -58,7 +58,7 @@ come **after** `userAuthentication`, because the limiter prefers the resolved
 `AuthenticatedUserEmailAddress` over the client address and that variable does not exist
 until auth has run. `/rest` limits come **before** their route, because a Subsonic client
 authenticates inside the dispatcher from query parameters — there is no ambient identity
-on that surface to key on. See *The user rate limits come after auth* below.
+on that surface to key on. See _The user rate limits come after auth_ below.
 
 ## `onError` speaks both dialects
 
@@ -134,7 +134,7 @@ deliberately does **not** do:
   so the guard is `entries > 0 && placeable === 0`. Failing every probe that returns a listing
   would be the same over-correction in the other direction, and it would break every probe.
 
-The status stays `207` on the failure, because the origin *did* answer: this is a
+The status stays `207` on the failure, because the origin _did_ answer: this is a
 configuration fault, and reporting it as unreachable would send an operator off to debug their
 own server — the exact failure `classifyBeforeRequest` exists to prevent.
 
@@ -154,7 +154,7 @@ Three things about the shape, and each would have been the obvious alternative:
   should carry. The projection is the one `GET`, because `IndexStatsDAO` has no write method — so
   there is no version of it that can be triggered by a prefetcher into doing damage.
 - **There is no confirmation token here.** Every caller of `/user/*` is already an operator —
-  Cloudflare Access *is* the authorization boundary, and `users.is_admin` is written but read only
+  Cloudflare Access _is_ the authorization boundary, and `users.is_admin` is written but read only
   to render a badge. The two gates are in `apps/web`. What this side owes is **honesty about
   cost**: the figure the dialog quotes comes from the same `billedRowsForTable` that charges the
   delete, so what the operator consents to is what they pay. And the figure is why the drop is
@@ -206,7 +206,7 @@ auth has run. The previous order registered limits first while a comment claimed
 opposite ("before auth, so they can key on the resolved identity"), so every bucket
 silently fell back to `ip:…` and several operators behind one NAT shared a budget.
 
-`/rest` limits are registered *before* its route instead, because a Subsonic client
+`/rest` limits are registered _before_ its route instead, because a Subsonic client
 authenticates inside the dispatcher from `u`/`t`/`s` query parameters: there is no
 ambient identity on that surface to read.
 
@@ -255,7 +255,7 @@ sets its own `no-store` and the tests that existed all passed. Asserted in
   `<position>42000</position>` is `42000` in JSON, not `{"#text": 42000}`.
 - Every other element **is** a record, which is what makes the last rule usable: the
   one exception the schema makes is `user.folder`, and a record there fails to decode.
-  See *A scalar the schema says is a scalar* below.
+  See _A scalar the schema says is a scalar_ below.
 - **An album is two elements over one attribute builder**: `albumElement` is the list
   child (`getAlbumList2`, `getArtist`, `search2`), `albumChildElement` is the `Child`
   shape, and `albumWithSongs` is `getAlbum`'s payload — over `albumAttrs`. The split is
@@ -266,7 +266,7 @@ sets its own `no-store` and the tests that existed all passed. Asserted in
 
 `MAX_PAGE_SIZE` (`500`) is **clamped** to `MAX_PAGE_SIZE_CEILING`, which is
 derived from the statement budget rather than chosen — a limit the platform imposes is
-not a number this code may pick, and `validate()` *reports* the clamp. `DEFAULT_PAGE_SIZE`
+not a number this code may pick, and `validate()` _reports_ the clamp. `DEFAULT_PAGE_SIZE`
 is `20`; `context.pageSize(n, fallback)` clamps to `[1, maxPage]`.
 
 `context.pageSize(context.params.optionalInt('size'), 10)`. `params.int` returns the
@@ -284,7 +284,7 @@ came out `[{"id": 0}]` where a client modelling `User.folder` as `List<Int>` thr
 
 It shipped, and the symptom was the worst available one: the throw lands in a client's
 **login** path, so a correct server that had answered `ping` and authenticated the
-request reported *"failed to connect, check your credentials"*. A wrong shape in a scalar
+request reported _"failed to connect, check your credentials"_. A wrong shape in a scalar
 field is indistinguishable from a wrong password, and nothing in the product could tell
 them apart.
 
@@ -313,7 +313,7 @@ assertions: shapes alone pass again on two surfaces that disagree.
 `resolveLibrary` still accepts a library identifier, so a client holding one persisted
 before this change keeps working. It is authorized by the same grant check, so it is a
 second **spelling** rather than a second way past it, and only a canonical position
-*in range* is read as one — otherwise `"00"` would shadow a library whose id is `"00"`.
+_in range_ is read as one — otherwise `"00"` would shadow a library whose id is `"00"`.
 
 ## The default is the **union**, and a folder still narrows
 
@@ -332,15 +332,15 @@ a preference between them" was the only reading that made the data reachable.
 
 ### The union reaches the **identity**, not only the read — and the mappers make that structural
 
-It was implemented for the *read* and not for the *identity*, in four places. Each bound
+It was implemented for the _read_ and not for the _identity_, in four places. Each bound
 `library = libraries[0]` and used it to filter rows or mint ids while reading across the union:
 
-| Surface | What it dropped |
-| --- | --- |
-| `getStarred` | every starred **song** from the second library, while the starred **albums** in the same response were unioned — so one response was internally inconsistent |
-| `getNowPlaying` | the current track, for a user playing something in their second library |
-| `getArtist` | every album key outside `libraries[0]`, from the completion fetch — so a split release was published here at a `songCount` of 1 while `getAlbumList2`, `search3` and `getAlbum` reported 2 for the same id |
-| every album list | nothing visible under a tag grouping, and a **dead link** under `ALBUM_GROUP_BY=folder` |
+| Surface          | What it dropped                                                                                                                                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getStarred`     | every starred **song** from the second library, while the starred **albums** in the same response were unioned — so one response was internally inconsistent                                               |
+| `getNowPlaying`  | the current track, for a user playing something in their second library                                                                                                                                    |
+| `getArtist`      | every album key outside `libraries[0]`, from the completion fetch — so a split release was published here at a `songCount` of 1 while `getAlbumList2`, `search3` and `getAlbum` reported 2 for the same id |
+| every album list | nothing visible under a tag grouping, and a **dead link** under `ALBUM_GROUP_BY=folder`                                                                                                                    |
 
 The folder case is the one that made it a protocol bug rather than a missing row: under that grouping
 the library is **part of** the album id (`albumIdOf`), so a release whose folder lives in library 2 was
@@ -360,7 +360,7 @@ with its row. `context.albumsForScope(libraries)` builds one from a granted set.
 **And the cost, which is a decision with a witness in
 `test/library-union.test.ts`:** `getMusicFolders` still publishes the individual
 libraries, so a client with a folder picker can choose one and will then see
-*less* than the default. A synthetic "All" entry would fix the incoherence and
+_less_ than the default. A synthetic "All" entry would fix the incoherence and
 shift every published position, and the stored `musicFolderId`s depend on those
 positions — so the default carries the union and the list carries the parts.
 
@@ -405,11 +405,11 @@ is far larger than the feature. So the library half is
 `LibraryDAO` never mints, and the all-zeros UUID `wrangler.template.jsonc` already
 carries for "no particular library". `decodeId` is untouched.
 
-**Only the two ids that name a *group* carry it.** A song id still names its
+**Only the two ids that name a _group_ carry it.** A song id still names its
 library, because the same relative path in two libraries is two files and
 collapsing them would point a star at whichever was written last. `al:`
 (`ALBUM_GROUP_BY=folder`) also keeps its library — under that grouping an album
-*is* a directory, and directories are per-source — so **folder grouping is not
+_is_ a directory, and directories are per-source — so **folder grouping is not
 unioned**, and that asymmetry is stated in `albumIdOf` rather than left to be
 inferred.
 
@@ -418,13 +418,13 @@ The minting sites were five for an artist and one for an album, so they are
 and nothing in the response says which is stale.
 
 **A stored annotation survives the re-key**, and `test/library-union.test.ts`
-asserts it rather than assuming it — because `resolveAlbumId` decodes to a *key*,
+asserts it rather than assuming it — because `resolveAlbumId` decodes to a _key_,
 which the widened lookup then finds. An album star written by a client before the
 change names a real library and still resolves, attached to the whole release. A
 migration to re-point stored ids would have been written on the belief that it did
 not, which is why the belief was measured instead.
 
-**An album's year and genre come from the first track that *has* one, not from track 1.**
+**An album's year and genre come from the first track that _has_ one, not from track 1.**
 `year` and `genre` are the two columns `pathConvention` deliberately never derives, so a row the
 scan has not range-read holds NULL for both. That was invisible while a derived `X (derived)` and
 a tagged `X` were two albums — the tagged half published a year, the derived half published none,
@@ -449,7 +449,7 @@ Three things about the album id, each of which is a way to lose a user's library
   them — every starred album and every album rating. It resolves through the directory and then
   that directory's rows' key, so a pre-change star points at the **merged** album rather than
   the half of it that happened to be its folder. `albumModel` therefore looks a star up under the
-  current id *and* under the folder id each row would have had: checking only the current one
+  current id _and_ under the folder id each row would have had: checking only the current one
   reports a correctly-stored star by nothing at all.
 
 `getAlbumList` and `getAlbumList2` share one grouping on purpose, against the protocol's own
@@ -466,9 +466,9 @@ resolved inside the caller's own grant list, so there is no id to forge.
 
 `/user/libraries` reads each library's scan state from **both** `scan_state` and the per-library
 Durable Object, and the DO's answer wins. A pause is held in DO storage because it is usually
-*caused by* D1 refusing writes, so `scan_state` is **guaranteed stale** about it: it says
+_caused by_ D1 refusing writes, so `scan_state` is **guaranteed stale** about it: it says
 `scanning`, which an operator reads as working. This is the one case where the DO is the
-authoritative source for the *status* and D1 is not — the frontier and every count still come from
+authoritative source for the _status_ and D1 is not — the frontier and every count still come from
 D1.
 
 Two events are kept apart here, and conflating them is how this page would end up lying twice:
@@ -506,8 +506,8 @@ symptom — and a client that does back off should keep polling rather than leng
 interval, because **polling is the scan**.
 
 **The ceiling is a total, and on Free it is 50.** Workers Free allows 50 subrequests per
-invocation and a D1 statement is one of them — D1 states its own limit as *queries per Worker
-invocation — 1000 (Workers Paid) / 50 (Free)* — so a chunk that budgeted only `fetch` spent
+invocation and a D1 statement is one of them — D1 states its own limit as _queries per Worker
+invocation — 1000 (Workers Paid) / 50 (Free)_ — so a chunk that budgeted only `fetch` spent
 ~240 against a budget of 40 and was terminated by the runtime inside its first album, on every
 chunk, with `ScanWorker.alarm` re-arming and each dead invocation banking a few tracks. That is
 why a scan could report success while no chunk ever completed, and why `stoppedBy: 'requests'`
@@ -525,9 +525,9 @@ performs live outbound requests with the stored credential.
 ### `scanning` means "poll me again", which is not what it answered
 
 `scanStatus` carries only `scanning` and `count`, so `scanning` has exactly one job: tell
-the client whether another poll buys anything. It answered "did *this* call do work"
+the client whether another poll buys anything. It answered "did _this_ call do work"
 instead, and every client reads `scanning: false` as **stop polling** — which is precisely
-what stopped a library being scanned. A failed chunk *is* retried, from the frontier in D1,
+what stopped a library being scanned. A failed chunk _is_ retried, from the frontier in D1,
 so it reports `true`; only `stalled`, which has spent its retry budget and will not be
 retried without an explicit `startScan`, reports `false`. The distinction is the whole fix,
 and the reason `stalled` is a status rather than a flavour of `failed`.
@@ -536,13 +536,13 @@ and the reason `stalled` is a status rather than a flavour of `failed`.
 the two are one decision: `step` used to answer both inline, and the tangle is what shipped.
 
 **`paused` is `false` here and `true` for the alarm, and that is not an inconsistency.**
-`isAdvancing` answers *the client's* question — "will my poll buy anything?" — and polling cannot
+`isAdvancing` answers _the client's_ question — "will my poll buy anything?" — and polling cannot
 move a wall clock, so a paused scan answers `false` and the client stops. `willResumeWithoutAPoll`
-answers *the alarm's* question and is `true`, or deleting the alarm would leave an allowance spent
+answers _the alarm's_ question and is `true`, or deleting the alarm would leave an allowance spent
 until an operator noticed. Two questions, two functions; one predicate for both is the same shape of
 defect as the one above it.
 
-The *reason* a scan failed is not on this surface at all. A reason here would be a
+The _reason_ a scan failed is not on this surface at all. A reason here would be a
 non-standard attribute some strict clients reject, and `scanStatus` has nowhere to put one.
 It is on `scan_state.last_error`, read through the operator API.
 
@@ -569,7 +569,7 @@ endpoints a client calls routinely — `getLyrics` on every track among them —
 `EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
 `code=70` is still right for an endpoint this server does not have at all, which is the
 case `getOpenSubsonicExtensions` was in — the protocol says a
-server supporting no extensions returns an empty *list*, and answering a failure from the
+server supporting no extensions returns an empty _list_, and answering a failure from the
 **capability-discovery** call told a client it could not ask the question, which is the one
 answer it cannot use. It is implemented now and reports `[]`.
 
@@ -602,13 +602,20 @@ it is a bare list at a key rather than a record wrapping one.
 
 ## Never
 
-- Never import `@edge-sonic/backend-data` **values** in a route (type-only is fine).
+- Never import `@edge-sonic/backend-data` **values** in a route (type-only is fine) — **and
+  never through `await import(...)` either.** `no-restricted-imports` reads `ImportDeclaration`
+  nodes only; a dynamic `import()` is an `ImportExpression` and the rule does not report it, so
+  the boundary held for every syntax except the one in use. `createUser` reached
+  `backend-data/crypto` that way, on the route that should least be holding a credential
+  operation. `eslint.config.mjs` now states the same boundary through `no-restricted-syntax`,
+  and `auth/UserService` owns the encryption — `LibraryService` owns the DAV credential for
+  the same reason.
 - Never write a D1 predicate that lowercases a column. See the parent index.
 - Never batch an `IN (...)` list on a number you chose. Derive it from
   `bindChunkSize`. See the parent index.
 - Never let a list wrapper's child name disagree with its declared list key.
-- Never mint an id from `libraries[0]` over a union read. Take a resolver; see *The union reaches
-  the identity* above.
+- Never mint an id from `libraries[0]` over a union read. Take a resolver; see _The union reaches
+  the identity_ above.
 - Never pass an unbounded `id` list to a per-id loop. `MAX_IDS_PER_REQUEST` refuses with a code a
   client can read; without it the platform terminates the invocation and the client sees a dropped
   connection.
@@ -624,5 +631,5 @@ it is a bare list at a key rather than a record wrapping one.
   lesser dialect there — it is the wrong shape. A `404` from the origin used to become a
   masked `200 application/json`, which a client hands to an image decoder and fails on
   with no diagnostic. It lives in `endpoints/coverArt.ts` because it is the one media
-  endpoint that *finds* a picture rather than forwarding one, and that is a different
+  endpoint that _finds_ a picture rather than forwarding one, and that is a different
   shape of problem from `stream`.

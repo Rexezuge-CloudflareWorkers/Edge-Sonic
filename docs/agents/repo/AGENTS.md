@@ -10,15 +10,15 @@ part: what exists, what runs it, and what refuses to merge.
 
 `pnpm-workspace.yaml` globs `apps/*`, `packages/*`, and `test`. That is **12 projects**:
 
-| Layer | Projects | May import |
-| --- | --- | --- |
-| 0 | `shared`, `backend-errors`, `subsonic`, `media-tags`, `webdav` | nothing |
-| 1 | `backend-runtime` | layer 0 |
-| 2 | `backend-data` | layer 0 |
-| 3 | `backend-services` | layers 0–2, never `apps/*` |
-| app | `background` | layers 0–3, never `apps/api` |
-| app | `api` | layers 0–3 + `background`; `backend-data` **types only** |
-| app | `web` | the browser |
+| Layer | Projects                                                       | May import                                               |
+| ----- | -------------------------------------------------------------- | -------------------------------------------------------- |
+| 0     | `shared`, `backend-errors`, `subsonic`, `media-tags`, `webdav` | nothing                                                  |
+| 1     | `backend-runtime`                                              | layer 0                                                  |
+| 2     | `backend-data`                                                 | layer 0                                                  |
+| 3     | `backend-services`                                             | layers 0–2, never `apps/*`                               |
+| app   | `background`                                                   | layers 0–3, never `apps/api`                             |
+| app   | `api`                                                          | layers 0–3 + `background`; `backend-data` **types only** |
+| app   | `web`                                                          | the browser                                              |
 
 Enforced by `no-restricted-imports` in `eslint.config.mjs`, not by convention — and the
 enforcement has gaps worth knowing: there is **no** layer block for `subsonic` or
@@ -45,7 +45,7 @@ pnpm run checks          # checks:fast, then coverage, then integration
 pnpm run checks:fast     # typecheck + lint + god-files + migrations + locales + SPA shell
 pnpm run typecheck       # -r, plus scripts/ and functions/
 pnpm run lint            # eslint --fix --quiet
-pnpm run check:god-files # 300 warn / 400 error
+pnpm run check:god-files # a ratchet: no file may grow past its recorded size
 pnpm run validate:migrations   # read-only; refuses an edited or unlocked migration
 pnpm run migrations:lock       # records a NEW migration; never re-hashes an applied one
 pnpm run validate:locales
@@ -69,36 +69,59 @@ integration config has no thresholds, deliberately.
 ## The gates
 
 **Coverage floors are `89 / 78 / 92 / 92`** (statements / branches / functions / lines),
-against a measured 89.62 / 79.08 / 92.46 / 92.74. They are a **measured** floor: lower one
-to make CI green and the gate stops saying anything. `apps/web` is deliberately *not* in the
+against a measured 90.40 / 79.70 / 93.69 / 93.34. They are a **measured** floor: lower one
+to make CI green and the gate stops saying anything. `apps/web` is deliberately _not_ in the
 coverage `include`, and `packages/backend-errors` is excluded because it is a pure taxonomy
 whose mapping out is tested.
 
-**The god-file guard** is 300 warn / 400 error, counting `split('\n').length`. It skips
-`node_modules`, `dist`, `.wrangler`, coverage directories, `.git`, `locales/`, `generated/`,
-`__tests__`/`__mocks__`, `scripts/`, `*.config.*`, and every `.md`, `.json` and `.sql`. Only
-the top 30 offenders print.
+**The god-file guard is a ratchet, not a ceiling.** It was `300 warn / 400 error` — a hard
+limit **above the largest file in the tree** (397), so `HARD` had never fired and `SOFT`
+reported 40 files over while exiting 0. A ceiling set above the current maximum measures
+nothing: it cannot distinguish a repository getting worse from one that never got better, and
+raising the ceiling is always available.
+
+So `scripts/god-files.baseline.json` records every file's size, and a file may shrink freely,
+may be deleted, and may grow **only up to its own recorded size**. A file with no entry is new
+and is held to 300. Paying down debt can never fail a build, which is what makes the gate safe
+to enforce from day one against 357 files. `pnpm run check:god-files:update` rewrites the
+baseline and is the only write path — there is deliberately no `--force`, for the same reason
+`migrations:lock` has none. The rules are in `scripts/lib/godFiles.ts` and
+`test/scripts/god-files.test.ts` exercises them, because a gate that has only ever been seen
+passing is not a gate.
+
+It counts `split('\n').length` and skips `node_modules`, `dist`, `.wrangler`, coverage
+directories, `.git`, `locales/`, `generated/`, `__tests__`/`__mocks__`, `scripts/`,
+`*.config.*`, and every `.md`, `.json`, `.sql` and `.d.ts`. **Test files are in scope.** They
+used not to be, which is how `test/schema.int.test.ts` sat at 4,388 lines with no limit of any
+kind applying to it — a quarter of the suite, unchecked. Only the top 30 offenders print.
+
+**`format:check` is its own CI job, and `pnpm run lint` cannot replace it.** `lint` is
+`eslint --fix --quiet` and `prettier/prettier` is a **warning**, so `--fix` repairs what it can
+and `--quiet` suppresses the rest: CI exited 0 on a tree Prettier rejects, with the repairs
+landed in the runner's checkout and thrown away. 175 files were in that state — the gate had
+never run. `prettier --check` is the one command that fails rather than repairs, so it gets
+the one job that can fail.
 
 **`validate:migrations` is read-only and fails on an edit.** D1 records applied migrations
-by *filename*, so a migration that has run is skipped silently by every later
+by _filename_, so a migration that has run is skipped silently by every later
 `wrangler d1 migrations apply`. `migrations/migrations.lock.json` records the sha256 of
 everything applied and `test/schema.int.test.ts` asserts both directions. There is
 deliberately **no `--force`**: a write that could adopt a new digest for an already-applied
-file *is* the bug, offered as a flag. See
+file _is_ the bug, offered as a flag. See
 [`../indexing/AGENTS.md`](../indexing/AGENTS.md).
 
-**`validate:locales`** compares bundles *and* reads the `t('key', 'default')` call sites in
+**`validate:locales`** compares bundles _and_ reads the `t('key', 'default')` call sites in
 both directions, because a bundle-to-bundle diff cannot see a key that is used and absent.
 It reported 130 compared defaults when this line was written.
 
 ## What is generated, and what is not
 
-| Path | Generated |
-| --- | --- |
-| `worker-configuration.d.ts` | `pnpm run typegen`; **gitignored** |
-| `apps/api/src/generated/spa-shell.ts` | `pnpm run build`; **gitignored**, verified by a check |
-| `migrations/migrations.lock.json` | `pnpm run migrations:lock`, on adding a migration only |
-| `coverage/`, `coverage-integration/` | the test run; gitignored |
+| Path                                  | Generated                                              |
+| ------------------------------------- | ------------------------------------------------------ |
+| `worker-configuration.d.ts`           | `pnpm run typegen`; **gitignored**                     |
+| `apps/api/src/generated/spa-shell.ts` | `pnpm run build`; **gitignored**, verified by a check  |
+| `migrations/migrations.lock.json`     | `pnpm run migrations:lock`, on adding a migration only |
+| `coverage/`, `coverage-integration/`  | the test run; gitignored                               |
 
 The root `wrangler.jsonc` is **local development only** and is the one config carrying a
 `DEV_AUTH_EMAIL` bypass and two raw 32-zero placeholder keys. A deployment starts from

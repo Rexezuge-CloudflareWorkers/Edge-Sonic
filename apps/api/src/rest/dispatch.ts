@@ -201,7 +201,7 @@ async function buildContext(
     format: ReturnType<typeof resolveFormat>;
     jsonpCallback: string | null;
     user: RestContext['user'];
-      username: string;
+    username: string;
   },
 ): Promise<RestContext> {
   const scope = BaseRoute.getScope(c);
@@ -230,7 +230,8 @@ async function buildContext(
     // The media object is resolved separately and deliberately: a Durable Object handles one event
     // at a time, so routing this through the scan's object would put a chunk walking the origin on
     // the critical path of `getSong` and `getCoverArt`.
-    mediaStubFor: (libraryId: string) => (hasMediaBinding(c.env) ? getMediaStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null),
+    mediaStubFor: (libraryId: string) =>
+      hasMediaBinding(c.env) ? getMediaStub(c.env, libraryId, scope.get(Tokens.SubrequestMeter)) : null,
     songs: await scope.get(Tokens.SongDAO)(),
     songIndex: await scope.get(Tokens.SongIndexDAO)(),
     users: await scope.get(Tokens.UserDAO)(),
@@ -247,7 +248,12 @@ async function buildContext(
     // resolved before `env` exists, which is the `LOG_LEVEL` defect: a setting that passes
     // validation and changes nothing.
     albumsFor: (library) => albumIdentity(config.getAlbumGroupBy(), library.id),
-    albumsForScope: (libraries) => identityPerLibrary(config.getAlbumGroupBy(), libraries, albumIdentity(config.getAlbumGroupBy(), libraries[0]?.id ?? SPANNING_LIBRARY_ID)),
+    albumsForScope: (libraries) =>
+      identityPerLibrary(
+        config.getAlbumGroupBy(),
+        libraries,
+        albumIdentity(config.getAlbumGroupBy(), libraries[0]?.id ?? SPANNING_LIBRARY_ID),
+      ),
     maxOffset: maxOffsetFor(maxPage),
   };
 }
@@ -255,5 +261,5 @@ async function buildContext(
 export { dispatchRest, endpointNameFromPath, clientIpOf, PUBLIC_ENDPOINTS };
 export type { RestOutcome };
 
-export {missingParameter, successResponse, type SubsonicError as SubsonicErrorType, errorResponse} from '@edge-sonic/subsonic';
-export {ENDPOINT_NAMES} from './endpoints';
+export { missingParameter, successResponse, type SubsonicError as SubsonicErrorType, errorResponse } from '@edge-sonic/subsonic';
+export { ENDPOINT_NAMES } from './endpoints';

@@ -199,5 +199,4 @@ type C = UserContext;
 export { BaseRoute, MAX_JSON_BODY_BYTES };
 export type { UserContext, WorkerEnv };
 
-
-export {type UserErrorBody} from '@edge-sonic/backend-services/errors';
+export { type UserErrorBody } from '@edge-sonic/backend-services/errors';

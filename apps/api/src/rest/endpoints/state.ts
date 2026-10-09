@@ -134,28 +134,28 @@ async function getPlayQueue(context: RestContext): Promise<EnvelopeResponse> {
   }
   return respond(
     context,
-    elList(
-      'playQueue',
-      'entry',
-      {},
-      [
-        // `current` and `position` are what a client resumes from, so they are reported
-        // on **every** path. They used to be emitted only when the queue was empty, which
-        // is exactly backwards: a saved queue resumed from zero.
-        //
-        // `current` is reported only when the track is still in the queue. Naming an id
-        // the client cannot resolve is worse than naming none.
-        ...(currentCanonical !== null && renderable.some((song) => song.id === currentCanonical) ? [el('current', {}, [currentCanonical])] : []),
-        el('position', {}, [saved.positionMs]),
-        // `username` and `changed` are part of the same element, and a client that syncs a
-        // queue between devices needs to know whose queue it is and when it moved.
-        el('username', {}, [context.username]),
-        ...(saved.changedAt === null ? [] : [el('changed', {}, [toIso(saved.changedAt)!])]),
-        // Renamed: see the note on `getBookmarks`. The element name is the key, so a
-        // `song` element here would put the queue under `playQueue.song`.
-        ...renderable.map((song) => ({ ...songElement(songToModel(song, () => context.albumsFor(libraryOf(libraries, song.library_id)), annotations)), name: 'entry' })),
-      ],
-    ),
+    elList('playQueue', 'entry', {}, [
+      // `current` and `position` are what a client resumes from, so they are reported
+      // on **every** path. They used to be emitted only when the queue was empty, which
+      // is exactly backwards: a saved queue resumed from zero.
+      //
+      // `current` is reported only when the track is still in the queue. Naming an id
+      // the client cannot resolve is worse than naming none.
+      ...(currentCanonical !== null && renderable.some((song) => song.id === currentCanonical)
+        ? [el('current', {}, [currentCanonical])]
+        : []),
+      el('position', {}, [saved.positionMs]),
+      // `username` and `changed` are part of the same element, and a client that syncs a
+      // queue between devices needs to know whose queue it is and when it moved.
+      el('username', {}, [context.username]),
+      ...(saved.changedAt === null ? [] : [el('changed', {}, [toIso(saved.changedAt)!])]),
+      // Renamed: see the note on `getBookmarks`. The element name is the key, so a
+      // `song` element here would put the queue under `playQueue.song`.
+      ...renderable.map((song) => ({
+        ...songElement(songToModel(song, () => context.albumsFor(libraryOf(libraries, song.library_id)), annotations)),
+        name: 'entry',
+      })),
+    ]),
   );
 }
 
@@ -241,4 +241,4 @@ const stateEndpoints = { getBookmarks, createBookmark, deleteBookmark, getPlayQu
 
 export { stateEndpoints, getBookmarks, createBookmark, deleteBookmark, getPlayQueue, savePlayQueue };
 
-export {ErrorCode, SubsonicError} from '@edge-sonic/subsonic';
+export { ErrorCode, SubsonicError } from '@edge-sonic/subsonic';

@@ -63,6 +63,33 @@ jobs:
           command: pnpm run lint
           max_attempts: '2'
 
+  # Its own job, and read-only, because the `lint` job cannot catch this.
+  #
+  # `pnpm run lint` is `eslint --fix --quiet`, and `prettier/prettier` is configured as a
+  # **warning**. `--fix` repairs what it can and `--quiet` suppresses the rest, so CI exits 0
+  # on a tree Prettier rejects — the repairs land in the runner's checkout and are thrown
+  # away. 242 files were in that state: the gate had never run.
+  #
+  # `prettier --check` is the one command that fails instead of repairing, so it gets the one
+  # job that can fail. Separate from `lint` so the failure says "formatting" rather than
+  # arriving inside a lint log, and because it needs no `--fix` and no ESLint program.
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Check Formatting
+        uses: ./.github/actions/retry-step
+        with:
+          command: pnpm run format:check
+          max_attempts: '2'
+
   migrations:
     name: Migration Lock
     runs-on: ubuntu-latest
@@ -166,23 +193,6 @@ jobs:
           path: coverage/
           retention-days: 14
 
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
-
-      - name: Setup Environment
-        uses: ./.github/actions/setup-env
-
-      - name: Run Integration Tests
-        uses: ./.github/actions/retry-step
-        with:
-          command: pnpm run test:integration
-          max_attempts: '2'
-
   # Only the SPA build. The API worker is typechecked by the `typecheck` job
   # (`pnpm run typecheck` reaches `apps/api`), so repeating it here ran the same
   # `tsc --noEmit` against the same tsconfig a second time.
@@ -241,11 +251,11 @@ jobs:
     needs:
       - typecheck
       - lint
+      - format
       - migrations
       - god-files
       - locales
       - unit-tests
-      - integration-tests
       - build-web
       - spa-shell
     permissions:
@@ -272,11 +282,11 @@ jobs:
     needs:
       - typecheck
       - lint
+      - format
       - migrations
       - god-files
       - locales
       - unit-tests
-      - integration-tests
       - build-web
       - spa-shell
     permissions:

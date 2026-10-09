@@ -178,10 +178,7 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
     scanning: t('libraries.scanScanning', 'Scanning.'),
     failed: t('libraries.scanFailed', 'Retrying after an error.'),
     stalled: t('libraries.scanStalled', 'Stopped retrying. Fix the cause, then rescan.'),
-    paused: t(
-      'libraries.scanPaused',
-      "D1's daily write allowance is spent. Paused until {{time}} UTC; the scan resumes itself.",
-    ),
+    paused: t('libraries.scanPaused', "D1's daily write allowance is spent. Paused until {{time}} UTC; the scan resumes itself."),
     tracksIndexed: t('libraries.scanTracks', '{{count}} tracks indexed'),
   });
   const scanFailure = describeScan(scanState?.lastError);
@@ -205,17 +202,11 @@ function LibraryRow({ library, busy, editing, onEdit, onEditDone, onEditSubmit, 
   const enrichPresented = describeEnrichState(enrichState, {
     never: t('libraries.enrichNever', 'Not enriched yet.'),
     idle: t('libraries.enrichIdle', 'Enriched.'),
-    partial: t(
-      'libraries.enrichPartial',
-      'Partially enriched. New tracks enrich on first play, or run the enrichment again.',
-    ),
+    partial: t('libraries.enrichPartial', 'Partially enriched. New tracks enrich on first play, or run the enrichment again.'),
     enriching: t('libraries.enrichEnriching', 'Enriching.'),
     failed: t('libraries.enrichFailed', 'Retrying after an error.'),
     stalled: t('libraries.enrichStalled', 'Stopped retrying. Fix the cause, then enrich again.'),
-    paused: t(
-      'libraries.enrichPaused',
-      "D1's daily write allowance is spent. Paused until {{time}} UTC; the enrichment resumes itself.",
-    ),
+    paused: t('libraries.enrichPaused', "D1's daily write allowance is spent. Paused until {{time}} UTC; the enrichment resumes itself."),
     tracksRemaining: t('libraries.enrichTracks', '{{count}} tracks remaining'),
   });
   const enrichFailure = describeScan(enrichState?.lastError);

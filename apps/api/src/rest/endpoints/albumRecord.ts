@@ -165,7 +165,10 @@ function firstWith<T>(songs: readonly SongRow[], read: (song: SongRow) => T | nu
  *   needs the whole list, because an album spanning two libraries has rows in both and the id it
  *   publishes must be minted against each row's own library.
  */
-async function libraryForAlbumId(context: RestContext, id: string): Promise<{ libraries: readonly LibraryRow[]; library: LibraryRow; scope: LibraryScope }> {
+async function libraryForAlbumId(
+  context: RestContext,
+  id: string,
+): Promise<{ libraries: readonly LibraryRow[]; library: LibraryRow; scope: LibraryScope }> {
   let libraryId: string;
   let path: string | null;
   try {
@@ -197,7 +200,11 @@ async function libraryForAlbumId(context: RestContext, id: string): Promise<{ li
  * and the part a pre-existing star names is not the album the lists publish.
  */
 async function resolveAlbumKey(context: RestContext, id: string, library: LibraryRow): Promise<string | null> {
-  return await resolveAlbumId(id, context.albumsFor(library).grouping, async (dirPath) => await context.songs.listByAlbumDir(library.id, dirPath));
+  return await resolveAlbumId(
+    id,
+    context.albumsFor(library).grouping,
+    async (dirPath) => await context.songs.listByAlbumDir(library.id, dirPath),
+  );
 }
 
 /**

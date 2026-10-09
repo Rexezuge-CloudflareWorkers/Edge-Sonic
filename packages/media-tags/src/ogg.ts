@@ -33,7 +33,7 @@
  */
 import { parseVorbisCommentSource, readUintLE } from './bits';
 import { EMPTY_TAGS } from './types';
-import { fileGranule,  readPage, startsWith, walkPackets, walkPages, OGG_EOS_FLAG, OGG_MAGIC } from './oggFraming';
+import { fileGranule, readPage, startsWith, walkPackets, walkPages, OGG_EOS_FLAG, OGG_MAGIC } from './oggFraming';
 import type { AudioTags } from './types';
 import type { CommentFields } from './bits';
 import type { OggPage } from './oggFraming';
@@ -218,6 +218,6 @@ function readOggTailDuration(bytes: Uint8Array, sampleRate: number, preskip = 0)
   return decoded > 0 ? decoded / sampleRate : null;
 }
 
-export { readOpus, readVorbis,  detectOggCodec, readOggTailDuration, OPUS_SAMPLE_RATE };
+export { readOpus, readVorbis, detectOggCodec, readOggTailDuration, OPUS_SAMPLE_RATE };
 
-export {hasOggMagic} from './oggFraming';
+export { hasOggMagic } from './oggFraming';

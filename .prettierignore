@@ -1,1 +1,14 @@
 pnpm-lock.yaml
+
+# Everything here is gitignored and regenerated, so formatting it is wasted work
+# that also has to fit in one process's heap. `worker-configuration.d.ts` alone is
+# 600 KB of generated types; walking it with the source tree is what made
+# `prettier --check .` exhaust a default-heap Node and leave a multi-gigabyte
+# `core.<pid>` in the worktree.
+worker-configuration.d.ts
+coverage/
+coverage-integration/
+apps/web/dist/
+apps/api/src/generated/
+.wrangler/
+node_modules/

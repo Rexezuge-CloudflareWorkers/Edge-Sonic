@@ -126,9 +126,7 @@ function TypeToConfirmModal({
         </div>
         {cost}
         <div className="space-y-1.5 mb-6">
-          <Label htmlFor="danger-confirm-input">
-            {t('common.typeToConfirm', 'Type {{name}} to confirm', { name: expectedName })}
-          </Label>
+          <Label htmlFor="danger-confirm-input">{t('common.typeToConfirm', 'Type {{name}} to confirm', { name: expectedName })}</Label>
           <Input
             id="danger-confirm-input"
             value={input}

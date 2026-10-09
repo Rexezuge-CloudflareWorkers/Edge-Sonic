@@ -57,7 +57,10 @@ async function apiGetJson(path: string): Promise<unknown> {
 describe("lib/api.ts's error decoder", () => {
   it('reads the `{Exception:{Type,Message}}` dialect the user API speaks', async () => {
     const decoded = await decode(
-      Response.json({ Exception: { Type: 'Conflict', Message: 'The slug is already in use.' } }, { status: 409, headers: { 'content-type': 'application/json' } }),
+      Response.json(
+        { Exception: { Type: 'Conflict', Message: 'The slug is already in use.' } },
+        { status: 409, headers: { 'content-type': 'application/json' } },
+      ),
     );
     expect(decoded).toEqual({ message: 'The slug is already in use.', type: 'Conflict', status: 409 });
   });
@@ -67,14 +70,20 @@ describe("lib/api.ts's error decoder", () => {
     // docstring, and a deployment mid-migration sends both. Accepting only the current one
     // would turn every old error into "Request failed with status N".
     const decoded = await decode(
-      Response.json({ error: { code: 'NotFound', message: 'Library not found.' } }, { status: 404, headers: { 'content-type': 'application/json' } }),
+      Response.json(
+        { error: { code: 'NotFound', message: 'Library not found.' } },
+        { status: 404, headers: { 'content-type': 'application/json' } },
+      ),
     );
     expect(decoded).toEqual({ message: 'Library not found.', type: null, status: 404 });
   });
 
   it('prefers `Exception.Message` over the legacy body, so the newer dialect wins when both are present', async () => {
     const decoded = await decode(
-      Response.json({ Exception: { Type: 'BadRequest', Message: 'newer' }, error: { message: 'older' } }, { status: 400, headers: { 'content-type': 'application/json' } }),
+      Response.json(
+        { Exception: { Type: 'BadRequest', Message: 'newer' }, error: { message: 'older' } },
+        { status: 400, headers: { 'content-type': 'application/json' } },
+      ),
     );
     expect(decoded.message).toBe('newer');
   });
@@ -85,7 +94,9 @@ describe("lib/api.ts's error decoder", () => {
     // a login form. `response.json()` throws on it, and a decoder that only caught that to
     // re-throw would render an operator a JSON parse error instead of "your session
     // expired" — or a blank notice bar.
-    const decoded = await decode(new Response('<!doctype html><title>Access</title>', { status: 401, headers: { 'content-type': 'text/html' } }));
+    const decoded = await decode(
+      new Response('<!doctype html><title>Access</title>', { status: 401, headers: { 'content-type': 'text/html' } }),
+    );
     // Markup is **refused**, not quoted: pasting a login form into the notice bar reads as
     // the app rendering garbage. What the operator needs is the status, and that the
     // answer did not come from this API.
@@ -104,7 +115,9 @@ describe("lib/api.ts's error decoder", () => {
     // This is the branch `response.json()` + `response.text()` could never reach: `json()`
     // consumes the body, so the fallback read `''` and reported the generic sentence for
     // every one of these.
-    const decoded = await decode(new Response('upstream connect error or disconnect/reset before headers', { status: 502, headers: { 'content-type': 'text/plain' } }));
+    const decoded = await decode(
+      new Response('upstream connect error or disconnect/reset before headers', { status: 502, headers: { 'content-type': 'text/plain' } }),
+    );
     expect(decoded.message).toBe('upstream connect error or disconnect/reset before headers');
     expect(decoded.status).toBe(502);
   });
@@ -121,14 +134,18 @@ describe("lib/api.ts's error decoder", () => {
   });
 
   it('uses a type on its own when there is no message, so the category survives', async () => {
-    const decoded = await decode(Response.json({ Exception: { Type: 'RateLimited' } }, { status: 429, headers: { 'content-type': 'application/json' } }));
+    const decoded = await decode(
+      Response.json({ Exception: { Type: 'RateLimited' } }, { status: 429, headers: { 'content-type': 'application/json' } }),
+    );
     expect(decoded).toEqual({ message: 'RateLimited (HTTP 429)', type: 'RateLimited', status: 429 });
   });
 
   it('bounds a very long message, because a 5xx body can be a whole page', async () => {
     // A masked 5xx from the server is short, but a proxy's HTML error page is not, and a
     // multi-kilobyte string in a notice bar pushes every control off screen.
-    const decoded = await decode(Response.json({ Exception: { Message: 'x'.repeat(5000) } }, { status: 500, headers: { 'content-type': 'application/json' } }));
+    const decoded = await decode(
+      Response.json({ Exception: { Message: 'x'.repeat(5000) } }, { status: 500, headers: { 'content-type': 'application/json' } }),
+    );
     expect(decoded.message.length).toBeLessThan(1000);
   });
 
@@ -136,7 +153,9 @@ describe("lib/api.ts's error decoder", () => {
     // `Message: ''` reaches here from a server that stringifies a null. Rendering the empty
     // string would give the operator a notice bar with no text in it, which reads as the
     // app being broken rather than the request having failed.
-    const decoded = await decode(Response.json({ Exception: { Type: 'BadRequest', Message: '' } }, { status: 400, headers: { 'content-type': 'application/json' } }));
+    const decoded = await decode(
+      Response.json({ Exception: { Type: 'BadRequest', Message: '' } }, { status: 400, headers: { 'content-type': 'application/json' } }),
+    );
     expect(decoded.message).toBe('BadRequest (HTTP 400)');
   });
 

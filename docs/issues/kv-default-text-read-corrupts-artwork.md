@@ -10,7 +10,7 @@ track an Opus file with the picture embedded as a base64 `METADATA_BLOCK_PICTURE
 sidecar image anywhere.
 
 "Some are working" is the whole of the report, and it is the part that mattered: it said the
-extraction was *intermittent*, which pointed at the readers, the origin, or the limits. It was
+extraction was _intermittent_, which pointed at the readers, the origin, or the limits. It was
 none of those, and the shape of the answer is what pinned it.
 
 ## What the platform says
@@ -48,7 +48,7 @@ fix or a fixture that handled only one of the two formats would still have looke
 depends on:
 
 ```ts
-const raw = await this.namespace!.get(buildKvKey(domain, parts));   // default: text
+const raw = await this.namespace!.get(buildKvKey(domain, parts)); // default: text
 if (raw === null || raw === undefined) return null;
 return typeof raw === 'string' ? new TextEncoder().encode(raw) : new Uint8Array(raw);
 ```
@@ -105,7 +105,7 @@ failed.
 
 The latency split said the same thing from the other side. A failing `getCoverArt` cost
 1.25–1.39 s; pure-D1 calls (`getMusicFolders`, `getIndexes`) cost 0.66–1.39 s; the same cover
-*when it worked* cost 2.2–3.8 s. The extra second is the ranged read the failures were not
+_when it worked_ cost 2.2–3.8 s. The extra second is the ranged read the failures were not
 making.
 
 Ruled out along the way, each with a measurement rather than an argument:
@@ -135,7 +135,7 @@ async get(key: string): Promise<string | null> { return store.get(key) ?? null; 
 Every round-trip in the repository was byte-exact while the real binding was lossy. This is
 the same defect as the D1 double that lowercased both sides of a predicate and the FLAC fixture
 that shared a byte offset with the FLAC reader: **a double that shares an assumption with the
-code it tests makes both look right.** Here the shared assumption was an *encoding*, which is
+code it tests makes both look right.** Here the shared assumption was an _encoding_, which is
 why a byte-exact round-trip assertion proved nothing — and why the fixture matters too: a
 cover beginning `ff d8 ff e0` (JFIF) survives some UTF-8 round trips well enough to look fine,
 so the fixture now starts `ff d8 ff db`, which is what every real cover in this library starts
@@ -180,11 +180,11 @@ album in the library for nothing.
 
 - the exact bytes come back, for both domains;
 - the requested type **is** `'arrayBuffer'` — the decision, asserted rather than inferred;
-- **the pair**: reading the same key the way the platform reads by default is *not* the same
+- **the pair**: reading the same key the way the platform reads by default is _not_ the same
   value, and `sniffImageType` says `null` for it and `image/jpeg` for the correct read. Without
   this, a byte-exact double makes the whole block pass;
 - a PNG's magic is destroyed too, so a fix handling one format cannot pass;
-- a zero-length entry stays zero-length, because that is the cached *absence*.
+- a zero-length entry stays zero-length, because that is the cached _absence_.
 
 `test/cover-art-embedded.test.ts` asserts both requests and the requested type.
 
@@ -196,7 +196,7 @@ the double was always wrong.
 
 **A double must model the platform's _defaults_, not only its shapes.**
 
-Every earlier instance in this repository was a wrong *value* or a wrong *shape*. This one was
+Every earlier instance in this repository was a wrong _value_ or a wrong _shape_. This one was
 a default nobody had written down: `get()` returns text unless told otherwise, `SQLITE_MAX_VARIABLE_NUMBER`
 is 100 in D1 and 32 766 in Node, `lower(col)` cannot use an index, a `subrequest` is not only
 `fetch`. In each case the platform's behaviour is documented, discoverable, and absent from the

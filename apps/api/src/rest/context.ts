@@ -129,5 +129,4 @@ interface RestContext {
 
 export type { RestContext };
 
-
-export {type LibraryRow, type UserRow} from '@edge-sonic/backend-data/dao';
+export { type LibraryRow, type UserRow } from '@edge-sonic/backend-data/dao';

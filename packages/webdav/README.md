@@ -7,13 +7,13 @@ is why there is no XML library below. Layer 0.
 
 ## What is here
 
-| Module | Role |
-| --- | --- |
-| `xml.ts` | A small strict XML reader for `207 Multi-Status` |
-| `multistatus.ts` | `207` body → `DavResource[]` |
-| `url.ts` | Origin + root + relative path → an absolute URL |
+| Module           | Role                                                                                             |
+| ---------------- | ------------------------------------------------------------------------------------------------ |
+| `xml.ts`         | A small strict XML reader for `207 Multi-Status`                                                 |
+| `multistatus.ts` | `207` body → `DavResource[]`                                                                     |
+| `url.ts`         | Origin + root + relative path → an absolute URL                                                  |
 | `multistatus.ts` | also owns `decodeHrefPath`/`toLibraryPath`, the containment check — open this file, not `url.ts` |
-| `client.ts` | `WebDavClient`: `propfind`, `get` (with `Range`), `readPrefix`, `readTail`, `readRange` |
+| `client.ts`      | `WebDavClient`: `propfind`, `get` (with `Range`), `readPrefix`, `readTail`, `readRange`          |
 
 ## Why there is no XML library
 
@@ -68,6 +68,6 @@ permitted to rewrite media bytes: a `206` has to stay a `206` with its
 `readPrefix` and `readTail` exist for tag enrichment and are ranged reads for the same
 reason — an ID3v2 tag can declare itself hundreds of megabytes, and a 3 MB FLAC must
 not be pulled through the worker to learn its duration. **`readTail` is the harder case
-and cannot be answered by a prefix at all**: an Ogg duration is the granule of the *last*
+and cannot be answered by a prefix at all**: an Ogg duration is the granule of the _last_
 page, so the read has to be at the end of the file. `readRange` serves embedded artwork,
 where the picture block is itself as large as the image.

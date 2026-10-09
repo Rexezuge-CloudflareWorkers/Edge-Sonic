@@ -35,7 +35,11 @@ interface SpaViewRouterProps {
 function SessionResolving() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-[var(--color-surface-base)]">
-      <div className="h-10 w-10 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" role="status" aria-label="Loading" />
+      <div
+        className="h-10 w-10 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent"
+        role="status"
+        aria-label="Loading"
+      />
     </div>
   );
 }
@@ -85,16 +89,18 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
       <Route
         path="/libraries"
         element={
-          signedOut ? (
-            page(<Unauthorized message={t('errors.signInToViewLibraries', 'Sign in to view libraries.')} />)
-          ) : (
-            page(<LibrariesView showNotice={showNotice} />)
-          )
+          signedOut
+            ? page(<Unauthorized message={t('errors.signInToViewLibraries', 'Sign in to view libraries.')} />)
+            : page(<LibrariesView showNotice={showNotice} />)
         }
       />
       <Route
         path="/users"
-        element={signedOut ? page(<Unauthorized message={t('errors.signInToViewUsers', 'Sign in to view users.')} />) : page(<UsersView showNotice={showNotice} />)}
+        element={
+          signedOut
+            ? page(<Unauthorized message={t('errors.signInToViewUsers', 'Sign in to view users.')} />)
+            : page(<UsersView showNotice={showNotice} />)
+        }
       />
       {/*
         Registered **after** `/users` and before the catch-all. `/import` holds no query state, so
@@ -102,7 +108,14 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         below `path="*"` is a route nothing can reach, and a route table with a dead entry is one
         nothing notices.
       */}
-      <Route path="/import" element={signedOut ? page(<Unauthorized message={t('errors.signInToViewImport', 'Sign in to import.')} />) : page(<ImportView showNotice={showNotice} />)} />
+      <Route
+        path="/import"
+        element={
+          signedOut
+            ? page(<Unauthorized message={t('errors.signInToViewImport', 'Sign in to import.')} />)
+            : page(<ImportView showNotice={showNotice} />)
+        }
+      />
       {/*
         `/settings` holds the Danger Zone, so it is registered **after** `/import` and before
         the catch-all for the same reason `/import` is: a route below `path="*"` is one nothing
@@ -114,21 +127,21 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
       <Route
         path="/settings"
         element={
-          signedOut ? page(<Unauthorized message={t('errors.signInToViewSettings', 'Sign in to view settings.')} />) : page(<SettingsView showNotice={showNotice} />)
+          signedOut
+            ? page(<Unauthorized message={t('errors.signInToViewSettings', 'Sign in to view settings.')} />)
+            : page(<SettingsView showNotice={showNotice} />)
         }
       />
       <Route
         path="*"
-        element={
-          page(
-            <Card>
-              <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">{t('errors.pageNotFound', 'Page not found')}</h1>
-              <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                {t('errors.pageNotFoundDescription', 'The page you requested does not exist.')}
-              </p>
-            </Card>,
-          )
-        }
+        element={page(
+          <Card>
+            <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">{t('errors.pageNotFound', 'Page not found')}</h1>
+            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+              {t('errors.pageNotFoundDescription', 'The page you requested does not exist.')}
+            </p>
+          </Card>,
+        )}
       />
     </Routes>
   );

@@ -169,9 +169,9 @@ function parseReport(raw: string | null): ImportReport | null {
     const parsed = JSON.parse(raw) as Partial<ImportReport>;
     if (!parsed || !Array.isArray(parsed.phases)) return null;
     return {
-      runId: (parsed.runId ?? ''),
-      sourceName: (parsed.sourceName ?? ''),
-      targetUsername: (parsed.targetUsername ?? ''),
+      runId: parsed.runId ?? '',
+      sourceName: parsed.sourceName ?? '',
+      targetUsername: parsed.targetUsername ?? '',
       phases: parsed.phases as readonly PhaseReport[],
       finishedAt: typeof parsed.finishedAt === 'number' ? parsed.finishedAt : null,
     };
@@ -180,12 +180,5 @@ function parseReport(raw: string | null): ImportReport | null {
   }
 }
 
-export {
-  buildReport,
-  collectUnresolved,
-  parseReport,
-  phase,
-  serializeReport,
-  MAX_REPORTED_UNRESOLVED,
-};
+export { buildReport, collectUnresolved, parseReport, phase, serializeReport, MAX_REPORTED_UNRESOLVED };
 export type { ImportReport, PhaseReport, UnresolvedItem };

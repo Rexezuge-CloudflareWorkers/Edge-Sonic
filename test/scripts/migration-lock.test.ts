@@ -110,7 +110,10 @@ describe('checkMigrations', () => {
   });
 
   it('names a lock entry with no file, which can never be reproduced from the repository', () => {
-    const result = checkMigrations(files('0008_squash.sql'), lock({ '0008_squash.sql': digest('1'), '0009_gone.sql': digest('9') }, '0008_squash.sql'));
+    const result = checkMigrations(
+      files('0008_squash.sql'),
+      lock({ '0008_squash.sql': digest('1'), '0009_gone.sql': digest('9') }, '0008_squash.sql'),
+    );
     expect(result.findings.find((finding) => finding.kind === 'orphan')?.subject).toBe('0009_gone.sql');
   });
 
@@ -119,7 +122,10 @@ describe('checkMigrations', () => {
     // order, so this would run on a fresh build and never on an existing database.
     const onDisk = files('0008_squash.sql', '0009_new.sql');
     const withEarly: MigrationFile[] = [{ name: '0007_early.sql', digest: digest('e') }, ...onDisk];
-    const result = checkMigrations(withEarly, lock({ '0008_squash.sql': digest('1'), '0009_new.sql': onDisk[1]?.digest as string }, '0008_squash.sql'));
+    const result = checkMigrations(
+      withEarly,
+      lock({ '0008_squash.sql': digest('1'), '0009_new.sql': onDisk[1]?.digest as string }, '0008_squash.sql'),
+    );
     expect(result.findings.find((finding) => finding.kind === 'out-of-order')?.subject).toBe('0007_early.sql');
   });
 
@@ -184,7 +190,10 @@ describe('checkMigrations', () => {
       // bless a drift would be the operator blessing their own edit, and they are by
       // definition the one making it.
       const onDisk = files('0008_squash.sql', '0009_new.sql');
-      const result = checkMigrations(onDisk, lock({ '0008_squash.sql': onDisk[0]?.digest as string, '0009_new.sql': digest('d') }, '0008_squash.sql'));
+      const result = checkMigrations(
+        onDisk,
+        lock({ '0008_squash.sql': onDisk[0]?.digest as string, '0009_new.sql': digest('d') }, '0008_squash.sql'),
+      );
       expect(result.updated?.migrations['0009_new.sql']).toBe(digest('d'));
     });
 

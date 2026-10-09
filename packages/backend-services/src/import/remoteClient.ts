@@ -57,10 +57,6 @@ The largest response this client will read. A 500-song album is ~150 KB of JSON.
 */
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-
-
-
-
 /**
  * Coerce a protocol wrapper's child to an array.
  *
@@ -139,7 +135,11 @@ class RemoteSubsonicClient {
       // — and the operator is told to debug their own server, which is the mistake
       // `probeOutcome.ts` exists to prevent.
       if (timeout.aborted) throw new RemoteSubsonicError('The import source did not answer in time.', 408, null);
-      throw new RemoteSubsonicError(`The import source could not be reached: ${error instanceof Error ? error.message : 'unknown error'}.`, null, null);
+      throw new RemoteSubsonicError(
+        `The import source could not be reached: ${error instanceof Error ? error.message : 'unknown error'}.`,
+        null,
+        null,
+      );
     }
   }
 
@@ -173,13 +173,15 @@ class RemoteSubsonicClient {
   public async getPlaylists(): Promise<RemotePlaylist[]> {
     const payload = await this.call('getPlaylists');
     const wrapper = (payload['playlists'] ?? {}) as Record<string, unknown>;
-    return asArray(wrapper['playlist']).map((node) => ({
-      id: str(node, 'id') ?? '',
-      name: str(node, 'name'),
-      comment: str(node, 'comment'),
-      isPublic: bool(node, 'public'),
-      songCount: num(node, 'songCount'),
-    })).filter((playlist) => playlist.id !== '');
+    return asArray(wrapper['playlist'])
+      .map((node) => ({
+        id: str(node, 'id') ?? '',
+        name: str(node, 'name'),
+        comment: str(node, 'comment'),
+        isPublic: bool(node, 'public'),
+        songCount: num(node, 'songCount'),
+      }))
+      .filter((playlist) => playlist.id !== '');
   }
 
   public async getPlaylist(id: string): Promise<RemoteSong[]> {
@@ -201,14 +203,18 @@ class RemoteSubsonicClient {
     const wrapper = (payload['starred2'] ?? {}) as Record<string, unknown>;
     return {
       songs: songsOf(wrapper),
-      albums: asArray(wrapper['album']).map((node) => ({
-        id: str(node, 'id') ?? '',
-        name: str(node, 'name'),
-        artist: str(node, 'artist'),
-        artistId: str(node, 'artistId'),
-        songCount: num(node, 'songCount'),
-      })).filter((album) => album.id !== ''),
-      artists: asArray(wrapper['artist']).map((node) => ({ id: str(node, 'id') ?? '', name: str(node, 'name') })).filter((artist) => artist.id !== ''),
+      albums: asArray(wrapper['album'])
+        .map((node) => ({
+          id: str(node, 'id') ?? '',
+          name: str(node, 'name'),
+          artist: str(node, 'artist'),
+          artistId: str(node, 'artistId'),
+          songCount: num(node, 'songCount'),
+        }))
+        .filter((album) => album.id !== ''),
+      artists: asArray(wrapper['artist'])
+        .map((node) => ({ id: str(node, 'id') ?? '', name: str(node, 'name') }))
+        .filter((artist) => artist.id !== ''),
     };
   }
 
@@ -281,5 +287,14 @@ export { RemoteSubsonicClient };
 
 export type { RemoteSubsonicClientOptions };
 
-
-export {RemoteSubsonicError, asArray, unwrapEnvelope, type RemoteSong, type RemoteAlbum, type RemoteArtist, type RemotePlaylist, type RemoteBookmark, type RemoteQueueEntry} from './remoteParse';
+export {
+  RemoteSubsonicError,
+  asArray,
+  unwrapEnvelope,
+  type RemoteSong,
+  type RemoteAlbum,
+  type RemoteArtist,
+  type RemotePlaylist,
+  type RemoteBookmark,
+  type RemoteQueueEntry,
+} from './remoteParse';

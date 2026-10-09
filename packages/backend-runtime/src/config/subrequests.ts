@@ -162,9 +162,9 @@ const SCAN_DERIVE_MAX_ROWS_PER_CHUNK = Math.max(
  * Folders one chunk attempts before the walk's own bookkeeping is accounted for.
  *
  * Derived, never chosen: `SCAN_CHUNK_FOLDERS` used to be `40`, documented as a bound on D1
- * *row writes* against the 5,000-rows/day allowance, which it still is — but a chunk also
- * spends the subrequest ceiling on those same folders, and 40 of them cannot fit in 42
- * subrequests however few tracks they hold.
+ * *row writes* against the day's allowance — which it has **never** been, as
+ * `docs/agents/scanning/AGENTS.md` also records. A chunk spends the subrequest ceiling on those
+ * same folders, and 40 of them cannot fit in 42 subrequests however few tracks they hold.
  *
  * It remains a bound worth having for its own sake: it stops a chunk that is doing nothing but
  * cheap metadata work from spending the whole poll on one level of the tree.
@@ -205,8 +205,28 @@ const SCAN_ENRICH_MAX_PER_FOLDER = Math.max(1, Math.floor(SCAN_CHUNK_SUBSREQUEST
  *
  * with the three denominators derived from D1's 100-parameter ceiling rather than typed, and
  * the numerator set to the chunk budget so a page and a scan chunk are sized against the same
- * number. `2200 × (1/99 + 1/49 + 3/99) ≈ 100` statements — over the ceiling by half, which is
- * how a ceiling derived to be "conservative" ended up unservable.
+ * number.
+ *
+ * ### The arithmetic, **recomputed**, because the old line was wrong twice
+ *
+ * The figure this paragraph used to carry was `2200 × (1/99 + 1/49 + 3/99) ≈ 100` statements,
+ * annotated *"over the ceiling by half"*. Neither the number nor the ratio survives checking:
+ *
+ * - The product as written is **91**, not "≈ 100" — but each term is a **ceiling**, so the
+ *   honest figure is `ceil(2200/99) + ceil(2200/49) + 3 × ceil(2200/99)` = `23 + 45 + 69` =
+ *   **137**.
+ * - Adding {@link PAGE_FIXED_STATEMENTS} (4) puts the whole page at **141**.
+ * - The ceiling is {@link SCAN_CHUNK_SUBSREQUEST_BUDGET} = **42**.
+ *
+ * So the page was over by **3.4×**, not "by half". The direction of the mistake was harmless —
+ * it argued for a *smaller* page than the truth — but a number that is wrong by 3× and reads as
+ * right by 2× is the recorded defect of this repository stated about itself: a claim nothing
+ * recomputes. Nothing recomputed it because the paragraph sat in a doc comment, where a number
+ * costs nothing to change and is checked by nobody.
+ *
+ * `MAX_PAGE_SIZE` is `500`, not `2200`, so the shipped page is `ceil(500/99) + ceil(500/49) +
+ * 3 × ceil(500/99) + 4` = `6 + 11 + 18 + 4` = **39** statements — inside the ceiling, which is
+ * the property `MAX_PAGE_SIZE_CEILING` is derived to hold.
  */
 
 /**
@@ -240,7 +260,8 @@ const PAGE_FIXED_STATEMENTS = 4;
  * The marginal rate, not the total: one group's own key read plus its songs plus its three
  * annotation reads.
  */
-const PAGE_STATEMENTS_PER_GROUP = 1 / PAGE_ALBUM_KEYS_PER_STATEMENT + 1 / PAGE_ALBUMS_PER_STATEMENT + PAGE_ANNOTATION_READS / PAGE_IDS_PER_STATEMENT;
+const PAGE_STATEMENTS_PER_GROUP =
+  1 / PAGE_ALBUM_KEYS_PER_STATEMENT + 1 / PAGE_ALBUMS_PER_STATEMENT + PAGE_ANNOTATION_READS / PAGE_IDS_PER_STATEMENT;
 
 /**
  * Rows D1 accepts written per day on the Free plan.
@@ -348,7 +369,10 @@ function dailyRowWriteShare(enabledLibraries: number, limit = SCAN_DAILY_ROW_WRI
  * above 500 that is better than 500, so a derivation that produced 625 must not widen the
  * surface to reach it.
  */
-const MAX_PAGE_SIZE_CEILING = Math.min(500, Math.max(1, Math.floor((SCAN_CHUNK_SUBSREQUEST_BUDGET - PAGE_FIXED_STATEMENTS) / PAGE_STATEMENTS_PER_GROUP)));
+const MAX_PAGE_SIZE_CEILING = Math.min(
+  500,
+  Math.max(1, Math.floor((SCAN_CHUNK_SUBSREQUEST_BUDGET - PAGE_FIXED_STATEMENTS) / PAGE_STATEMENTS_PER_GROUP)),
+);
 
 /**
  * The statement count `MAX_PAGE_SIZE_CEILING` implies.

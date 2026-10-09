@@ -54,21 +54,15 @@ class AppConfiguration {
    */
   public static readonly DERIVED_MARKER_MAX_LENGTH = DERIVED_MARKER_MAX_LENGTH;
 
-  public get libraryLimits(): LibraryLimits {
-    return this.library;
-  }
-
-  public get scanLimits(): ScanLimits {
-    return this.scan;
-  }
-
-  public get requestLimits(): RequestLimits {
-    return this.requests;
-  }
-
-  public get authThrottle(): AuthThrottleConfig {
-    return this.throttle;
-  }
+  // Four section accessors were removed here: `libraryLimits`, `scanLimits`, `requestLimits` and
+  // `authThrottle`. Nothing outside this file read any of them — the sections are consumed by
+  // `validate()`, which takes them as arguments, and the settings a caller actually reads are the
+  // individual `getX()` methods below. So they were a second way to reach the same configuration,
+  // one with no caller, which is a second vocabulary to keep in sync.
+  //
+  // `test/config-validate.test.ts` reaches the whole configuration through `validate()` for the
+  // same reason: `AuthConfig` had no accessor here at all, so a test reaching for the section
+  // objects directly would have had to construct one production never constructs.
 
   /**
   The configured log level, or `null` when unset or unrecognised.

@@ -8,7 +8,7 @@
  * systems are deliberately not connected: an operator's Access identity must not be
  * usable as a streaming credential.
  */
-import { ErrorCode,  SubsonicError,   elList, userElement } from '@edge-sonic/subsonic';
+import { ErrorCode, SubsonicError, elList, userElement } from '@edge-sonic/subsonic';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
 import type { RestContext } from '../context';
 import { respond } from '../respond';
@@ -26,7 +26,15 @@ async function getUsers(context: RestContext): Promise<EnvelopeResponse> {
     throw new SubsonicError(ErrorCode.NotAuthorized, 'Only an admin may list users.');
   }
   const users = await context.users.list();
-  return respond(context, elList('users', 'user', {}, users.map((user) => userElement(toView(user)))));
+  return respond(
+    context,
+    elList(
+      'users',
+      'user',
+      {},
+      users.map((user) => userElement(toView(user))),
+    ),
+  );
 }
 
 function toView(user: UserRow) {
@@ -87,5 +95,4 @@ const userEndpoints = { getUsers, getUser };
 
 export { userEndpoints, getUsers, getUser };
 
-
-export {IdKind, decodeId, el} from '@edge-sonic/subsonic';
+export { IdKind, decodeId, el } from '@edge-sonic/subsonic';

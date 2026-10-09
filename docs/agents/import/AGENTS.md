@@ -21,11 +21,11 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **An import refuses to start rather than sharing the daily row allowance, because the
   allowance is an outage.** `SCAN_DAILY_ROW_WRITE_BUDGET` exists because the daily row-write
   allowance is per **account**, so N libraries each capped at the whole allowance would write N
-  times it. The argument is *stronger* for an import, because since 2026-09-01 an account over its
+  times it. The argument is _stronger_ for an import, because since 2026-09-01 an account over its
   allowance has **every query fail** until midnight UTC — reads included. Two writers racing for the
   last rows do not each get slower: the second takes the whole product down, `/rest` authentication
   with it, and the remedy is a clock rather than a change. So there is **one writer at a time**,
-  and the two refusals are about *not writing rows* rather than a conflict in the usual sense.
+  and the two refusals are about _not writing rows_ rather than a conflict in the usual sense.
   Both are asserted through the HTTP surface in `test/import-routes.test.ts`, each with the case
   that proves the gate has teeth, and `assertScansIdle` is asserted **both ways** — because a
   precondition that passes when it should fail looks exactly like a guard.
@@ -36,7 +36,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   `IMPORT_DO` binding is configured" and "the start threw". The two lead to different terminal
   states and ask the operator for different things, and the second one shipped: `stub.start()`
   was called with no payload, so `PlayCountImportWorker.start` read `request.runId` off
-  `undefined` and threw *before* its `put` and *before* its `setAlarm`. The fault escaped, so
+  `undefined` and threw _before_ its `put` and _before_ its `setAlarm`. The fault escaped, so
   `settle` never ran, and the run stayed `running` with `last_error` **null** for ever with
   nothing scheduled to advance it — the operator's page said the import was still going, and the
   only record of the fault was the Workflow instance in the Cloudflare dashboard. `WalkOutcome`
@@ -55,7 +55,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   left to guess.** `ImportSourceService.clientFor` returns `{ok:true, client}` or
   `{ok:false, reason}` because there are **two** refusals — the row is gone, or the host is no
   longer permitted because an operator tightened `ALLOW_PRIVATE_WEBDAV_HOSTS` after the run
-  started — and a method answering `null` for one and *throwing* for the other left the Durable
+  started — and a method answering `null` for one and _throwing_ for the other left the Durable
   Object writing `=== null` and so believing it covered both, while a tightening arrived as a
   thrown `NotFoundError` that its `alarm` catch swallowed into a generic message. It then re-armed
   and retried a host the policy had just refused, for ever, with the real reason discarded.
@@ -69,14 +69,14 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   rejected URL as a conflict would go looking for a duplicate to rename. The class carries the
   status (`ConflictError` → 409, `BadRequestError` → 400) and `BaseRoute.toErrorResponse` is the
   single path, so a route has nothing to map.
-- **A derived id needs an *injective* encoding, because a separator proves nothing.**
+- **A derived id needs an _injective_ encoding, because a separator proves nothing.**
   An imported playlist's id must be stable across a retried Workflow step, so it is a hash of
   `(namespace, run, remotePlaylistId)`. The first version joined the parts with NUL and its
   docstring claimed the delimiter "cannot appear in a part" — which is false: joining
   `['ns','a','b']` and joining `['ns', 'a' + NUL + 'b']` produce the same string, so **any** delimiter is
   forgeable and two different playlists hash to one id, one overwriting the other. Length-prefixing
   each part (`3:ns1:a1:b`) is injective because the length is recoverable from the bytes. The
-  comment was the false part and the test that caught it was written *because* the comment made a
+  comment was the false part and the test that caught it was written _because_ the comment made a
   claim; asserted in `test/import-phases.test.ts`.
 
 ## See also

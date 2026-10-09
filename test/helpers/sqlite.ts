@@ -126,10 +126,7 @@ Build a `D1Queryable` over an in-memory SQLite database.
  */
 function assertWithinBindCeiling(sql: string, count: number): void {
   if (count <= D1_MAX_BIND_PARAMETERS) return;
-  throw new SqliteError(
-    `too many SQL variables: bound ${count}, D1 allows ${D1_MAX_BIND_PARAMETERS}. ` +
-      `Statement: ${sql.slice(0, 120)}`,
-  );
+  throw new SqliteError(`too many SQL variables: bound ${count}, D1 allows ${D1_MAX_BIND_PARAMETERS}. Statement: ${sql.slice(0, 120)}`);
 }
 
 function sqliteQueryable(path = ':memory:'): SqliteQueryable {

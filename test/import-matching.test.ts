@@ -81,7 +81,9 @@ function song(partial: Partial<SongRow> & { readonly id: string }): SongRow {
 /**
 A store answering from a fixed list, with call recording for the assertions that need it.
 */
-function storeAnswering(rows: readonly SongRow[]): MatchStore & { findByPaths: ReturnType<typeof vi.fn>; findByAlbumTitle: ReturnType<typeof vi.fn> } {
+function storeAnswering(
+  rows: readonly SongRow[],
+): MatchStore & { findByPaths: ReturnType<typeof vi.fn>; findByAlbumTitle: ReturnType<typeof vi.fn> } {
   return {
     findByPaths: vi.fn(async () => [...rows]),
     findByAlbumTitle: vi.fn(async () => [...rows]),
@@ -265,7 +267,9 @@ describe('the path strategy is tried first, and reported honestly', () => {
   it('reports a song with neither a path nor an album/title pair as unresolvable', async () => {
     const store = storeAnswering([]);
 
-    const [outcome] = await matchRemoteSongs(store, 'L1', [{ remoteId: 'r1', path: null, artist: null, album: null, title: null, discNumber: null, track: null }]);
+    const [outcome] = await matchRemoteSongs(store, 'L1', [
+      { remoteId: 'r1', path: null, artist: null, album: null, title: null, discNumber: null, track: null },
+    ]);
 
     // A key built from a null half would match every row carrying the other, so the matcher
     // refuses rather than treating an absent tag as a wildcard.
@@ -276,7 +280,11 @@ describe('the path strategy is tried first, and reported honestly', () => {
   it('de-duplicates repeated remote ids, because a playlist repeats its tracks', async () => {
     const store = storeAnswering([localStacks({ id: 'one' })]);
 
-    const outcomes = await matchRemoteSongs(store, 'L1', Array.from({ length: 40 }, () => STACKS));
+    const outcomes = await matchRemoteSongs(
+      store,
+      'L1',
+      Array.from({ length: 40 }, () => STACKS),
+    );
 
     expect(outcomes).toHaveLength(40);
     // One lookup per **distinct** id, not one per occurrence: a 40-track playlist drawn from a
@@ -307,7 +315,10 @@ describe('a remote album key is the same key this server publishes', () => {
 
   it('produces the album grouping key rather than a second convention', () => {
     expect(albumKeyFor('Bon Iver', 'For Emma', 'album')).toBe(
-      albumKeySpec({ dir_path: '', album: 'for emma', album_ci: 'for emma', album_artist: 'bon iver', album_artist_ci: 'bon iver' }, 'album').string,
+      albumKeySpec(
+        { dir_path: '', album: 'for emma', album_ci: 'for emma', album_artist: 'bon iver', album_artist_ci: 'bon iver' },
+        'album',
+      ).string,
     );
   });
 
@@ -393,7 +404,9 @@ describe('the match DAO against real SQLite', () => {
     // The whole directory, sorted — the same rule `test/helpers/migrations.ts` exists to
     // enforce, applied here so a new migration cannot leave this suite on a schema the product
     // does not have.
-    for (const file of readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort()) {
+    for (const file of readdirSync(MIGRATIONS)
+      .filter((name) => name.endsWith('.sql'))
+      .sort()) {
       execScript(handle, readFileSync(`${MIGRATIONS}/${file}`, 'utf8'));
     }
     void handle.db
@@ -405,7 +418,10 @@ describe('the match DAO against real SQLite', () => {
     return handle;
   }
 
-  function insert(handle: ReturnType<typeof seeded>, row: { id: string; path: string; dirPath: string; album: string; title: string }): void {
+  function insert(
+    handle: ReturnType<typeof seeded>,
+    row: { id: string; path: string; dirPath: string; album: string; title: string },
+  ): void {
     void handle.db
       .prepare(
         `INSERT INTO songs (id, library_id, path, dir_path, name, name_ci, size, mtime_ms, content_type, suffix,
@@ -413,7 +429,17 @@ describe('the match DAO against real SQLite', () => {
                             duration, bitrate, derived_version, created_at, updated_at)
          VALUES (?, 'L1', ?, ?, ?, ?, 1, 1, 'audio/flac', 'flac', 'A', 'a', ?, ?, 'A', 'a', ?, ?, 300, 0, 1, 0, 0)`,
       )
-      .bind(row.id, row.path, row.dirPath, `${row.id}.flac`, `${row.id}.flac`, row.album, row.album.toLowerCase(), row.title, row.title.toLowerCase())
+      .bind(
+        row.id,
+        row.path,
+        row.dirPath,
+        `${row.id}.flac`,
+        `${row.id}.flac`,
+        row.album,
+        row.album.toLowerCase(),
+        row.title,
+        row.title.toLowerCase(),
+      )
       .run();
   }
 
@@ -439,7 +465,12 @@ describe('the match DAO against real SQLite', () => {
 
     // Both rows share `album_ci = 'b'`, so this is the ambiguous-key case the DAO must return in
     // full rather than resolving to one row.
-    expect(await dao.findByAlbumTitle('L1', [['b', 'one'], ['b', 'two']])).toHaveLength(2);
+    expect(
+      await dao.findByAlbumTitle('L1', [
+        ['b', 'one'],
+        ['b', 'two'],
+      ]),
+    ).toHaveLength(2);
     handle.close();
   });
 
@@ -449,7 +480,12 @@ describe('the match DAO against real SQLite', () => {
     const handle = seeded();
     const dao = new SongMatchDAO(handle.db, new SubrequestCounter(2));
 
-    await expect(dao.findByPaths('L1', Array.from({ length: 500 }, (_, index) => `A/${index}.flac`))).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
+    await expect(
+      dao.findByPaths(
+        'L1',
+        Array.from({ length: 500 }, (_, index) => `A/${index}.flac`),
+      ),
+    ).rejects.toBeInstanceOf(SubrequestBudgetExhaustedError);
     handle.close();
   });
 });

@@ -10,7 +10,7 @@ deadline, and leaves the frontier rather than running itself out. See
 
 ## Summary
 
-`getScanStatus` is not a query about scan progress — it *is* the scan. One call descends
+`getScanStatus` is not a query about scan progress — it _is_ the scan. One call descends
 into up to `SCAN_CHUNK_FOLDERS` folders **sequentially**, with no wall-clock deadline and
 no subrequest budget. Chunk duration is therefore `folders × per-request latency`, which on
 the origin this was found on is roughly **88 seconds typical and 400 seconds worst case**.
@@ -21,7 +21,7 @@ scan.
 
 Worse: the scan-enrichment change on the branch above moved per-track range reads **inside
 that same sequential loop**, taking a full chunk from 40 subrequests to up to 1,640 — past
-the 1,000-subrequest ceiling. At the shipped defaults that is a chunk which *fails* rather
+the 1,000-subrequest ceiling. At the shipped defaults that is a chunk which _fails_ rather
 than one which is slow.
 
 ## Mechanism
@@ -44,21 +44,21 @@ the loop early. The chunk ends when the folder list ends or something throws.
 
 Measured against the live origin, 5 samples of a single ranged read:
 
-| sample | 1 | 2 | 3 | 4 | 5 |
-|---|---|---|---|---|---|
+| sample  | 1    | 2    | 3    | 4    | 5    |
+| ------- | ---- | ---- | ---- | ---- | ---- |
 | seconds | 2.26 | 2.20 | 2.41 | 2.25 | 1.98 |
 
 > **Caveat.** These were issued with `cf-ray: ...-NRT`, so part of ~2.2 s is
-> Tokyo↔origin distance rather than intrinsic origin latency. The *shape* of the problem is
+> Tokyo↔origin distance rather than intrinsic origin latency. The _shape_ of the problem is
 > origin-independent; the magnitude is not, and the numbers below should be read as "this
 > origin is slow enough to break the default", not as a constant.
 
-| | |
-|---|---|
+|                      |                                                                         |
+| -------------------- | ----------------------------------------------------------------------- |
 | `SCAN_CHUNK_FOLDERS` | `40` (`ConfigurationDefaults.ts:23`, and `wrangler.template.jsonc:113`) |
-| `WEBDAV_TIMEOUT_MS` | `10000` (`ConfigurationDefaults.ts:13`) |
-| chunk, typical | 40 × 2.2 s ≈ **88 s** |
-| chunk, worst case | 40 × 10 s = **400 s** |
+| `WEBDAV_TIMEOUT_MS`  | `10000` (`ConfigurationDefaults.ts:13`)                                 |
+| chunk, typical       | 40 × 2.2 s ≈ **88 s**                                                   |
+| chunk, worst case    | 40 × 10 s = **400 s**                                                   |
 
 Observed against the live instance while a scan was running:
 
@@ -74,12 +74,12 @@ watching.
 
 ## Why it matters beyond "slow"
 
-1. **Polling is the scan.** The root `AGENTS.md` states it as a design property: *"with no
-   client polling, the scan does not advance."* A client that times out and backs off stops
+1. **Polling is the scan.** The root `AGENTS.md` states it as a design property: _"with no
+   client polling, the scan does not advance."_ A client that times out and backs off stops
    advancing the scan by construction.
 2. **Progress cannot be observed without incurring it.** There is no read-only progress
    endpoint on the `/rest` surface — `getScanStatus` always calls `step`. Asking "how far
-   along am I?" *is* doing more of the scan, and may be why it times out. `ScanService.status`
+   along am I?" _is_ doing more of the scan, and may be why it times out. `ScanService.status`
    exists and is unused by this surface.
 3. **A client-side timeout is indistinguishable from a dead server.** Nothing in the
    protocol response says "this call did a lot of work".
@@ -103,8 +103,8 @@ rather than completing slowly.
 Two further gaps make this invisible:
 
 - **`webdavRequests` under-reports.** It is incremented once per `PROPFIND` (line 182) and
-  never for enrichment reads. `scanTypes.ts:145` describes the field as *"instrumented so the
-  write/subrequest budget is testable, not just asserted"* — it is now an undercount by up to
+  never for enrichment reads. `scanTypes.ts:145` describes the field as _"instrumented so the
+  write/subrequest budget is testable, not just asserted"_ — it is now an undercount by up to
   40×, so a test asserting the budget would assert the wrong number.
 - **No test exercises either bound.** `fakeDav` answers instantly, so neither the subrequest
   count nor the wall clock was ever observed. The budget lived in comments and in the choice
@@ -144,7 +144,7 @@ measurement.
 
 ## Out of scope
 
-`getScanStatus` was also observed exceeding 45 s on a *cold* chunk before any enrichment
+`getScanStatus` was also observed exceeding 45 s on a _cold_ chunk before any enrichment
 existed. That is the original form of this issue; the enrichment regression is an
 amplification of it, not a separate defect.
 
@@ -158,14 +158,14 @@ retired that ceiling on 2026-02-11. Workers **Free** allows **50 subrequests per
 Paid 10,000, raiseable to 10M via `limits.subrequests`. A chunk of 1,640 was therefore not
 "past 1,000": on a Free-plan account it was **33× past 50**.
 
-This resolution originally read D1 and KV as having a *separate* 1,000-subrequest allowance on
+This resolution originally read D1 and KV as having a _separate_ 1,000-subrequest allowance on
 Free, on the strength of a second row on Cloudflare's Workers limits page, and set
 `DEFAULT_SCAN_CHUNK_MAX_REQUESTS` to 40 on that basis. **That was wrong**, and the correction
-introduced the defect the next issue records: D1's own limits page counts *queries per Worker
-invocation* against the same 50, so the budget has to be a total rather than a WebDAV count. The
+introduced the defect the next issue records: D1's own limits page counts _queries per Worker
+invocation_ against the same 50, so the budget has to be a total rather than a WebDAV count. The
 ceiling is now 50, the chunk budget is `50 − 8`, and every other scan bound is derived from it —
 see `docs/issues/free-plan-subrequest-ceiling.md`. The measurement work below was still the right
-work and is kept: it is what made the budget *measurable*, which is what the second fix needed.
+work and is kept: it is what made the budget _measurable_, which is what the second fix needed.
 
 1. **Bounded by subrequests, not folders** — `ScanBudget` carries `maxRequests` and the
    loop checks `canAfford()` before each folder. The count is **measured**:
@@ -177,7 +177,7 @@ work and is kept: it is what made the budget *measurable*, which is what the sec
 2. **A wall-clock deadline** — `SCAN_CHUNK_DEADLINE_MS`, default 20 s, checked between
    units of work so a chunk overruns by at most one in-flight request.
 3. **The default is sized in time and requests, not folders** — `chunkFolders` remains a
-   *separate* bound on D1 work, because a folder count, a request count and a duration
+   _separate_ bound on D1 work, because a folder count, a request count and a duration
    guard three different resources and none is redundant with the others.
 4. **The tests can see both bounds** — `fakeDav` gained `latencyMs` (a real
    `setTimeout`, not a fake clock) and `requestCount()`. The suite asserts
@@ -188,7 +188,7 @@ work and is kept: it is what made the budget *measurable*, which is what the sec
    protocol has no read-only scan-status method, so nothing was invented on `/rest`; but
    the operator surface had **no way to advance a scan at all** (`start` and `status`
    only, while `step` was reachable solely from `/rest`), so `POST
-   /user/libraries/:id/scan/step` was added. It is also the only place
+/user/libraries/:id/scan/step` was added. It is also the only place
    `ChunkResult.stoppedBy` is readable, which is what the SPA renders when a chunk pauses.
 
 Two smaller corrections while in here:

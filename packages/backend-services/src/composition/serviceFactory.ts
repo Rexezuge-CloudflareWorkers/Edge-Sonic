@@ -27,7 +27,6 @@
  * paper over it.
  */
 
-
 import type { SubrequestMeter } from '@edge-sonic/shared';
 import { isUsableKey } from '@edge-sonic/backend-data/crypto';
 
@@ -107,8 +106,7 @@ function resolveKey(
         return rawVar;
       }
       throw new Error(
-        `${bindingName} is not configured for this scope. ` +
-          `Set the Secrets Store binding in production, or ${varName} for tests.`,
+        `${bindingName} is not configured for this scope. Set the Secrets Store binding in production, or ${varName} for tests.`,
       );
     })();
     // A rejection must not be cached: the next call retries, so a transient
@@ -120,7 +118,7 @@ function resolveKey(
   };
 }
 
-export { resolveKey,  };
-export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider,  };
+export { resolveKey };
+export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider };
 
-export {KvCache, type KvNamespaceLike} from '@edge-sonic/backend-runtime/kv';
+export { KvCache, type KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';

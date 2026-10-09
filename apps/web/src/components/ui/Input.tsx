@@ -23,7 +23,11 @@ function Select({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>)
  * accessible name both depend on it, and neither is visible in the markup that
  * omits it.
  */
-function Label({ children, htmlFor, ...rest }: { children: ReactNode; htmlFor?: string } & Omit<LabelHTMLAttributes<HTMLLabelElement>, 'htmlFor'>) {
+function Label({
+  children,
+  htmlFor,
+  ...rest
+}: { children: ReactNode; htmlFor?: string } & Omit<LabelHTMLAttributes<HTMLLabelElement>, 'htmlFor'>) {
   return (
     <label htmlFor={htmlFor} className="mb-1 block text-xs font-medium text-[var(--color-text-muted)]" {...rest}>
       {children}

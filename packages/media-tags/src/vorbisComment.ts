@@ -3,41 +3,35 @@
  *
  * ### Why this is a source and not a buffer
  *
- * The list is length-prefixed, so reading field *n+1* means stepping over field *n* — and
- * on a real file the field you step over is usually the artwork: `METADATA_BLOCK_PICTURE`
- * on a 9 MB Opus track is 1,158,176 bytes of base64, sitting *inside* the comment list,
- * usually before the tags anyone wants. A bounded prefix read therefore stops inside it.
+ * The list is length-prefixed, so reading field *n+1* means stepping over field *n* — and on a real
+ * file the field you step over is usually the artwork: `METADATA_BLOCK_PICTURE` on a 9 MB Opus
+ * track is 1,158,176 bytes of base64, sitting *inside* the comment list, usually before the tags
+ * anyone wants. A bounded prefix read therefore stops inside it.
  *
- * So the reader is given a {@link ByteSource} rather than a `Uint8Array`. A contiguous
- * buffer is one (a FLAC `VORBIS_COMMENT`, or an Ogg packet small enough to materialize);
- * an Ogg `LogicalPacket` is another, whose bytes are split by every page header the packet
- * continues across, so a field boundary can fall inside a gap and a 4-byte length can
- * straddle two pages. Reading both through one walk is the point — **two copies of the
- * framing are free to disagree about where a comment ends, and that disagreement is
- * invisible until a picture silently decodes to the wrong bytes.**
+ * So the reader is given a {@link ByteSource} rather than a `Uint8Array`: a contiguous buffer
+ * is one, and an Ogg `LogicalPacket` is another whose bytes are split by every page header the
+ * packet continues across. Reading both through one walk is the point — **two copies of the
+ * framing are free to disagree about where a comment ends, and that disagreement is invisible
+ * until a picture silently decodes to the wrong bytes.**
  *
  * ### A field that runs past what is there ends the walk, and that is the whole design
  *
- * The list is sequential, so there is no way to reach field *n+1* without stepping over
- * field *n*. Treating "the buffer stopped here" as a parse failure reports **no tags at
- * all** for a file whose `TITLE`, `ARTIST` and `ALBUM` are all in the first four hundred
- * bytes — which is what this server reported for every Opus track it had. So the walk
- * stops, keeping everything it read, and hands the oversized field back as a *range*.
- *
- * "Where is it" and "what does it say" are therefore separate questions with separate
- * answers, and the artwork is the case where the first one is the only one asked.
+ * The list is sequential, so there is no way to reach field *n+1* without stepping over field *n*.
+ * Treating "the buffer stopped here" as a parse failure reports **no tags at all** for a file
+ * whose `TITLE`, `ARTIST` and `ALBUM` are all in the first four hundred bytes — which is what
+ * this server reported for every Opus track it had. So the walk stops, keeping everything it
+ * read, and hands the oversized field back as a *range*. "Where is it" and "what does it say"
+ * are therefore separate questions, and the artwork is the case where only the first is asked.
  */
-import { normalizeCommentKey, parseIndex, parseYear, readUintLE } from './bits';
-import type { CommentFields } from './bits';
-
+import { normalizeCommentKey, readUintLE } from './bits';
 /**
  * Somewhere a length-prefixed structure can be read from.
  */
 interface ByteSource {
   /**
-   * Bytes available from offset 0. Named for what it is rather than for the whole
-   * structure, because on a bounded read the two differ: a `LogicalPacket` reports how much
-   * of the packet it can reach, which is what decides whether the walk can continue.
+   * Bytes available from offset 0. Named for what it is rather than for the whole structure,
+   * because on a bounded read the two differ: a `LogicalPacket` reports how much of the packet it
+   * can reach, which is what decides whether the walk can continue.
    */
   readonly available: number;
   /**
@@ -81,32 +75,63 @@ const MAX_COMMENT_VALUE_BYTES = 64 * 1024;
 /**
  * How much of a field is read to recover its **key**.
  *
- * The key is what identifies the field, and it is a few dozen bytes at the front of it —
- * `METADATA_BLOCK_PICTURE` is 22. So when the value is too large to decode, this is all
- * that has to be read to name it.
+ * The key identifies the field and is a few dozen bytes at the front of it —
+ * `METADATA_BLOCK_PICTURE` is 22 — so this is all that has to be read when the value is too
+ * large to decode.
  *
- * It has to be a bound, because the alternative is reading the field to find the `=`, and
- * the field is the thing that was too large: an unbounded `read` of an 819 KB value comes
- * back `null` under the packet's materialization limit, the empty result has no `=` in it,
- * and the field is then reported as *nothing at all* — which is the bug this replaced,
- * reappearing one level down.
+ * It has to be a bound: the alternative is reading the field to find the `=`, and the field is
+ * the thing that was too large. An unbounded read of an 819 KB value comes back `null` under the
+ * packet's materialization limit, the empty result has no `=` in it, and the field is reported as
+ * nothing at all — this bug, reappearing one level down.
  */
 const MAX_COMMENT_KEY_BYTES = 256;
 
 /**
  * One comment's **value**, as a byte range into its {@link ByteSource}.
  *
- * The value and not the field: the field carries the key and the `=`, and a caller told
- * "your bytes are here" hands all three to a decoder that wanted only the value.
+ * The value and not the field: the field carries the key and the `=`, and a caller told "your bytes
+ * are here" hands all three to a decoder that wanted only the value.
  *
- * A range rather than a string, because the one comment whose value is not text is
- * routinely **larger than any buffer this server will hold**. Handing the caller its
+ * A range rather than a string, because the one comment whose value is not text is routinely
+ * **larger than any buffer this server will hold**. Handing the caller its
  * extent is what lets it ask for exactly those bytes instead of giving up on the picture —
  * or reading a megabyte of base64 to throw most of it away.
  */
+
 interface CommentValue {
   readonly offset: number;
   readonly length: number;
+}
+
+/**
+ * Report a field whose bytes cannot be materialized, and end the walk.
+ *
+ * Two reasons land here and need identical handling: the bytes are not all present (a bounded
+ * read stopped inside the field), or the value is too large to be text (the artwork). Either way
+ * the **length prefix has already told us how long it is**, and the key is a few dozen bytes at
+ * the front, so the field is still identifiable from what is present. That is the only reason a
+ * cover 1.16 MB into a file is findable from a 128 KiB read.
+ *
+ * There is nothing after it to reach — the list is sequential — so the walk ends here with
+ * everything it did read kept.
+ *
+ * The extent reported is the **value's**, never the field's: the field carries the key and the
+ * `=`, and a caller told "here are your bytes" hands all three to a decoder that wanted only the
+ * value. That is a base64 payload with `METADATA_BLOCK_PICTURE=` prepended to it, which decodes
+ * to nothing at all.
+ */
+function reportExtentOnly(
+  source: ByteSource,
+  start: number,
+  length: number,
+  present: number,
+  visit: (key: string, value: string | null, extent: CommentValue) => boolean | void,
+): void {
+  if (present <= 0) return;
+  const key = new TextDecoder().decode(source.read(start, Math.min(present, MAX_COMMENT_KEY_BYTES)) ?? new Uint8Array(0));
+  const equals = key.indexOf('=');
+  if (equals <= 0) return;
+  visit(normalizeCommentKey(key.slice(0, equals)), null, { offset: start + equals + 1, length: length - equals - 1 });
 }
 
 /**
@@ -161,17 +186,7 @@ function walkVorbisCommentSource(
     const present = Math.max(0, Math.min(length, source.available - start));
     const decodable = present >= length && length <= maxValueBytes && length > 0;
     if (!decodable) {
-      if (present > 0) {
-        const key = new TextDecoder().decode(source.read(start, Math.min(present, MAX_COMMENT_KEY_BYTES)) ?? new Uint8Array(0));
-        const equals = key.indexOf('=');
-        // The extent reported is the **value's**, never the field's — the field carries the
-        // key and the `=`, and a caller told "here are your bytes" hands all three to a
-        // decoder that wanted only the value. That is a base64 payload with
-        // `METADATA_BLOCK_PICTURE=` prepended to it, which decodes to nothing at all.
-        if (equals > 0) {
-          visit(normalizeCommentKey(key.slice(0, equals)), null, { offset: start + equals + 1, length: length - equals - 1 });
-        }
-      }
+      reportExtentOnly(source, start, length, present, visit);
       return;
     }
 
@@ -186,20 +201,6 @@ function walkVorbisCommentSource(
     if (value.length === 0) continue;
     if (visit(normalizeCommentKey(comment.slice(0, equals)), value, { offset: start + equals + 1, length: value.length }) === false) return;
   }
-}
-
-/**
- * Walk the comment list in one contiguous buffer.
- *
- * The buffer form of {@link walkVorbisCommentSource}, for the readers whose container
- * keeps the whole block together: a FLAC `VORBIS_COMMENT`, and an Ogg packet small
- * enough to materialize.
- */
-function walkVorbisCommentList(bytes: Uint8Array, offset: number, visit: (key: string, value: string) => boolean | void): void {
-  walkVorbisCommentSource(contiguousSource(bytes), offset, (key, value) => {
-    if (value === null) return;
-    return visit(key, value);
-  });
 }
 
 /**
@@ -220,73 +221,6 @@ function walkVorbisCommentList(bytes: Uint8Array, offset: number, visit: (key: s
  *   `album artist=SILENT SIREN` ahead of `ALBUMARTIST=Silent Siren`, and first-wins
  *   publishes the stale all-caps spelling against the file's own `ARTIST`.
  */
-function parseVorbisCommentSource(source: ByteSource, offset: number): CommentFields {
-  const fields: CommentFields = {
-    title: null,
-    artist: null,
-    album: null,
-    albumArtist: null,
-    genre: null,
-    year: null,
-    track: null,
-    disc: null,
-  };
-
-  walkVorbisCommentSource(source, offset, (key, value) => {
-    if ((value === null) || (value.trim().length === 0)) return;
-    switch (key) {
-      case 'TITLE': {
-        fields.title = value;
-        break;
-      }
-      case 'ARTIST': {
-        fields.artist = value;
-        break;
-      }
-      case 'ALBUM': {
-        fields.album = value;
-        break;
-      }
-      case 'ALBUMARTIST':
-      case 'ALBUMARTISTSORT': {
-        fields.albumArtist = value;
-        break;
-      }
-      case 'GENRE': {
-        fields.genre = value;
-        break;
-      }
-      case 'DATE':
-      case 'YEAR':
-      case 'ORIGINALDATE': {
-        fields.year = parseYear(value) ?? fields.year;
-        break;
-      }
-      case 'TRACKNUMBER': {
-        fields.track = parseIndex(value) ?? fields.track;
-        break;
-      }
-      case 'DISCNUMBER': {
-        fields.disc = parseIndex(value) ?? fields.disc;
-        break;
-      }
-      default: {
-        break;
-      }
-    }
-  });
-
-  return fields;
-}
-
-/**
- * Parse a `VORBIS_COMMENT` / `OpusTags` payload (vendor string and framing
- * already stripped by the caller).
- */
-function parseVorbisComments(bytes: Uint8Array, offset: number): CommentFields {
-  return parseVorbisCommentSource(contiguousSource(bytes), offset);
-}
-
 /**
  * The extent of one comment's value, without decoding it.
  *
@@ -330,14 +264,13 @@ function findVorbisComment(bytes: Uint8Array, offset: number, wanted: string): s
 }
 
 export {
-  parseVorbisComments,
-  parseVorbisCommentSource,
   findVorbisComment,
   findVorbisCommentExtent,
-  walkVorbisCommentList,
   walkVorbisCommentSource,
   contiguousSource,
   MAX_COMMENT_VALUE_BYTES,
   MAX_COMMENT_KEY_BYTES,
 };
 export type { ByteSource, CommentValue };
+// Re-exported so the module's published surface is unchanged by the split.
+export { parseVorbisCommentSource, parseVorbisComments } from './commentFields';

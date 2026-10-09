@@ -34,7 +34,10 @@ function bindImport(scope: Container, config: AppConfiguration, subrequests: Sub
   scope.bindValue(
     Tokens.ImportSourceService,
     new ImportSourceService({
-      sources: () => scope.get(Tokens.ImportSourceDAO)().then(async (dao) => await dao),
+      sources: () =>
+        scope
+          .get(Tokens.ImportSourceDAO)()
+          .then(async (dao) => await dao),
       resolveKey: scope.get(Tokens.RemoteKey),
       /**
        * The **same expression** `LibraryService` is built with, deliberately rather than by

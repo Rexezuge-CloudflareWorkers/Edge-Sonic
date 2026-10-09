@@ -58,7 +58,8 @@ async function scopeMiddleware(c: ScopeContext, next: Next): Promise<Response | 
       resolveEnrichDriver(
         c.env,
         () => BaseRoute.getScope(c).get(Tokens.LibraryEnrichmentService),
-        async (libraryId) => (await BaseRoute.getScope(c).get(Tokens.SongEnrichmentDAO)()).countNeedingEnrichment(libraryId, READER_VERSION),
+        async (libraryId) =>
+          (await BaseRoute.getScope(c).get(Tokens.SongEnrichmentDAO)()).countNeedingEnrichment(libraryId, READER_VERSION),
         meterOf(),
       ),
     ),

@@ -839,9 +839,7 @@ describe('schema', () => {
       // index at all — so the deviation and the index it backs are one fact, asserted together
       // rather than as two that can drift.
       const indexes: Array<{ tbl_name: string; name: string }> = handle.raw
-        .prepare(
-          "SELECT tbl_name, name FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name",
-        )
+        .prepare("SELECT tbl_name, name FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY tbl_name, name")
         .all() as Array<{ tbl_name: string; name: string }>;
 
       const usingTwins = indexes.filter((index) =>
@@ -901,8 +899,7 @@ describe('schema', () => {
       // engine-versus-build gap has cost this repository a defect before, and `wrangler d1
       // execute` is the instrument that closes it.
       const equality = (value: string): number =>
-        (handle.raw.prepare('SELECT (? = ? COLLATE NOCASE) AS equal').get(value.toLowerCase(), value) as { equal: number })
-          .equal;
+        (handle.raw.prepare('SELECT (? = ? COLLATE NOCASE) AS equal').get(value.toLowerCase(), value) as { equal: number }).equal;
 
       // ASCII agrees, which is why a spot check on ASCII fixtures finds nothing wrong.
       expect(equality('MiXeD')).toBe(1);
@@ -1297,12 +1294,49 @@ describe("listRoots does not return the library root's own row", () => {
     await nodes.upsertMany([
       { libraryId, path: 'Artist', parentPath: '', name: 'Artist', mtimeMs: 1, etag: null, depth: 1, isScanned: true },
       { libraryId, path: 'Artist/Album', parentPath: 'Artist', name: 'Album', mtimeMs: 1, etag: null, depth: 2, isScanned: true },
-      { libraryId, path: 'Artist/Album/01.flac', parentPath: 'Artist/Album', name: '01.flac', mtimeMs: 1, etag: '"a"', depth: 3, isScanned: true },
-      { libraryId, path: 'Artist/Album/02.flac', parentPath: 'Artist/Album', name: '02.flac', mtimeMs: 1, etag: '"b"', depth: 3, isScanned: true },
-      { libraryId, path: 'Artist/Album/cover.jpg', parentPath: 'Artist/Album', name: 'cover.jpg', mtimeMs: 1, etag: '"c"', depth: 3, isScanned: true },
+      {
+        libraryId,
+        path: 'Artist/Album/01.flac',
+        parentPath: 'Artist/Album',
+        name: '01.flac',
+        mtimeMs: 1,
+        etag: '"a"',
+        depth: 3,
+        isScanned: true,
+      },
+      {
+        libraryId,
+        path: 'Artist/Album/02.flac',
+        parentPath: 'Artist/Album',
+        name: '02.flac',
+        mtimeMs: 1,
+        etag: '"b"',
+        depth: 3,
+        isScanned: true,
+      },
+      {
+        libraryId,
+        path: 'Artist/Album/cover.jpg',
+        parentPath: 'Artist/Album',
+        name: 'cover.jpg',
+        mtimeMs: 1,
+        etag: '"c"',
+        depth: 3,
+        isScanned: true,
+      },
     ]);
     await songs.upsertFileFacts([
-      { id: 's1', libraryId, path: 'Artist/Album/01.flac', dirPath: 'Artist/Album', name: '01.flac', size: 10, mtimeMs: 1, contentType: 'audio/flac', suffix: 'flac' },
+      {
+        id: 's1',
+        libraryId,
+        path: 'Artist/Album/01.flac',
+        dirPath: 'Artist/Album',
+        name: '01.flac',
+        size: 10,
+        mtimeMs: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
     ]);
 
     const children = await nodes.listChildrenWithSongPresence(libraryId, 'Artist/Album');
@@ -4336,7 +4370,17 @@ describe('short song ids', () => {
     const { libraryId, songs, short } = await seedShortIds();
     expect(short).toBe(deriveShortSongId(libraryId, 'Blur/For Emma/02.flac'));
     await songs.upsertFileFacts([
-      { id: 's:AAAAAAAAAAAAAAAAAAAAAA', libraryId, path: 'Blur/For Emma/02.flac', dirPath: 'Blur/For Emma', name: '02.flac', size: 11, mtimeMs: 2, contentType: 'audio/flac', suffix: 'flac' },
+      {
+        id: 's:AAAAAAAAAAAAAAAAAAAAAA',
+        libraryId,
+        path: 'Blur/For Emma/02.flac',
+        dirPath: 'Blur/For Emma',
+        name: '02.flac',
+        size: 11,
+        mtimeMs: 2,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      },
     ]);
     expect((await songs.findByPath(libraryId, 'Blur/For Emma/02.flac'))?.id).toBe(short);
   });

@@ -23,7 +23,7 @@
 
 import { matchRemoteSongs } from './matchRemoteIds';
 import { authorizedSongIds, toCandidate, unresolvedFor } from './phaseShared';
-import { collectUnresolved, phase } from './report';
+import { phase } from './report';
 
 import type { PhaseContext } from './phases';
 import type { PhaseReport } from './report';
@@ -31,7 +31,7 @@ import type { PhaseReport } from './report';
 /**
  * **One** album of the play-count walk.
  *
- * Split from {@link runPlayCountPagePhase} so the Durable Object can walk album by album without
+ * The Durable Object walks album by album without
  * re-fetching the enumeration for each one — the page phase is a *loop* over this, so both
  * callers issue the same work rather than two implementations of it.
  *
@@ -44,7 +44,10 @@ import type { PhaseReport } from './report';
  * albums nobody has played are the common case, and a remote that reported `playCount: 0` for
  * every track is saying the truth about a library nobody listens to.
  */
-async function runPlayCountAlbumPhase(context: PhaseContext, album: { readonly id: string; readonly name: string | null }): Promise<PhaseReport> {
+async function runPlayCountAlbumPhase(
+  context: PhaseContext,
+  album: { readonly id: string; readonly name: string | null },
+): Promise<PhaseReport> {
   const { store, remote, userId, libraryId } = context;
   const songs = await remote.getAlbumSongs(album.id);
   const withCounts = songs.filter((song) => song.playCount !== null && song.playCount > 0);
@@ -69,7 +72,7 @@ async function runPlayCountAlbumPhase(context: PhaseContext, album: { readonly i
       status: unresolved.length === 0 ? 'imported' : 'partial',
       unresolved,
       unresolvedCount: unresolved.length,
-      lastError: unresolved.length === 0 ? null : 'None of this album\'s counted tracks resolved to a local song.',
+      lastError: unresolved.length === 0 ? null : "None of this album's counted tracks resolved to a local song.",
     });
   }
 
@@ -85,38 +88,4 @@ async function runPlayCountAlbumPhase(context: PhaseContext, album: { readonly i
   });
 }
 
-/**
- * One **page** of the play-count walk, fetched as a page.
- *
- * This is the Workflow-shaped entry point: one `step.do` per page, so a page that fails is
- * retried as a page. The Durable Object uses {@link runPlayCountAlbumPhase} instead, because it
- * already holds the page in hand and re-fetching it per album would spend an enumeration call
- * per album.
- *
- * A page of albums comes from `listAlbums(offset)`, **not** from walking artists: one call per 500
- * albums against roughly three per album, and it is what makes the walk fit inside a step budget
- * at all.
- */
-async function runPlayCountPagePhase(context: PhaseContext, offset: number): Promise<PhaseReport> {
-  const { remote, albumPageSize } = context;
-  const albums = await remote.listAlbums(offset, albumPageSize);
-  if (albums.length === 0) return phase({ phase: `playCounts:page:${offset}`, status: 'imported', lastError: 'No further albums.' });
-
-  const outcomes: PhaseReport[] = [];
-  for (const album of albums) outcomes.push(await runPlayCountAlbumPhase(context, album));
-
-  return phase({
-    phase: `playCounts:page:${offset}`,
-    // `albums.length < albumPageSize` is the remote saying there is no next page. Reported rather
-    // than left for the caller to infer — a walk that ended for a reason nobody recorded reads as
-    // a walk that finished.
-    status: albums.length < albumPageSize ? 'imported' : 'partial',
-    imported: outcomes.reduce((total, outcome) => total + outcome.imported, 0),
-    rowsWritten: outcomes.reduce((total, outcome) => total + outcome.rowsWritten, 0),
-    unresolved: collectUnresolved([], outcomes.flatMap((outcome) => outcome.unresolved)),
-    unresolvedCount: outcomes.reduce((total, outcome) => total + outcome.unresolvedCount, 0),
-    lastError: albums.length < albumPageSize ? null : 'More albums remain.',
-  });
-}
-
-export { runPlayCountAlbumPhase, runPlayCountPagePhase };
+export { runPlayCountAlbumPhase };

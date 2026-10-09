@@ -36,7 +36,10 @@ class ImportPlayCountProgressDAO extends BaseDAO {
   public async read(runId: string): Promise<ImportPlayCountProgressRow | null> {
     return await this.withRetry(
       async () =>
-        await this.database.prepare('SELECT * FROM import_play_count_progress WHERE run_id = ?').bind(runId).first<ImportPlayCountProgressRow>(),
+        await this.database
+          .prepare('SELECT * FROM import_play_count_progress WHERE run_id = ?')
+          .bind(runId)
+          .first<ImportPlayCountProgressRow>(),
       'importPlayCounts.read',
     );
   }

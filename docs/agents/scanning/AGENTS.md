@@ -20,16 +20,16 @@ store still accepting writes when D1 is refusing them.
 All derived in `packages/backend-runtime/src/config/subrequests.ts` from one platform
 number, `WORKER_SUBSREQUEST_CEILING = 50`:
 
-| Constant | Value | Derivation |
-| --- | ---: | --- |
-| `SCAN_CHUNK_SUBSREQUEST_BUDGET` | 42 | `50 − 8` the invocation's own statements |
-| `SUBSREQUESTS_PER_FOLDER_BASE` | 6 | one folder's **whole** cost, not its one PROPFIND |
-| `SUBSREQUESTS_PER_ENRICHED_TRACK` | 5 | prefix + tail + KV read + write + apply |
-| `SUBSREQUESTS_PER_CHUNK_OVERHEAD` | 4 | `ensure`, backfill read, `listFrontier`, `saveProgress` |
-| `SCAN_CHUNK_FOLDER_LIMIT` | 7 | `floor(42 / 6)` |
-| `SCAN_ENRICH_MAX_PER_FOLDER` | 8 | `floor(42 / 5)` |
-| `SCAN_DERIVE_MAX_ROWS_PER_CHUNK` | 32 | `42 − 4 − 6` |
-| `SCAN_DAILY_ROW_WRITE_BUDGET` | 90,000 | `100,000 − 10%`, divided by library count at use |
+| Constant                          |  Value | Derivation                                              |
+| --------------------------------- | -----: | ------------------------------------------------------- |
+| `SCAN_CHUNK_SUBSREQUEST_BUDGET`   |     42 | `50 − 8` the invocation's own statements                |
+| `SUBSREQUESTS_PER_FOLDER_BASE`    |      6 | one folder's **whole** cost, not its one PROPFIND       |
+| `SUBSREQUESTS_PER_ENRICHED_TRACK` |      5 | prefix + tail + KV read + write + apply                 |
+| `SUBSREQUESTS_PER_CHUNK_OVERHEAD` |      4 | `ensure`, backfill read, `listFrontier`, `saveProgress` |
+| `SCAN_CHUNK_FOLDER_LIMIT`         |      7 | `floor(42 / 6)`                                         |
+| `SCAN_ENRICH_MAX_PER_FOLDER`      |      8 | `floor(42 / 5)`                                         |
+| `SCAN_DERIVE_MAX_ROWS_PER_CHUNK`  |     32 | `42 − 4 − 6`                                            |
+| `SCAN_DAILY_ROW_WRITE_BUDGET`     | 90,000 | `100,000 − 10%`, divided by library count at use        |
 
 A chunk is bounded by **both** a request ceiling and a wall-clock deadline, and
 `canAfford` is checked **before** each unit of work.
@@ -38,12 +38,12 @@ A chunk is bounded by **both** a request ceiling and a wall-clock deadline, and
 
 Violating any of these reintroduces a fixed defect. The suite asserts each one.
 
-- **A chunk is bounded by a *measured* request count, not by a folder number.**
-  `getScanStatus` is not a progress read — it *is* the scan — so one call descending
+- **A chunk is bounded by a _measured_ request count, not by a folder number.**
+  `getScanStatus` is not a progress read — it _is_ the scan — so one call descending
   `SCAN_CHUNK_FOLDERS` folders sequentially is unbounded work on a surface whose
   clients time out. It shipped: a chunk on a 2.2 s origin took ~88 s while clients
   gave up at ~45 s, so the work finished server-side where nobody was watching, and
-  a client that backed off stopped advancing the scan *by construction*. Enrichment
+  a client that backed off stopped advancing the scan _by construction_. Enrichment
   then moved per-track range reads inside that same loop, taking a chunk from 40
   subrequests to 1,640 — past the ceiling, so a chunk that **fails** rather than one
   that is slow. Two rules, and each is how the previous one collapsed:
@@ -53,29 +53,29 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     used to be `+= 1` inside the walk's loop, which charged the `PROPFIND`s and
     nothing the scan's own enrichment caused — an undercount of up to 40x, on a field
     whose comment claimed it was instrumented "so the budget is testable". A
-    caller-incremented counter is a *claim* about work; one incremented at the choke
+    caller-incremented counter is a _claim_ about work; one incremented at the choke
     point is a measurement of it, and only the second can bound anything.
   - **A bound that is not checked is not a bound.** `webdavRequests` was returned in
     `ChunkResult` and compared against nothing anywhere. There is now a request
-    ceiling *and* a wall-clock deadline, the loop checks `canAfford` **before** each
+    ceiling _and_ a wall-clock deadline, the loop checks `canAfford` **before** each
     unit of work, and the remainder of the frontier is simply left for the next poll.
-  Asserted in `test/scan-budget.test.ts`: `webdavRequests` is compared against what
-  the `fakeDav` double actually received, a `fakeDav` gained a real `latencyMs` so a
-  deadline is observable at all, and every bound test is paired with one that shows
-  the guard has teeth. The same rule the previous invariant records, one level up: the
-  budget lived in a comment and in the choice of default numbers, and **a comment is
-  not a measurement**.
+    Asserted in `test/scan-budget.test.ts`: `webdavRequests` is compared against what
+    the `fakeDav` double actually received, a `fakeDav` gained a real `latencyMs` so a
+    deadline is observable at all, and every bound test is paired with one that shows
+    the guard has teeth. The same rule the previous invariant records, one level up: the
+    budget lived in a comment and in the choice of default numbers, and **a comment is
+    not a measurement**.
 - **A subrequest is not only `fetch`, and budgeting the easy one to measure kills the
   invocation.** Workers Free allows **50 subrequests per invocation**, and D1 counts
-  its own queries against the same 50 — *"Queries per Worker invocation — 1000 (Workers
-  Paid) / 50 (Free)"* — as do KV, Durable Object RPCs and Secrets Store reads. Cloudflare's
+  its own queries against the same 50 — _"Queries per Worker invocation — 1000 (Workers
+  Paid) / 50 (Free)"_ — as do KV, Durable Object RPCs and Secrets Store reads. Cloudflare's
   own two limits pages disagree on the internal-service question (the Workers page carries a
-  *subrequests to internal services: 1,000 on Free* row), and this repository believed the
+  _subrequests to internal services: 1,000 on Free_ row), and this repository believed the
   wrong one for long enough to ship a broken scan: `ScanBudget` metered
   `WebDavClient.request()` and nothing else, so a chunk of 40 folders charged its budget
   **40** and spent the platform **~240**. It crossed the ceiling inside its first album,
   `ScanWorker.alarm` caught an error nothing in the scan can see, re-armed a second later,
-  and each dead invocation banked ~20 tracks — which is why a 110-track library *finished*
+  and each dead invocation banked ~20 tracks — which is why a 110-track library _finished_
   while no chunk ever completed. **The belief was itself wrong, and is now measured:**
   external `fetch` and internal-service calls are drawn from **separate** budgets —
   50 external, 1,000 to Cloudflare services — confirmed on a Free account on 2026-10-05.
@@ -94,7 +94,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     statements is 1 or N subrequests and the docs do not say; charging N costs throughput
     if N is wrong and costs availability if 1 is.
   - **The per-unit reservation is the unit's whole cost.** `MAX_REQUESTS_PER_TRACK = 2`
-    counted a prefix read and a tail read — the two *external* requests — while the same
+    counted a prefix read and a tail read — the two _external_ requests — while the same
     track also costs a `songMeta` KV read, an `applyMetadata` and a `songMeta` KV write.
     Admitting 20 tracks per folder on the cost of two each is ~100 subrequests of work onto
     a budget of 50. Likewise a folder: the walk checked one `PROPFIND`, and a chunk that
@@ -107,15 +107,15 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     **clamped**, because the operator surface was telling people to raise one of them: on
     Free the ceiling cannot be raised, and following that advice converts a chunk that
     pauses into a chunk the runtime terminates.
-  A budget that ran out is a **pause**, not a failure — `stoppedBy: 'requests'` was
-  structurally unreachable while the meter could not see D1, so a self-inflicted ceiling
-  spent the retry budget on every attempt and the operator surface had a string for a state
-  it could never render. Asserted in `test/subrequest-budget.test.ts` (per charge point,
-  with negatives) and `test/scan-budget.test.ts` (a whole chunk, against a store double
-  that charges). Full account: `docs/issues/free-plan-subrequest-ceiling.md`.
+    A budget that ran out is a **pause**, not a failure — `stoppedBy: 'requests'` was
+    structurally unreachable while the meter could not see D1, so a self-inflicted ceiling
+    spent the retry budget on every attempt and the operator surface had a string for a state
+    it could never render. Asserted in `test/subrequest-budget.test.ts` (per charge point,
+    with negatives) and `test/scan-budget.test.ts` (a whole chunk, against a store double
+    that charges). Full account: `docs/issues/free-plan-subrequest-ceiling.md`.
 - **A write that is larger than the invocation must be resumable, or it must be refused.**
   A 500-track album is ~1,000 statements against a ceiling of 50, so truncation is the
-  *expected* case on Free rather than an edge case. `runWriteBatch` splits by what is left
+  _expected_ case on Free rather than an edge case. `runWriteBatch` splits by what is left
   and reports `truncated`; `reconcileFolder` writes the children **first** and the folder's
   own row — the one carrying `is_scanned: true` — **last and only if nothing was
   truncated**, so a half-written folder stays on the frontier and the next chunk finishes it.
@@ -123,7 +123,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   would otherwise delete exactly the children the upsert could not write. A browse cannot
   resume, so `TreeService` persists nothing and answers from the listing it already holds. And
   a write that has no partial form — a play queue, a playlist's `song_count`, the derivation
-  backfill — refuses with a `413` instead, because half a queue is a *shorter queue*, which
+  backfill — refuses with a `413` instead, because half a queue is a _shorter queue_, which
   is a wrong answer rather than an unfinished one.
 - **A stored failure is read back, or it was never written.** `scan_state.last_error`
   was populated on every scan failure and read by nothing, and `apps/web` declared a
@@ -137,7 +137,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   chunk ended a scan permanently** with the frontier sitting intact and unread in D1. A
   library of eighty albums stayed at one scanned folder for the life of the deployment,
   and `getScanStatus` reported `{"scanning": false, "count": 1}` because it derived
-  `scanning` from the status, which is exactly what a client reads as *stop polling*. Only
+  `scanning` from the status, which is exactly what a client reads as _stop polling_. Only
   `startScan` recovered, and `startScan` runs at client startup, not while browsing. The
   module header claimed the opposite and the claim was true of the frontier and false of
   the code reading it. So: a `failed` scan is re-entered, bounded by
@@ -151,7 +151,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **A row with no tags is absent from every aggregate, not shown with a blank name.**
   `listAlbums` filters `album_ci IS NOT NULL AND album_ci <> ''`, `listArtists` filters
   `artist_ci IS NOT NULL`, `listGenres` filters `genre_ci IS NOT NULL` — and those columns
-  are written *only* by a tag read, which costs one ranged request per track and is bounded
+  are written _only_ by a tag read, which costs one ranged request per track and is bounded
   twice over. So for a library of any size most rows are unenriched for a long time, and
   the whole tag-organized half of the protocol answers `[]` while `getRandomSongs`, which
   does not group, returns rows happily. It shipped. The fix is to derive `album`/`artist`
@@ -161,13 +161,13 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   is offered to the user as fact, and `getGenres` would publish it with a song count. An
   uninformative path yields NULL, never `''`, because `''` groups under a blank name — the
   same defect `NodeDAO.listRoots` had with the root.
-- **A folder too large for one invocation must be *closable*, or the scan writes the same
+- **A folder too large for one invocation must be _closable_, or the scan writes the same
   rows for ever.** `runWriteBatch` truncates a folder's children against the
   invocation's subrequest ceiling — 45 statements on the Free plan — and `reconcileFolder`
   writes the folder's own `is_scanned: true` **only if nothing was truncated**. That is the
   resumability mechanism, and it only resumes if the next pass offers strictly fewer rows.
   It did not: `reconcileFolder` had no comparison, so the rows it had already written were
-  the rows it re-offered *first*, the truncation landed on the same offset every time, and
+  the rows it re-offered _first_, the truncation landed on the same offset every time, and
   progress on the next pass was zero. So **any folder with ≥45 entries could never be
   closed**, and every chunk rewrote the same ~45 rows. It shipped: **231,620 rows written on
   `nodes`** for one 80-album, 110-track library, `is_scanned` never reaching 1, the frontier
@@ -179,21 +179,21 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   was not enough:
   - **The compare exists, it is one function, and it was already written — elsewhere.**
     `TreeService.persistChildren` had it; `reconcileFolder` described it in its own docstring
-    and had no such branch. Two writers and two answers, and the second answer was *no
-    comparison at all*. `nodeWrite.ts` owns it now, and its caller-side and statement-side
+    and had no such branch. Two writers and two answers, and the second answer was _no
+    comparison at all_. `nodeWrite.ts` owns it now, and its caller-side and statement-side
     halves are **both** required: `runWriteBatch.truncated` counts statements **issued**, not
     rows changed, so `NodeDAO.UPSERT`'s new `WHERE` makes redundant writes free but does not
     make a caller that offers 80 rows for a 45-statement budget converge. The `WHERE` is
     defence in depth; the compare is the fix.
   - **`updated_at` is excluded from the statement's `WHERE`, and that is why.**
-    It is `nowSeconds()`, so it is the one column that *always* differs — including it would
+    It is `nowSeconds()`, so it is the one column that _always_ differs — including it would
     make every comparison true and the guard a comment. It is consequently the one column a
     no-op upsert does not move, which is what keeps "when was this row last actually touched"
     answerable. The other half: `IS NOT`, not `!=`, because `NULL != NULL` is `NULL` and in a
     `WHERE` that is false — so a row whose etag went from a value to none looked unchanged and
     its subtree froze. That permissive direction is the dangerous one.
   - **A browse does not get to say a folder was descended into.** `persistChildren` wrote
-    `is_scanned = 0` for every child, so a client merely *looking at* the root put all 80
+    `is_scanned = 0` for every child, so a client merely _looking at_ the root put all 80
     album folders back on the frontier and the scan re-walked them — once per browse, on a
     `GET`, spending the same allowance. The flag means "someone descended into this" and that
     path demonstrably has not. It now **preserves** the stored value and writes `0` only for
@@ -211,7 +211,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     `SubrequestCounter` and asserts each pass writes **strictly less** than the one before.
     Removing either the compare or the `WHERE` turns seven of its cases red while every
     status- and shape-level assertion in the suite stays green — which is the finding, because
-    the two doubles that hid this (`scan-budget`'s `upsertMany`, which *skipped* unchanged
+    the two doubles that hid this (`scan-budget`'s `upsertMany`, which _skipped_ unchanged
     rows, and `scan-incremental`'s `chunkMaxRequests: 10_000` with a double that never
     truncates) each modelled the fixed implementation or a bound that never fires.
 - **A compare must read the table the row it guards lives in.** This is the same rule as
@@ -226,7 +226,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   rows, found every mtime already current, computed `changed === false` for all of them, offered
   nothing, saw no truncation, and closed the folder.
   Nothing else reaches that state, which is what makes it permanent rather than merely unlikely:
-  `songPaths.push` runs *before* the gate, so the prune keeps the path and never deletes a row that
+  `songPaths.push` runs _before_ the gate, so the prune keeps the path and never deletes a row that
   was never written; and `startScan`'s root-mtime probe means the folder is not re-listed at all.
   No error, no retry, no operator — one chunk boundary in the wrong place, once. Three rules:
   - **The gate names its own table's answer.** `songRowMissing = known?.has_song !== 1`, beside
@@ -252,22 +252,22 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     the cheap one. Whichever batch truncates, the other can still land, so the asymmetry survives
     any order — only reading the row's own table removes it. Asserted by mutation: reverting the
     gate to `if (changed)` fails four cases, and moving the audio test below it fails three more.
-  This is the third instance of the file's own recurring shape — **a compare standing in for a
-  measurement** — and the reason it recurs is that `changed` reads correctly and reads *the wrong
-  table*: a predicate nobody can distinguish from the right one by reading it.
-- **A spent D1 daily allowance is a *pause*, and it is not `failed`.** Since 2026-09-01 a
+    This is the third instance of the file's own recurring shape — **a compare standing in for a
+    measurement** — and the reason it recurs is that `changed` reads correctly and reads _the wrong
+    table_: a predicate nobody can distinguish from the right one by reading it.
+- **A spent D1 daily allowance is a _pause_, and it is not `failed`.** Since 2026-09-01 a
   Free account over its daily row allowance has **every query fail** — reads included — until
   **midnight UTC**, so the whole product is down (Subsonic auth reads `users`) and the remedy
   is a clock. It shipped as a loop: `step` caught the refusal, tried to record it with a D1
-  write that *could not succeed* (the fault **is** a refusal to write), returned `failed`,
+  write that _could not succeed_ (the fault **is** a refusal to write), returned `failed`,
   `isAdvancing('failed')` is true, and the alarm re-armed one second later — ~86,400 times
   before the reset, each attempt two failed statements, with `getScanStatus` reporting
   `scanning: true` and the cause masked into `code=0`. `paused` is the third answer: retried
   **by itself, at a known time, needing no operator**. Neither existing status could carry it —
   `failed` retries (a loop) and `stalled` never does (a wedge until an operator acts). Four
   rules:
-  - **Two questions, so two predicates.** The alarm asks *will this resume by itself?*
-    (`true`); `getScanStatus`'s `scanning` asks *will my poll buy anything?* (`false` — polling
+  - **Two questions, so two predicates.** The alarm asks _will this resume by itself?_
+    (`true`); `getScanStatus`'s `scanning` asks _will my poll buy anything?_ (`false` — polling
     cannot move a clock). One predicate for both is the shape of defect that once made
     `scanning` mean "did this call do work" and stopped every scan; its mirror deletes the
     alarm and leaves an allowance spent. `willResumeWithoutAPoll` and `isAdvancing` are
@@ -276,7 +276,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     convenience.** It is the only store still accepting writes when D1 is refusing them, so a
     pause in `scan_state` would be unwritable exactly when needed — and `/user/libraries`, which
     reads D1, could not see it either. `getStatus` reads it back and lets it **override** the
-    stored row, because D1's row is *guaranteed* stale about it: it says `scanning`, which an
+    stored row, because D1's row is _guaranteed_ stale about it: it says `scanning`, which an
     operator reads as working. The stated exception to "D1 stays authoritative"; the frontier,
     every indexed row, the retry counter and the index version are all still D1's.
   - **The limit is reached by design, so the scan paces itself before the platform refuses.**
@@ -285,13 +285,13 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     only way there, and a fix that only made the outage survivable would leave it frequent.
     `SCAN_DAILY_ROW_WRITE_BUDGET` is the platform's allowance less a **10%** reserve for
     non-scan writes, **divided by the number of registered libraries** (the allowance is per
-    *account*, so a per-library cap is unsound the moment a second library exists, and
+    _account_, so a per-library cap is unsound the moment a second library exists, and
     `MAX_LIBRARIES` would give a one-library deployment a tenth of what it could have had).
     Counted in **billed** rows, held in DO storage because **metering D1 writes must not itself
     spend D1 writes**, and persisted at most once per 500 rows — which makes it a lower bound,
     absorbed by the reserve.
   - **The metered unit is a billed row, and the multiplier is the schema.** D1 bills a write as
-    the row *plus every index entry it rewrote* (pricing page, definition 6), so `songs` is **ten**
+    the row _plus every index entry it rewrote_ (pricing page, definition 6), so `songs` is **ten**
     per row — nine indexes, one of them the implicit `sqlite_autoindex` for `id TEXT PRIMARY KEY`,
     which is why counting `CREATE INDEX` statements by eye undercounts every table in this schema by
     one. The guard was counting table rows: `runWriteBatch` summed `meta.changes`, and
@@ -308,10 +308,10 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     - **Both writers are one implementation.** `runWriteStatement` (single) and `runWriteBatch`
       (batched) both go through `billedRowsFor`, so `applyMetadata` cannot disagree with
       `upsertFileFacts`. Each is asserted over real SQLite, because reverting either leaves the
-      whole scan suite green — those meter *doubles* that report their own `billedRows` and never
+      whole scan suite green — those meter _doubles_ that report their own `billedRows` and never
       execute the DAO, so a mutation to the arithmetic is invisible there by construction.
-    - The constant was also wrong — `5,000`, under a comment claiming to be *"the platform number,
-      not a choice"*, which is this file's own recorded shape of defect and the only reason a wrong
+    - The constant was also wrong — `5,000`, under a comment claiming to be _"the platform number,
+      not a choice"_, which is this file's own recorded shape of defect and the only reason a wrong
       number sits in a file for ever. Correcting it **alone** would have multiplied the ten-fold
       under-count by twenty; the two are one change.
   - **A flat reserve is not a reserve, and a Paid account is throttled by a number it cannot
@@ -330,12 +330,12 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     adds `/exceeded/`. Full account: `docs/issues/d1-daily-write-limit.md`.
 - **Indexing only happens on change, so deriving there is not enough — and the symptom
   hides in the one endpoint that does not group.** Every writer of the grouping columns is
-  gated on the file having *moved*: the `Depth: 0` root probe, `isScanned: !changed`,
+  gated on the file having _moved_: the `Depth: 0` root probe, `isScanned: !changed`,
   `if (changed)` in `reconcileFolder`, and the read-through `getMusicDirectory` path. That
   gating is correct — it is what makes a rescan of an unchanged library cost one
   subrequest — and the consequence is that the derivation is **unreachable for an
   already-indexed library**, so its aggregates never recover without a file changing. It
-  shipped *twice*, the second time as a fix that changed nothing: 113 rows on a live
+  shipped _twice_, the second time as a fix that changed nothing: 113 rows on a live
   library, all indexed before the deploy, all with `album_ci`/`artist_ci` NULL, and
   `getArtists`/`getAlbumList2`/`getGenres`/`search3` answering `[]` after a redeploy that
   carried the derivation. Per-track everything looked fine, because `rest/mappers.ts`
@@ -343,7 +343,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   group in SQL was the only one that looked healthy**, which is why this took a whole
   deployment to name. Four rules, and the first two are why the second attempt worked:
   - **The backfill runs where the rows are, not where the files are.**
-    `SongDerivationDAO` re-runs the *same* `deriveFromPath` over rows the walk will never
+    `SongDerivationDAO` re-runs the _same_ `deriveFromPath` over rows the walk will never
     revisit. Deriving the same fact in SQL was rejected: a second implementation of the
     convention, free to disagree over the separator rules and the marker, and a
     disagreement between two naming conventions is invisible until a client groups a
@@ -353,7 +353,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     placed after the status check never runs for precisely the libraries that need it.
   - **The selection is on `derived_version`, not on NULL**, and the write is a `CASE` on
     `songs.grouping_source`: replace a value a derivation is recorded as owning, fill a
-    NULL, leave a real tag. `NULL` alone cannot express a *corrected* convention — this
+    NULL, leave a real tag. `NULL` alone cannot express a _corrected_ convention — this
     is the `reader_version` invariant one layer down, and a plain `COALESCE` would
     re-select the row and then decline to change it, which is a version column that buys
     nothing. **It never stamps `enriched_at`**, so `EnrichmentService` does not read the
@@ -363,25 +363,25 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   derived-grouping backfill reads a page of rows and writes them **one `UPDATE` per row**
   with `requireComplete`, so it refuses rather than truncating — correctly, because the
   selection is on `derived_version` and a partial page leaves rows re-selected for ever.
-  That makes the page size a bound the chunk budget *imposes*. It was
+  That makes the page size a bound the chunk budget _imposes_. It was
   `DERIVE_MAX_ROWS_PER_CHUNK = 200`, against a chunk budget of `42` and a platform ceiling
   of `50`: it fitted on **no chunk under any configuration**, so every library with more
   than ~48 rows owing a derivation threw `SubrequestBudgetExhaustedError` out of
-  `derivePending` — which runs *before* `listFrontier` — so the walk never ran, `step`'s
+  `derivePending` — which runs _before_ `listFrontier` — so the walk never ran, `step`'s
   catch recorded a scan failure, `isAdvancing('failed')` is `true`, and `getScanStatus`
-  answered `scanning: true` for ever. Reported as *"stuck on Scanning after 2 hours with
-  ~100 tracks"*. Three rules, and each is how the other two collapse:
+  answered `scanning: true` for ever. Reported as _"stuck on Scanning after 2 hours with
+  ~100 tracks"_. Three rules, and each is how the other two collapse:
   - **Both the debt and its repayment have to be bounded.** `UPSERT_FILE_FACTS` stamped no
     `derived_version`, so every row the walk wrote took the migration's `DEFAULT 0` and was
-    *immediately owed* — permanently, since the selection is `derived_version < 1`. Neither
+    _immediately owed_ — permanently, since the selection is `derived_version < 1`. Neither
     half produces the wedge alone: with the stamp and a `200` page it is a slow repair; with
     a `32` page and no stamp it is a scan that re-stamps every row it wrote, every poll.
   - **The bound is derived, and it holds a folder back.**
     `SCAN_DERIVE_MAX_ROWS_PER_CHUNK = SCAN_CHUNK_SUBSREQUEST_BUDGET −
-    SUBSREQUESTS_PER_CHUNK_OVERHEAD − SUBSREQUESTS_PER_FOLDER_BASE` (`42 − 4 − 6 = 32`).
+SUBSREQUESTS_PER_CHUNK_OVERHEAD − SUBSREQUESTS_PER_FOLDER_BASE` (`42 − 4 − 6 = 32`).
     `SUBSREQUESTS_PER_CHUNK_OVERHEAD` is the four statements a chunk spends belonging to no
     folder (`ensure`, the backfill's read, `listFrontier`, `saveProgress`) and the count
-    matters: size the page without the two that *bracket* the walk and the loop's
+    matters: size the page without the two that _bracket_ the walk and the loop's
     `canAfford(SUBSREQUESTS_PER_FOLDER_BASE)` refuses, so the chunk returns `scanning`
     having visited **zero** folders — the same stuck scan with the throw removed, and what a
     fix that only deleted the throw would have shipped.
@@ -398,11 +398,12 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   (a chunk that drains a 100-row backlog **and** still visits a folder — either assertion
   alone passes against the other failure), and `test/subrequest-budget.test.ts` (the
   relationship, not the numeral).
+
 - **The reported state and the scheduled work are two stores, and they must be reconciled.**
   `ScanWorker.alarm` had no handler and `ScanService.step` had five awaited calls outside
   its own `try`, so a D1 error in any of them rejected `step`, the re-arm never ran, the
-  alarm was consumed, and D1 still recorded `scanning` — which `getStatus` reports as *keep
-  polling*, for ever, with nothing scheduled to answer. `getAlarm()` is called from nowhere
+  alarm was consumed, and D1 still recorded `scanning` — which `getStatus` reports as _keep
+  polling_, for ever, with nothing scheduled to answer. `getAlarm()` is called from nowhere
   in this repository, so the two stores were never compared. A handler that can reject is a
   permanent wedge, and `stalled` is the wrong answer for a failure it could not record: it
   is the terminal status, so `isAdvancing` is false for it and the chain is deleted — the
@@ -418,20 +419,20 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   and every charge point below it read the same number. `test/import-execution.test.ts` walks
   twenty albums across several alarms to completion, which is the only assertion that would have
   seen it: a fixture of one page settles after one album and never reaches the branch.
-- **A comparison written twice is two answers, and the one that was *absent* is the one that
+- **A comparison written twice is two answers, and the one that was _absent_ is the one that
   shipped.** `nodes` has two writers: the scan's `reconcileFolder` and `TreeService`'s
   read-through `persistChildren`. Only the browse had a "does this row need writing" check;
   `reconcileFolder` **described** one in its own docstring and had no such branch. So the scan
   re-offered every row it had already written, `runWriteBatch` truncated that against the
   invocation's ceiling, and a folder with ≥45 entries could never be closed — 231,620 rows on
   one 80-album library, and a scan reporting `scanning` for ever. Meanwhile `persistChildren`'s
-  header claimed *"both go through `persistChildren`, which is the only place a node row is
-  written"* — **false**, and the false sentence is what made the invariant look enforced.
+  header claimed _"both go through `persistChildren`, which is the only place a node row is
+  written"_ — **false**, and the false sentence is what made the invariant look enforced.
   `nodeWrite.ts` owns the comparison now. See `docs/issues/nodes-upsert-livelock.md`.
 - **A column with two writers needs both writers in its key.** `nodes.mtime_ms` is written
-  by the scan *and* by `TreeService`'s read-through browse, from the same `Depth: 1`
+  by the scan _and_ by `TreeService`'s read-through browse, from the same `Depth: 1`
   PROPFIND, so a stored mtime cannot say which of them wrote it — and the two mean opposite
-  things. The scan writes it having *descended into that folder*; the browse writes it
+  things. The scan writes it having _descended into that folder_; the browse writes it
   having read nothing at all below it. `reconcileFolder` read `!changed` as "already
   reconciled", so it closed every folder a browse had materialized. It shipped: a library
   of 80 albums where **none was ever opened**, `songs` empty, `scan_state` `idle`, and the
@@ -441,22 +442,22 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     only one of the two that says "someone actually descended", so `needsDescent` consults
     it: `known?.is_scanned !== 1 || mtimeMoved || etagMoved`. The browse path writes `0`
     (`isScanned` is optional and `undefined` binds to `0`), so `0` and "absent" both descend.
-    This is the `reader_version` invariant one level up — the bytes *and* the thing that
+    This is the `reader_version` invariant one level up — the bytes _and_ the thing that
     read them, or the second is unreachable.
   - **"Does this row need rewriting" and "does this folder need descending" are different
     questions**, and one `changed` flag was answering both. Pairing matters: the same cases
-    assert that a folder the *scan* reconciled with an unchanged mtime is still closed, so
+    assert that a folder the _scan_ reconciled with an unchanged mtime is still closed, so
     the guard cannot be satisfied by disabling incrementality — which would cost one
     PROPFIND per folder per rescan against the day's row-write allowance.
   - **A completed scan that indexed nothing is not evidence the library is current.**
     `start`'s cheap path compared the root mtime and reported `idle`, which is only sound if
-    the previous scan read something — and `scanned_count` counts folders *visited*, so a
+    the previous scan read something — and `scanned_count` counts folders _visited_, so a
     walk that visited the root and closed every child unread leaves it at `1`. With no floor,
     that library could never be re-walked: the origin's root mtime had to change, or the
     library be deleted, which cascades the index away. `start` now also requires
     `songs.countByLibrary > 0`, one indexed read, on `startScan` only.
   - **The chunk boundary is what makes it visible, so the test needs one.** `step` reads the
-    frontier *once* and walks all of it, so at the default 40 a root chunk that wrongly
+    frontier _once_ and walks all of it, so at the default 40 a root chunk that wrongly
     closes its children still visits them in the same chunk and the library indexes fine.
     The case needs `chunkFolders: 1`, which is also what a root with 80 albums gets in
     practice.

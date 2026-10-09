@@ -205,7 +205,11 @@ class ScanService {
 
       // The backfill writes `songs` grouping, which every aggregate reads, so it counts. It is
       // the one writer outside `reconcileFolder`.
-      totals = mergeFolderWrites(totals, { rowsWritten: derived.rowsWritten, billedRows: derived.billedRows, indexChanged: derived.rowsWritten > 0 });
+      totals = mergeFolderWrites(totals, {
+        rowsWritten: derived.rowsWritten,
+        billedRows: derived.billedRows,
+        indexChanged: derived.rowsWritten > 0,
+      });
       scanned = state.scanned_count;
 
       for (const folder of frontier) {
@@ -294,7 +298,9 @@ class ScanService {
         const message = describeFailure(error);
         try {
           const consecutiveFailures = await this.deps.scanState.fail(library.id, message);
-          return consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? { ...unrecordedFailure(message), status: 'stalled' } : unrecordedFailure(message);
+          return consecutiveFailures >= MAX_CONSECUTIVE_FAILURES
+            ? { ...unrecordedFailure(message), status: 'stalled' }
+            : unrecordedFailure(message);
         } catch (persistError) {
           // D1 refused the fail *and* the record of the fail, so the retry counter cannot
           // be incremented and nothing knows how many attempts have been made.
@@ -311,11 +317,16 @@ class ScanService {
           return unrecordedFailure(`${message} (the failure could not be recorded: ${describeFailure(persistError)})`);
         }
       }
-      return await this.failChunk(library, state, error, budget, { rowsWritten: totals.rowsWritten, billedRows: totals.billedRows, scanned, foldersVisited });
+      return await this.failChunk(library, state, error, budget, {
+        rowsWritten: totals.rowsWritten,
+        billedRows: totals.billedRows,
+        scanned,
+        foldersVisited,
+      });
     }
   }
 
-    public async status(libraryId: string): Promise<ChunkResult> {
+  public async status(libraryId: string): Promise<ChunkResult> {
     const state = await this.deps.scanState.ensure(libraryId);
     return {
       // A read-only status reports `stalled` from the stored counter, so an operator sees the same

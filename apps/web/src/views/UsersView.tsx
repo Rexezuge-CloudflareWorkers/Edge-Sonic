@@ -219,10 +219,17 @@ function UsersView({ showNotice }: { showNotice: ShowNotice }) {
               </fieldset>
 
               <div className="mt-3 flex flex-wrap gap-2">
-                <Button size="sm" onClick={() => void mutate(async () => await setUserEnabled(user.id, !user.isEnabled), t('users.updated', 'Updated.'))}>
+                <Button
+                  size="sm"
+                  onClick={() => void mutate(async () => await setUserEnabled(user.id, !user.isEnabled), t('users.updated', 'Updated.'))}
+                >
                   {user.isEnabled ? t('users.disable', 'Disable') : t('users.enable', 'Enable')}
                 </Button>
-                <Button size="sm" variant="danger" onClick={() => void mutate(async () => await deleteUser(user.id), t('users.deleted', 'User deleted.'))}>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => void mutate(async () => await deleteUser(user.id), t('users.deleted', 'User deleted.'))}
+                >
                   {t('users.delete', 'Delete')}
                 </Button>
               </div>

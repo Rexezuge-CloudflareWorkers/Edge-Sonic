@@ -240,7 +240,7 @@ function withReceiverCheck(inner: typeof fetch): typeof fetch {
   return function receiverChecked(this: unknown, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     if (this !== undefined && this !== globalThis) {
       throw new TypeError(
-        "Illegal invocation: function called with incorrect `this` reference. " +
+        'Illegal invocation: function called with incorrect `this` reference. ' +
           'A platform global was invoked as a method of another object.',
       );
     }
@@ -308,7 +308,9 @@ function fakeDav(initialTree: Record<string, DavEntry[]>, options: FakeDavOption
       const range = request.headers.get('range');
       gets.push({ path, range });
       if (getStatus !== null) return new Response('', { status: getStatus });
-      const entry = Object.values(tree).flat().find((candidate) => candidate.path === path);
+      const entry = Object.values(tree)
+        .flat()
+        .find((candidate) => candidate.path === path);
       if (entry === undefined) return new Response('', { status: 404 });
       // `null` range: the whole body with a `200`, which is what a server without range
       // support actually sends. Deliberately *not* a `206` claiming a prefix — that would

@@ -117,7 +117,9 @@ describe('the SSRF gate on an operator-supplied host', () => {
     expect(normalizeRemoteBaseUrl('https://example.com', false)).toBe('https://example.com');
     // Asserted as the URL that will actually be built, because that is where a trailing slash
     // becomes a 404 and not in the normalizer at all.
-    expect(`${normalizeRemoteBaseUrl('https://example.com/', false)}/rest/getPlaylists.view`).toBe('https://example.com/rest/getPlaylists.view');
+    expect(`${normalizeRemoteBaseUrl('https://example.com/', false)}/rest/getPlaylists.view`).toBe(
+      'https://example.com/rest/getPlaylists.view',
+    );
   });
 
   it('refuses a traversal in the mount path, after decoding', () => {
@@ -157,7 +159,9 @@ describe('a protocol error arrives as HTTP 200, and must not read as an empty pa
     // "no playlists" — then starts an import that imports nothing and reports success.
     expect(() =>
       unwrapEnvelope(
-        JSON.stringify({ 'subsonic-response': { status: 'failed', version: '1.16.1', error: { code: 40, message: 'Wrong username or password.' } } }),
+        JSON.stringify({
+          'subsonic-response': { status: 'failed', version: '1.16.1', error: { code: 40, message: 'Wrong username or password.' } },
+        }),
         200,
         'getPlaylists',
       ),
@@ -166,7 +170,11 @@ describe('a protocol error arrives as HTTP 200, and must not read as an empty pa
 
   it("names the remote's own message rather than inventing one", () => {
     try {
-      unwrapEnvelope(JSON.stringify({ 'subsonic-response': { status: 'failed', error: { code: 50, message: 'User is not authorized.' } } }), 200, 'getPlaylists');
+      unwrapEnvelope(
+        JSON.stringify({ 'subsonic-response': { status: 'failed', error: { code: 50, message: 'User is not authorized.' } } }),
+        200,
+        'getPlaylists',
+      );
       throw new Error('should have thrown');
     } catch (error) {
       expect((error as RemoteSubsonicError).message).toContain('not authorized');
@@ -188,7 +196,16 @@ describe('a protocol error arrives as HTTP 200, and must not read as an empty pa
 
   it('strips the envelope attributes so a caller cannot read `status` as a result', () => {
     const payload = unwrapEnvelope(
-      JSON.stringify({ 'subsonic-response': { status: 'ok', version: '1.16.1', type: 'edge-sonic', serverVersion: '0.1.0', openSubsonic: true, playlists: {} } }),
+      JSON.stringify({
+        'subsonic-response': {
+          status: 'ok',
+          version: '1.16.1',
+          type: 'edge-sonic',
+          serverVersion: '0.1.0',
+          openSubsonic: true,
+          playlists: {},
+        },
+      }),
       200,
       'getPlaylists',
     );
@@ -203,7 +220,9 @@ describe('a single-element list collapses to a bare object, and must survive it'
     // The single most consequential case in this file. `{"entry": {...}}` where this server would
     // send `[...]`, read naively, imports a one-track playlist as an **empty** one — which is
     // indistinguishable from a playlist whose tracks did not resolve.
-    const { client } = clientUnderStub({ 'subsonic-response': { status: 'ok', playlist: { id: 'p1', entry: { id: 'r1', title: 'Only' } } } });
+    const { client } = clientUnderStub({
+      'subsonic-response': { status: 'ok', playlist: { id: 'p1', entry: { id: 'r1', title: 'Only' } } },
+    });
 
     const songs = await client.getPlaylist('p1');
 
@@ -212,7 +231,9 @@ describe('a single-element list collapses to a bare object, and must survive it'
   });
 
   it('reads a many-track playlist as many', async () => {
-    const { client } = clientUnderStub({ 'subsonic-response': { status: 'ok', playlist: { entry: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } } });
+    const { client } = clientUnderStub({
+      'subsonic-response': { status: 'ok', playlist: { entry: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } },
+    });
 
     expect(await client.getPlaylist('p1')).toHaveLength(3);
   });
@@ -246,7 +267,9 @@ describe('a single-element list collapses to a bare object, and must survive it'
   });
 
   it('tolerates counts sent as strings, because some servers send them as text', async () => {
-    const { client } = clientUnderStub({ 'subsonic-response': { status: 'ok', starred2: { song: { id: 's1', playCount: '7', userRating: '4' } } } });
+    const { client } = clientUnderStub({
+      'subsonic-response': { status: 'ok', starred2: { song: { id: 's1', playCount: '7', userRating: '4' } } },
+    });
 
     const [song] = (await client.getStarred()).songs;
     expect(song.playCount).toBe(7);
@@ -294,7 +317,13 @@ describe('the credential is a token, not the password', () => {
       tokens.push(new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).searchParams.get('t'));
       return jsonResponse({ 'subsonic-response': { status: 'ok', playlists: {} } });
     });
-    const client = new RemoteSubsonicClient({ baseUrl: 'https://m.example.com', username: 'a', password: 'b', timeoutMs: 1000, onRequest: () => undefined });
+    const client = new RemoteSubsonicClient({
+      baseUrl: 'https://m.example.com',
+      username: 'a',
+      password: 'b',
+      timeoutMs: 1000,
+      onRequest: () => undefined,
+    });
 
     await client.getPlaylists();
     await client.getPlaylists();
@@ -341,7 +370,13 @@ describe('the credential is a token, not the password', () => {
       await new Promise((resolve) => setTimeout(resolve, 60));
       throw new Error('aborted');
     });
-    const client = new RemoteSubsonicClient({ baseUrl: 'https://m.example.com', username: 'a', password: 'b', timeoutMs: 1, onRequest: () => undefined });
+    const client = new RemoteSubsonicClient({
+      baseUrl: 'https://m.example.com',
+      username: 'a',
+      password: 'b',
+      timeoutMs: 1,
+      onRequest: () => undefined,
+    });
 
     await expect(client.getPlaylists()).rejects.toThrow(/did not answer in time/);
   });
@@ -350,7 +385,13 @@ describe('the credential is a token, not the password', () => {
     // `response.json()` on an unbounded body is an unbounded `JSON.parse` against a 10 ms CPU budget
     // — the same class of concern as the ReDoS guards.
     vi.stubGlobal('fetch', async () => new Response('x'.repeat(5 * 1024 * 1024), { status: 200 }));
-    const client = new RemoteSubsonicClient({ baseUrl: 'https://m.example.com', username: 'a', password: 'b', timeoutMs: 1000, onRequest: () => undefined });
+    const client = new RemoteSubsonicClient({
+      baseUrl: 'https://m.example.com',
+      username: 'a',
+      password: 'b',
+      timeoutMs: 1000,
+      onRequest: () => undefined,
+    });
 
     await expect(client.getPlaylists()).rejects.toThrow(/too large to read/);
   });
@@ -359,7 +400,13 @@ describe('the credential is a token, not the password', () => {
     vi.stubGlobal('fetch', async () => {
       throw new TypeError('network error');
     });
-    const client = new RemoteSubsonicClient({ baseUrl: 'https://m.example.com', username: 'a', password: 'b', timeoutMs: 1000, onRequest: () => undefined });
+    const client = new RemoteSubsonicClient({
+      baseUrl: 'https://m.example.com',
+      username: 'a',
+      password: 'b',
+      timeoutMs: 1000,
+      onRequest: () => undefined,
+    });
 
     try {
       await client.getPlaylists();

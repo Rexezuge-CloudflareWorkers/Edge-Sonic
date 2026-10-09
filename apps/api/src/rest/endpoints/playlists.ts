@@ -94,10 +94,10 @@ async function getPlaylists(context: RestContext): Promise<EnvelopeResponse> {
 
   const playlists = isSelf
     ? await context.playlists.listVisible(context.user.id)
-    // A named user's own playlists, and **not** the public ones: `username` asks for one
-    // user's playlists, so mixing in every public playlist from every user is a different
-            // answer and would make an admin's list grow with the library.
-    : await context.playlists.listForOwner(await ownerIdFor(context, target));
+    : // A named user's own playlists, and **not** the public ones: `username` asks for one
+      // user's playlists, so mixing in every public playlist from every user is a different
+      // answer and would make an admin's list grow with the library.
+      await context.playlists.listForOwner(await ownerIdFor(context, target));
   return respond(context, elList('playlists', 'playlist', {}, await playlistElements(context, playlists)));
 }
 
@@ -159,25 +159,21 @@ async function respondWithPlaylist(context: RestContext, playlist: PlaylistRow):
   // an object rather than an array. So the element is renamed here rather than
   // duplicating the whole song attribute set in `builders.ts`.
   const [element] = await playlistElements(context, [playlist]);
-  return respond(
-    context,
-    {
-      ...element,
-      children: rows.map((song) => ({
-        ...songElement(songToModel(song, () => context.albumsFor(visible.get(song.library_id) as LibraryRow), annotations)),
-        name: 'entry',
-        array: true as const,
-      })),
-      listKey: 'entry',
-    },
-  );
+  return respond(context, {
+    ...element,
+    children: rows.map((song) => ({
+      ...songElement(songToModel(song, () => context.albumsFor(visible.get(song.library_id) as LibraryRow), annotations)),
+      name: 'entry',
+      array: true as const,
+    })),
+    listKey: 'entry',
+  });
 }
 
 async function getPlaylist(context: RestContext): Promise<EnvelopeResponse> {
   const id = context.params.require('id');
   return await respondWithPlaylist(context, await requireVisible(context, id));
 }
-
 
 /**
  * The song ids a client asked for, filtered to the caller's grants, in the client's order.
@@ -288,9 +284,9 @@ async function updatePlaylist(context: RestContext): Promise<EnvelopeResponse> {
   const isPublic = context.params.has('public') ? context.params.bool('public', false) : undefined;
   if (name !== undefined || comment !== undefined || isPublic !== undefined) {
     await context.playlists.updateMeta(playlist.id, {
-      ...((name !== undefined) && { name: name.trim() }),
-      ...((comment !== undefined) && { comment }),
-      ...((isPublic !== undefined) && { isPublic }),
+      ...(name !== undefined && { name: name.trim() }),
+      ...(comment !== undefined && { comment }),
+      ...(isPublic !== undefined && { isPublic }),
     });
   }
 
@@ -302,10 +298,7 @@ async function updatePlaylist(context: RestContext): Promise<EnvelopeResponse> {
   // `songIndexToRemove` is `Int` in some client schemas and a repeated string in
   // others, so both spellings are read. The DAO sorts descending, so the order the
   // client sent them in does not matter.
-  const rawRemovals = [
-    ...context.params.getAll('songIndexToRemove'),
-    ...context.params.getAll('songIndexToRemove[]'),
-  ];
+  const rawRemovals = [...context.params.getAll('songIndexToRemove'), ...context.params.getAll('songIndexToRemove[]')];
   const positions = rawRemovals
     .flatMap((value) => value.split(','))
     .map((value) => Number.parseInt(value.trim(), 10))

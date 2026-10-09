@@ -641,7 +641,9 @@ describe('library enrichment', () => {
   it('refuses to start or step while the scan is advancing, but still reports status', async () => {
     await makeOwing();
     await harness.db.db
-      .prepare("INSERT INTO scan_state (library_id, status, scanned_count, total_count, index_version, consecutive_failures, updated_at) VALUES ('L1', 'scanning', 0, 0, 1, 0, 0)")
+      .prepare(
+        "INSERT INTO scan_state (library_id, status, scanned_count, total_count, index_version, consecutive_failures, updated_at) VALUES ('L1', 'scanning', 0, 0, 1, 0, 0)",
+      )
       .run();
 
     const started = await call('/user/libraries/L1/enrich', { method: 'POST' });

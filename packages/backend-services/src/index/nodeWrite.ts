@@ -82,25 +82,5 @@ function nodeRowNeedsWrite(known: NodeRow | undefined, desired: DesiredNodeRow):
   );
 }
 
-/**
- * The node inputs for the entries of one listing that actually need writing.
- *
- * A function rather than a `filter` at each call site, because the two call sites disagreed
- * about the etag rule and a filter is where that disagreement would be invisible — one of them
- * would grow a third condition and no assertion would notice.
- *
- * `name_ci` is not compared: it is computed from `name` by the writer in the same expression,
- * so there is no second spelling of it to drift. The statement's `WHERE` carries it anyway,
- * because the statement is the thing that has to be right about what it writes.
- *
- * `path` rides on the desired row rather than being derived from `parentPath` and `depth`,
- * because it is the key the two are compared *by*: a lookup that reconstructed it would be able
- * to disagree with the row it is about to write.
- */
-function nodeInputsNeedingWrite(known: readonly NodeRow[], desired: readonly (DesiredNodeRow & { readonly path: string })[]): (DesiredNodeRow & { readonly path: string })[] {
-  const byPath = new Map(known.map((row) => [row.path, row]));
-  return desired.filter((row) => nodeRowNeedsWrite(byPath.get(row.path), row));
-}
-
-export { nodeRowNeedsWrite, nodeInputsNeedingWrite };
+export { nodeRowNeedsWrite };
 export type { DesiredNodeRow };

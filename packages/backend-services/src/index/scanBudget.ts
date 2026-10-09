@@ -159,7 +159,9 @@ class ScanBudget {
    * tell them.
    */
   public spend(): SubrequestSpend {
-    return this.options.meter.spent === 0 ? NO_SUBREQUESTS_SPENT : subrequestSpend(this.options.meter.breakdown(), this.options.meter.spent);
+    return this.options.meter.spent === 0
+      ? NO_SUBREQUESTS_SPENT
+      : subrequestSpend(this.options.meter.breakdown(), this.options.meter.spent);
   }
 }
 

@@ -91,7 +91,8 @@ function stubApi(options: { libraries?: LibraryWire[]; stats?: StatsWire[]; fail
     calls.push(`${method} ${url}`);
 
     if (url.includes('/user/index/stats')) {
-      if (options.failStats) return Response.json({ Exception: { Type: 'InternalServerError', Message: 'D1 unavailable' } }, { status: 500 });
+      if (options.failStats)
+        return Response.json({ Exception: { Type: 'InternalServerError', Message: 'D1 unavailable' } }, { status: 500 });
       const billedRows = stats.reduce((sum, entry) => sum + entry.billedRows, 0);
       const songs = stats.reduce((sum, entry) => sum + entry.songs, 0);
       const nodes = stats.reduce((sum, entry) => sum + entry.nodes, 0);
@@ -100,13 +101,24 @@ function stubApi(options: { libraries?: LibraryWire[]; stats?: StatsWire[]; fail
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     }
-    if (url.includes('/user/index/drop')) return Response.json({ ok: true, songs: 0, nodes: 0, scanStates: 0, changes: 0, billedRows: 0, libraries: 2 }, { status: 200, headers: { 'content-type': 'application/json' } });
-    if (url.includes('/index/drop')) return Response.json({ ok: true, songs: 0, nodes: 0, scanStates: 0, changes: 0, billedRows: 0, libraries: 1 }, { status: 200, headers: { 'content-type': 'application/json' } });
+    if (url.includes('/user/index/drop'))
+      return Response.json(
+        { ok: true, songs: 0, nodes: 0, scanStates: 0, changes: 0, billedRows: 0, libraries: 2 },
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    if (url.includes('/index/drop'))
+      return Response.json(
+        { ok: true, songs: 0, nodes: 0, scanStates: 0, changes: 0, billedRows: 0, libraries: 1 },
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
     if (url.includes('/user/libraries') && method === 'GET') {
       return Response.json({ libraries }, { status: 200, headers: { 'content-type': 'application/json' } });
     }
     if (url.includes('/index/drop') || url.includes('/user/libraries')) {
-      return Response.json({ ok: true, songs: 0, nodes: 0, scanStates: 0, changes: 0, billedRows: 0, libraries: 1 }, { status: 200, headers: { 'content-type': 'application/json' } });
+      return Response.json(
+        { ok: true, songs: 0, nodes: 0, scanStates: 0, changes: 0, billedRows: 0, libraries: 1 },
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
     }
     throw new Error(`unexpected request: ${method} ${url}`);
   });

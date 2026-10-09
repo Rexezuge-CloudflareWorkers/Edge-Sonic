@@ -32,7 +32,9 @@ interface PhaseStore extends MatchStore {
   /**
   Rows for resolved ids, in the caller's order, so a playlist's sequence survives.
   */
-  songsByIds(ids: readonly string[]): Promise<ReadonlyArray<{ readonly id: string; readonly library_id: string; readonly duration: number }>>;
+  songsByIds(
+    ids: readonly string[],
+  ): Promise<ReadonlyArray<{ readonly id: string; readonly library_id: string; readonly duration: number }>>;
   findPlaylistById(id: string): Promise<{ readonly id: string } | null>;
   createPlaylistWithId(input: {
     id: string;
@@ -50,11 +52,35 @@ interface PhaseStore extends MatchStore {
    * `stars.starred_at` is a sort key — `getStarred` orders by it — so a store that stamped the
    * clock per item would move every star it touched to the top of the list in import order.
    */
-  upsertStar(input: { userId: string; itemId: string; itemType: 'song' | 'album' | 'artist'; starredAt: number }): Promise<{ readonly written: number }>;
-  upsertRating(input: { userId: string; itemId: string; itemType: 'song' | 'album' | 'artist'; rating: number }): Promise<{ readonly written: number }>;
-  upsertBookmark(input: { userId: string; songId: string; positionMs: number; comment: string | null }): Promise<{ readonly written: number }>;
-  savePlayQueue(input: { userId: string; songIds: readonly string[]; currentSongId: string | null; positionMs: number; changed: string }): Promise<{ readonly written: number }>;
-  setPlayCounts(input: { userId: string; counts: ReadonlyArray<{ readonly songId: string; readonly playCount: number }> }): Promise<{ readonly written: number }>;
+  upsertStar(input: {
+    userId: string;
+    itemId: string;
+    itemType: 'song' | 'album' | 'artist';
+    starredAt: number;
+  }): Promise<{ readonly written: number }>;
+  upsertRating(input: {
+    userId: string;
+    itemId: string;
+    itemType: 'song' | 'album' | 'artist';
+    rating: number;
+  }): Promise<{ readonly written: number }>;
+  upsertBookmark(input: {
+    userId: string;
+    songId: string;
+    positionMs: number;
+    comment: string | null;
+  }): Promise<{ readonly written: number }>;
+  savePlayQueue(input: {
+    userId: string;
+    songIds: readonly string[];
+    currentSongId: string | null;
+    positionMs: number;
+    changed: string;
+  }): Promise<{ readonly written: number }>;
+  setPlayCounts(input: {
+    userId: string;
+    counts: ReadonlyArray<{ readonly songId: string; readonly playCount: number }>;
+  }): Promise<{ readonly written: number }>;
 }
 
 /**
@@ -80,7 +106,12 @@ function labelOf(song: RemoteSong): string {
   return parts.length > 0 ? parts.join(' — ') : song.id;
 }
 
-function unresolvedFor(songs: readonly RemoteSong[], outcomes: readonly MatchOutcome[], category: string, context: string): UnresolvedItem[] {
+function unresolvedFor(
+  songs: readonly RemoteSong[],
+  outcomes: readonly MatchOutcome[],
+  category: string,
+  context: string,
+): UnresolvedItem[] {
   const byId = new Map(outcomes.map((outcome) => [outcome.remoteId, outcome]));
   return songs
     .filter((song) => byId.get(song.id)?.songId === null)
@@ -105,11 +136,7 @@ function unresolvedFor(songs: readonly RemoteSong[], outcomes: readonly MatchOut
  * *permission*. Without this filter an import would happily write a star onto a track in a
  * library its target user was never granted, and `getStarred` would publish it to them.
  */
-function authorizedSongIds(
-  store: PhaseStore,
-  granted: ReadonlySet<string>,
-  ids: readonly string[],
-): Promise<Set<string>> {
+function authorizedSongIds(store: PhaseStore, granted: ReadonlySet<string>, ids: readonly string[]): Promise<Set<string>> {
   return store.songsByIds(ids).then((rows) => new Set(rows.filter((row) => granted.has(row.library_id)).map((row) => row.id)));
 }
 export { toCandidate, labelOf, unresolvedFor, authorizedSongIds };

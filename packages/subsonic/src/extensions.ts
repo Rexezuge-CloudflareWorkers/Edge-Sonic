@@ -140,7 +140,8 @@ function songExtensionAttrs(song: Song): Record<string, string | number | undefi
 function songExtensionChildren(song: Song): ElementNode[] {
   const children: ElementNode[] = [];
   if (song.artist !== undefined) children.push(elArray('artists', 'artist', {}, [el('artist', { id: song.artistId, name: song.artist })]));
-  if (song.albumArtist !== undefined) children.push(elArray('albumArtists', 'artist', {}, [el('artist', { id: song.artistId, name: song.albumArtist })]));
+  if (song.albumArtist !== undefined)
+    children.push(elArray('albumArtists', 'artist', {}, [el('artist', { id: song.artistId, name: song.albumArtist })]));
   if (song.genre !== undefined) children.push(elArray('genres', 'genre', {}, [el('genre', { name: song.genre })]));
   return children;
 }

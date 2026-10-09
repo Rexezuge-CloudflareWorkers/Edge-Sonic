@@ -153,7 +153,13 @@ async function start(
  * hundred lines — the decision "is this the platform refusing us or is this a bug" must not be
  * made by the width of a `try` block.
  */
-async function seed(deps: ScanDeps, library: LibraryRow, budget: ScanBudget, state: ScanStateRow, root: DavResource | undefined): Promise<ChunkResult> {
+async function seed(
+  deps: ScanDeps,
+  library: LibraryRow,
+  budget: ScanBudget,
+  state: ScanStateRow,
+  root: DavResource | undefined,
+): Promise<ChunkResult> {
   const rootMtime = root?.lastModifiedMs ?? null;
   const stored = await deps.nodes.find(library.id, '');
 

@@ -84,7 +84,8 @@ function decodeUserFolder(user: unknown): number[] {
 function decodeMusicFolders(folders: unknown): Array<{ id: number; name: string }> {
   if (typeof folders !== 'object' || folders === null) throw new Error('Expected a musicFolders object.');
   const list = (folders as Record<string, unknown>)['musicFolder'];
-  if (!Array.isArray(list)) throw new Error(`Expected JsonArray, but had ${describeValue(list)} as the serialized body of musicFolders.musicFolder`);
+  if (!Array.isArray(list))
+    throw new Error(`Expected JsonArray, but had ${describeValue(list)} as the serialized body of musicFolders.musicFolder`);
   return list.map((entry, index) => {
     if (typeof entry !== 'object' || entry === null) throw new Error(`Expected JsonObject at path: $.musicFolder.${index}`);
     const record = entry as Record<string, unknown>;
@@ -121,7 +122,9 @@ function decodeMusicFolders(folders: unknown): Array<{ id: number; name: string 
  */
 function decodeString(value: unknown, path: string): string {
   if (typeof value !== 'string') {
-    throw new TypeError(`Expected JsonPrimitive("a string"), but had ${describeValue(value)} as the serialized body of String at path: $.${path}`);
+    throw new TypeError(
+      `Expected JsonPrimitive("a string"), but had ${describeValue(value)} as the serialized body of String at path: $.${path}`,
+    );
   }
   return value;
 }
@@ -131,12 +134,19 @@ function decodeRequired<T>(record: Record<string, unknown>, key: string, path: s
     // The wording kotlinx.serialization uses, because "the field was not there" and "the
     // field was the wrong shape" are different bugs and the message is how you tell them
     // apart from a bug report.
-    throw new TypeError(`Field '${key}' is required for type with serial name 'dev.zt64.subsonic.api.model.${path}', but it was missing at path: $.${path}.${key}`);
+    throw new TypeError(
+      `Field '${key}' is required for type with serial name 'dev.zt64.subsonic.api.model.${path}', but it was missing at path: $.${path}.${key}`,
+    );
   }
   return decode(record[key], `${path}.${key}`);
 }
 
-function decodeOptional<T>(record: Record<string, unknown>, key: string, path: string, decode: (value: unknown, at: string) => T): T | undefined {
+function decodeOptional<T>(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+  decode: (value: unknown, at: string) => T,
+): T | undefined {
   return key in record && record[key] !== null ? decode(record[key], `${path}.${key}`) : undefined;
 }
 
@@ -145,7 +155,9 @@ function decodeOptional<T>(record: Record<string, unknown>, key: string, path: s
  */
 function decodeDuration(value: unknown, path: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new TypeError(`Expected JsonPrimitive, but had ${describeValue(value)} as the serialized body of kotlin.time.DurationSeconds at path: $.${path}`);
+    throw new TypeError(
+      `Expected JsonPrimitive, but had ${describeValue(value)} as the serialized body of kotlin.time.DurationSeconds at path: $.${path}`,
+    );
   }
   return value;
 }
@@ -156,7 +168,9 @@ function decodeDuration(value: unknown, path: string): number {
 function decodeInstant(value: unknown, path: string): string {
   const text = decodeString(value, path);
   if (Number.isNaN(Date.parse(text))) {
-    throw new TypeError(`Field 'created' is required for type with serial name 'kotlin.time.Instant', but it was not an instant at path: $.${path}`);
+    throw new TypeError(
+      `Field 'created' is required for type with serial name 'kotlin.time.Instant', but it was not an instant at path: $.${path}`,
+    );
   }
   return text;
 }
@@ -201,7 +215,10 @@ function decodeAlbum(value: unknown, path = 'album'): DecodedAlbum {
     // `List<Song>` decoded by plain kotlinx.serialization, which does not accept an object
     // where an array belongs. This is the line the reported failure died on.
     songs: decodeRequired(record, 'song', path, (songs, at) => {
-      if (!Array.isArray(songs)) throw new TypeError(`Expected JsonArray, but had ${describeValue(songs)} as the serialized body of kotlin.collections.ArrayList at path: $.${at}`);
+      if (!Array.isArray(songs))
+        throw new TypeError(
+          `Expected JsonArray, but had ${describeValue(songs)} as the serialized body of kotlin.collections.ArrayList at path: $.${at}`,
+        );
       return songs.map((song, index) => decodeSong(song, `${at}.${index}`));
     }),
   };
@@ -267,7 +284,10 @@ describe('the answers decode as the schema types them', () => {
     // The collapse is invisible at n≥2, so the two-track fixture is exactly the fixture
     // that cannot see it. This deletes a track so the album holds one, and asserts the
     // shape the client decodes.
-    await harness.db.db.prepare('DELETE FROM songs WHERE id = ?').bind(subsonicId('s', `${ALBUM_DIR}/02.flac`)).run();
+    await harness.db.db
+      .prepare('DELETE FROM songs WHERE id = ?')
+      .bind(subsonicId('s', `${ALBUM_DIR}/02.flac`))
+      .run();
     const envelope = await call('getAlbum', { id: subsonicId('al', ALBUM_DIR) });
     const album = decodeAlbum(field(envelope, 'album'));
 
@@ -285,7 +305,9 @@ describe('the answers decode as the schema types them', () => {
 describe('the decoder has teeth', () => {
   it('rejects a folder entry that is a record, which is what shipped', () => {
     // Exactly the response that produced "Failed to connect … check your credentials".
-    expect(() => decodeUserFolder({ folder: [{ id: 0 }] })).toThrow(/had JsonObject as the serialized body of int at path: \$\.user\.folder\.0/);
+    expect(() => decodeUserFolder({ folder: [{ id: 0 }] })).toThrow(
+      /had JsonObject as the serialized body of int at path: \$\.user\.folder\.0/,
+    );
   });
 
   it('rejects a quoted folder id, which the schema docs example shows', () => {
@@ -297,7 +319,9 @@ describe('the decoder has teeth', () => {
   });
 
   it('rejects a musicFolder id that is a library identifier rather than a position', () => {
-    expect(() => decodeMusicFolders({ musicFolder: [{ id: 'L1', name: 'Home' }] })).toThrow(/had JsonPrimitive\("a string"\) as the serialized body of int/);
+    expect(() => decodeMusicFolders({ musicFolder: [{ id: 'L1', name: 'Home' }] })).toThrow(
+      /had JsonPrimitive\("a string"\) as the serialized body of int/,
+    );
   });
 
   it('rejects a quoted boolean role, which the schema docs example shows', () => {
@@ -308,7 +332,9 @@ describe('the decoder has teeth', () => {
     // The reported failure, verbatim: `getAlbum` on a single-track album rendered
     // `"song": {...}`, and the client's `Album` model decodes that field as a `List<Song>`.
     const album = { id: 'al:1', name: 'A', songCount: 1, created: '2024-03-01T00:00:00Z', song: { id: 's:1', title: 't', artist: 'a' } };
-    expect(() => decodeAlbum(album)).toThrow(/Expected JsonArray, but had JsonObject as the serialized body of kotlin\.collections\.ArrayList at path: \$\.album\.song/);
+    expect(() => decodeAlbum(album)).toThrow(
+      /Expected JsonArray, but had JsonObject as the serialized body of kotlin\.collections\.ArrayList at path: \$\.album\.song/,
+    );
   });
 
   it('rejects an album with no created, which is the second failure it was masking', () => {

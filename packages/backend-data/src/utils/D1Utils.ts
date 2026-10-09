@@ -1,6 +1,7 @@
 import { DatabaseError } from '@edge-sonic/backend-errors';
-import { isD1ErrorRetryable } from './D1ErrorClassifier';
 import type { D1Result } from './D1Types';
+import { attemptFromRunResult, attemptFromThrown } from './d1RetryOutcome';
+import type { AttemptOutcome } from './d1RetryOutcome';
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_DELAY_MS = 100;
@@ -40,40 +41,24 @@ async function executeD1WithRetry<T>(
   let lastError: Error | undefined;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const canRetry: boolean = attempt < maxRetries;
+
+    let outcome: AttemptOutcome;
     try {
       const result: T = await operation();
-      // Only a `run()` result carries `success`. Anything else is a read, and a
-      // read has no success flag to check.
-      if (isRunResult(result) && !result.success) {
-        const errorMessage: string = result.error ?? 'Unknown database error';
-        const retryable: boolean = isD1ErrorRetryable(errorMessage);
-        if (retryable && attempt < maxRetries) {
-          await sleep(backoffDelay(baseDelayMs, attempt));
-          continue;
-        }
-        throw new DatabaseError(`Failed to ${context}: ${errorMessage}`, retryable);
-      }
-      return result;
+      // Only a `run()` result carries `success`. Anything else is a read, and a read has no
+      // success flag to check — so a read is never mistaken for a failed write.
+      if (!isRunResult(result) || result.success) return result;
+      outcome = await attemptFromRunResult(result, context, canRetry, attempt, baseDelayMs);
     } catch (error: unknown) {
-      if (error instanceof DatabaseError) {
-        if (error.retryable && attempt < maxRetries) {
-          await sleep(backoffDelay(baseDelayMs, attempt));
-          lastError = error;
-          continue;
-        }
-        throw error;
-      }
-      if (error instanceof Error) {
-        const retryable: boolean = isD1ErrorRetryable(error.message);
-        if (retryable && attempt < maxRetries) {
-          await sleep(backoffDelay(baseDelayMs, attempt));
-          lastError = error;
-          continue;
-        }
-        throw new DatabaseError(`Failed to ${context}: ${error.message}`, retryable);
-      }
-      throw error;
+      outcome = await attemptFromThrown(error, context, canRetry, attempt, baseDelayMs);
+      // Recorded only on this path, matching the original: a `success: false` refusal is a
+      // D1-reported fault rather than a thrown one, and the final `throw` below reports the
+      // last thing D1 actually raised.
+      if (outcome.kind === 'retry' && error instanceof Error) lastError = error;
     }
+
+    if (outcome.kind === 'throw') throw outcome.error;
   }
 
   throw lastError ?? new DatabaseError(`Failed to ${context} after ${maxRetries + 1} attempts`);
@@ -83,4 +68,6 @@ function isRunResult(value: unknown): value is D1Result {
   return typeof value === 'object' && value !== null && 'success' in value;
 }
 
-export { executeD1WithRetry, sleep };
+export { backoffDelay, executeD1WithRetry, sleep };
+export { attemptFromRunResult, attemptFromThrown } from './d1RetryOutcome';
+export type { AttemptOutcome } from './d1RetryOutcome';

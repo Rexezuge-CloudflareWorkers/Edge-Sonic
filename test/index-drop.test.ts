@@ -28,15 +28,7 @@ import { SubrequestCounter } from '@edge-sonic/shared';
 import { WebDavClient } from '@edge-sonic/webdav';
 import { fakeDav } from './helpers/fakeDav';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
-import {
-  IndexDropDAO,
-  IndexStatsDAO,
-  NodeDAO,
-  ScanStateDAO,
-  SongDAO,
-  UserDAO,
-  billedRowsForTable,
-} from '@edge-sonic/backend-data/dao';
+import { IndexDropDAO, IndexStatsDAO, NodeDAO, ScanStateDAO, SongDAO, UserDAO, billedRowsForTable } from '@edge-sonic/backend-data/dao';
 import { migrationSql } from './helpers/migrations';
 import { sqliteQueryable } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
@@ -150,18 +142,23 @@ describe('dropping an index keeps the library', () => {
     // cascades `libraries`, and with it the only copy of the WebDAV password — so an operator
     // with a rejected credential had no remedy but re-registering the origin. A drop that took
     // the credential too would be that route with a slower spelling.
-    const user = (await new UserDAO(handle.db).create({
-      username: 'ann',
-      passwordCiphertext: 'x',
-      passwordIv: 'y',
-    })).id;
+    const user = (
+      await new UserDAO(handle.db).create({
+        username: 'ann',
+        passwordCiphertext: 'x',
+        passwordIv: 'y',
+      })
+    ).id;
     const { ciphertext } = await seedLibrary(user, 'L1');
     await seedSong('L1', 'Bon Iver/For Emma/01.flac', 'Bon Iver/For Emma');
 
     await new IndexDropDAO(handle.db).dropLibrary('L1');
 
     expect(await countOf('libraries')).toBe(1);
-    const row = await handle.db.prepare('SELECT password_ciphertext FROM libraries WHERE id = ?').bind('L1').first<{ password_ciphertext: string }>();
+    const row = await handle.db
+      .prepare('SELECT password_ciphertext FROM libraries WHERE id = ?')
+      .bind('L1')
+      .first<{ password_ciphertext: string }>();
     expect(row?.password_ciphertext).toBe(ciphertext);
     // And the grant, so a Subsonic user does not lose access to the library they could see.
     expect(await countOf('user_libraries')).toBe(1);
@@ -287,12 +284,16 @@ describe('the annotations survive, because song ids are derived', () => {
     const tree = new TreeService({
       nodes: new NodeDAO(handle.db),
       songs: new SongDAO(handle.db, MARKER),
-      clientFor: async () => new WebDavClient(library.base_url, library.root_path, { username: 'alice', password: 'dav-password' }, dav.fetch),
+      clientFor: async () =>
+        new WebDavClient(library.base_url, library.root_path, { username: 'alice', password: 'dav-password' }, dav.fetch),
       timeoutMs: 1000,
     });
     const browseId = async (): Promise<string> => {
       await tree.children(library, folder);
-      const song = await handle.db.prepare('SELECT id FROM songs WHERE library_id = ? AND path = ?').bind(library.id, path).first<{ id: string }>();
+      const song = await handle.db
+        .prepare('SELECT id FROM songs WHERE library_id = ? AND path = ?')
+        .bind(library.id, path)
+        .first<{ id: string }>();
       if (!song) throw new Error('browse did not persist the song');
       return song.id;
     };
@@ -307,7 +308,18 @@ describe('the annotations survive, because song ids are derived', () => {
     const meter = new SubrequestCounter(50);
     const nodes = new NodeDAO(handle.db, meter);
     const songs = new SongDAO(handle.db, MARKER, meter);
-    await nodes.upsertMany([{ libraryId: library.id, path: folder, parentPath: 'Bon Iver', name: 'For Emma', mtimeMs: 1000, etag: null, depth: 2, isScanned: false }]);
+    await nodes.upsertMany([
+      {
+        libraryId: library.id,
+        path: folder,
+        parentPath: 'Bon Iver',
+        name: 'For Emma',
+        mtimeMs: 1000,
+        etag: null,
+        depth: 2,
+        isScanned: false,
+      },
+    ]);
     const folderRow = await nodes.find(library.id, folder);
     if (!folderRow) throw new Error('scan frontier folder is missing');
     const client = new WebDavClient(library.base_url, library.root_path, { username: 'alice', password: 'dav-password' }, dav.fetch);
@@ -333,8 +345,14 @@ describe('the annotations survive, because song ids are derived', () => {
       .bind(user)
       .first<{ id: string }>();
     expect(resolved?.id).toBe(before);
-    const playCount = await handle.db.prepare('SELECT s.id FROM play_counts pc JOIN songs s ON s.id = pc.song_id WHERE pc.user_id = ?').bind(user).first<{ id: string }>();
-    const bookmark = await handle.db.prepare('SELECT s.id FROM bookmarks b JOIN songs s ON s.id = b.song_id WHERE b.user_id = ?').bind(user).first<{ id: string }>();
+    const playCount = await handle.db
+      .prepare('SELECT s.id FROM play_counts pc JOIN songs s ON s.id = pc.song_id WHERE pc.user_id = ?')
+      .bind(user)
+      .first<{ id: string }>();
+    const bookmark = await handle.db
+      .prepare('SELECT s.id FROM bookmarks b JOIN songs s ON s.id = b.song_id WHERE b.user_id = ?')
+      .bind(user)
+      .first<{ id: string }>();
     expect(playCount?.id).toBe(before);
     expect(bookmark?.id).toBe(before);
   });

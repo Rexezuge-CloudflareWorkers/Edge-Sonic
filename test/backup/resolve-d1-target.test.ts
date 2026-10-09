@@ -129,11 +129,14 @@ describe('evaluateConfig', () => {
     expect(evaluateConfig({ ...complete, BACKUP_ENCRYPTION_KEY: undefined }).errors[0]).toMatch(/listening history/);
   });
 
-  it.each(['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET'] as const)('treats a partial S3 config (%s) as no S3 destination', (missing) => {
-    const env: Record<string, string | undefined> = { ...complete };
-    delete env[missing];
-    expect(evaluateConfig(env).s3).toBe(false);
-  });
+  it.each(['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET'] as const)(
+    'treats a partial S3 config (%s) as no S3 destination',
+    (missing) => {
+      const env: Record<string, string | undefined> = { ...complete };
+      delete env[missing];
+      expect(evaluateConfig(env).s3).toBe(false);
+    },
+  );
 
   it('counts a whitespace-only secret as unset', () => {
     expect(evaluateConfig({ ...complete, S3_BUCKET: ' '.repeat(3) }).s3).toBe(false);

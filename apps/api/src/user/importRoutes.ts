@@ -94,13 +94,15 @@ async function createSource(c: UserContext): Promise<Response> {
   // one class mean one status, so "that URL is not allowed" and "that account is already
   // registered" would arrive under one number, and the operator would read a rejected URL as a
   // conflict they should resolve by renaming.
-  const created = await BaseRoute.getScope(c).get(Tokens.ImportSourceService).register({
-    name: requireString(body, 'name', 64),
-    baseUrl: requireString(body, 'baseUrl', 2048),
-    username: requireString(body, 'username', 256),
-    password: requireString(body, 'password', 256),
-    musicFolderId: BaseRoute.optionalString(body, 'musicFolderId', 64),
-  });
+  const created = await BaseRoute.getScope(c)
+    .get(Tokens.ImportSourceService)
+    .register({
+      name: requireString(body, 'name', 64),
+      baseUrl: requireString(body, 'baseUrl', 2048),
+      username: requireString(body, 'username', 256),
+      password: requireString(body, 'password', 256),
+      musicFolderId: BaseRoute.optionalString(body, 'musicFolderId', 64),
+    });
 
   return c.json(created, 201);
 }
@@ -138,9 +140,7 @@ async function deleteSource(c: UserContext): Promise<Response> {
  */
 async function listRemotePlaylistIds(client: RemoteSubsonicClient): Promise<string[]> {
   try {
-    return (await client.getPlaylists())
-      .map((playlist) => playlist.id)
-      .slice(0, MAX_PLAYLIST_IDS);
+    return (await client.getPlaylists()).map((playlist) => playlist.id).slice(0, MAX_PLAYLIST_IDS);
   } catch (error) {
     console.error('[import] could not list the remote playlists; the playlist phase will report nothing');
     console.error(error);

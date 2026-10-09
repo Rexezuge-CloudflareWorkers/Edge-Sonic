@@ -487,7 +487,10 @@ describe('the album separator stays linear', () => {
 
   it.each([
     ['a run of spaces and then a non-dash, so there is no separator at all', (n: number): string => `${' '.repeat(n)}a`],
-    ['a run of spaces ended by a dash, which a regex matches on its first attempt', (n: number): string => `${' '.repeat(n)}-${' '.repeat(n)}a`],
+    [
+      'a run of spaces ended by a dash, which a regex matches on its first attempt',
+      (n: number): string => `${' '.repeat(n)}-${' '.repeat(n)}a`,
+    ],
     ['a run of tabs, which are whitespace to `\s` as well', (n: number): string => `Artist${'\t'.repeat(n)}- Album`],
     ['a run of non-breaking spaces, which are whitespace too', (n: number): string => `Artist${' '.repeat(n)}- Album`],
   ])('matches the oracle on %s, in bounded time', (_shape, build) => {

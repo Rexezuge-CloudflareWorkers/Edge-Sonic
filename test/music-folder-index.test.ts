@@ -60,7 +60,9 @@ async function grant(harness: Harness, libraryId: string): Promise<void> {
  * one library has and another does not is how a test proves *which* library answered.
  */
 async function addRoot(harness: Harness, libraryId: string, name: string): Promise<void> {
-  await new NodeDAO(harness.db.db).upsertMany([{ libraryId, path: name, parentPath: '', name, mtimeMs: 1000, etag: '"z"', depth: 1, isScanned: true }]);
+  await new NodeDAO(harness.db.db).upsertMany([
+    { libraryId, path: name, parentPath: '', name, mtimeMs: 1000, etag: '"z"', depth: 1, isScanned: true },
+  ]);
 }
 
 let harness: Harness;

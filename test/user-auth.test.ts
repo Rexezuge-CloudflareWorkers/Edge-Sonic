@@ -177,7 +177,9 @@ describe('the Access binding', () => {
 
 describe('verifyAccessJwt', () => {
   it('names a missing token, because that is a configuration problem, not a forgery', async () => {
-    await expect(AccessAuthService.verifyAccessJwt(userRequest(), 'example.cloudflareaccess.com', 'aud')).rejects.toThrow(/No Cloudflare Access JWT/);
+    await expect(AccessAuthService.verifyAccessJwt(userRequest(), 'example.cloudflareaccess.com', 'aud')).rejects.toThrow(
+      /No Cloudflare Access JWT/,
+    );
   });
 
   it('refuses to verify without a team domain or an audience', async () => {
@@ -185,8 +187,12 @@ describe('verifyAccessJwt', () => {
     // RFC 7519 appendix, and it is here to be *rejected*, which is the whole test.
     // eslint-disable-next-line sonarjs/no-hardcoded-secrets
     const token = 'eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6ImFubkBleGFtcGxlLmNvbSJ9.sig';
-    await expect(AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), '', 'aud')).rejects.toThrow(/configuration/i);
-    await expect(AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), 'example.com', '  ')).rejects.toThrow(/configuration/i);
+    await expect(AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), '', 'aud')).rejects.toThrow(
+      /configuration/i,
+    );
+    await expect(AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), 'example.com', '  ')).rejects.toThrow(
+      /configuration/i,
+    );
   });
 
   it('rejects a multi-valued audience instead of failing inside the verifier', async () => {
@@ -196,9 +202,9 @@ describe('verifyAccessJwt', () => {
     // RFC 7519 appendix, and it is here to be *rejected*, which is the whole test.
     // eslint-disable-next-line sonarjs/no-hardcoded-secrets
     const token = 'eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6ImFubkBleGFtcGxlLmNvbSJ9.sig';
-    await expect(AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), 'example.com', 'a,b')).rejects.toThrow(
-      /Multiple JWT audiences/,
-    );
+    await expect(
+      AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), 'example.com', 'a,b'),
+    ).rejects.toThrow(/Multiple JWT audiences/);
   });
 
   it('collapses every signature failure into one message', async () => {
@@ -206,9 +212,9 @@ describe('verifyAccessJwt', () => {
     // issuer, the audience, the expiry — is a free oracle for building a valid one.
     // eslint-disable-next-line sonarjs/no-hardcoded-secrets -- a deliberately invalid token.
     const token = 'eyJhbGciOiJSUzI1NiJ9.eyJlbWFpbCI6ImFubkBleGFtcGxlLmNvbSJ9.not-a-signature';
-    await expect(AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), 'example.com', 'aud')).rejects.toThrow(
-      'Cloudflare Access authentication failed.',
-    );
+    await expect(
+      AccessAuthService.verifyAccessJwt(userRequest({ 'cf-access-jwt-assertion': token }), 'example.com', 'aud'),
+    ).rejects.toThrow('Cloudflare Access authentication failed.');
   });
 
   it('does not attempt a network fetch when the request has no token', async () => {

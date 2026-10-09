@@ -140,13 +140,24 @@ async function embeddedArtFor(target: AlbumTarget, library: LibraryRow, context:
   if (stub) {
     return await stub.coverArt(library.id, target.dirPath, candidates, context.streamTimeoutMs);
   }
-  return await embeddedAlbumArt(library, target.dirPath, candidates, { clientFor: (row) => context.libraries.clientFor(row), cache: context.cache }, context.streamTimeoutMs);
+  return await embeddedAlbumArt(
+    library,
+    target.dirPath,
+    candidates,
+    { clientFor: (row) => context.libraries.clientFor(row), cache: context.cache },
+    context.streamTimeoutMs,
+  );
 }
 
 /**
  * Sidecar probe, then embedded tags, then the placeholder.
  */
-async function coverForSongs(library: LibraryRow, songs: readonly SongRow[], dirPath: string | null, context: RestContext): Promise<PassthroughResponse> {
+async function coverForSongs(
+  library: LibraryRow,
+  songs: readonly SongRow[],
+  dirPath: string | null,
+  context: RestContext,
+): Promise<PassthroughResponse> {
   const folder =
     dirPath === null
       ? null
@@ -160,7 +171,12 @@ async function coverForSongs(library: LibraryRow, songs: readonly SongRow[], dir
   return await coverForTarget(library, { dirPath, songs }, folder, context);
 }
 
-async function coverForTarget(library: LibraryRow, target: AlbumTarget, folder: string | null, context: RestContext): Promise<PassthroughResponse> {
+async function coverForTarget(
+  library: LibraryRow,
+  target: AlbumTarget,
+  folder: string | null,
+  context: RestContext,
+): Promise<PassthroughResponse> {
   if (folder !== null) {
     return await forwardCoverFile(library, folder, context);
   }

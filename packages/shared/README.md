@@ -8,14 +8,14 @@ vocabulary. Both rules below came from it doing that.
 
 ## What is here
 
-| Path | Holds |
-| --- | --- |
-| `src/i18n/` | the locale bundles and `SUPPORTED_LANGUAGES` |
+| Path         | Holds                                              |
+| ------------ | -------------------------------------------------- |
+| `src/i18n/`  | the locale bundles and `SUPPORTED_LANGUAGES`       |
 | `src/utils/` | `UUIDUtil` — `getRandomUUID` and `deterministicId` |
 
 `src/constants/` used to hold `DEMO_USER_EMAIL`, and it is **gone**: `AccessAuthService`
 carried its own literal and `AuthConfig` read a variable no caller asked for, so there were
-two constants with *different values* and a getter that answered neither. The one value lives
+two constants with _different values_ and a getter that answered neither. The one value lives
 in `ConfigurationDefaults` now. A shared constant is not a neutral thing to have — it is a
 place two answers can meet, and nothing in a `constants/` directory says which one is right.
 
@@ -29,7 +29,7 @@ delimiter is forgeable: two different playlists hash to one id and one overwrite
 
 Length-prefixing each part (`3:ns1:a1:b`) is **injective**, because the length is recoverable
 from the bytes. The comment was the false part and the test that caught it was written
-*because* the comment made a claim — asserted in `test/import-phases.test.ts`.
+_because_ the comment made a claim — asserted in `test/import-phases.test.ts`.
 
 ## A bundle value and its inline default are one fact
 

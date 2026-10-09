@@ -325,8 +325,10 @@ class TreeService {
     // that is worse than either alternative: a listing that is missing children, served as
     // though they were deleted.
     const nodes = nodeInputs.length > 0 ? await this.deps.nodes.upsertMany(nodeInputs) : { changes: 0, truncated: false, billedRows: 0 };
-    const songs = songInputs.length > 0 ? await this.deps.songs.upsertFileFacts(songInputs) : { changes: 0, truncated: false, billedRows: 0 };
-    if (nodes.truncated || songs.truncated) return { children: materialized(library.id, resources, parentPath), node: syntheticRootNode(library.id, self) };
+    const songs =
+      songInputs.length > 0 ? await this.deps.songs.upsertFileFacts(songInputs) : { changes: 0, truncated: false, billedRows: 0 };
+    if (nodes.truncated || songs.truncated)
+      return { children: materialized(library.id, resources, parentPath), node: syntheticRootNode(library.id, self) };
 
     // Materialize the folder's own row, so the next read finds it in D1 and skips
     // the PROPFIND entirely. Skipped for the library root, which has no path.
@@ -393,4 +395,4 @@ class TreeService {
 export { TreeService };
 export type { TreeDeps, MaterializedFolder };
 
-export {toLibraryPath} from '@edge-sonic/webdav';
+export { toLibraryPath } from '@edge-sonic/webdav';

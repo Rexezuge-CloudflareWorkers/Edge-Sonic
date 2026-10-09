@@ -121,7 +121,10 @@ class ImportSourceDAO extends BaseDAO {
   }
 
   public async delete(id: string): Promise<void> {
-    await this.withRetry(async () => await this.database.prepare('DELETE FROM import_sources WHERE id = ?').bind(id).run(), 'importSources.delete');
+    await this.withRetry(
+      async () => await this.database.prepare('DELETE FROM import_sources WHERE id = ?').bind(id).run(),
+      'importSources.delete',
+    );
   }
 }
 
@@ -133,11 +136,7 @@ class ImportSourceDAO extends BaseDAO {
  * machine, and they have different lifetimes and different readers.
  */
 class ImportRunDAO extends BaseDAO {
-  public async create(input: {
-    sourceId: string;
-    targetUserId: string;
-    phases: readonly ImportPhase[];
-  }): Promise<ImportRunRow> {
+  public async create(input: { sourceId: string; targetUserId: string; phases: readonly ImportPhase[] }): Promise<ImportRunRow> {
     const timestamp = nowSeconds();
     const id = UUIDUtil.getRandomUUID();
     await this.withRetry(
@@ -179,7 +178,9 @@ class ImportRunDAO extends BaseDAO {
     const rows = await this.withRetry(
       async () =>
         await this.database
-          .prepare(`SELECT * FROM import_runs WHERE target_user_id = ? AND status IN ('running', 'paused') ORDER BY started_at DESC LIMIT 2`)
+          .prepare(
+            `SELECT * FROM import_runs WHERE target_user_id = ? AND status IN ('running', 'paused') ORDER BY started_at DESC LIMIT 2`,
+          )
           .bind(targetUserId)
           .all<ImportRunRow>(),
       'importRuns.findRunningForUser',
@@ -231,7 +232,11 @@ class ImportRunDAO extends BaseDAO {
     assignments.push('updated_at = ?');
     values.push(nowSeconds(), id);
     await this.withRetry(
-      async () => await this.database.prepare(`UPDATE import_runs SET ${assignments.join(', ')} WHERE id = ?`).bind(...values).run(),
+      async () =>
+        await this.database
+          .prepare(`UPDATE import_runs SET ${assignments.join(', ')} WHERE id = ?`)
+          .bind(...values)
+          .run(),
       'importRuns.update',
     );
   }
@@ -246,14 +251,18 @@ class ImportRunDAO extends BaseDAO {
   public async writeReport(id: string, report: string): Promise<void> {
     await this.withRetry(
       async () =>
-        await this.database.prepare('UPDATE import_runs SET report_json = ?, updated_at = ? WHERE id = ?').bind(report, nowSeconds(), id).run(),
+        await this.database
+          .prepare('UPDATE import_runs SET report_json = ?, updated_at = ? WHERE id = ?')
+          .bind(report, nowSeconds(), id)
+          .run(),
       'importRuns.writeReport',
     );
   }
 
   public async readReport(id: string): Promise<string | null> {
     const row = await this.withRetry(
-      async () => await this.database.prepare('SELECT report_json FROM import_runs WHERE id = ?').bind(id).first<{ report_json: string | null }>(),
+      async () =>
+        await this.database.prepare('SELECT report_json FROM import_runs WHERE id = ?').bind(id).first<{ report_json: string | null }>(),
       'importRuns.readReport',
     );
     return row?.report_json ?? null;
@@ -262,10 +271,7 @@ class ImportRunDAO extends BaseDAO {
   public async countForSource(sourceId: string): Promise<number> {
     const row = await this.withRetry(
       async () =>
-        await this.database
-          .prepare('SELECT COUNT(*) AS cnt FROM import_runs WHERE source_id = ?')
-          .bind(sourceId)
-          .first<CountRow>(),
+        await this.database.prepare('SELECT COUNT(*) AS cnt FROM import_runs WHERE source_id = ?').bind(sourceId).first<CountRow>(),
       'importRuns.countForSource',
     );
     return row?.cnt ?? 0;

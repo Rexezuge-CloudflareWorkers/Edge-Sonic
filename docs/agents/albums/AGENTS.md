@@ -37,14 +37,14 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   named `Artist - Album` is an order no client requested and none could predict.
   Unifying them on `dir_path` fixed the disagreement and left the **choice** unmade — which
   is a different defect, and it shipped next.
-- **An album is a *configuration*, because a folder and a release routinely disagree.**
+- **An album is a _configuration_, because a folder and a release routinely disagree.**
   Unifying the grouping on `dir_path` made a library whose folders split a release report one
   album per folder: measured on a live library, 113 tracks in 80 album folders carrying **71
   distinct `ALBUM` values**, nine releases split across folders and one across six, so
   `MementoMori (メメントモリ)` appeared six times and `Ex-Otogibanashi` was cut in half. The
   answer is `ALBUM_GROUP_BY` ∈ `folder | album | album_artist`, default `album` — the same
   decision the reference server exposes as `PID.Album`, and a modelling question with no
-  right answer is a *setting*, not a bug. `subsonic/albumKey.ts` owns the question,
+  right answer is a _setting_, not a bug. `subsonic/albumKey.ts` owns the question,
   `albumKeySql.ts` writes it as SQL, and `apps/api`'s `albumIdentity` carries it per request.
   Five rules, and each is how the previous one collapses:
   - **The SQL group and the TypeScript group are one function of the same columns**, which is

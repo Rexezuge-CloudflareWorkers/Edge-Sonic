@@ -163,12 +163,7 @@ function DangerZoneCard({
                       : t('danger.currentSize', '{{songs}} tracks indexed.', { songs: entry.songs })}
                   </p>
                 </div>
-                <Button
-                  variant="danger"
-                  size="sm"
-                  loading={dropping === library.id}
-                  onClick={() => setArmed(library.id)}
-                >
+                <Button variant="danger" size="sm" loading={dropping === library.id} onClick={() => setArmed(library.id)}>
                   {t('danger.dropIndex', 'Drop index')}
                 </Button>
               </div>
@@ -187,9 +182,7 @@ function DangerZoneCard({
         {libraries.length > 0 && (
           <div className="flex items-center justify-between gap-3 flex-wrap border-t border-[var(--color-border)] pt-4">
             <div>
-              <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                {t('danger.dropEverything', 'Drop every index')}
-              </p>
+              <p className="text-sm font-medium text-[var(--color-text-primary)]">{t('danger.dropEverything', 'Drop every index')}</p>
               <p className="text-sm text-[var(--color-text-secondary)]">
                 {t('danger.dropEverythingDescription', 'Empties every registered library at once. Registrations are kept.')}
               </p>
@@ -200,7 +193,10 @@ function DangerZoneCard({
                       an operator reads a library count before consenting to empty all of them. */}
                   {libraries.length === 1
                     ? t('danger.everythingSizeOne', '{{songs}} tracks.', { songs: totalSongs })
-                    : t('danger.everythingSizeMany', '{{songs}} tracks across {{count}} libraries.', { songs: totalSongs, count: libraries.length })}
+                    : t('danger.everythingSizeMany', '{{songs}} tracks across {{count}} libraries.', {
+                        songs: totalSongs,
+                        count: libraries.length,
+                      })}
                 </p>
               )}
             </div>

@@ -190,11 +190,7 @@ function d1AllowancePause(error: unknown, nowMs: number): ChunkResult | null {
  * `lastError` is carried so the reason a scan is incomplete survives a poll that touched nothing —
  * the operator API is the only surface that can show it, and this is where it comes from.
  */
-function idleResult(
-  state: ScanStateRow,
-  status: 'idle' | 'failed' | 'stalled',
-  derived: DerivationCost = NO_DERIVATION,
-): ChunkResult {
+function idleResult(state: ScanStateRow, status: 'idle' | 'failed' | 'stalled', derived: DerivationCost = NO_DERIVATION): ChunkResult {
   return {
     status,
     scanned: state.scanned_count,
@@ -232,7 +228,11 @@ function stalledResult(state: ScanStateRow, derived: DerivationCost = NO_DERIVAT
  * The stored reason is re-recorded rather than a new one invented: the cause has not
  * changed, and there is nothing to retry until `startScan` reseeds the frontier.
  */
-async function unableToAdvance(state: ScanStateRow, fail: (error: string) => Promise<number>, derived: DerivationCost = NO_DERIVATION): Promise<ChunkResult> {
+async function unableToAdvance(
+  state: ScanStateRow,
+  fail: (error: string) => Promise<number>,
+  derived: DerivationCost = NO_DERIVATION,
+): Promise<ChunkResult> {
   const message = state.last_error ?? 'The library root could not be read, so the scan has no folder to start from.';
   const consecutiveFailures = await fail(message);
   return idleResult(state, consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? 'stalled' : 'failed', derived);

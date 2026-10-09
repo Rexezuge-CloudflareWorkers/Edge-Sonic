@@ -83,7 +83,10 @@ class PlayCountDAO extends BaseDAO {
    * Returns the **rows written**, not the counts supplied, because the daily row allowance is
    * spent from statements and a caller metering its day needs the figure the platform charges.
    */
-  public async setPlayCounts(userId: string, counts: ReadonlyArray<{ readonly songId: string; readonly playCount: number }>): Promise<number> {
+  public async setPlayCounts(
+    userId: string,
+    counts: ReadonlyArray<{ readonly songId: string; readonly playCount: number }>,
+  ): Promise<number> {
     if (counts.length === 0) return 0;
     const timestamp = nowSeconds();
     const statements = counts.map((entry) =>
@@ -100,7 +103,6 @@ class PlayCountDAO extends BaseDAO {
     const result = await this.runWriteBatch(statements, 'playCounts.setPlayCounts', { requireComplete: true });
     return result.written;
   }
-
 }
 
 export { PlayCountDAO };

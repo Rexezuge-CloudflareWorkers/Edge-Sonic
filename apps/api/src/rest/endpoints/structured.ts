@@ -154,10 +154,16 @@ async function getArtist(context: RestContext): Promise<EnvelopeResponse> {
   const complete = await context.songIndex.listForAlbumKeys(scope, keys, grouping);
   const annotations = await annotationsFor(context, true);
   const albums = groupAlbumsOf(complete, identityOf, annotations);
-  return respond(context, elList('artist', 'album', { id, name: artistName, albumCount: albums.length, coverArt: id }, albums.map((album) => albumElement(album))));
+  return respond(
+    context,
+    elList(
+      'artist',
+      'album',
+      { id, name: artistName, albumCount: albums.length, coverArt: id },
+      albums.map((album) => albumElement(album)),
+    ),
+  );
 }
-
-
 
 /**
 `getAlbum` — an album's songs.
@@ -197,7 +203,6 @@ async function getAlbum(context: RestContext): Promise<EnvelopeResponse> {
     ),
   );
 }
-
 
 /**
  * `getSong` — one track, enriched on demand.
@@ -245,14 +250,7 @@ Handlers only — the registry rejects a signature that is not `(context) => ...
 */
 const structuredEndpoints = { getArtists, getArtist, getAlbum, getSong };
 
-export {
-  structuredEndpoints,
-  getArtists,
-  getArtist,
-  getAlbum,
-  getSong,
-  annotationsFor,
-};
+export { structuredEndpoints, getArtists, getArtist, getAlbum, getSong, annotationsFor };
 
 // `groupAlbumsOf` and `albumModel` live in `./albumRecord` and are re-exported under the names
 // `lists.ts` and `search.ts` already import, because reaching into a second module for one call

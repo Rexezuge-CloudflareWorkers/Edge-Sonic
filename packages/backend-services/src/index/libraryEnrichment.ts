@@ -47,12 +47,7 @@ import type { EnrichmentCost } from './scanEnrichment';
 import type { EnrichFacts } from './EnrichmentService';
 import { storedStatus } from './scanRetry';
 import type { ScanDailyBudget } from './scanTypes';
-import {
-  enrichD1AllowancePause,
-  enrichDailyAllowancePause,
-  enrichIdleResult,
-  describeEnrichFailure,
-} from './enrichRetry';
+import { enrichD1AllowancePause, enrichDailyAllowancePause, enrichIdleResult, describeEnrichFailure } from './enrichRetry';
 import type { EnrichChunkResult } from './enrichRetry';
 
 interface EnrichLibrarySongStore {

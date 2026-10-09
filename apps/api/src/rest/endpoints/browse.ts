@@ -20,8 +20,6 @@ import { IGNORED_ARTICLES, toIso, songToChild } from '../mappers';
 import { artistIndexGroups, groupArtistRows } from '../artistIndex';
 import { libraryName, resolveLibrary } from './libraries';
 
-
-
 function isPlayable(name: string): boolean {
   const dot = name.lastIndexOf('.');
   return dot > 0 && /\.(?:mp3|flac|ogg|oga|opus|m4a|mp4|aac|wav|wma|aiff|aif|ape|wv|mpc|dsf|dff)$/i.test(name);
@@ -145,12 +143,7 @@ async function getMusicDirectory(context: RestContext): Promise<EnvelopeResponse
 
   return respond(
     context,
-    elList(
-      'directory',
-      'child',
-      { id: selfId, parent: parentId, name: path === '' ? libraryName(library) : basename(path) },
-      childNodes,
-    ),
+    elList('directory', 'child', { id: selfId, parent: parentId, name: path === '' ? libraryName(library) : basename(path) }, childNodes),
   );
 }
 

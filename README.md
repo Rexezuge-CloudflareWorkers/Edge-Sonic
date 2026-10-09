@@ -90,8 +90,7 @@ at build time, and `verify:spa-shell` refuses a stale one.
 The 32-zero `store_id` is a **placeholder**: `scripts/deploy/prepare-wrangler-config.ts` creates
 the store and patches the real id in, then `scripts/deploy/init-secrets.ts` writes all three
 32-byte key values. Use that exact sentinel — the patcher matches it by string equality, and any
-other placeholder is skipped without a word and fails at deploy time as Cloudflare error
-10182. Each value is AES-256-GCM under its own key: user passwords under one, WebDAV
+other placeholder is skipped without a word and fails at deploy time as Cloudflare error 10182. Each value is AES-256-GCM under its own key: user passwords under one, WebDAV
 credentials under the second, and an imported server's credentials under the third.
 
 The SPA deploys to **two** targets. The Worker serves the SPA and the API from one
@@ -119,22 +118,22 @@ The database **is** backed up: `backup-d1.yml` exports it daily at 04:15 UTC, en
 and uploads to any combination of S3-compatible storage and WebDAV. Set at least
 `BACKUP_ENCRYPTION_KEY` plus one destination — the preflight refuses to run a destination
 without it, because the in-database credential encryption is described in the schema as
-*obfuscation against a D1 dump*. See [`docs/db-backup-recovery.md`](docs/db-backup-recovery.md).
+_obfuscation against a D1 dump_. See [`docs/db-backup-recovery.md`](docs/db-backup-recovery.md).
 
 ## Where to read next
 
 [`AGENTS.md`](AGENTS.md) is the index, and it is the only file to read before knowing where
 anything else lives.
 
-| I want to… | Read |
-| --- | --- |
-| work in this repository | [`docs/agents/repo/AGENTS.md`](docs/agents/repo/AGENTS.md) |
-| change what goes on the wire | [`docs/agents/protocol/AGENTS.md`](docs/agents/protocol/AGENTS.md) |
+| I want to…                               | Read                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------ |
+| work in this repository                  | [`docs/agents/repo/AGENTS.md`](docs/agents/repo/AGENTS.md)         |
+| change what goes on the wire             | [`docs/agents/protocol/AGENTS.md`](docs/agents/protocol/AGENTS.md) |
 | change the scan, the budget, or a status | [`docs/agents/scanning/AGENTS.md`](docs/agents/scanning/AGENTS.md) |
-| write SQL or add a migration | [`docs/agents/indexing/AGENTS.md`](docs/agents/indexing/AGENTS.md) |
-| change what an album is | [`docs/agents/albums/AGENTS.md`](docs/agents/albums/AGENTS.md) |
-| read a byte out of an audio file | [`docs/agents/media/AGENTS.md`](docs/agents/media/AGENTS.md) |
-| import from another Subsonic server | [`docs/agents/import/AGENTS.md`](docs/agents/import/AGENTS.md) |
-| add a binding, a secret or a variable | [`docs/agents/runtime/AGENTS.md`](docs/agents/runtime/AGENTS.md) |
-| write or trust an assertion | [`docs/agents/testing/AGENTS.md`](docs/agents/testing/AGENTS.md) |
-| restore after a bad deploy | [`docs/db-backup-recovery.md`](docs/db-backup-recovery.md) |
+| write SQL or add a migration             | [`docs/agents/indexing/AGENTS.md`](docs/agents/indexing/AGENTS.md) |
+| change what an album is                  | [`docs/agents/albums/AGENTS.md`](docs/agents/albums/AGENTS.md)     |
+| read a byte out of an audio file         | [`docs/agents/media/AGENTS.md`](docs/agents/media/AGENTS.md)       |
+| import from another Subsonic server      | [`docs/agents/import/AGENTS.md`](docs/agents/import/AGENTS.md)     |
+| add a binding, a secret or a variable    | [`docs/agents/runtime/AGENTS.md`](docs/agents/runtime/AGENTS.md)   |
+| write or trust an assertion              | [`docs/agents/testing/AGENTS.md`](docs/agents/testing/AGENTS.md)   |
+| restore after a bad deploy               | [`docs/db-backup-recovery.md`](docs/db-backup-recovery.md)         |

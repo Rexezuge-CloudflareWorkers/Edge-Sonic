@@ -12,11 +12,11 @@ The rules these readers live under are in
 Every entry point takes a **bounded** buffer, and a caller that cannot answer from one gets
 a **range to fetch** rather than a partial answer:
 
-| Module | Answers from |
-| --- | --- |
-| `mp3.ts` | an ID3v2 prefix; walks the frame list when the `APIC` frame is past the prefix |
-| `flac.ts` | a `STREAMINFO` block; `flacPicture.ts` locates a `PICTURE` block **by range** |
-| `ogg.ts`, `vorbisComment.ts` | the comment packet; `oggFraming.ts` decodes the **segment** table |
+| Module                       | Answers from                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------ |
+| `mp3.ts`                     | an ID3v2 prefix; walks the frame list when the `APIC` frame is past the prefix |
+| `flac.ts`                    | a `STREAMINFO` block; `flacPicture.ts` locates a `PICTURE` block **by range**  |
+| `ogg.ts`, `vorbisComment.ts` | the comment packet; `oggFraming.ts` decodes the **segment** table              |
 
 A truncated cover is a cover that "loaded" and renders as a grey box, so a picture whose
 block header is past the prefix is reported as **not locatable** and the caller answers the
@@ -48,7 +48,7 @@ then decodes it back through `packetStarts` before asserting anything about the 
 
 That paid for itself immediately: five of its own bugs surfaced as reader failures — a 4-byte
 Ogg granule where the specification has 8, a 36-byte `STREAMINFO` where it has 34, a
-syncsafe *decoder* that ORed the whole value into its low byte, a `packetStarts` that
+syncsafe _decoder_ that ORed the whole value into its low byte, a `packetStarts` that
 reported where a packet's last segment began, and a `Uint8Array` image body that
 `Array.prototype.flat` refused to flatten, so every offset after it was wrong. In every case
 the reader was right and the fixture was not — which is the only outcome that makes the

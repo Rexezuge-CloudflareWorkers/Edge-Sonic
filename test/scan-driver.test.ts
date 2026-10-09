@@ -232,7 +232,9 @@ describe('ScanDriver: the choice itself', () => {
     // has no RPC and must charge nothing: inventing a charge for a call the platform never made
     // would make the ceiling describe work that did not happen.
     const charges: string[] = [];
-    const meter = { charge: (_n?: number, kind?: string): void => void charges.push(kind ?? '?') } as unknown as Parameters<typeof resolveScanDriver>[2];
+    const meter = { charge: (_n?: number, kind?: string): void => void charges.push(kind ?? '?') } as unknown as Parameters<
+      typeof resolveScanDriver
+    >[2];
     const calls: string[] = [];
     const { env } = scanNamespace(calls);
     const { runner } = recordingScanRunner();

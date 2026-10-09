@@ -38,7 +38,7 @@ Access — it has no Subsonic credential and could not use one.
   (detection precedence, `<html lang>` sync, manual-change flow; English-only, but
   the shape a second locale plugs into).
 - `src/lib/api.ts` — generic transport primitives only (`apiGet/Post/Patch/
-  Delete`, `BackendError`, `buildQuery`). Domain calls live in `src/services/*`
+Delete`, `BackendError`, `buildQuery`). Domain calls live in `src/services/*`
   (`libraryService`, `userService`); no component reaches for `fetch` directly.
 - `src/types.ts` — thin facade over `libraryTypes.ts` + `userTypes.ts` (plus
   `CurrentUser` and `Notice`), so existing `from '../types'` imports keep working.
@@ -68,17 +68,17 @@ rather than satisfied.
 
 `useCurrentUser` returns a tri-state, and the router branches on all three:
 
-| `authorized` | `/` | `/libraries`, `/users` |
-| ------------ | --- | ----------------------- |
-| `null` (in flight) | full-page spinner | full-page spinner |
-| `false` (refused)  | `LandingView`      | `Unauthorized`          |
-| `true`             | `LibrariesView`    | the real view          |
+| `authorized`       | `/`               | `/libraries`, `/users` |
+| ------------------ | ----------------- | ---------------------- |
+| `null` (in flight) | full-page spinner | full-page spinner      |
+| `false` (refused)  | `LandingView`     | `Unauthorized`         |
+| `true`             | `LibrariesView`   | the real view          |
 
 `null` is a spinner because rendering `LandingView` during the request flashes the
 signed-out page at every signed-in operator on every load.
 
 `false` gates because **the SPA shell is public**. `EdgeSonicWorker` serves `SPA_HTML` for
-`/`, `/libraries` and `/users` *above* `app.use('/user/*', userAuthentication())`, because
+`/`, `/libraries` and `/users` _above_ `app.use('/user/*', userAuthentication())`, because
 a browser navigating to a client-side route sends no API call for the worker to
 authenticate. Without the gate, `LibrariesView` calls `/user/libraries`, takes the 401, and
 renders its documented **empty list plus a notice** — the honest-looking answer to "you
@@ -87,9 +87,9 @@ have no libraries", from a caller who is not allowed to know whether any exist.
 The gate is a courtesy, not a control. `/user/*` is independently guarded, so nothing is
 readable by ignoring the component.
 
-**What the gate does not cover.** A 401 raised *after* this branch — an Access session
+**What the gate does not cover.** A 401 raised _after_ this branch — an Access session
 expiring mid-use — still renders as an empty list plus a notice, because the views cannot
-classify it. Distinguishing it needs the API to say *why* it refused, which it will not do
+classify it. Distinguishing it needs the API to say _why_ it refused, which it will not do
 for an unauthenticated caller (see below). So the signed-out landing page is a correct
 answer to "no session" and an incomplete one to "a session I cannot use".
 
@@ -114,18 +114,18 @@ the same page, with a button that was pressed and did nothing. Every click is a 
 navigation and every one lands on the same page, which is the only symptom.
 
 `lib/signInLoop.ts` detects the loop — an attempt recorded in `sessionStorage` and this
-page *still* anonymous — and `LandingView` renders a muted line naming `POLICY_AUD` and
+page _still_ anonymous — and `LandingView` renders a muted line naming `POLICY_AUD` and
 `TEAM_DOMAIN`. Muted and beside the button, not in the error tone: the button is still
 correct, and this is the same reasoning as a scan that stops at a subrequest bound being
 rendered muted rather than red.
 
 **The client cannot be told the cause, and must not ask.** `AccessAuthService` throws one
-`UnauthorizedError` for a missing session *and* for a `TEAM_DOMAIN`/`POLICY_AUD` typo,
+`UnauthorizedError` for a missing session _and_ for a `TEAM_DOMAIN`/`POLICY_AUD` typo,
 because the JWT strategy fails soft at `fromJwt` and the configuration cause is discarded
 before the single throw site. That collapse is deliberate — a detailed message tells an
 unauthenticated caller which part of their token they got right. Both reach the browser as
 `401 / Exception.Type === 'Unauthorized'`, so the page names the two variables to check
-rather than asserting which is wrong. The inference it *does* make is stronger than a guess
+rather than asserting which is wrong. The inference it _does_ make is stronger than a guess
 about the cause: the loop was witnessed.
 
 `clearSignInAttempt` runs once `authorized === true`, so an operator signed out later by an
@@ -133,19 +133,20 @@ expired cookie is an ordinary signed-out visitor rather than a page claiming the
 deployment is broken.
 
 **`/user/` is a route, not just a constant.** Access redirects back to whatever it
-interrupted, so a *successful* sign-in arrives at `/user/` and hits the worker. With no
+interrupted, so a _successful_ sign-in arrives at `/user/` and hits the worker. With no
 route registered it fell through to `notFound` and answered JSON `Exception{NotFound}` —
 the one screen in the product guaranteed to be reached by an operator who did exactly what
 the landing page asked. `EdgeSonicWorker` registers `app.get('/user/', (c) => c.redirect('/'))`,
 above `scopeMiddleware` and above `/user/*` authentication, and `test/worker.int.test.ts`
 pins it against being widened into something that shadows `/user/me`.
+
 - `src/i18n.ts` — i18next, English-only for now (`SUPPORTED_LANGUAGES` is `['en']`;
   `validate:locales` guards key/placeholder parity and bundle-dir parity when a
   second locale ships).
 
 ## Rebuild before deploying
 
-**`pnpm run build`.** The Worker serves `SPA_HTML` from the *last local build*, and both
+**`pnpm run build`.** The Worker serves `SPA_HTML` from the _last local build_, and both
 `dist/` and `apps/api/src/generated/` are gitignored, so a source change here is inert
 until `vite build` runs again. `scripts/build/verify-spa-shell.ts` rejects a missing,
 stubbed, or mismatched artifact, and it runs in `pnpm run checks`.
@@ -154,7 +155,7 @@ It is **also** a CI job now — `spa-shell` in
 `.github/workflows/continuous-integration.yml`, which builds and then verifies. It used not
 to be, which is a gap worth recording because the reasoning generalises: a check that
 only runs locally fails on a merge rather than on a machine, and this one guards an
-artifact the *deploy* serves. It cannot detect a stale-but-self-consistent pair, which is
+artifact the _deploy_ serves. It cannot detect a stale-but-self-consistent pair, which is
 why the rebuild before `wrangler deploy` remains an operational duty and not only a
 checked one.
 
@@ -166,8 +167,12 @@ Each view's `load` callback does the fetching and the effect that runs it owns t
 ```ts
 useEffect(() => {
   let cancelled = false;
-  void load().then((next) => { if (!cancelled) setState(next); });
-  return () => { cancelled = true; };
+  void load().then((next) => {
+    if (!cancelled) setState(next);
+  });
+  return () => {
+    cancelled = true;
+  };
 }, [load]);
 ```
 
@@ -202,7 +207,7 @@ jsdom` pragma + Testing Library, both already devDependencies at the root). It d
 `SpaViewRouter` through all three `authorized` states, and it exists because **no server
 test can see this branch**: every assertion in `user-auth.test.ts` and `worker.int.test.ts`
 is about `/user/*` refusing a caller, and not one involves what the browser renders after
-being refused. The 401 they assert *is* the 401 that reaches `LibrariesView`. So the entire
+being refused. The 401 they assert _is_ the 401 that reaches `LibrariesView`. So the entire
 gate could be deleted and the server suite would stay green, because `useCurrentUser`'s
 contract is only "set `authorized: false`" and whether anything reads it is invisible to
 every test that exists.
@@ -215,7 +220,7 @@ red when the guard is removed. Verified by mutation — deleting the `/user/` ro
 One of those mutations is worth recording, because the **first** version of that test
 passed against a broken guard: it seeded `sessionStorage` before clicking and then asserted
 the flag was set, so it was reading back its own setup. It now starts from an empty store
-and is paired with a case that asserts the hint is *absent* on the page that requests the
+and is paired with a case that asserts the hint is _absent_ on the page that requests the
 sign-in — a guard that reads back its own arrangement is not a guard.
 
 **There is no lint rule that catches a missing cancellation guard.** This file claimed one
@@ -227,7 +232,7 @@ are correct because they were written that way, not because something enforces i
 So an **event handler** that awaits has to own its guard explicitly, and `LibraryRow` is the
 worked example: `rescan` makes three sequential round trips against an origin slow enough
 that a chunk is bounded in seconds, and both its handlers now check a ref the mount effect
-sets. The effect form below is unaffected — an effect *can* own its cleanup, because only
+sets. The effect form below is unaffected — an effect _can_ own its cleanup, because only
 the effect knows when the component goes away.
 
 ## A diagnostic is rendered, not summarised
@@ -259,18 +264,18 @@ absent".
 A scan that **pauses** carries it too, via `stoppedBy`. A chunk is bounded by a subrequest
 ceiling and a wall-clock deadline, and returns when it reaches either;
 `describeStopReason` turns that into a sentence naming the bound, because an operator
-reading "still scanning" is reading a *status*, and one reading "still scanning, because
+reading "still scanning" is reading a _status_, and one reading "still scanning, because
 your origin takes two seconds a request and the chunk is capped at twenty" is reading a
 **diagnosis** — the second has an action and the first does not. The two limits are named
 separately because their remedies differ (`SCAN_CHUNK_DEADLINE_MS` against the subrequest
 ceiling), and "it stopped" is neither.
 
 **The request sentence no longer names a knob, because on Free there is none.** It used to
-say *"Raise `SCAN_CHUNK_MAX_REQUESTS` to index more per poll"*, and `test/spa-decisions.test.ts`
+say _"Raise `SCAN_CHUNK_MAX_REQUESTS` to index more per poll"_, and `test/spa-decisions.test.ts`
 asserted the sentence **contained** that variable name — so the harmful advice was the
 contract. Workers Free allows 50 subrequests per invocation and does not raise it from the
 wrangler config, the server clamps the value to what fits, and a chunk that spends more is
-*terminated* by the runtime rather than slowed. Following the old advice therefore turned a
+_terminated_ by the runtime rather than slowed. Following the old advice therefore turned a
 scan that pauses into a scan that cannot finish. The sentence now says the two things that
 are true — this is the plan's limit rather than a fault, and the scan is still advancing — and
 `stoppedBy: 'requests'` is a state a Free-plan deployment reaches **by design**, not a
@@ -282,9 +287,18 @@ line that does mean something went wrong.
 `Rescan` calls `stepLibraryScan` as well as `startLibraryScan`, and both halves are
 needed. The scan is client-driven and `/rest/getScanStatus` was the only thing that
 advanced it, so before the step route this button started a scan that only progressed
-while some *Subsonic client* happened to be polling — which is not a thing an operator
-can arrange. The status is then re-read with `libraryScanStatus`, so the row shows the
-persisted state a `/rest` poll would see.
+while some _Subsonic client_ happened to be polling — which is not a thing an operator
+can arrange. The row shows the persisted state a `/rest` poll would see, because `onRun`
+reloads the list and that list carries every library's state — not because a status was
+re-read per library.
+
+This paragraph used to say the status "is then re-read with `libraryScanStatus`", which is
+the other half of this file's contradiction: line ~350 says the rescan handler does **not**
+read the status back, `LibraryRow.tsx` says the same, and `libraryScanStatus` had zero
+callers — kept alive by this sentence. A wrapper whose only justification is a paragraph
+describing a call it never received is not documentation. The wrapper is gone; the
+`GET /user/libraries/:id/scan` **route** stays, because it is part of the operator API and is
+asserted in `test/user-api.test.ts`.
 
 ## An untouched password is absent, not empty
 
@@ -305,7 +319,7 @@ rescan handler — so a scan the background worker was driving, which is the nor
 rendered as a row with nothing on it. The server had been answering correctly throughout:
 `GET /user/libraries` now carries each library's `status`, `scanned`, `lastError` and a real
 `songCount`. **No server test could see this**, because every assertion in `user-api.test.ts`
-is about what the server *sends* and none is about what a page load renders — the same gap
+is about what the server _sends_ and none is about what a page load renders — the same gap
 `test/web-landing.test.tsx` records for the `authorized` gate. Hence
 `test/web-library-row.test.tsx`.
 
@@ -319,7 +333,7 @@ Four decisions, each a place the obvious implementation is wrong:
   shape, deliberately.
 - **The poll is passive.** It re-reads `GET /user/libraries`, which advances nothing; the scan
   is driven by `ScanWorker`'s alarm or by `/rest/getScanStatus`. So `SCAN_POLL_INTERVAL_MS` is
-  a *display* cadence, not a claim about scan speed, and polling faster would change nothing
+  a _display_ cadence, not a claim about scan speed, and polling faster would change nothing
   but the request count.
 - **Polling stops, and the stop is a `stalled` case.** `/user/*` is limited to **60 requests
   per minute** keyed on the Access identity — the same bucket probe and rescan spend — so a
@@ -327,7 +341,7 @@ Four decisions, each a place the obvious implementation is wrong:
   `isAdvancingStatus` is the guard, and `idle`, `stalled`, `paused` and `null` are all terminal. Each is
   asserted, because a guard written as `status === 'scanning'` gets `null` wrong and a newly
   registered library is the most common state a new deployment is in.
-- **A failed poll keeps the list on screen.** It does *not* reuse `load`'s documented
+- **A failed poll keeps the list on screen.** It does _not_ reuse `load`'s documented
   "empty list plus a notice", because a poll runs unattended: folding its failure in would
   blank the page out from under an operator reading it and turn four libraries into "No
   libraries yet", which is the one sentence on this page that means something is genuinely
@@ -376,7 +390,7 @@ effect was overwriting `stoppedBy` with `null`.
   without, so the row also shows the current track count.
 
 **There is no server-side confirmation, and that is a decision.** Every caller of `/user/*` is
-already an operator — Cloudflare Access *is* the authorization boundary, and `users.is_admin` is
+already an operator — Cloudflare Access _is_ the authorization boundary, and `users.is_admin` is
 written but read only to render a badge — so a token here would be a second gate with no second
 authority behind it. `test/web-danger-zone.test.tsx` asserts the browser half, and every case
 there exists because a server test could delete the whole file and stay green.
@@ -407,7 +421,7 @@ whose remedy is the operator's action, which is why its label names it.
 
 `scan === null` was separated from `idle` so a never-scanned library would not render as a
 finished one. That left the **other** half uncovered, and it is the half that shipped: a
-library whose scan *finished* and indexed **zero** tracks. `songCount` is `0`, the status is
+library whose scan _finished_ and indexed **zero** tracks. `songCount` is `0`, the status is
 `idle`, and the row rendered a success-toned "Up to date." next to "0 tracks indexed" — two
 claims on screen, contradicting, and the badge won. `test/scan-progress.test.ts` asserted
 `idle` + `2` and had no `idle` + `0` case, so the one untrue thing on the page could not fail
@@ -418,7 +432,7 @@ a test.
 is any hands the number to the badge it contradicts.
 
 **It is gated on `idle && songCount === 0`, not on `songCount === 0`.** Zero tracks is the
-*expected* state of a library for the whole length of a first scan, and a guard written the
+_expected_ state of a library for the whole length of a first scan, and a guard written the
 second way paints every cold scan as a failure. The `it.each` over `scanning`/`failed`/
 `stalled` is there so that over-correction is caught too.
 
@@ -441,7 +455,7 @@ to somebody who already knows the product is called "Edge-Sonic".
 So `scripts/i18n/validate_locales.ts` now captures the optional second argument of `t('key',
 'default')` and **fails** when it disagrees with the bundle, across all 130 call sites. Everything
 else in that script compares two bundles or checks that a key exists; nothing in it read what a
-value *is*, and with one shipped language the per-tag body is skipped entirely. Verified by
+value _is_, and with one shipped language the per-tag body is skipped entirely. Verified by
 mutation: restoring `"-Sonic"` fails both the validator and the render assertion in
 `test/web-library-row.test.tsx`.
 
@@ -461,7 +475,7 @@ mean adding a dependency for one function:
   state.** A `load` that also called `setState` had to close over the state it sets in order to
   build its own stale fallback, which made every poll re-create the effect that depends on it — so
   a timer's lifetime was decided by the data it fetched.
-- **A failed poll keeps the list and marks it stale.** It does *not* reuse `load`'s documented
+- **A failed poll keeps the list and marks it stale.** It does _not_ reuse `load`'s documented
   "empty list plus a notice", because this is a poll: folding the failure in would turn "No
   imports yet" — the one sentence on this page meaning something is genuinely absent — into a
   sentence appearing every four seconds.

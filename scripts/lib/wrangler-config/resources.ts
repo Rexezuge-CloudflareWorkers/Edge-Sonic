@@ -204,6 +204,94 @@ export function ensureVectorizeIndex(indexName: string, dimensions: number): voi
   }
 }
 
+/**
+ * Replace each placeholder D1 `database_id` with a real one, and return the patched config text.
+ *
+ * A placeholder is the deployment template's all-zeroes UUID: it means "resolve me", and a config
+ * carrying one cannot be deployed. The `database_name` is what the resource is created under, so a
+ * placeholder id without a name has nothing to create under and is refused rather than skipped.
+ */
+function provisionD1Databases(content: string, config: WranglerConfig, created: string[]): string {
+  let patched = content;
+  for (const [index, database] of config.d1_databases?.entries() ?? []) {
+    if (database.database_id !== DEFAULT_UUID) continue;
+    if (!database.database_name) {
+      throw new Error(`D1 database binding ${database.binding ?? index} has a placeholder database_id but no database_name.`);
+    }
+
+    const resolved = ensureD1Database(database.database_name);
+    if (resolved.created) {
+      created.push(`d1:${database.database_name}`);
+    }
+    console.log(`Using D1 database ${database.database_name}: ${resolved.id}`);
+    patched = writeConfigValue(patched, ['d1_databases', index, 'database_id'], resolved.id);
+  }
+  return patched;
+}
+
+/**
+ * Replace each placeholder KV namespace id with a real one, and return the patched config text.
+ *
+ * The same placeholder rule as D1, over hex rather than a UUID, and the same refusal when a
+ * placeholder has no binding to create it under.
+ */
+function provisionKvNamespaces(content: string, config: WranglerConfig, created: string[]): string {
+  let patched = content;
+  for (const [index, namespace] of config.kv_namespaces?.entries() ?? []) {
+    if (namespace.id !== DEFAULT_HEX_ID) continue;
+    if (!namespace.binding) {
+      throw new Error(`KV namespace at index ${index} has a placeholder id but no binding.`);
+    }
+
+    const resolvedNamespace = ensureKVNamespace(config, namespace.binding);
+    const namespaceName = getKVNamespaceName(config, namespace.binding);
+    if (resolvedNamespace.created) {
+      created.push(`kv:${namespaceName}`);
+    }
+    console.log(`Using KV namespace ${namespaceName}: ${resolvedNamespace.id}`);
+    patched = writeConfigValue(patched, ['kv_namespaces', index, 'id'], resolvedNamespace.id);
+  }
+  return patched;
+}
+
+/**
+ * Point every placeholder Secrets Store `store_id` at one store, creating it if absent.
+ *
+ * Returns the patched config text. `existed` is read **before** the create, because whether the
+ * store was created is what the caller reports — and the create is the thing that makes it exist.
+ */
+function provisionSecretStore(content: string, config: WranglerConfig, created: string[]): string {
+  const placeholders = (config.secrets_store_secrets ?? [])
+    .map((secret, index) => ({ secret, index }))
+    .filter(({ secret }) => secret.store_id === DEFAULT_HEX_ID);
+  if (placeholders.length === 0) return content;
+
+  const existed = listSecretStores().some((store) => store.name === DEFAULT_SECRET_STORE_NAME);
+  const storeId = ensureSecretStore();
+  if (!existed) {
+    created.push(`secrets-store:${DEFAULT_SECRET_STORE_NAME}`);
+  }
+  console.log(`Using Secrets Store: ${storeId}`);
+  return placeholders.reduce(
+    (patched, { index }) => writeConfigValue(patched, ['secrets_store_secrets', index, 'store_id'], storeId),
+    content,
+  );
+}
+
+/**
+ * Create every queue the config names.
+ *
+ * Name-based, so nothing in the file is patched — but created names are still reported like every
+ * other resource, so a deploy log shows what appeared.
+ */
+function provisionQueues(config: WranglerConfig, created: string[]): void {
+  for (const queueName of queueNamesIn(config)) {
+    if (ensureQueue(queueName)) {
+      created.push(`queue:${queueName}`);
+    }
+  }
+}
+
 export function provisionWranglerResources(): string[] {
   // Every resource this call had to create, as `<kind>:<name>`. Returned rather than
   // logged, because a caller acts on it: the backup workflow refuses to export a D1
@@ -217,69 +305,22 @@ export function provisionWranglerResources(): string[] {
   content = ensureRequiredKvBindings(content, config);
   config = parse(content) as WranglerConfig;
 
-  // D1 databases — patch placeholder UUIDs with real IDs
-  for (const [index, database] of config.d1_databases?.entries() ?? []) {
-    if (database.database_id !== DEFAULT_UUID) {
-      continue;
-    }
-    if (!database.database_name) {
-      throw new Error(`D1 database binding ${database.binding ?? index} has a placeholder database_id but no database_name.`);
-    }
-
-    const resolved = ensureD1Database(database.database_name);
-    if (resolved.created) {
-      created.push(`d1:${database.database_name}`);
-    }
-    console.log(`Using D1 database ${database.database_name}: ${resolved.id}`);
-    content = writeConfigValue(content, ['d1_databases', index, 'database_id'], resolved.id);
-  }
-
-  // KV namespaces — patch placeholder hex IDs with real IDs
+  // Each of the four below re-parses before it patches, because each writes into the config text
+  // the previous one produced. They are separate functions because they are separate resources
+  // with separate rules, and one loop holding all four read as a single resource list with the
+  // differences hidden in the bodies.
+  content = provisionD1Databases(content, config, created);
   config = parse(content) as WranglerConfig;
-  for (const [index, namespace] of config.kv_namespaces?.entries() ?? []) {
-    if (namespace.id !== DEFAULT_HEX_ID) {
-      continue;
-    }
-    if (!namespace.binding) {
-      throw new Error(`KV namespace at index ${index} has a placeholder id but no binding.`);
-    }
 
-    const resolvedNamespace = ensureKVNamespace(config, namespace.binding);
-    const namespaceName = getKVNamespaceName(config, namespace.binding);
-    if (resolvedNamespace.created) {
-      created.push(`kv:${namespaceName}`);
-    }
-    console.log(`Using KV namespace ${namespaceName}: ${resolvedNamespace.id}`);
-    content = writeConfigValue(content, ['kv_namespaces', index, 'id'], resolvedNamespace.id);
-  }
-
-  // Secrets Store — patch placeholder hex IDs with real store ID
+  content = provisionKvNamespaces(content, config, created);
   config = parse(content) as WranglerConfig;
-  const secretStoreIndexes = (config.secrets_store_secrets ?? [])
-    .map((secret, index) => ({ secret, index }))
-    .filter(({ secret }) => secret.store_id === DEFAULT_HEX_ID);
-  if (secretStoreIndexes.length > 0) {
-    const existed = listSecretStores().some((store) => store.name === DEFAULT_SECRET_STORE_NAME);
-    const storeId = ensureSecretStore();
-    if (!existed) {
-      created.push(`secrets-store:${DEFAULT_SECRET_STORE_NAME}`);
-    }
-    console.log(`Using Secrets Store: ${storeId}`);
-    for (const { index } of secretStoreIndexes) {
-      content = writeConfigValue(content, ['secrets_store_secrets', index, 'store_id'], storeId);
-    }
-  }
+
+  content = provisionSecretStore(content, config, created);
 
   writeFileSync(CONFIG_PATH, content.endsWith('\n') ? content : `${content}\n`);
 
-  // Queues — name-based, no config patching needed. Created names are reported
-  // like every other resource so a deploy log shows what appeared.
   config = parse(content) as WranglerConfig;
-  for (const queueName of queueNamesIn(config)) {
-    if (ensureQueue(queueName)) {
-      created.push(`queue:${queueName}`);
-    }
-  }
+  provisionQueues(config, created);
 
   // Vectorize indexes — name-based, no config patching needed
   for (const binding of config.vectorize ?? []) {

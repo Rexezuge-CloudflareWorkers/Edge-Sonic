@@ -61,13 +61,7 @@ function PhaseRow({ report }: { report: PhaseReport }) {
   // `variant`, not `tone`: `Badge` is a cva and its variant names are the tones. `error` rather
   // than `danger` for the same reason — the name is the token.
   const variant =
-    report.status === 'failed'
-      ? 'error'
-      : report.status === 'partial'
-        ? 'warning'
-        : report.status === 'imported'
-          ? 'success'
-          : 'neutral';
+    report.status === 'failed' ? 'error' : report.status === 'partial' ? 'warning' : report.status === 'imported' ? 'success' : 'neutral';
   return (
     <div className="border-b border-[var(--color-border)] py-3 last:border-b-0">
       <div className="flex flex-wrap items-center justify-between gap-2">

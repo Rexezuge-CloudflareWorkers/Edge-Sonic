@@ -297,10 +297,14 @@ class KvCache {
       return false;
     }
     const ttl = clampTtl(options?.ttlSeconds, domain);
-    return await this.guard('put', async () => {
-      await ns.put(buildKvKey(domain, parts), value, ttl === undefined ? undefined : { expirationTtl: ttl });
-      return true;
-    }, false);
+    return await this.guard(
+      'put',
+      async () => {
+        await ns.put(buildKvKey(domain, parts), value, ttl === undefined ? undefined : { expirationTtl: ttl });
+        return true;
+      },
+      false,
+    );
   }
 
   public async getJson<T>(domain: KvDomainName, parts: readonly string[]): Promise<T | null> {
@@ -328,9 +332,13 @@ class KvCache {
   public async del(domain: KvDomainName, parts: readonly string[]): Promise<void> {
     const ns = this.namespace;
     if (!ns) return;
-    await this.guard('delete', async () => {
-      await ns.delete(buildKvKey(domain, parts));
-    }, undefined);
+    await this.guard(
+      'delete',
+      async () => {
+        await ns.delete(buildKvKey(domain, parts));
+      },
+      undefined,
+    );
   }
 
   /**
@@ -351,28 +359,33 @@ class KvCache {
     const ns = this.namespace;
     if (!ns) return 0;
     const prefix = parts.length === 0 ? `${domain}:` : buildKvKey(domain, parts);
-    const result = await this.guard('purge', async () => {
-      let deleted = 0;
-      // Restart from the start after each page: deleting while a positional
-      // cursor advances would skip keys. Each pass removes a full page, so the
-      // loop terminates; the page cap bounds worst-case cost.
-      for (let page = 0; page < PURGE_MAX_PAGES; page += 1) {
-        this.meter.charge(1, 'kv');
-        const listed = await ns.list({ prefix, limit: PURGE_LIST_LIMIT });
-        if (listed.keys.length === 0) return deleted;
-        for (const key of listed.keys) {
-          // Per delete rather than per `guard`: `purgePrefix` wraps a whole loop in one
-          // `guard`, so charging there would report a 10,000-key purge as one subrequest. It
-          // has no production caller, which is exactly why it is the one place a loop needed
-          // saying out loud.
+    const result = await this.guard(
+      'purge',
+      async () => {
+        let deleted = 0;
+        // Restart from the start after each page: deleting while a positional
+        // cursor advances would skip keys. Each pass removes a full page, so the
+        // loop terminates; the page cap bounds worst-case cost.
+        for (let page = 0; page < PURGE_MAX_PAGES; page += 1) {
           this.meter.charge(1, 'kv');
-          await ns.delete(key.name);
-          deleted += 1;
+          const listed = await ns.list({ prefix, limit: PURGE_LIST_LIMIT });
+          if (listed.keys.length === 0) return deleted;
+          for (const key of listed.keys) {
+            // Per delete rather than per `guard`: `purgePrefix` wraps a whole loop in one
+            // `guard`, so charging there would report a 10,000-key purge as one subrequest. It
+            // has no production caller, which is exactly why it is the one place a loop needed
+            // saying out loud.
+            this.meter.charge(1, 'kv');
+            await ns.delete(key.name);
+            deleted += 1;
+          }
+          if (listed.keys.length < PURGE_LIST_LIMIT) return deleted;
         }
-        if (listed.keys.length < PURGE_LIST_LIMIT) return deleted;
-      }
-      return deleted;
-    }, 0, { charge: false });
+        return deleted;
+      },
+      0,
+      { charge: false },
+    );
     return result;
   }
 }

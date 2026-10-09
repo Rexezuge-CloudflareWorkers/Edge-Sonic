@@ -27,7 +27,7 @@ last updated 2026-04-21). So this is not a scan that slows down. Subsonic authen
 
 Meanwhile:
 
-- `getScanStatus` reported `scanning: true` throughout, which every client reads as *keep polling*.
+- `getScanStatus` reported `scanning: true` throughout, which every client reads as _keep polling_.
 - `toSubsonicError` masked the cause into `code=0`, so the one fact an operator needed — a clock — was
   in an exception nobody could read.
 - The retry counter was charged for a condition it was never meant to bound, so eventually the scan
@@ -37,8 +37,8 @@ Three of those are separate defects, and only the first is about the platform.
 
 ## Why `failed` could not carry it
 
-`failed` means *retried within a bound that the retry counter supplies*, and `stalled` means *not
-retried at all — an operator must act*. Neither is true of a spent allowance: it resolves by
+`failed` means _retried within a bound that the retry counter supplies_, and `stalled` means _not
+retried at all — an operator must act_. Neither is true of a spent allowance: it resolves by
 itself, at a known moment, and needs no operator and no attempt.
 
 Collapsing it into either produces a loop (retry) or a wedge (stall). So `paused` is a third answer:
@@ -46,19 +46,19 @@ Collapsing it into either produces a loop (retry) or a wedge (stall). So `paused
 
 ## Two questions, and one predicate could not answer both
 
-`isAdvancing` is what `getScanStatus`'s `scanning` is built from, and it answers *"will more work
-happen if I poll again?"* — which every client reads as *stop polling* when the answer is false.
+`isAdvancing` is what `getScanStatus`'s `scanning` is built from, and it answers _"will more work
+happen if I poll again?"_ — which every client reads as _stop polling_ when the answer is false.
 
-The alarm needs a different question: *"will this resume without a client?"* For `paused` the answers
+The alarm needs a different question: _"will this resume without a client?"_ For `paused` the answers
 are **opposite**:
 
-| caller | question | `paused` |
-| --- | --- | --- |
-| `ScanWorker`'s alarm | will this resume by itself? | **true** |
-| `getScanStatus` | will my poll buy anything? | **false** |
+| caller               | question                    | `paused`  |
+| -------------------- | --------------------------- | --------- |
+| `ScanWorker`'s alarm | will this resume by itself? | **true**  |
+| `getScanStatus`      | will my poll buy anything?  | **false** |
 
 So `willResumeWithoutAPoll` and `isAdvancing` are separate functions. One predicate for both is the
-same shape of defect as `scanning` once answering *"did this call do work"*, which is what stopped
+same shape of defect as `scanning` once answering _"did this call do work"_, which is what stopped
 every scan in the product from ever finishing — and its mirror here would delete the alarm and leave
 an allowance spent until somebody noticed.
 
@@ -69,7 +69,7 @@ them. A pause held in `scan_state` would be unwritable exactly when it is needed
 page — which reads D1 — could not see it either. So:
 
 - `ScanPauseStore` holds it, and `getStatus` reads it back and lets it **override** the stored
-  status. D1 cannot know about a pause entered *because* it was refusing writes, so its row is
+  status. D1 cannot know about a pause entered _because_ it was refusing writes, so its row is
   guaranteed stale about it: it says `scanning`, which an operator reads as working.
 - The alarm is armed for `resumeAt`, so the chain sleeps through the window rather than re-running
   the refusal a second at a time.
@@ -92,7 +92,7 @@ So the scan paces itself:
   figure, so it moves when the platform's number does — the flat `1,000` it replaced was 20% of the
   old `5,000` and 1% of the real one.
 - Divided by the number of **registered** libraries, not `MAX_LIBRARIES` — the allowance is per
-  *account*, so a per-library cap is unsound the moment a second library exists, and using the
+  _account_, so a per-library cap is unsound the moment a second library exists, and using the
   configured maximum would give a one-library deployment a tenth of the budget it could have had.
 - **Counted in billed rows**, not table rows — see the next section. The number is a measurement
   taken off each statement's own result, never a figure declared at a call site.
@@ -110,7 +110,7 @@ Pricing page, definition 6:
 > Indexes will add an additional written row when writes include the indexed column, as there are
 > two rows written: one to the table itself, and one to the index.
 
-So the unit is a **billed row**, and the multiplier is a property of the *table*. `songs` carries
+So the unit is a **billed row**, and the multiplier is a property of the _table_. `songs` carries
 **nine** indexes — eight declared plus the implicit unique index SQLite creates for
 `id TEXT PRIMARY KEY` — so one insert is ten rows of allowance; `nodes` is four, and `scan_state`,
 which declares no index at all, is two.
@@ -142,7 +142,7 @@ Three consequences, and each is a separate defect:
 
 ### What it cost, and what raising the ceiling would have cost alone
 
-Correcting the constant from 5,000 to 100,000 *by itself* would have multiplied a ten-fold
+Correcting the constant from 5,000 to 100,000 _by itself_ would have multiplied a ten-fold
 under-count by twenty — an outage, not a slow scan. The two corrections only make sense together,
 which is why they are one change.
 
@@ -172,7 +172,7 @@ that means something is genuinely absent.
 ## The negative that matters
 
 `isD1ErrorRetryable` already answered `false` for this message, **by accident of vocabulary**:
-`too many` is in its retryable list and `exceeded` is not. So today there is no retry storm *inside*
+`too many` is in its retryable list and `exceeded` is not. So today there is no retry storm _inside_
 the DAO, and nothing enforces that. It is asserted, because adding `/exceeded/` is an entirely
 reasonable-looking change that would turn a refusal which cannot change for hours into three attempts
 with backoff per statement, per chunk, per alarm.
@@ -187,7 +187,7 @@ from a test.
 `test/d1-daily-limit.test.ts` — the classifier with its negatives, the pause beside the ordinary
 fault, the two predicates, and the budget's derivation including the day/month/leap-day arithmetic.
 Also the **unit**: the limit pinned to the published 100,000 rather than derived from anything, the
-reserve asserted as a *share* rather than as a numeral, and `0` disabling the pacing.
+reserve asserted as a _share_ rather than as a numeral, and `0` disabling the pacing.
 
 `test/schema.int.test.ts` — the billed-row model against `sqlite_schema`, in both directions. The
 load-bearing pair is the one that runs the **real DAO**: reverting either `runWriteBatch`'s batch

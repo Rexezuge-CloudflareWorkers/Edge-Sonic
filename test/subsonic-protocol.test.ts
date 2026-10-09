@@ -259,7 +259,9 @@ describe('envelope', () => {
   });
 
   it('wraps JSON under the response element name', async () => {
-    const response = successResponse(elList('indexes', 'shortcut', {}, [el('shortcut', { id: 'dir:a', name: 'Blur' })]), { format: 'json' });
+    const response = successResponse(elList('indexes', 'shortcut', {}, [el('shortcut', { id: 'dir:a', name: 'Blur' })]), {
+      format: 'json',
+    });
     const body = (await response.json()) as Record<string, { status: string; indexes: { shortcut: unknown } }>;
     expect(body['subsonic-response']!.status).toBe('ok');
     // `array: true` means one item is still an array. Subsonic's own server emits a
@@ -312,14 +314,18 @@ describe('envelope', () => {
     // songs gets `song` and nothing for `album`. The previous behaviour seeded every
     // declared key, which is why one assertion could cover both halves at once and neither
     // was distinguishable from the other.
-    const body = (await (await successResponse(elList('starred2', ['album', 'song'], {}, [el('song', { id: 's:1' })]), { format: 'json' })).json()) as {
+    const body = (await (
+      await successResponse(elList('starred2', ['album', 'song'], {}, [el('song', { id: 's:1' })]), { format: 'json' })
+    ).json()) as {
       'subsonic-response': { starred2: Record<string, unknown> };
     };
     expect(Object.keys(body['subsonic-response'].starred2)).toEqual(['song']);
   });
 
   it('renders a one-item list as an array, not as a bare object', async () => {
-    const body = (await (await successResponse(elList('starred2', 'song', {}, [el('song', { id: 's:1' })]), { format: 'json' })).json()) as {
+    const body = (await (
+      await successResponse(elList('starred2', 'song', {}, [el('song', { id: 's:1' })]), { format: 'json' })
+    ).json()) as {
       'subsonic-response': { starred2: { song: unknown } };
     };
     expect(Array.isArray(body['subsonic-response'].starred2.song)).toBe(true);
@@ -351,9 +357,21 @@ describe('envelope', () => {
     const at = async (n: number): Promise<unknown> => {
       const album = albumWithSongs(
         { id: 'al:1', name: 'A', songCount: n, duration: 0 },
-        Array.from({ length: n }, (_, i) => ({ id: `s:${i}`, title: `t${i}`, mediaType: 'song' as const, duration: 0, bitRate: 0, size: 0, contentType: 'audio/flac', suffix: 'flac', playCount: 0 })),
+        Array.from({ length: n }, (_, i) => ({
+          id: `s:${i}`,
+          title: `t${i}`,
+          mediaType: 'song' as const,
+          duration: 0,
+          bitRate: 0,
+          size: 0,
+          contentType: 'audio/flac',
+          suffix: 'flac',
+          playCount: 0,
+        })),
       );
-      const body = (await (await successResponse(album, { format: 'json' })).json()) as { 'subsonic-response': { album: { song: unknown } } };
+      const body = (await (await successResponse(album, { format: 'json' })).json()) as {
+        'subsonic-response': { album: { song: unknown } };
+      };
       return body['subsonic-response'].album.song;
     };
     expect(Array.isArray(await at(1))).toBe(true);
@@ -377,7 +395,16 @@ describe('envelope', () => {
    * `mediaType` to tell a song from an album reads nothing.
    */
   it('publishes type as the container and mediaType as the shape', async () => {
-    const song: Song = { id: 's:1', title: 'Akane', mediaType: 'song', duration: 256, bitRate: 200, size: 1, contentType: 'audio/ogg', suffix: 'opus' };
+    const song: Song = {
+      id: 's:1',
+      title: 'Akane',
+      mediaType: 'song',
+      duration: 256,
+      bitRate: 200,
+      size: 1,
+      contentType: 'audio/ogg',
+      suffix: 'opus',
+    };
     const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as {
       'subsonic-response': { song: Record<string, unknown> };
     };
@@ -440,8 +467,19 @@ describe('envelope', () => {
     // ignore — so both come from one source. Asserted against the same article list
     // `getIndexes` advertises.
     const at = async (title: string): Promise<unknown> => {
-      const song: Song = { id: 's:1', title, mediaType: 'song', duration: 0, bitRate: 0, size: 1, contentType: 'audio/flac', suffix: 'flac' };
-      const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as { 'subsonic-response': { song: { sortName: unknown } } };
+      const song: Song = {
+        id: 's:1',
+        title,
+        mediaType: 'song',
+        duration: 0,
+        bitRate: 0,
+        size: 1,
+        contentType: 'audio/flac',
+        suffix: 'flac',
+      };
+      const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as {
+        'subsonic-response': { song: { sortName: unknown } };
+      };
       return body['subsonic-response'].song.sortName;
     };
 
@@ -460,7 +498,16 @@ describe('envelope', () => {
     // *and* knows the answer is none — an absent key claims nothing, which is the honest state.
     // Paired with the test above deliberately: together they say the key tracks the data,
     // rather than that it is always present or never present.
-    const song: Song = { id: 's:1', title: '01 - untagged', mediaType: 'song', duration: 0, bitRate: 0, size: 1, contentType: 'audio/flac', suffix: 'flac' };
+    const song: Song = {
+      id: 's:1',
+      title: '01 - untagged',
+      mediaType: 'song',
+      duration: 0,
+      bitRate: 0,
+      size: 1,
+      contentType: 'audio/flac',
+      suffix: 'flac',
+    };
     const body = (await (await successResponse(songElement(song), { format: 'json' })).json()) as {
       'subsonic-response': { song: Record<string, unknown> };
     };
@@ -476,7 +523,9 @@ describe('envelope', () => {
     // both: `title` duplicated `name` (so every album carried two identical fields
     // and a client reading the one the schema names still worked, which is why it
     // was invisible), and `isDir: true` asserted a field the schema does not have.
-    const body = (await (await successResponse(albumElement({ id: 'al:1', name: 'Akane', songCount: 1, duration: 256 }), { format: 'json' })).json()) as {
+    const body = (await (
+      await successResponse(albumElement({ id: 'al:1', name: 'Akane', songCount: 1, duration: 256 }), { format: 'json' })
+    ).json()) as {
       'subsonic-response': { album: Record<string, unknown> };
     };
     expect(body['subsonic-response'].album).not.toHaveProperty('title');
@@ -489,7 +538,11 @@ describe('envelope', () => {
     // declaring `song` on the shared album builder would attach an empty `"song": []` to
     // every album in `getAlbumList2`, `getArtist` and `search2`/`search3` — a list of
     // albums that each claim to carry no songs, which is a different wrong answer.
-    const body = (await (await successResponse(elList('albumList2', 'album', {}, [albumElement({ id: 'al:1', name: 'A', songCount: 12, duration: 3600 })]), { format: 'json' })).json()) as {
+    const body = (await (
+      await successResponse(elList('albumList2', 'album', {}, [albumElement({ id: 'al:1', name: 'A', songCount: 12, duration: 3600 })]), {
+        format: 'json',
+      })
+    ).json()) as {
       'subsonic-response': { albumList2: { album: Array<Record<string, unknown>> } };
     };
     expect(body['subsonic-response'].albumList2.album[0]).not.toHaveProperty('song');
@@ -498,7 +551,9 @@ describe('envelope', () => {
   it('drops null and undefined attributes but keeps zero', async () => {
     // `duration=0` means "not read yet" and clients tolerate it; a *missing*
     // duration is read as a malformed record and hides the track.
-    const body = await (await successResponse(el('song', { id: 's:1', duration: 0, title: undefined, album: null }), { format: 'xml' })).text();
+    const body = await (
+      await successResponse(el('song', { id: 's:1', duration: 0, title: undefined, album: null }), { format: 'xml' })
+    ).text();
     expect(body).toContain('duration="0"');
     expect(body).not.toContain('title=');
     expect(body).not.toContain('album=');
@@ -741,7 +796,15 @@ describe('Subsonic ids', () => {
  */
 describe('the album id', () => {
   const LIBRARY = 'lib-1';
-  const row = (over: Partial<{ dir_path: string; album: string | null; album_ci: string | null; album_artist: string | null; album_artist_ci: string | null }> = {}) => ({
+  const row = (
+    over: Partial<{
+      dir_path: string;
+      album: string | null;
+      album_ci: string | null;
+      album_artist: string | null;
+      album_artist_ci: string | null;
+    }> = {},
+  ) => ({
     dir_path: 'Some/Album',
     album: 'Album',
     album_ci: 'album',
@@ -769,7 +832,7 @@ describe('the album id', () => {
     // case where writing the name plainly produces an id the server cannot decode.
     const names = [
       'Ex-Otogibanashi',
-      'Sgt. Pepper\'s Lonely Hearts Club Band',
+      "Sgt. Pepper's Lonely Hearts Club Band",
       '..',
       'a/b',
       '100%',
@@ -783,7 +846,9 @@ describe('the album id', () => {
     for (const name of names) {
       // An album name is keyed on its `_ci` twin, which is what the column holds.
       const albumRow = row({ album: name, album_ci: name.toLowerCase() });
-      expect(await roundTrip(albumRow, 'album'), `album name ${JSON.stringify(name)} did not survive the round trip`).toBe(`album:${name.toLowerCase()}`);
+      expect(await roundTrip(albumRow, 'album'), `album name ${JSON.stringify(name)} did not survive the round trip`).toBe(
+        `album:${name.toLowerCase()}`,
+      );
     }
   });
 

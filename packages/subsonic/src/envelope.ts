@@ -6,11 +6,11 @@
  * `openSubsonic`) — a failure envelope missing `version` is reported by some
  * clients as a server outage rather than as the actual error.
  */
-import { API_VERSION, DEFAULT_FORMAT, OPEN_SUBSONIC, SERVER_TYPE, SERVER_VERSION,  } from './constants';
+import { API_VERSION, DEFAULT_FORMAT, OPEN_SUBSONIC, SERVER_TYPE, SERVER_VERSION } from './constants';
 import type { ResponseFormat } from './constants';
 import { ErrorCode, SubsonicError, httpStatusForErrorCode } from './errors';
-import type { ElementNode,  } from './nodes';
-import { el,  } from './nodes';
+import type { ElementNode } from './nodes';
+import { el } from './nodes';
 import { isValidJsonpCallback, serializeJson, serializeJsonp, serializeXml } from './serialize';
 
 const CONTENT_TYPES: Record<ResponseFormat, string> = {
@@ -53,7 +53,9 @@ interface EnvelopeOptions {
 
 function render(root: ElementNode, options: EnvelopeOptions): string {
   if (options.format === 'json') return serializeJson(root);
-  return options.format === 'jsonp' && options.jsonpCallback && isValidJsonpCallback(options.jsonpCallback) ? serializeJsonp(root, options.jsonpCallback) : serializeXml(root);
+  return options.format === 'jsonp' && options.jsonpCallback && isValidJsonpCallback(options.jsonpCallback)
+    ? serializeJsonp(root, options.jsonpCallback)
+    : serializeXml(root);
 }
 
 /**
@@ -116,18 +118,8 @@ function notFound(what: string): SubsonicError {
   return new SubsonicError(ErrorCode.NotFound, `The requested data was not found: ${what}`);
 }
 
-export {
-  successResponse,
-  errorResponse,
-  resolveFormat,
-  missingParameter,
-  notFound,
-  CONTENT_TYPES,
-  
-  
-  
-};
-export type { EnvelopeOptions,    };
+export { successResponse, errorResponse, resolveFormat, missingParameter, notFound, CONTENT_TYPES };
+export type { EnvelopeOptions };
 
-export {XML_NAMESPACE, type ResponseFormat} from './constants';
-export {type Node, elList, el, type ElementNode} from './nodes';
+export { XML_NAMESPACE, type ResponseFormat } from './constants';
+export { type Node, elList, el, type ElementNode } from './nodes';

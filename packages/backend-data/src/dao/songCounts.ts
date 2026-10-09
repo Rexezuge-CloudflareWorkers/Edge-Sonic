@@ -37,11 +37,7 @@ class SongCountDAO extends BaseDAO {
    */
   public async countByLibrary(libraryId: string): Promise<number> {
     const row = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT COUNT(*) AS cnt FROM songs WHERE library_id = ?')
-          .bind(libraryId)
-          .first<CountRow>(),
+      async () => await this.database.prepare('SELECT COUNT(*) AS cnt FROM songs WHERE library_id = ?').bind(libraryId).first<CountRow>(),
       'songs.countByLibrary',
     );
     return row?.cnt ?? 0;

@@ -36,7 +36,13 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseError } from '@edge-sonic/backend-errors';
 import { isD1DailyLimitError, isD1ErrorRetryable, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
-import { ScanService, d1AllowancePause, dailyWriteAllowanceSpent, isAdvancing, willResumeWithoutAPoll } from '@edge-sonic/backend-services/index';
+import {
+  ScanService,
+  d1AllowancePause,
+  dailyWriteAllowanceSpent,
+  isAdvancing,
+  willResumeWithoutAPoll,
+} from '@edge-sonic/backend-services/index';
 import { SCAN_ROW_COUNT_PERSIST_INTERVAL } from '@edge-sonic/background/scanPause';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';

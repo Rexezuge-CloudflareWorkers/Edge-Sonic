@@ -6,7 +6,7 @@ Scope: `packages/media-tags`, and the enrichment and cover-art paths in
 Three rules run through all of it. **Nothing reads a whole file** — a prefix is bounded by
 `TAG_READ_BYTES` and a tail by `TAG_READ_TAIL_BYTES`, and where a byte lives outside both
 the answer is a **range** the caller must fetch, never a partial image. **What a row holds
-is a function of the file *and* of the reader that extracted it**, so invalidation carries
+is a function of the file _and_ of the reader that extracted it**, so invalidation carries
 `reader_version` as well as `mtime_ms`. And **a failure that says nothing about the file
 earns no stamp**, because `enriched_at` means "already read" and every later decision
 trusts it.
@@ -24,7 +24,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   mtime with the old duration — and `enrich`, which short-circuits on `enriched_at`,
   re-reads it.
 - **Staleness has two inputs, and only recording one makes a fix inert.** What a row
-  holds is a function of the file's bytes *and* of the reader that extracted them.
+  holds is a function of the file's bytes _and_ of the reader that extracted them.
   Keying invalidation on `mtime_ms` alone is correct for the bytes and blind to the
   reader, so a corrected reader leaves every row it already wrote looking current: the
   file genuinely has not moved, so the short-circuit is right and the wrong value is
@@ -42,7 +42,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
 - **A feature that covers one storage layout reports "nothing here" for the other, and
   nothing distinguishes them.** `getCoverArt` found artwork by listing the album folder
   and matching `cover`/`folder`/`front`/`album`/`albumart`/`thumb` ×
-  `jpg`/`jpeg`/`png`/`webp`. That is a complete implementation of *one* way a music
+  `jpg`/`jpeg`/`png`/`webp`. That is a complete implementation of _one_ way a music
   library stores a picture, and not the common one: Picard, beets, Metaflac, `ffmpeg` and
   every ripped disc put the image **inside the audio file**. For such a library the
   lookup found nothing and the endpoint served `PLACEHOLDER_PNG` — a **valid** 70-byte
@@ -60,7 +60,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   - **A placeholder that is a valid success is the worst possible answer.** `404`, or
     `200` with zero bytes, is recoverable — a client re-asks. A valid image is cached
     and never re-requested, so artwork that appears later is invisible until the client
-    evicts. That is why the no-artwork answer is a real, decodable image *and* why the
+    evicts. That is why the no-artwork answer is a real, decodable image _and_ why the
     extracted bytes are cached under a key that goes stale when the file does.
   - **A cover endpoint must never speak the Subsonic envelope.** A `404` from the origin
     on the cover `GET` threw, was classified by `toSubsonicError`, and came back as a
@@ -75,7 +75,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   (`decodeBlockTable`, `decodeSyncsafe`, `packetStarts`) before asserting anything about
   the reader. It paid for itself immediately: five of its own bugs surfaced as reader
   failures — a 4-byte Ogg granule where the spec has 8, a 36-byte `STREAMINFO` where it
-  has 34, a syncsafe *decoder* that ORed the whole value into its low byte, a
+  has 34, a syncsafe _decoder_ that ORed the whole value into its low byte, a
   `packetStarts` that reported where a packet's last segment began, and a
   `Uint8Array` image body that `Array.prototype.flat` refused to flatten, so every offset
   after it was wrong. In every case the reader was right and the fixture was not — which
@@ -86,7 +86,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   either `inline` (the bytes are in the buffer) or `range` (a claim about a byte range
   the caller must fetch) — never a partial image, because a truncated cover is a cover
   that "loaded" and renders as a grey box. And the limit is stated rather than implied:
-  a picture whose *block header* is past the prefix is not locatable at all, and the
+  a picture whose _block header_ is past the prefix is not locatable at all, and the
   answer is the placeholder. The MP3 retry exists for the one case a prefix cannot
   answer — an `APIC` frame is normally the **last** frame, and ID3 frame headers are
   interleaved with payloads, so there is no offset table to consult and the tag has to be
@@ -103,7 +103,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   **reassembled** — a comment block with embedded cover art is that case, and reading
   across the gap consumes the page header as comment data.
   Separately, a granule read off a page that is not the end-of-stream page — or off one
-  the buffer truncated — is a *number* that is not the file's length. A 240.61 s track
+  the buffer truncated — is a _number_ that is not the file's length. A 240.61 s track
   was served as 3 s and 15329 kbps instead of 191, and a client seeks by it. Returning
   `null` and letting `readOggTailDuration` answer from a second read is the fix; the
   `null` was never the bug, the missing tail read was. Asserted in
@@ -120,7 +120,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   - The second came from calling `400`, `404` and `413` "deterministic, therefore about
     the file". They are deterministic about the **request**. `413` is the sharp one: it is
     `WebDavClient.readBounded`'s own body limit, and an origin that answers a `Range`
-    request with `200` and the whole file trips it on *every* track. So one such origin
+    request with `200` and the whole file trips it on _every_ track. So one such origin
     stamped an entire library "already read" without reading any of it — a Subsonic client
     saw every album and artist still carrying the path-derived `(derived)` name and every
     song with a null duration, with no error anywhere and nothing on the operator's page,
@@ -150,7 +150,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   refused tail — or a deployment running `TAG_READ_TAIL_BYTES=0` — wrote an entry that
   answered "no duration" for that file's mtime, and raising the setting afterwards changed
   nothing. It is the artwork negative-cache defect below, in the one cache written
-  *before* anybody knows whether the answer is complete.
+  _before_ anybody knows whether the answer is complete.
   - `isCompleteEnrichment` (`index/songMetaCache.ts`) is the test, and **both sides** call
     it: the writer does not produce one, and the reader does not trust one. Guarding only
     the writer helps libraries created after it shipped and leaves every existing entry in
@@ -163,7 +163,7 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
     a retry of the one missing value would throw away a correct answer.
   - It lives in its own module because it is the third thing answering "has this file been
     read?" — `shouldEnrich` asks it of a **row**, this asks it of a **cache entry**, and
-    `enrich` consults the cache *before* the row, so an entry disagreeing with the row's
+    `enrich` consults the cache _before_ the row, so an entry disagreeing with the row's
     own stamp would decide the answer alone.
 - **"We looked and there is nothing" and "we could not look" are different
   observations, and only the first is worth remembering.** The artwork negative cache
@@ -174,12 +174,12 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   paired with the completed-read case for the same reason as above.
 - **A second implementation of a thing you already wrote is a defect, not a duplication.**
   `embeddedArt` re-derived the media type of a cached image with its own magic-byte table
-  while the extractor that *wrote* those bytes called `sniffImageType`, which knows four
+  while the extractor that _wrote_ those bytes called `sniffImageType`, which knows four
   more families. So a TIFF cover was extracted correctly and then served as the 1x1
   transparent placeholder on every request after the first, for the TTL, under a key only
   the file's revision can invalidate — the client got a `200` and a decodable image on both
   requests, so it cached the placeholder and never asked again. The generalisation is what
-  matters: extraction answered one question and re-identification answered a *different*
+  matters: extraction answered one question and re-identification answered a _different_
   one about the same bytes, and the suite could not see it because the formats were asserted
   through the path that already worked. One answer per question, and the second answer must
   be the first one's callee rather than its twin.

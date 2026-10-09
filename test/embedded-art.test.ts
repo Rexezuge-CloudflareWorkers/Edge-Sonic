@@ -55,7 +55,7 @@ const PNG_BODY = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x
  * A JPEG body large enough that its syncsafe and plain 32-bit frame-size readings
  * differ. Used by the teeth test that guards the v2.4 size field.
  */
-const LARGE_JPEG_BODY = [0xff, 0xd8, 0xff, 0xe0, ...Array.from({length: 400}, () => 0x20), 0xff, 0xd9];
+const LARGE_JPEG_BODY = [0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 400 }, () => 0x20), 0xff, 0xd9];
 
 function bytes(...values: number[]): number[] {
   return values;
@@ -135,7 +135,7 @@ function streamInfoBlock(): number[] {
     bytes(0x00, 0x00, 0x00), // min frame size
     bytes(0x00, 0x10, 0x00), // max frame size
     bytes(0x00, 0xac, 0x42, 0xf0, 0x00, 0x00, 0xac, 0x44), // the packed run
-    Array.from({length: 16}, () => 0), // MD5 of the unencoded audio
+    Array.from({ length: 16 }, () => 0), // MD5 of the unencoded audio
   );
 }
 
@@ -181,7 +181,9 @@ function flacFile(image: readonly number[], options: { paddingBefore?: number; m
   const imageOffset = options.pictureFirst
     ? FLAC_MAGIC.length + streamInfo.length + 4 + bodyHeaderLength
     : FLAC_MAGIC.length + streamInfo.length + comments.length + padding.length + 4 + bodyHeaderLength;
-  const parts = options.pictureFirst ? concat(FLAC_MAGIC, streamInfo, picture, body, comments, padding) : concat(FLAC_MAGIC, streamInfo, comments, padding, picture, body);
+  const parts = options.pictureFirst
+    ? concat(FLAC_MAGIC, streamInfo, picture, body, comments, padding)
+    : concat(FLAC_MAGIC, streamInfo, comments, padding, picture, body);
 
   return { bytes: Uint8Array.from(concat(parts, [0xff, 0xf8])), imageOffset }; // a frame sync, so the file is not just metadata
 }
@@ -232,7 +234,7 @@ describe('FLAC picture', () => {
     // the caller has to spend a second request for exactly that range. Locating it must
     // therefore be possible from the block table alone — the offset is arithmetic, not
     // something that has to be read.
-    const big = [0xff, 0xd8, 0xff, 0xe0, ...Array.from({length: 300_000}, () => 0x20), 0xff, 0xd9];
+    const big = [0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 300_000 }, () => 0x20), 0xff, 0xd9];
     const fixture = flacFile(big, { pictureFirst: true });
     const prefix = fixture.bytes.subarray(0, 128 * 1024);
 
@@ -262,7 +264,7 @@ describe('FLAC picture', () => {
     // reach and the honest answer is "no picture" — the placeholder — not a wrong
     // offset. Enormous padding blocks are rare, which is why this is a limit and not a
     // reason to read the whole file.
-    const big = [0xff, 0xd8, 0xff, 0xe0, ...Array.from({length: 300_000}, () => 0x20), 0xff, 0xd9];
+    const big = [0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 300_000 }, () => 0x20), 0xff, 0xd9];
     const fixture = flacFile(big, { paddingBefore: 300_000 });
     expect(findPicture(fixture.bytes.subarray(0, 128 * 1024))).toBeNull();
   });
@@ -281,7 +283,15 @@ describe('FLAC picture', () => {
   });
 
   it('reads no picture from a FLAC that has none', () => {
-    const noPicture = Uint8Array.from(concat(FLAC_MAGIC, blockHeader(0, 34), streamInfoBlock(), blockHeader(4, vorbisCommentBlock(['TITLE=x']).length, true), vorbisCommentBlock(['TITLE=x'])));
+    const noPicture = Uint8Array.from(
+      concat(
+        FLAC_MAGIC,
+        blockHeader(0, 34),
+        streamInfoBlock(),
+        blockHeader(4, vorbisCommentBlock(['TITLE=x']).length, true),
+        vorbisCommentBlock(['TITLE=x']),
+      ),
+    );
     expect(findPicture(noPicture)).toBeNull();
   });
 });
@@ -292,7 +302,11 @@ describe('FLAC picture', () => {
 
 function id3Header(tagSize: number, majorVersion = 4): number[] {
   // "ID3", version, flags, then a **syncsafe** size: 7 bits per byte.
-  return concat(ascii('ID3'), [majorVersion, 0, 0], [(tagSize >>> 21) & 0x7f, (tagSize >>> 14) & 0x7f, (tagSize >>> 7) & 0x7f, tagSize & 0x7f]);
+  return concat(
+    ascii('ID3'),
+    [majorVersion, 0, 0],
+    [(tagSize >>> 21) & 0x7f, (tagSize >>> 14) & 0x7f, (tagSize >>> 7) & 0x7f, tagSize & 0x7f],
+  );
 }
 
 /**
@@ -371,7 +385,12 @@ describe('ID3v2 picture', () => {
     // The walk has to skip real frames to get here, and taggers put `APIC` after the
     // text frames — so a reader that assumed the first frame is the picture, or that
     // trusted a frame offset table, would miss it.
-    const frames = concat(textFrame('TIT2', 'Skinny Love'), textFrame('TPE1', 'Bon Iver'), textFrame('TALB', 'For Emma'), apicFrame('image/jpeg', 'front', JPEG_BODY));
+    const frames = concat(
+      textFrame('TIT2', 'Skinny Love'),
+      textFrame('TPE1', 'Bon Iver'),
+      textFrame('TALB', 'For Emma'),
+      apicFrame('image/jpeg', 'front', JPEG_BODY),
+    );
     const file = Uint8Array.from(concat(id3Header(frames.length), frames, [0xff, 0xfb, 0x90, 0x00]));
 
     const source = findPicture(file);
@@ -438,7 +457,9 @@ describe('ID3v2 picture', () => {
   it('reads no picture from a truncated APIC frame', () => {
     // A frame whose size runs past the end of the buffer. The walk stops rather than
     // reading a partial image.
-    const file = Uint8Array.from(concat(id3Header(4096), ascii('APIC'), [0x00, 0x00, 0x40, 0x00, 0x00, 0x00], [0x00], ascii('image/jpeg'), [0x00, 0x03, 0x00]));
+    const file = Uint8Array.from(
+      concat(id3Header(4096), ascii('APIC'), [0x00, 0x00, 0x40, 0x00, 0x00, 0x00], [0x00], ascii('image/jpeg'), [0x00, 0x03, 0x00]),
+    );
     expect(findPicture(file)).toBeNull();
   });
 });
@@ -471,7 +492,8 @@ function oggFile(packet: readonly number[]): Uint8Array {
     remaining -= 255;
   }
   lacing.push(remaining);
-  if (lacing.length > 255) throw new Error(`Packet of ${packet.length} bytes needs ${lacing.length} lacing entries; one Ogg page holds at most 255.`);
+  if (lacing.length > 255)
+    throw new Error(`Packet of ${packet.length} bytes needs ${lacing.length} lacing entries; one Ogg page holds at most 255.`);
 
   // 'OggS' | version | header type | granule u64 | serial u32 | page seq u32 |
   // checksum u32 | segment count u8 | segment table | body. 27 bytes before the table.
@@ -556,7 +578,7 @@ describe('Ogg picture', () => {
     // Real image bytes, not filler. The filler has to begin with a magic or the reader
     // refuses it — correctly, since `resolveImageBytes` trusts nothing but the bytes,
     // and a payload of `0x41` is not a picture however well it is framed.
-    const big = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({length: 8000}, () => 0x41)];
+    const big = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 8000 }, () => 0x41)];
     const encoded = base64(Uint8Array.from(pictureBlock('image/png', '', big)));
     const packet = concat(ascii('\x03vorbis'), commentList([`METADATA_BLOCK_PICTURE=${encoded}`]));
     const file = oggFile(packet);
@@ -577,7 +599,7 @@ describe('Ogg picture', () => {
   it('refuses to build a one-page fixture for a packet that needs more than 255 lacing entries', () => {
     // The guard in `oggFile` above, asserted so it cannot be quietly removed: the
     // segment count is one byte, so a page holds at most 255 lacing values.
-    expect(() => oggFile(Array.from({length: 70_000}, () => 0))).toThrow(/at most 255/);
+    expect(() => oggFile(Array.from({ length: 70_000 }, () => 0))).toThrow(/at most 255/);
   });
 
   it('reads a picture from an OpusTags packet', () => {
@@ -623,7 +645,9 @@ describe('resolveImageBytes', () => {
   });
 
   it('identifies an ISO-BMFF image by its ftyp brand, not by a prefix', () => {
-    expect(resolveImageBytes(Uint8Array.from(concat(bytes(0x00, 0x00, 0x00, 0x20), ascii('ftypavif'), ascii('mif1'))))?.mimeType).toBe('image/avif');
+    expect(resolveImageBytes(Uint8Array.from(concat(bytes(0x00, 0x00, 0x00, 0x20), ascii('ftypavif'), ascii('mif1'))))?.mimeType).toBe(
+      'image/avif',
+    );
     expect(resolveImageBytes(Uint8Array.from(concat(bytes(0x00, 0x00, 0x00, 0x20), ascii('ftypheic'))))?.mimeType).toBe('image/heif');
     // A brand we do not know is not served as an image.
     expect(resolveImageBytes(Uint8Array.from(concat(bytes(0x00, 0x00, 0x00, 0x20), ascii('ftypmp42'))))).toBeNull();

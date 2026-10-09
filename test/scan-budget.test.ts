@@ -229,7 +229,9 @@ function createIndex(options: IndexOptions = {}) {
       nodes: {
         find: async (_libraryId: string, path: string) => await charge(() => nodes.get(nodeKey(path)) ?? null),
         listChildren: async (_libraryId: string, parentPath: string) =>
-          await charge(() => [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci))),
+          await charge(() =>
+            [...nodes.values()].filter((node) => node.parent_path === parentPath).sort((a, b) => a.name_ci.localeCompare(b.name_ci)),
+          ),
         // Reports both planes, and `has_song` is read from `songs` rather than inferred from
         // `nodes` — which is the whole point of the method. Deriving it from the node row would
         // model the shipped defect, where a node row current meant "nothing to write" for a song
@@ -283,50 +285,66 @@ function createIndex(options: IndexOptions = {}) {
          * and `test/scan-convergence.test.ts` asserts that list against real SQLite — which is what
          * keeps the two copies from drifting.
          */
-        upsertMany: async (inputs: readonly { libraryId: string; path: string; parentPath: string; name: string; mtimeMs: number | null; etag: string | null; depth: number; isScanned?: boolean }[]) => {
+        upsertMany: async (
+          inputs: readonly {
+            libraryId: string;
+            path: string;
+            parentPath: string;
+            name: string;
+            mtimeMs: number | null;
+            etag: string | null;
+            depth: number;
+            isScanned?: boolean;
+          }[],
+        ) => {
           const { written } = writeBatch(inputs.length);
           const result = await charge(() => {
-          let changed = 0;
-          for (const input of inputs.slice(0, written)) {
-            const key = nodeKey(input.path);
-            const existing = nodes.get(key);
-            // Every column the statement's `WHERE` compares, and `updated_at` deliberately not —
-            // so an unchanged row is *not* touched, which is what makes `updated_at` answerable.
-            if (
-              existing !== undefined &&
-              existing.parent_path === input.parentPath &&
-              existing.name === input.name &&
-              existing.name_ci === input.name.toLowerCase() &&
-              existing.mtime_ms === input.mtimeMs &&
-              existing.etag === input.etag &&
-              existing.depth === input.depth &&
-              existing.is_scanned === (input.isScanned ? 1 : 0)
-            ) {
-              continue;
+            let changed = 0;
+            for (const input of inputs.slice(0, written)) {
+              const key = nodeKey(input.path);
+              const existing = nodes.get(key);
+              // Every column the statement's `WHERE` compares, and `updated_at` deliberately not —
+              // so an unchanged row is *not* touched, which is what makes `updated_at` answerable.
+              if (
+                existing !== undefined &&
+                existing.parent_path === input.parentPath &&
+                existing.name === input.name &&
+                existing.name_ci === input.name.toLowerCase() &&
+                existing.mtime_ms === input.mtimeMs &&
+                existing.etag === input.etag &&
+                existing.depth === input.depth &&
+                existing.is_scanned === (input.isScanned ? 1 : 0)
+              ) {
+                continue;
+              }
+              nodes.set(key, {
+                library_id: LIBRARY_ID,
+                path: input.path,
+                parent_path: input.parentPath,
+                name: input.name,
+                name_ci: input.name.toLowerCase(),
+                mtime_ms: input.mtimeMs,
+                etag: input.etag,
+                depth: input.depth,
+                is_scanned: input.isScanned ? 1 : 0,
+                created_at: existing?.created_at ?? 0,
+                updated_at: 0,
+              });
+              changed += 1;
             }
-            nodes.set(key, {
-              library_id: LIBRARY_ID,
-              path: input.path,
-              parent_path: input.parentPath,
-              name: input.name,
-              name_ci: input.name.toLowerCase(),
-              mtime_ms: input.mtimeMs,
-              etag: input.etag,
-              depth: input.depth,
-              is_scanned: input.isScanned ? 1 : 0,
-              created_at: existing?.created_at ?? 0,
-              updated_at: 0,
-            });
-            changed += 1;
-          }
-          return changed;
-        }, inputs.length);
+            return changed;
+          }, inputs.length);
           return { changes: result, written, truncated: written < inputs.length, billedRows: billedRowsForTable('nodes', result) };
         },
         deleteSubtree: async (_libraryId: string, path: string) => {
           const doomed = [...nodes.values()].filter((node) => node.path === path || node.path.startsWith(`${path}/`));
           for (const node of doomed) nodes.delete(nodeKey(node.path));
-          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('nodes', doomed.length) };
+          return {
+            changes: doomed.length,
+            written: doomed.length,
+            truncated: false,
+            billedRows: billedRowsForTable('nodes', doomed.length),
+          };
         },
         countByLibrary: async () => nodes.size,
       },
@@ -350,60 +368,60 @@ function createIndex(options: IndexOptions = {}) {
         upsertFileFacts: async (inputs: readonly { id: string; path: string; size: number; mtimeMs: number }[]) => {
           const { written } = writeBatch(inputs.length);
           const result = await charge(() => {
-          for (const input of inputs.slice(0, written)) {
-            const dirPath = input.path.split('/').slice(0, -1).join('/');
-            const derived = deriveFromPath(dirPath, DERIVED_MARKER);
-            // Keyed by path with the id preserved, like production's
-            // `ON CONFLICT (library_id, path)`: the id is derived from the path,
-            // so a rescan computes the same value rather than duplicating the row.
-            const oldId = songs.get(input.path)?.id;
-            songs.set(input.path, {
-              id: oldId ?? input.id,
-              library_id: LIBRARY_ID,
-              path: input.path,
-              dir_path: dirPath,
-              name: input.path.split('/').pop() ?? input.path,
-              name_ci: input.path.toLowerCase(),
-              size: input.size,
-              mtime_ms: input.mtimeMs,
-              content_type: null,
-              suffix: 'flac',
-              // Derived from the file's name, which is what the statement does. `null` here
-              // is this repository's recorded double defect on this pair of columns: the
-              // suite agreed with itself and with neither production, and 113 of 118
-              // imported stars reported `not-found` on a library indexed under exactly the
-              // titles it was displaying. `test/schema.int.test.ts` runs the statement over
-              // real SQLite; this line is the double agreeing with it.
-              title: deriveTitleFromFileName(input.path.split('/').pop() ?? input.path),
-              title_ci: deriveTitleFromFileName(input.path.split('/').pop() ?? input.path).toLowerCase(),
-              artist: derived.artist,
-              artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
-              album: derived.album,
-              album_ci: derived.album === null ? null : derived.album.toLowerCase(),
-              // `album_artist` takes the derived **artist**, per `UPSERT_FILE_FACTS`:
-              // "`getArtist` groups on it, and an album whose album-artist column is NULL
-              // does not appear under the artist a client navigated to". Copying that
-              // comment rather than the rule is how the two drift.
-              album_artist: derived.artist,
-              album_artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
-              track: null,
-              disc: null,
-              year: null,
-              genre: null,
-              genre_ci: null,
-              duration: 0,
-              bitrate: 0,
-              sample_rate: null,
-              channels: null,
-              enriched_at: null,
-              reader_version: 0,
-              derived_version: DERIVED_VERSION,
-              created_at: 0,
-              updated_at: 0,
-            } as SongRow);
-          }
-          return inputs.length;
-        }, inputs.length);
+            for (const input of inputs.slice(0, written)) {
+              const dirPath = input.path.split('/').slice(0, -1).join('/');
+              const derived = deriveFromPath(dirPath, DERIVED_MARKER);
+              // Keyed by path with the id preserved, like production's
+              // `ON CONFLICT (library_id, path)`: the id is derived from the path,
+              // so a rescan computes the same value rather than duplicating the row.
+              const oldId = songs.get(input.path)?.id;
+              songs.set(input.path, {
+                id: oldId ?? input.id,
+                library_id: LIBRARY_ID,
+                path: input.path,
+                dir_path: dirPath,
+                name: input.path.split('/').pop() ?? input.path,
+                name_ci: input.path.toLowerCase(),
+                size: input.size,
+                mtime_ms: input.mtimeMs,
+                content_type: null,
+                suffix: 'flac',
+                // Derived from the file's name, which is what the statement does. `null` here
+                // is this repository's recorded double defect on this pair of columns: the
+                // suite agreed with itself and with neither production, and 113 of 118
+                // imported stars reported `not-found` on a library indexed under exactly the
+                // titles it was displaying. `test/schema.int.test.ts` runs the statement over
+                // real SQLite; this line is the double agreeing with it.
+                title: deriveTitleFromFileName(input.path.split('/').pop() ?? input.path),
+                title_ci: deriveTitleFromFileName(input.path.split('/').pop() ?? input.path).toLowerCase(),
+                artist: derived.artist,
+                artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
+                album: derived.album,
+                album_ci: derived.album === null ? null : derived.album.toLowerCase(),
+                // `album_artist` takes the derived **artist**, per `UPSERT_FILE_FACTS`:
+                // "`getArtist` groups on it, and an album whose album-artist column is NULL
+                // does not appear under the artist a client navigated to". Copying that
+                // comment rather than the rule is how the two drift.
+                album_artist: derived.artist,
+                album_artist_ci: derived.artist === null ? null : derived.artist.toLowerCase(),
+                track: null,
+                disc: null,
+                year: null,
+                genre: null,
+                genre_ci: null,
+                duration: 0,
+                bitrate: 0,
+                sample_rate: null,
+                channels: null,
+                enriched_at: null,
+                reader_version: 0,
+                derived_version: DERIVED_VERSION,
+                created_at: 0,
+                updated_at: 0,
+              } as SongRow);
+            }
+            return inputs.length;
+          }, inputs.length);
           return { changes: result, written, truncated: written < inputs.length, billedRows: billedRowsForTable('songs', result) };
         },
         // The prune path, made **visible**. It returned 0 unconditionally, so the largest
@@ -427,7 +445,12 @@ function createIndex(options: IndexOptions = {}) {
         deleteSubtree: async (_libraryId: string, dirPath: string) => {
           const doomed = [...songs.values()].filter((song) => song.dir_path === dirPath);
           for (const song of doomed) songs.delete(song.path);
-          return { changes: doomed.length, written: doomed.length, truncated: false, billedRows: billedRowsForTable('songs', doomed.length) };
+          return {
+            changes: doomed.length,
+            written: doomed.length,
+            truncated: false,
+            billedRows: billedRowsForTable('songs', doomed.length),
+          };
         },
         countByLibrary: async () => songs.size,
       },
@@ -613,7 +636,13 @@ function createScanHarness(tree: Record<string, DavEntry[]>, latencyMs?: number,
         ...(overrides.derivation !== undefined && { derivation: overrides.derivation }),
         ...(overrides.enrich !== false && {
           enrichSong: async (libraryRow, facts, onRequest) => {
-            const client = new WebDavClient(libraryRow.base_url, libraryRow.root_path, { username: 'u', password: 'p' }, dav.fetch, onRequest);
+            const client = new WebDavClient(
+              libraryRow.base_url,
+              libraryRow.root_path,
+              { username: 'u', password: 'p' },
+              dav.fetch,
+              onRequest,
+            );
             // The three charges `EnrichmentService` makes that are not WebDAV: a `songMeta` KV
             // read on the way in, an `applyMetadata` and a `songMeta` KV write on the way out.
             // Modelled explicitly rather than by standing up the real service, because what
@@ -999,10 +1028,18 @@ describe('the backfill and the walk share one chunk budget', () => {
       store: {
         listNeedingDerivation: async (_libraryId: string, limit: number) => {
           meter.charge(1, 'd1');
-          return Array.from({ length: Math.min(limit, state.remaining) }, (_, index) => ({ id: `s${index}`, dir_path: 'Blur/Holocene', name: '01 - Holocene.opus' }));
+          return Array.from({ length: Math.min(limit, state.remaining) }, (_, index) => ({
+            id: `s${index}`,
+            dir_path: 'Blur/Holocene',
+            name: '01 - Holocene.opus',
+          }));
         },
         async deriveFor(rows: readonly { id: string; dir_path: string; name: string }[]) {
-          return rows.map((row) => ({ id: row.id, title: deriveTitleFromFileName(row.name), ...deriveFromPath(row.dir_path, DERIVED_MARKER) }));
+          return rows.map((row) => ({
+            id: row.id,
+            title: deriveTitleFromFileName(row.name),
+            ...deriveFromPath(row.dir_path, DERIVED_MARKER),
+          }));
         },
         applyDerivation: async (writes: readonly { id: string }[]) => {
           if (!meter.canAfford(writes.length)) {

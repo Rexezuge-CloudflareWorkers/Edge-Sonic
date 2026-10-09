@@ -164,4 +164,4 @@ const mediaEndpoints = { stream, download, getCoverArt };
 
 export { mediaEndpoints, stream, download, passthrough };
 
-export {getCoverArt} from './coverArt';
+export { getCoverArt } from './coverArt';

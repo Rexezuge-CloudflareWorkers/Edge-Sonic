@@ -107,7 +107,9 @@ async function collectTargets(context: RestContext): Promise<Array<{ id: string;
  * different targets that happen to share an id — and `stars` is keyed `(user_id, item_id, item_type)`
  * for the same reason.
  */
-function distinctTargets(targets: ReadonlyArray<{ id: string; itemType: 'song' | 'album' | 'artist' }>): Array<{ id: string; itemType: 'song' | 'album' | 'artist' }> {
+function distinctTargets(
+  targets: ReadonlyArray<{ id: string; itemType: 'song' | 'album' | 'artist' }>,
+): Array<{ id: string; itemType: 'song' | 'album' | 'artist' }> {
   const seen = new Set<string>();
   const unique: Array<{ id: string; itemType: 'song' | 'album' | 'artist' }> = [];
   for (const target of targets) {

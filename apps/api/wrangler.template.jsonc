@@ -128,9 +128,7 @@
   // instead of being acknowledged as if they had been handled.
   "queues": {
     "producers": [{ "binding": "SCAN_QUEUE", "queue": "edge-sonic-scan" }],
-    "consumers": [
-      { "queue": "edge-sonic-scan", "max_batch_size": 4, "max_retries": 3, "dead_letter_queue": "edge-sonic-scan-dlq" },
-    ],
+    "consumers": [{ "queue": "edge-sonic-scan", "max_batch_size": 4, "max_retries": 3, "dead_letter_queue": "edge-sonic-scan-dlq" }],
   },
   // Nightly maintenance fanout: enqueue one scan-chunk per library so idle
   // deployments advance without a client poll. The alarm/poll paths remain the
@@ -286,7 +284,7 @@
     // Changing this re-derives every wholly-derived row, which changes the album grouping
     // key and therefore every album id — so stars and ratings on those albums are lost.
     // "Wholly derived" is recorded per row in songs.grouping_source, not inferred from
-    // this string; see migrations/0006_songs_grouping_source.sql.
+    // this string; see `migrations/0008_squash.sql`.
     "DERIVED_MARKER": "",
 
     // Tag enrichment reads at most this many bytes from the front of a file. A prefix

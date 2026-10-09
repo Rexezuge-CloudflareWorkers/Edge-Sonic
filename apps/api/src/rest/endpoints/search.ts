@@ -30,7 +30,6 @@ import { groupAlbumsOf } from './albumRecord';
 import { artistNameOf } from '../mappers';
 import type { AlbumIdentity } from '../albumIdentity';
 
-
 interface SearchSpec {
   readonly term: string;
   readonly field: 'any' | 'title' | 'artist' | 'album';
@@ -99,7 +98,12 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
   const { songs } = await runSearch(context, scope);
   const annotations = await annotationsFor(context, songs.length > 0);
 
-  const artists = groupArtists(songs, identityOf, context.pageSize(context.params.optionalInt('artistCount'), 20), context.params.int('artistOffset', 0, { min: 0, max: context.maxOffset }));
+  const artists = groupArtists(
+    songs,
+    identityOf,
+    context.pageSize(context.params.optionalInt('artistCount'), 20),
+    context.params.int('artistOffset', 0, { min: 0, max: context.maxOffset }),
+  );
   const albumOffset = context.params.int('albumOffset', 0, { min: 0, max: context.maxOffset });
   // **Completed, then grouped.** `songs` is the matched subset, so grouping it alone publishes
   // an album holding the tracks the term happened to hit — and the same album id then reports a
@@ -119,7 +123,9 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
   // `AlbumID3`. The wrapper is the only thing that distinguishes the two, so the
   // wrapper is what decides the element type.
   const albumNodes =
-    wrapperName === 'searchResult2' ? albums.map((album) => albumChildElement(album, album.artistId)) : albums.map((album) => albumElement(album));
+    wrapperName === 'searchResult2'
+      ? albums.map((album) => albumChildElement(album, album.artistId))
+      : albums.map((album) => albumElement(album));
 
   return respond(
     context,
@@ -130,11 +136,7 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
       // rather than `[]`.
       ['artist', 'album', 'song'],
       {},
-      [
-        ...artists,
-        ...albumNodes,
-        ...songs.map((song) => songElement(songToModel(song, identityOf, annotations))),
-      ],
+      [...artists, ...albumNodes, ...songs.map((song) => songElement(songToModel(song, identityOf, annotations)))],
     ),
   );
 }
@@ -147,7 +149,12 @@ async function search2Or3(context: RestContext, wrapperName: 'searchResult2' | '
  * `getArtists` and has to agree with this or the two browses disagree about an artist's
  * discography.
  */
-function groupArtists(rows: readonly SongRow[], identityOf: (song: SongRow) => AlbumIdentity, limit: number, offset: number): ElementNode[] {
+function groupArtists(
+  rows: readonly SongRow[],
+  identityOf: (song: SongRow) => AlbumIdentity,
+  limit: number,
+  offset: number,
+): ElementNode[] {
   const counts = new Map<string, { name: string; albums: Set<string> }>();
   for (const row of rows) {
     const name = row.artist ?? row.album_artist ?? artistNameOf(row);
@@ -184,5 +191,3 @@ async function search3(context: RestContext): Promise<EnvelopeResponse> {
 const searchEndpoints = { search, search2, search3 };
 
 export { searchEndpoints, search, search2, search3 };
-
-

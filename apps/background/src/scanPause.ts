@@ -154,7 +154,8 @@ class ScanPauseStore {
     const rows = (rolledOver ? 0 : memory.rows) + result.billedRows;
     this.pendingRows = rows - (rolledOver ? 0 : memory.rows);
 
-    const pause = result.status === 'paused' && result.resumeAt !== null ? { resumeAt: result.resumeAt, reason: result.lastError ?? 'Paused.' } : null;
+    const pause =
+      result.status === 'paused' && result.resumeAt !== null ? { resumeAt: result.resumeAt, reason: result.lastError ?? 'Paused.' } : null;
     const pauseChanged = (memory.pause === null) !== (pause === null) || memory.pause?.resumeAt !== pause?.resumeAt;
 
     if (!rolledOver && !pauseChanged && this.pendingRows < SCAN_ROW_COUNT_PERSIST_INTERVAL) return;

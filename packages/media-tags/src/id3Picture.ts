@@ -62,7 +62,7 @@ function skipTerminatedText(bytes: Uint8Array, from: number, end: number, encodi
  * which fails the bounds check and reports "no picture" on a file that has one.
  */
 function syncsafeAt(bytes: Uint8Array, offset: number): number | null {
-  if ((offset + 4 > bytes.length) || ((bytes[offset] | bytes[offset + 1] | bytes[offset + 2] | bytes[offset + 3]) > 0x7f)) return null;
+  if (offset + 4 > bytes.length || (bytes[offset] | bytes[offset + 1] | bytes[offset + 2] | bytes[offset + 3]) > 0x7f) return null;
   return (bytes[offset] << 21) | (bytes[offset + 1] << 14) | (bytes[offset + 2] << 7) | bytes[offset + 3];
 }
 

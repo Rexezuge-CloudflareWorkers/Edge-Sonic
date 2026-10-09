@@ -33,7 +33,10 @@ class UserDAO extends BaseDAO {
   }
 
   public async findById(id: string): Promise<UserRow | null> {
-    return await this.withRetry(async () => await this.database.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserRow>(), 'users.findById');
+    return await this.withRetry(
+      async () => await this.database.prepare('SELECT * FROM users WHERE id = ?').bind(id).first<UserRow>(),
+      'users.findById',
+    );
   }
 
   public async list(): Promise<UserRow[]> {
@@ -110,7 +113,11 @@ class UserDAO extends BaseDAO {
 
   public async setEnabled(id: string, isEnabled: boolean): Promise<void> {
     await this.withRetry(
-      async () => await this.database.prepare('UPDATE users SET is_enabled = ?, updated_at = ? WHERE id = ?').bind(isEnabled ? 1 : 0, nowSeconds(), id).run(),
+      async () =>
+        await this.database
+          .prepare('UPDATE users SET is_enabled = ?, updated_at = ? WHERE id = ?')
+          .bind(isEnabled ? 1 : 0, nowSeconds(), id)
+          .run(),
       'users.setEnabled',
     );
   }
@@ -129,7 +136,9 @@ class UserDAO extends BaseDAO {
     const result = await this.withRetry(
       async () =>
         await this.database
-          .prepare('SELECT l.id AS id FROM libraries l INNER JOIN user_libraries ul ON ul.library_id = l.id WHERE ul.user_id = ? ORDER BY l.slug_ci ASC')
+          .prepare(
+            'SELECT l.id AS id FROM libraries l INNER JOIN user_libraries ul ON ul.library_id = l.id WHERE ul.user_id = ? ORDER BY l.slug_ci ASC',
+          )
           .bind(userId)
           .all<{ id: string }>(),
       'users.listLibraryIds',
