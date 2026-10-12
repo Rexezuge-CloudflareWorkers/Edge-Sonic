@@ -25,7 +25,7 @@
  *   D1 write allowance,
  * - cleared on success, so one typo does not lock a user out.
  */
-import { DatabaseError } from '@edge-sonic/backend-errors';
+import { DatabaseError } from '@rexezuge/errors';
 import { decryptData, timingSafeEqualStrings } from '@edge-sonic/backend-data/crypto';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
 import { ErrorCode, md5Hex, SubsonicError } from '@edge-sonic/subsonic';
@@ -223,5 +223,5 @@ function throttleIdentity(username: string, clientIp: string): string {
 
 export { SubsonicAuthService, throttleIdentity };
 
-export { UnauthorizedError } from '@edge-sonic/backend-errors';
+export { UnauthorizedError } from '@rexezuge/errors';
 export { decodeLegacyPassword } from '@edge-sonic/subsonic';

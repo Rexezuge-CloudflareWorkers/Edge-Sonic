@@ -26,7 +26,7 @@
  * body is attacker-influenced text, so the message is chosen here from the *shape*
  * of the failure rather than read out of it.
  */
-import { NotFoundError, BadRequestError } from '@edge-sonic/backend-errors';
+import { NotFoundError, BadRequestError } from '@rexezuge/errors';
 
 /**
 The result of one probe. `status` is the origin's status when it answered, and

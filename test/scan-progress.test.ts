@@ -279,7 +279,7 @@ describe('describeScanState', () => {
     expect(presented.label).toMatch(/rescan/i);
     // Unlike `failed`, this one raises a notice: nothing else will change the outcome, so an
     // operator who is not watching the page has to be interrupted.
-    expect(presented.notice).toEqual({ type: 'error', text: SCAN_LABELS.stalled });
+    expect(presented.notice).toEqual({ kind: 'error', message: SCAN_LABELS.stalled });
   });
 
   it('reports a finished scan as current, and never counts a never-scanned library as zero', () => {
@@ -311,7 +311,7 @@ describe('describeScanState', () => {
     // there is any gives the number the badge is contradicting. Same reasoning as `never`.
     expect(presented.detail).toBeNull();
     // And it is a notice, because nothing else changes it — the same argument as `stalled`.
-    expect(presented.notice).toEqual({ type: 'error', text: SCAN_LABELS.empty });
+    expect(presented.notice).toEqual({ kind: 'error', message: SCAN_LABELS.empty });
   });
 
   it.each(['scanning', 'failed', 'stalled'] as const)('still shows zero tracks honestly while a scan is %s', (status) => {
@@ -411,7 +411,7 @@ describe('describeEnrichState', () => {
     expect(presented.tone).toBe('error');
     expect(presented.label).toBe(ENRICH_LABELS.stalled);
     expect(presented.label).toMatch(/enrich again/i);
-    expect(presented.notice).toEqual({ type: 'error', text: ENRICH_LABELS.stalled });
+    expect(presented.notice).toEqual({ kind: 'error', message: ENRICH_LABELS.stalled });
   });
 
   it('names the hour a paused run resumes and says it resumes itself', () => {

@@ -5,7 +5,7 @@
  * only. Three keys, never merged: user (mints tokens), WebDAV (largest read
  * surface), remote (third-party credential). See `serviceFactory.resolveKey`.
  */
-import type { Container } from '@edge-sonic/backend-runtime/di';
+import type { Container } from '@rexezuge/runtime';
 import type { SubrequestMeter } from '@edge-sonic/shared';
 import { resolveKey } from './serviceFactory';
 import type { RequestScopeEnv } from './serviceFactory';

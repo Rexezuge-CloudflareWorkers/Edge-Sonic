@@ -32,7 +32,11 @@
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
     "@edge-sonic/webdav": "workspace:*",
-    "jose": "6.2.12"
+    "jose": "6.2.12",
+    "@rexezuge/d1": "1.3.0",
+    "@rexezuge/errors": "1.3.0",
+    "@rexezuge/runtime": "1.3.0",
+    "@rexezuge/shared": "1.3.0"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

@@ -74,14 +74,14 @@ const PROBE_LABELS: ProbeLabels = {
 
 function describeProbe(result: ProbeResult, labels: ProbeLabels = PROBE_LABELS): ProbePresentation {
   if (result.ok) {
-    return { tone: 'success', label: labels.reachable, notice: { type: 'success', text: labels.probed } };
+    return { tone: 'success', label: labels.reachable, notice: { kind: 'success', message: labels.probed } };
   }
   // `error` is `null` only in a shape the server does not produce, so the
   // fallback exists to keep a malformed response from rendering an empty badge.
   const text = result.error ?? labels.failed;
-  // `type: 'error'` is the whole point: `NoticeBar` gives it `role="alert"`, so a
+  // `kind: 'error'` is the whole point: `NoticeBar` gives it `role="alert"`, so a
   // failed probe interrupts rather than being replaced by the next polite message.
-  return { tone: 'error', label: text, notice: { type: 'error', text } };
+  return { tone: 'error', label: text, notice: { kind: 'error', message: text } };
 }
 
 /**

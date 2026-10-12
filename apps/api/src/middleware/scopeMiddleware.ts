@@ -1,5 +1,5 @@
 import type { Next } from 'hono';
-import { asScopedContext, setRequestScope } from '@edge-sonic/backend-runtime/di';
+import { asScopedContext, setRequestScope } from '@rexezuge/runtime';
 import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composition';
 import type { SubrequestMeter } from '@edge-sonic/shared';
 import { BaseRoute } from '../endpoints/BaseRoute';

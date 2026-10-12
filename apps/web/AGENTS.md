@@ -12,9 +12,11 @@ Access — it has no Subsonic credential and could not use one.
   fetching in the shell and none in the router either — each view owns its own
   loading.
 - `src/components/layout/` — `AppHeader` (global, with the nav shown only for a
-  session), `AppPage` (`wide`/`narrow`/`hero` container; `wide` is `max-w-5xl` for this
-  surface, not the reference `max-w-7xl`), `NoticeBar`, `PageState` (`LoadingSpinner` +
-  `EmptyState`), `Unauthorized`, `SpaViewRouter`.
+  session), `AppPage` (local copy kept for `SpaViewRouter`; views take the kit's),
+  `Unauthorized`, `SpaViewRouter`. `NoticeBar`, `LoadingSpinner` and `EmptyState`
+  come from `@rexezuge/web`: the banner renders the kit's own `Notice`
+  (`{kind, message}` — errors assert, successes stay polite), and the empty
+  state takes one `message` node rather than `title` + `description`.
 - `src/components/ui/` — one component per file (`Card`, `Button`, `Input`, `Badge`), so
   a change to one cannot arrive in a diff that claims to be about another. A grab-bag
   `panels.tsx`/`controls.tsx` was the previous shape and is not to be reintroduced.
@@ -32,8 +34,8 @@ Access — it has no Subsonic credential and could not use one.
 - `src/lib/scanStatus.ts` — the two scan decisions: `isAdvancingStatus` (when to keep
   polling) and `describeScanState` (what is said). Pure, so it is testable from the root suite
   — see `test/scan-progress.test.ts`.
-- `src/hooks/` — `useNotice` (`showNotice(type, text)` + `clearNotice` for the
-  dismissible banner; timeout from `lib/constants`), `useCurrentUser`
+- `src/hooks/` — `useNotice` from `@rexezuge/web` (`showNotice(kind, message)` +
+  `dismissNotice` for the dismissible banner; timeout from the kit's constants), `useCurrentUser`
   (inflight-deduped `GET /user/me`, `authorized` tri-state), `useSpaLanguage`
   (detection precedence, `<html lang>` sync, manual-change flow; English-only, but
   the shape a second locale plugs into).

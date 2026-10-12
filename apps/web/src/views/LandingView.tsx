@@ -2,7 +2,7 @@ import { Database, Disc3, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
-import { AppPage } from '../components/layout/AppPage';
+import { AppPage } from '@rexezuge/web';
 import { ZERO_TRUST_AUTHENTICATION_PATH } from '../lib/constants';
 import { hasPriorSignInAttempt, rememberSignInAttempt } from '../lib/signInLoop';
 
@@ -19,7 +19,7 @@ function signIn() {
   // time the next one runs, only the stored fact says an attempt was made. See
   // `lib/signInLoop.ts` for what the repeat attempt means.
   rememberSignInAttempt();
-  globalThis.location.assign(ZERO_TRUST_AUTHENTICATION_PATH);
+  location.assign(ZERO_TRUST_AUTHENTICATION_PATH);
 }
 
 /**

@@ -17,8 +17,8 @@
 import { jwtVerify, createRemoteJWKSet } from 'jose';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { AppConfiguration as AppConfigurationType } from '@edge-sonic/backend-runtime/config';
-import { UnauthorizedError } from '@edge-sonic/backend-errors';
-import { isValidEmailFormat } from '@edge-sonic/shared/utils';
+import { UnauthorizedError } from '@rexezuge/errors';
+import { isValidEmailFormat } from '@rexezuge/shared';
 
 /**
  * The identity the `ACCESS` binding reports.

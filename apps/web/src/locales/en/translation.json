@@ -21,14 +21,15 @@
     "signInToViewSettings": "Sign in to view settings."
   },
   "common": {
-    "loading": "Loading…",
     "refresh": "Refresh",
     "save": "Save",
     "delete": "Delete",
     "close": "Close",
     "cancel": "Cancel",
     "copyToClipboard": "Copy to clipboard",
-    "typeToConfirm": "Type {{name}} to confirm"
+    "typeToConfirm": "Type {{name}} to confirm",
+    "success": "Success",
+    "error": "Error"
   },
   "landing": {
     "title": "The Subsonic API, Served From A WebDAV Library",

@@ -29,7 +29,7 @@ import { EnrichmentService } from '@edge-sonic/backend-services/index';
 import { billedRowsForTable } from '@edge-sonic/backend-data/dao';
 import type { MetadataWriteResult } from '@edge-sonic/backend-data/dao';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
-import { BadRequestError, DatabaseError, NotFoundError, RateLimitedError } from '@edge-sonic/backend-errors';
+import { BadRequestError, DatabaseError, NotFoundError, RateLimitedError } from '@rexezuge/errors';
 import { SubsonicError, ErrorCode } from '@edge-sonic/subsonic';
 import { WebDavClient, WebDavError } from '@edge-sonic/webdav';
 import { fakeKv } from './helpers/fakeKv';

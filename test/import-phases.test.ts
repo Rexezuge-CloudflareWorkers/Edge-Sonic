@@ -30,7 +30,7 @@ import {
 import type { PhaseContext, PhaseStore, RemoteSubsonicClient } from '@edge-sonic/backend-services/import';
 import type { SongRow } from '@edge-sonic/backend-data/dao';
 import type { RemoteAlbum, RemoteArtist } from '@edge-sonic/backend-services/import';
-import { UUIDUtil } from '@edge-sonic/shared/utils';
+import { UUIDUtil } from '@rexezuge/shared';
 
 interface Write {
   readonly kind: string;

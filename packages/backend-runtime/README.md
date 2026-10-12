@@ -1,7 +1,9 @@
 # `@edge-sonic/backend-runtime`
 
-Configuration, the KV cache and its breaker, the worker base class, and the subrequest meter
-every bound in this repository is derived from. Layer 1 — may reach layer 0 only.
+Configuration, the KV cache and its breaker, the subrequest meter every bound
+in this repository is derived from, and the Worker entrypoint policy. Layer 1 —
+may reach layer 0 only, plus the `@rexezuge/*` kernel packages the framework
+floor now comes from.
 
 The **behaviour** reachable from configuration, bindings and secrets is documented in
 [`docs/agents/runtime/AGENTS.md`](../../docs/agents/runtime/AGENTS.md). This file is what is
@@ -9,19 +11,19 @@ in the package.
 
 ## What is here
 
-| Path                                                      | Holds                                                                                                                        |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `config/ConfigurationDefaults.ts`                         | every default, in one file, beside the limit it belongs to                                                                   |
-| `config/subrequests.ts`                                   | `WORKER_SUBSREQUEST_CEILING = 50` and **every bound derived from it**                                                        |
-| `config/enrichSubrequests.ts`                             | the library-wide enrich chunk's page, derived from the same ceiling (split out when `subrequests.ts` hit the god-file limit) |
-| `config/ServiceEnv.ts`                                    | the declared shape of `env`                                                                                                  |
-| `config/EnvParser.ts`                                     | the parsers — `positiveInt`, `nonNegativeInt`, and why both                                                                  |
-| `config/sections/`                                        | `AuthConfig`, `LibraryLimits`                                                                                                |
-| `config/validate.ts`                                      | the warnings, kept off the class so it stays a facade                                                                        |
-| `di/RequestScope.ts`, `di/Container.ts`                   | the per-request registry                                                                                                     |
-| `kv/KvCache.ts`, `kv/KvDomains.ts`                        | the cache, the two domains, the breaker                                                                                      |
-| `base/AbstractEntrypointWorker.ts`, `base/runWorkflow.ts` | the Worker entrypoint                                                                                                        |
-| `logger.ts`                                               | the logger                                                                                                                   |
+| Path                                    | Holds                                                                                                                               |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `config/ConfigurationDefaults.ts`       | every default, in one file, beside the limit it belongs to                                                                          |
+| `config/subrequests.ts`                 | `WORKER_SUBSREQUEST_CEILING = 50` and **every bound derived from it**                                                               |
+| `config/enrichSubrequests.ts`           | the library-wide enrich chunk's page, derived from the same ceiling (split out when `subrequests.ts` hit the god-file limit)        |
+| `config/ServiceEnv.ts`                  | the declared shape of `env`                                                                                                         |
+| `config/EnvParser.ts`                   | the parsers — `positiveInt`, `nonNegativeInt`, and why both                                                                         |
+| `config/sections/`                      | `AuthConfig`, `LibraryLimits`                                                                                                       |
+| `config/validate.ts`                    | the warnings, kept off the class so it stays a facade                                                                               |
+| `di/RequestScope.ts`, `di/Container.ts` | the pre-kit per-request registry — superseded by `@rexezuge/runtime`, kept for the alias table; production scopes come from the kit |
+| `kv/KvCache.ts`, `kv/KvDomains.ts`      | the cache, the two domains, the breaker                                                                                             |
+| `base/runWorkflow.ts`                   | the Workflow failure policy (the entrypoint base itself is the kit's `AbstractEntrypointWorker`)                                    |
+| `logger.ts`                             | the logger                                                                                                                          |
 
 ## One platform number, and arithmetic rather than a typed constant
 
@@ -51,12 +53,14 @@ track for ever. `nonNegativeInt` had **no callers anywhere** at that moment: the
 that value existing, unused, in the same layer, while the line beside it called the other
 one.
 
-## `Container` is a map, and it says so
+## `Container` comes from the kit, and this codebase still only calls `bindValue`
 
-`bindValue` is the only registration this codebase uses — **thirty** of them — so the factory
-tier was deleted rather than kept. That took the "no binding for token" throw with it, the
-only diagnostic for a correctly-spelled-but-unbound token; the throw is back and is asserted
-for every entry in `Tokens`.
+`@rexezuge/runtime`'s `Container` carries both tiers again — `bind` with a
+factory plus `bindValue` — where this repository's copy had deleted the factory
+tier as unreachable. All thirty registrations in `createRequestScope` are still
+`bindValue`, so the factory tier is still unused here; what changed is only
+where the class lives. The "no binding for token" throw is the kit's, and it is
+still asserted for every entry in `Tokens`.
 
 ## The KV cache fails soft, and it fails _typed_
 

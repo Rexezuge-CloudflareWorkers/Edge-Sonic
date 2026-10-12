@@ -25,7 +25,7 @@
  * that will charge the delete, so what the operator consents to is what they pay.
  */
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { BadRequestError } from '@edge-sonic/backend-errors';
+import { BadRequestError } from '@rexezuge/errors';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 

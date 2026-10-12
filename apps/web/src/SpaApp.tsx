@@ -8,16 +8,17 @@
  * cannot see.
  */
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { AppHeader } from './components/layout/AppHeader';
-import { NoticeBar } from './components/layout/NoticeBar';
+import { NoticeBar, useNotice } from '@rexezuge/web';
 import { SpaViewRouter } from './components/layout/SpaViewRouter';
 import { useCurrentUser } from './hooks/useCurrentUser';
-import { useNotice } from './hooks/useNotice';
 import { useSpaLanguage } from './hooks/useSpaLanguage';
 import { clearSignInAttempt } from './lib/signInLoop';
 
 function SpaApp() {
-  const { notice, showNotice, clearNotice } = useNotice();
+  const { t } = useTranslation();
+  const { notice, showNotice } = useNotice();
   const { user, setUser, authorized } = useCurrentUser();
 
   // Cleared once a session exists, so a later expiry is an ordinary signed-out visit
@@ -44,7 +45,9 @@ function SpaApp() {
         visitor seeing links that lead to a sign-in gate.
       */}
       <AppHeader userEmail={user?.email ?? null} signedIn={authorized} />
-      {notice !== null && <NoticeBar notice={notice} onDismiss={clearNotice} />}
+      {notice !== null && (
+        <NoticeBar notice={notice} statusLabels={{ success: t('common.success', 'Success'), error: t('common.error', 'Error') }} />
+      )}
       <SpaViewRouter authorized={authorized} showNotice={showNotice} />
     </div>
   );

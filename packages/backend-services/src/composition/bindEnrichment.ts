@@ -13,12 +13,12 @@
  * chunk costs is `LibraryEnrichmentService`'s, and which strategy a deployment gets is
  * `apps/api`'s.
  */
-import type { Container } from '@edge-sonic/backend-runtime/di';
+import type { Container } from '@rexezuge/runtime';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { ENRICH_TRACKS_PER_CHUNK } from '@edge-sonic/backend-runtime/config';
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import { SongEnrichmentDAO } from '@edge-sonic/backend-data/dao';
-import type { D1Queryable } from '@edge-sonic/backend-data/utils';
+import type { D1Queryable } from '@rexezuge/d1';
 import type { SubrequestCounter } from '@edge-sonic/shared';
 import { LibraryEnrichmentService } from '../index/libraryEnrichment';
 import { InProcessEnrichDriver } from '../library/EnrichDriver';

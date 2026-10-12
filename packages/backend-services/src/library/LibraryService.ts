@@ -15,10 +15,11 @@
  * write: a row written before this rule existed, or by a migration, must not be
  * exempt because it is already in the database.
  */
-import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
+import { BadRequestError, ConflictError, NotFoundError } from '@rexezuge/errors';
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
-import { isLocalhostName, isPrivateOrInternalHost, MAX_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@edge-sonic/shared/utils';
+import { isPrivateOrInternalHost, MAX_REMOTE_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@rexezuge/shared';
+import { isLocalhostName } from '@edge-sonic/shared/utils';
 import { WebDavClient, WebDavError, toLibraryPath } from '@edge-sonic/webdav';
 import { classifyBeforeRequest, credentialUnreadable, fromStatus, reachable, unreachable } from './probeOutcome';
 import type { ProbeOutcome } from './probeOutcome';

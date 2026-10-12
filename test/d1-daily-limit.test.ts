@@ -34,7 +34,7 @@
  * and the diagnosis (on both dialects).
  */
 import { describe, expect, it } from 'vitest';
-import { DatabaseError } from '@edge-sonic/backend-errors';
+import { DatabaseError } from '@rexezuge/errors';
 import { isD1DailyLimitError, isD1ErrorRetryable, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
 import {
   ScanService,

@@ -23,9 +23,9 @@
  */
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
-import { BadRequestError } from '@edge-sonic/backend-errors';
+import { BadRequestError } from '@rexezuge/errors';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
-import { getRequestScope, asScopedContext, SCOPE_MISSING_MESSAGE } from '@edge-sonic/backend-runtime/di';
+import { getRequestScope, asScopedContext } from '@rexezuge/runtime';
 import { toUserResponse } from '@edge-sonic/backend-services/errors';
 import type { UserErrorBody } from '@edge-sonic/backend-services/errors';
 
@@ -49,6 +49,17 @@ type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmail
  * variable are declared.
  */
 type UserContext = Context<WorkerEnv>;
+
+/**
+ * The kit's missing-scope message, matched literally.
+ *
+ * `@rexezuge/runtime` does not export it, and the fallback below narrows on
+ * this one condition — a bare `catch` would silently re-mint a scope per call
+ * site. If the kit rewords it, this comparison misses and the fallback stops
+ * firing (fail-closed toward the middleware error, never toward a silent
+ * second scope), and the scope tests go red.
+ */
+const KIT_SCOPE_MISSING_MESSAGE = 'Request scope is not set. Register the scope middleware before routes.';
 
 /**
 User JSON body cap. Small by design — no user call carries media.
@@ -97,7 +108,7 @@ abstract class BaseRoute {
       // Narrowed to the one condition the fallback exists for. Anything else is a real
       // fault and propagates: a swallowed fault here is a silently re-minted scope, which
       // costs a request its shared singletons and reports nothing.
-      if (!(error instanceof Error) || error.message !== SCOPE_MISSING_MESSAGE) throw error;
+      if (!(error instanceof Error) || error.message !== KIT_SCOPE_MISSING_MESSAGE) throw error;
       return createRequestScope(c.env as Cloudflare.Env);
     }
   }

@@ -28,7 +28,7 @@
  * require re-entering any user's password, and a compromise of the most-read key must not yield
  * it. Merging any two would destroy a property invisibly.
  */
-import { ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
+import { ConflictError, NotFoundError } from '@rexezuge/errors';
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import { assertRemoteReachable, normalizeRemoteBaseUrl, normalizeRemoteUsername, normalizeSourceName } from './remoteOrigin';
 import { RemoteSubsonicClient } from './remoteClient';

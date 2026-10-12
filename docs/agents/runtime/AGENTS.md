@@ -333,21 +333,24 @@ the origin's.
 - `AppConfiguration` — an injectable view over env parsing: a facade over the section
   objects (`AuthConfig`, `LibraryLimits`), one method per setting. Inject it in new
   services; mock through constructor deps.
-- `Container` — a per-request registry of already-constructed services.
-  `createRequestScope(env)` in `backend-services/composition` is the composition root:
-  table-driven lazy DAO wiring plus service bindings, one scope per request, resolved with
-  `scope.get(Tokens.X)`. `scopeMiddleware` installs it; `BaseRoute.getScope` falls back to
-  a fresh scope for helpers and tests — narrowly, on the named missing-scope error only,
-  because a bare `catch` there would silently re-mint a scope **per call site**, which is
-  the defect the middleware ordering exists to prevent.
-  It used to be described as a "Factory + Singleton" DI, and the factory tier was
-  **unreachable**: all **30** registrations are `bindValue`, so `bind`, `resolve`,
-  `createChild`, `has`, `dispose` and `get`'s own factory branch had no callers (23 of 33
-  statements). That took the "no binding for token" throw with it — the only diagnostic
-  for a correctly-spelled-but-unbound token. The throw is back and is asserted for every
-  entry in `Tokens` in `test/rate-limit.test.ts`. There is **one** composition root —
-  `createScanWorkerScope` is a one-line delegation to `createRequestScope`, so "both roots"
-  was two entry names for one thing.
+- `Container` — `@rexezuge/runtime`'s per-request registry of
+  already-constructed services, carrying both tiers (`bind` with a factory plus
+  `bindValue`) where this repository's copy had deleted the factory tier as
+  unreachable. All **30** registrations in `createRequestScope` are still
+  `bindValue`, so the factory tier is still unused here; what moved is where
+  the class lives, and the request scope with it (`scopeMiddleware` sets and
+  `BaseRoute.getScope` reads the kit's key — one key, because a second scope
+  module is a second number nobody reconciles). `createRequestScope(env)` in
+  `backend-services/composition` is the composition root: table-driven lazy DAO
+  wiring plus service bindings, one scope per request, resolved with
+  `scope.get(Tokens.X)`. `BaseRoute.getScope` falls back to a fresh scope for
+  helpers and tests — narrowly, on the kit's missing-scope message only,
+  because a bare `catch` there would silently re-mint a scope **per call
+  site**, which is the defect the middleware ordering exists to prevent. The
+  "no binding for token" throw is the kit's and is asserted for every entry in
+  `Tokens` in `test/rate-limit.test.ts`. There is **one** composition root —
+  `createScanWorkerScope` is a one-line delegation to `createRequestScope`, so
+  "both roots" was two entry names for one thing.
 - **A binding that wraps another binding must not take a second meter.** `PlayCountImportWorker`
   needs a _narrower_ budget than the invocation's 50, so it took the scan's approach — but it
   built a **local** `SubrequestCounter` for the batch loop's `canAfford` while its DAOs charged

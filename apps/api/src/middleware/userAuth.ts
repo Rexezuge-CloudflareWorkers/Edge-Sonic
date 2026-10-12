@@ -18,7 +18,7 @@
  */
 import type { Next } from 'hono';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
+import { ErrorSanitizationUtil } from '@rexezuge/shared';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 

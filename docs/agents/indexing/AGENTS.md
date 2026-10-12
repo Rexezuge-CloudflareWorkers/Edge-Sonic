@@ -11,18 +11,19 @@ row-write allowance runs out in a couple of hours of scanning.
 
 ## The schema
 
-Three migrations, in Wrangler's order: `migrations/0008_squash.sql` (the baseline — 17
-tables), `migrations/0009_subsonic_import.sql` (3 more), and
+Four migrations, in Wrangler's order: `migrations/0008_squash.sql` (the baseline — 17
+tables), `migrations/0009_subsonic_import.sql` (3 more),
 `migrations/0010_drop_token_epoch.sql` (drops one column from `users`, and changes nothing
-else). **20 tables, 40 index entries** — 20 declared and 20 implicit `sqlite_autoindex_*`,
+else), and `migrations/0011_user_identity.sql` (the address registry: `users.current_email`
+plus `user_emails`). **21 tables, 43 index entries** — 22 declared and 21 implicit `sqlite_autoindex_*`,
 because a `TEXT PRIMARY KEY` is one. `PRAGMA foreign_key_check` is clean.
 
-| Table                                                                                 | Index entries | Billed rows per written row |
-| ------------------------------------------------------------------------------------- | ------------: | --------------------------: |
-| `songs`                                                                               |             9 |                      **10** |
-| `nodes`, `playlists`, `import_runs`                                                   |             3 |                           4 |
-| `users`, `libraries`, `user_libraries`, `playlist_entries`, `stars`, `import_sources` |             2 |                           3 |
-| the other nine                                                                        |             1 |                           2 |
+| Table                                                                                       | Index entries | Billed rows per written row |
+| ------------------------------------------------------------------------------------------- | ------------: | --------------------------: |
+| `songs`                                                                                     |             9 |                      **10** |
+| `users`, `nodes`, `playlists`, `import_runs`                                                |             3 |                           4 |
+| `libraries`, `user_libraries`, `playlist_entries`, `stars`, `import_sources`, `user_emails` |             2 |                           3 |
+| the other ten                                                                               |             1 |                           2 |
 
 Those counts live in `dao/billedRows.ts` and are asserted **both ways** against the real
 `sqlite_schema` in `test/schema.int.test.ts`, so a migration that adds an index turns the

@@ -26,7 +26,7 @@ import type { Harness } from './helpers/harness';
 import { ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, ScanStateDAO, UserDAO } from '@edge-sonic/backend-data/dao';
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import { readPhases } from '../apps/api/src/user/importRoutes';
-import { BadRequestError, ConflictError } from '@edge-sonic/backend-errors';
+import { BadRequestError, ConflictError } from '@rexezuge/errors';
 import { assertScansIdle, isImportInFlight } from '@edge-sonic/backend-services/import';
 import { runWorkflow } from '@edge-sonic/backend-runtime/base';
 import { Tokens, createRequestScope } from '@edge-sonic/backend-services/composition';

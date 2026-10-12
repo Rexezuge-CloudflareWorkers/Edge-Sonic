@@ -19,7 +19,7 @@ import type {
   UserDAO,
 } from '@edge-sonic/backend-data/dao';
 import type { SubrequestCounter } from '@edge-sonic/shared';
-import type { Token } from '@edge-sonic/backend-runtime/di';
+import type { Token } from '@rexezuge/runtime';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';

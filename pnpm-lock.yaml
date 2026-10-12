@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@rexezuge/tooling':
+        specifier: 1.3.0
+        version: 1.3.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.9)(typescript-eslint@8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)
     devDependencies:
       '@edge-sonic/backend-data':
         specifier: workspace:*
@@ -146,6 +150,15 @@ importers:
       '@edge-sonic/subsonic':
         specifier: workspace:*
         version: link:../../packages/subsonic
+      '@rexezuge/errors':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/runtime':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/shared':
+        specifier: 1.3.0
+        version: 1.3.0
       hono:
         specifier: 4.13.13
         version: 4.13.13
@@ -183,6 +196,12 @@ importers:
       '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../../packages/webdav
+      '@rexezuge/errors':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/runtime':
+        specifier: 1.3.0
+        version: 1.3.0
     devDependencies:
       '@types/node':
         specifier: 26.6.4
@@ -193,6 +212,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@rexezuge/web':
+        specifier: 1.3.0
+        version: 1.3.0(lucide-react@1.53.0(@types/react@19.3.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -257,6 +279,12 @@ importers:
       '@edge-sonic/subsonic':
         specifier: workspace:*
         version: link:../subsonic
+      '@rexezuge/errors':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/shared':
+        specifier: 1.3.0
+        version: 1.3.0
     devDependencies:
       '@types/node':
         specifier: 26.6.4
@@ -266,6 +294,10 @@ importers:
         version: 6.0.3
 
   packages/backend-errors:
+    dependencies:
+      '@rexezuge/errors':
+        specifier: 1.3.0
+        version: 1.3.0
     devDependencies:
       '@types/node':
         specifier: 26.6.4
@@ -313,6 +345,18 @@ importers:
       '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../webdav
+      '@rexezuge/d1':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/errors':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/runtime':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/shared':
+        specifier: 1.3.0
+        version: 1.3.0
       jose:
         specifier: 6.2.12
         version: 6.2.12
@@ -389,6 +433,18 @@ importers:
       '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../packages/webdav
+      '@rexezuge/d1':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/errors':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/runtime':
+        specifier: 1.3.0
+        version: 1.3.0
+      '@rexezuge/shared':
+        specifier: 1.3.0
+        version: 1.3.0
       vitest:
         specifier: 4.1.11
         version: 4.1.11(@types/node@26.6.4)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2)(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
@@ -1194,6 +1250,41 @@ packages:
 
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
+
+  '@rexezuge/d1@1.3.0':
+    resolution: {integrity: sha512-easaWVpg0w2A8m+SmUmdineN0MhiM7IqL8B0vZ+k0AKjXUL2fVG9FAVA1YyZ/FTe9EjbBJdoHg8Ztn9Jw5I8Rw==}
+
+  '@rexezuge/errors@1.3.0':
+    resolution: {integrity: sha512-EdrLpUdxYKqo6ATuYYFtC9q11QKNFAx8fCR+FjXjZbnDWYtkHXK1Gm0willDIwnxJmg8JkA9zJJEStyckB3KkQ==}
+
+  '@rexezuge/runtime@1.3.0':
+    resolution: {integrity: sha512-04xfSXoQxWzK0bpT+UTp37me7MVFwO1i7ZZGpix4unBQ/jw3/COrEFYUYnT9PqXPcRR94TLFSZfzIsRMDo65QA==}
+
+  '@rexezuge/shared@1.3.0':
+    resolution: {integrity: sha512-DrUvKLb1IOawa+zeYIptAa3IK+n2Tul6MjVDQ7KwZLHXOnT/tjZX4w6JR+458pRtZsIxT3FEXFrL5ZenmFGmJg==}
+
+  '@rexezuge/tooling@1.3.0':
+    resolution: {integrity: sha512-sAQZtWPUzXO8KPHYbQI8f7trCgCYrUV0uhZ8m8m1/o2BQJ01gVutO9uRpcZsALHth4ZChc+sytyvVlPPl271pA==}
+    peerDependencies:
+      eslint: ^10.0.0
+      eslint-config-prettier: ^10.1.8
+      eslint-plugin-prettier: ^5.5.6
+      eslint-plugin-regexp: ^3.3.1
+      eslint-plugin-sonarjs: ^4.2.2
+      eslint-plugin-unicorn: ^76.0.0
+      globals: ^17.13.0
+      jsonc-parser: ^3.3.1
+      prettier: ^3.9.0
+      typescript: ^6.0.0
+      typescript-eslint: ^8.0.0
+      vitest: ^4.0.0
+
+  '@rexezuge/web@1.3.0':
+    resolution: {integrity: sha512-bNDtTMmwnbSKB60e5uN82Bkyo6KEEi9pti5LBm51x/1akXgRPDICyd/0nirYHo8p/x4Kcgni+VY92NiDl8hXbg==}
+    peerDependencies:
+      lucide-react: ^1.49.0
+      react: ^19.3.0
+      react-dom: ^19.3.0
 
   '@rolldown/binding-android-arm-eabi@1.2.13':
     resolution: {integrity: sha512-Vu/NICrgdRvUOeaJZIyB2FP63s6fO/4ud5l8dXmxDx9yDyn+mN0y+gsvsVviSli+T361Aqo0h46EuMoobrwawA==}
@@ -3359,6 +3450,41 @@ snapshots:
       supports-color: 10.2.2
 
   '@poppinss/exception@1.2.3': {}
+
+  '@rexezuge/d1@1.3.0':
+    dependencies:
+      '@rexezuge/errors': 1.3.0
+      '@rexezuge/shared': 1.3.0
+
+  '@rexezuge/errors@1.3.0': {}
+
+  '@rexezuge/runtime@1.3.0': {}
+
+  '@rexezuge/shared@1.3.0': {}
+
+  '@rexezuge/tooling@1.3.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.9)(typescript-eslint@8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)':
+    dependencies:
+      '@rexezuge/d1': 1.3.0
+      eslint: 10.12.0(jiti@2.7.0)
+      eslint-config-prettier: 10.1.8(eslint@10.12.0(jiti@2.7.0))
+      eslint-plugin-prettier: 5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9)
+      eslint-plugin-regexp: 3.3.1(eslint@10.12.0(jiti@2.7.0))
+      eslint-plugin-sonarjs: 4.2.2(eslint@10.12.0(jiti@2.7.0))
+      eslint-plugin-unicorn: 76.0.0(eslint@10.12.0(jiti@2.7.0))
+      globals: 17.13.0
+      jsonc-parser: 3.3.1
+      prettier: 3.9.9
+      typescript: 6.0.3
+      typescript-eslint: 8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3)
+      vitest: 4.1.11(@types/node@26.6.4)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2)(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+
+  '@rexezuge/web@1.3.0(lucide-react@1.53.0(@types/react@19.3.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      '@rexezuge/errors': 1.3.0
+      '@rexezuge/shared': 1.3.0
+      lucide-react: 1.53.0(@types/react@19.3.0)(react@19.3.0)
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
 
   '@rolldown/binding-android-arm-eabi@1.2.13':
     optional: true

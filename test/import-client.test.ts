@@ -26,7 +26,7 @@
  * kind of thing nobody notices until somebody reads a log.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
+import { BadRequestError, NotFoundError } from '@rexezuge/errors';
 import {
   assertRemoteReachable,
   normalizeMountPath,

@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { READER_VERSION } from '@edge-sonic/media-tags';
-import { ConflictError } from '@edge-sonic/backend-errors';
+import { ConflictError } from '@rexezuge/errors';
 import { SubrequestCounter } from '@edge-sonic/shared';
 import {
   ENRICH_TRACKS_PER_CHUNK,

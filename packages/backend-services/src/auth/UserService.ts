@@ -22,7 +22,7 @@
  */
 import { encryptData } from '@edge-sonic/backend-data/crypto';
 import type { UserRow } from '@edge-sonic/backend-data/dao';
-import { ConflictError } from '@edge-sonic/backend-errors';
+import { ConflictError } from '@rexezuge/errors';
 
 /**
 What a caller supplies to create a user. The password is plaintext and never stored as such.

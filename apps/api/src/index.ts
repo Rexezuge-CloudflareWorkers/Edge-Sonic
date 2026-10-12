@@ -1,11 +1,12 @@
 import { EdgeSonicWorker } from './workers/EdgeSonicWorker';
+import type { WorkerExecutionContext, WorkerScheduledController } from '@rexezuge/runtime';
 
 const worker = new EdgeSonicWorker();
 
 export default {
   fetch: (request: Request, env: Cloudflare.Env, ctx: ExecutionContext) => worker.fetch(request, env, ctx),
   queue: (batch: { messages: Array<{ body: unknown }> }, env: Cloudflare.Env) => worker.onQueue(batch, env),
-  scheduled: (_event: unknown, env: Cloudflare.Env) => worker.onScheduled(env),
+  scheduled: (event: WorkerScheduledController, env: Cloudflare.Env, ctx: WorkerExecutionContext) => worker.scheduled(event, env, ctx),
 };
 
 // Re-exported so the wrangler bindings resolve: `SCAN` names `ScanWorker`, `MEDIA_DO` names

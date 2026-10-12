@@ -1,5 +1,5 @@
 import type { Next } from 'hono';
-import { RateLimitedError } from '@edge-sonic/backend-errors';
+import { RateLimitedError } from '@rexezuge/errors';
 import { errorResponse, ErrorCode, resolveFormat, SubsonicError } from '@edge-sonic/subsonic';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
@@ -258,7 +258,7 @@ function rateLimit(opts: {
           return throttled;
         }
         const limited = new RateLimitedError();
-        return c.json(BaseRoute.toErrorBody(limited.getErrorCode(), limited.getErrorMessage()), limited.getErrorCode() as 429, {
+        return c.json(BaseRoute.toErrorBody(limited.status, limited.message), limited.status as 429, {
           // A client that is told "slow down" without being told how long to wait
           // either retries immediately or gives up on the surface.
           'Retry-After': String(retryAfter),

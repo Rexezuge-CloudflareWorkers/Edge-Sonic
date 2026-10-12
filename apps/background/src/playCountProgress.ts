@@ -23,7 +23,7 @@
  * inlining three statements twice. It is also why `PlayCountImportWorker.ts` is not over the god-file
  * limit: the reasoning belongs beside the DAO it explains, not in the alarm handler that calls it.
  */
-import type { Token } from '@edge-sonic/backend-runtime/di';
+import type { Token } from '@rexezuge/runtime';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 
 /**

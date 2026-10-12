@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import { AccessAuthService } from '@edge-sonic/backend-services/auth';
 import { DEFAULT_DEMO_USER_EMAIL } from '@edge-sonic/backend-runtime/config';
 import type { AccessBinding, AccessIdentity } from '@edge-sonic/backend-services/auth';
-import { UnauthorizedError } from '@edge-sonic/backend-errors';
+import { UnauthorizedError } from '@rexezuge/errors';
 
 const ORIGIN = 'https://edge-sonic.test';
 

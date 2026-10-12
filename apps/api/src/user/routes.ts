@@ -1,6 +1,6 @@
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { UUIDUtil } from '@edge-sonic/shared/utils';
-import { BadRequestError, ConflictError, NotFoundError } from '@edge-sonic/backend-errors';
+import { UUIDUtil } from '@rexezuge/shared';
+import { BadRequestError, ConflictError, NotFoundError } from '@rexezuge/errors';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { listLibrarySummaries } from './librarySummary';

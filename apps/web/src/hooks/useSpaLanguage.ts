@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LANGUAGE_STORAGE_KEY, detectInitialLanguage, loadLanguage, normalizeLanguage } from '../i18n';
-import type { ShowNotice } from './useNotice';
+import type { ShowNotice } from '@rexezuge/web';
 import type { CurrentUser } from '../types';
 
 interface UseSpaLanguageInput {
