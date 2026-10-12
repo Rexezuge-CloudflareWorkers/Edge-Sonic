@@ -1,4 +1,4 @@
-import { DatabaseError } from '@edge-sonic/backend-errors';
+import { DatabaseError } from '@rexezuge/errors';
 import type { D1Result } from './D1Types';
 import { attemptFromRunResult, attemptFromThrown } from './d1RetryOutcome';
 import type { AttemptOutcome } from './d1RetryOutcome';

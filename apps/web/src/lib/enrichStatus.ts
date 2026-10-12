@@ -98,7 +98,7 @@ function describeEnrichState(enrich: LibraryEnrichSummary | null, labels: Enrich
   // No run was ever started and tracks remain. There is no count to report and an action
   // to suggest — which is why this is not folded into `idle`.
   if (enrich === null) {
-    return { tone: 'neutral', label: labels.never, detail: null, notice: { type: 'success', text: labels.never } };
+    return { tone: 'neutral', label: labels.never, detail: null, notice: { kind: 'success', message: labels.never } };
   }
 
   const detail = labels.tracksRemaining.split('{{count}}').join(String(enrich.remaining));
@@ -124,7 +124,7 @@ function describeEnrichState(enrich: LibraryEnrichSummary | null, labels: Enrich
     // Terminal: the retry budget is spent and nothing will re-attempt it. An error tone is
     // right here, and the label names the remedy, because this is the one status where the
     // operator's action is the only thing that changes the outcome.
-    return { tone: 'error', label: labels.stalled, detail, notice: { type: 'error', text: labels.stalled } };
+    return { tone: 'error', label: labels.stalled, detail, notice: { kind: 'error', message: labels.stalled } };
   }
 
   // A run that finished with tracks still owing. Checked **after** the advancing states,

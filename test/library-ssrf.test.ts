@@ -9,7 +9,7 @@
  * into its own network, with the response readable back through `getMusicDirectory`.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
+import { BadRequestError, NotFoundError } from '@rexezuge/errors';
 import { LibraryService, normalizeBaseUrl, normalizeRootPath, normalizeSlug, reachable } from '@edge-sonic/backend-services/library';
 import { encryptData, decryptData, isUsableKey, timingSafeEqualStrings, generateAesGcmKey } from '@edge-sonic/backend-data';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';

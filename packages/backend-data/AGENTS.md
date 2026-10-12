@@ -34,7 +34,7 @@ concrete DAO.
 | `dao/index.ts`                                                      | the barrel every other layer imports rather than a deep path                                                                                                                                                                                                                                                                                                                  |
 | `crypto/`                                                           | `encryptData`, `decryptData`, `isUsableKey` — every stored credential                                                                                                                                                                                                                                                                                                         |
 | `utils/`                                                            | `D1Types`, `D1Utils`, `D1ErrorClassifier`                                                                                                                                                                                                                                                                                                                                     |
-| `dao/identity.ts`                                                   | `UserDAO` and `LibraryDAO` — the two rows with a credential                                                                                                                                                                                                                                                                                                                   |
+| `dao/identity.ts`                                                   | `UserDAO`, `UserEmailDAO` and `LibraryDAO` — the rows with a credential, plus the address registry (`user_emails`, `current_email`)                                                                                                                                                                                                                                           |
 | `dao/songSql.ts`                                                    | the `songs` upsert statement                                                                                                                                                                                                                                                                                                                                                  |
 | `dao/pathConvention.ts`                                             | the `Artist/Album` and `Artist - Album` naming rules, and `DERIVED_VERSION`                                                                                                                                                                                                                                                                                                   |
 | `dao/groupingSource.ts`                                             | whether a row's grouping came from the path or from a tag, and the marker measurements                                                                                                                                                                                                                                                                                        |
@@ -545,12 +545,14 @@ NOT EXISTS`** (measured on 3.53.4, after assuming otherwise), **the baseline**
 
 ## Schema
 
-**Three** migrations, applied in Wrangler's order: `migrations/0008_squash.sql` is the
+**Four** migrations, applied in Wrangler's order: `migrations/0008_squash.sql` is the
 squashed baseline every database is built from and every future migration stacks on (17
 tables), `migrations/0009_subsonic_import.sql` adds the import's three (20 in all, with
 40 index entries counting the implicit `sqlite_autoindex_*` a `TEXT PRIMARY KEY` creates),
-and `migrations/0010_drop_token_epoch.sql` removes one column from `users` and changes
-nothing else — same 20 tables, same 40 index entries. The header of the baseline records what
+`migrations/0010_drop_token_epoch.sql` removes one column from `users` and changes
+nothing else — same 20 tables, same 40 index entries — and
+`migrations/0011_user_identity.sql` adds the address registry: `users.current_email`
+plus the `user_emails` table (21 tables, 43 index entries). The header of the baseline records what
 it absorbs and why it is idempotent; that is the property to read before editing it, because
 it also runs against databases that already have the full schema.
 `libraries` and `users` carry a `key_version` for credential rotation: re-encrypt under a new
@@ -566,10 +568,28 @@ and no column ever held it — `token_epoch` recorded how many times a password 
 no client knew the number. **Nothing should be written to read a replacement**, because the
 protocol has no field to compare one against.
 
-## Layer 2 (layer 0 only)
+## Identity addresses: an anchor, a current address, and a registry
 
-Import only `@edge-sonic/shared`, `@edge-sonic/backend-errors` and
-`@edge-sonic/subsonic`. Never `backend-runtime`, `backend-services`, `webdav` or `apps/*` —
-enforced by `no-restricted-imports`. `subsonic` is layer 0 and carries the album key, so it
+`users.email` is the frozen first-seen anchor; `users.current_email` is the mutable
+sign-in address (lowercased, `UNIQUE`, `NULL` when the account has none); `user_emails`
+is the registry (`is_verified = 1` authenticates, `0` is retained for attribution and
+re-pointable). The design is `@rexezuge/identity`'s, but the statements live in
+`dao/identity.ts`'s `UserEmailDAO` rather than in the kit's DAO: every DAO here
+constructs with the invocation's `SubrequestMeter` and the kit's DAO takes none, and
+the kit's `users` table is a different table (no password columns, no username twin).
+`UserDAO.create` writes the anchor, the current address and the verified registry row
+in one place; `setCurrentEmail` is the claim → move → revoke order a future
+address-change endpoint moves through. Login itself stays username-based.
+
+## Layer 2 (layer 0 plus the kit kernel)
+
+Import `@edge-sonic/shared`, `@edge-sonic/backend-errors`, `@edge-sonic/subsonic`,
+and the kit packages this layer adopted: `@rexezuge/errors` (the taxonomy),
+`@rexezuge/shared` (UUID and the other pure utilities). The D1 kernel stays
+local — `D1Utils`, `D1ErrorClassifier` (with the daily-allowance handling the
+kit does not cover), `D1Types`, and `BaseDAO` with its subrequest charging and
+billed-row accounting — because each carries behaviour the kit deliberately
+leaves to the consumer. Never `backend-runtime`, `backend-services`, `webdav`
+or `apps/*` — enforced by `no-restricted-imports`. `subsonic` is layer 0 and carries the album key, so it
 has no block of its own; it is declared in this package's manifest, which is where a
 dependency that resolves only by hoisting should be noticed.

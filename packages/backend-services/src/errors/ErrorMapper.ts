@@ -28,10 +28,10 @@
  * tables and columns, and a JWT failure that distinguishes "expired" from "bad
  * signature" is a free oracle for building a valid token.
  */
-import { ConflictError, DatabaseError, NotFoundError, ServiceError, UnauthorizedError } from '@edge-sonic/backend-errors';
+import { ConflictError, DatabaseError, NotFoundError, ServiceError, UnauthorizedError } from '@rexezuge/errors';
 import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
 import { getBackendStrings } from '@edge-sonic/shared/i18n';
-import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
+import { ErrorSanitizationUtil } from '@rexezuge/shared';
 import { createLogger } from '@edge-sonic/backend-runtime/logger';
 
 const logger = createLogger('ErrorMapper');
@@ -78,11 +78,11 @@ function toSubsonicError(error: unknown): SubsonicError {
     // "wrong Subsonic credential", and a service-level authorization failure is a
     // different thing — a request authenticated fine and was then refused. Reporting it
     // as 40 sends a user with valid credentials to re-enter their password.
-    if (error instanceof NotFoundError) return new SubsonicError(ErrorCode.NotFound, error.getErrorMessage());
-    if (error instanceof UnauthorizedError) return new SubsonicError(ErrorCode.NotAuthorized, error.getErrorMessage());
-    if (error instanceof ConflictError) return new SubsonicError(ErrorCode.Generic, error.getErrorMessage());
-    if (error.getErrorCode() < 500) {
-      return new SubsonicError(ErrorCode.Generic, error.getErrorMessage());
+    if (error instanceof NotFoundError) return new SubsonicError(ErrorCode.NotFound, error.message);
+    if (error instanceof UnauthorizedError) return new SubsonicError(ErrorCode.NotAuthorized, error.message);
+    if (error instanceof ConflictError) return new SubsonicError(ErrorCode.Generic, error.message);
+    if (error.status < 500) {
+      return new SubsonicError(ErrorCode.Generic, error.message);
     }
     logger.error('Service error during a Subsonic request:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
     return new SubsonicError(ErrorCode.Generic);
@@ -112,13 +112,13 @@ function toUserResponse(error: unknown, locale?: string | null): { status: numbe
   }
 
   if (error instanceof ServiceError) {
-    const status = USER_STATUSES.has(error.getErrorCode()) ? error.getErrorCode() : 500;
+    const status = USER_STATUSES.has(error.status) ? error.status : 500;
     const masked = status >= 500;
-    const message = masked ? strings.internalError : error.getErrorMessage();
+    const message = masked ? strings.internalError : error.message;
     if (masked) {
       logger.error('User API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));
     }
-    return { status, body: { Exception: { Type: error.getErrorType(), Message: message } } };
+    return { status, body: { Exception: { Type: error.type, Message: message } } };
   }
 
   logger.error('Unhandled user API error:', ErrorSanitizationUtil.sanitizeErrorForLogging(error));

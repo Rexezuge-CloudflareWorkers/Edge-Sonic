@@ -18,8 +18,8 @@ interface CurrentUser {
 }
 
 interface Notice {
-  readonly type: 'success' | 'error';
-  readonly text: string;
+  readonly kind: 'success' | 'error';
+  readonly message: string;
 }
 
 export type {

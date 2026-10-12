@@ -21,7 +21,7 @@ import { createHarness, executionContext, ORIGIN } from './helpers/harness';
 import { clientIp, rateLimit, resetRateLimitForTests, getRateLimitBucketCountForTests } from '../apps/api/src/middleware/rateLimit';
 import { Tokens } from '../packages/backend-services/src/composition/tokens';
 import { createRequestScope } from '../packages/backend-services/src/composition/requestScope';
-import { getRequestScope, asScopedContext } from '../packages/backend-runtime/src/di';
+import { getRequestScope, asScopedContext } from '@rexezuge/runtime';
 import { scopeMiddleware } from '../apps/api/src/middleware/scopeMiddleware';
 import { createScanWorkerScope } from '@edge-sonic/background';
 

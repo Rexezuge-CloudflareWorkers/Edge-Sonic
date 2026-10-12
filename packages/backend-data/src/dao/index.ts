@@ -5,7 +5,8 @@
 // in this library" — and mixing them in one file would produce a module well
 // past the god-file limit.
 export { BaseDAO } from './BaseDAO';
-export { UserDAO, LibraryDAO, nowSeconds } from './identity';
+export { UserDAO, UserEmailDAO, LibraryDAO, nowSeconds } from './identity';
+export type { UserEmailRow, EmailClaim } from './identity';
 export { NodeDAO } from './NodeDAO';
 export type { NodeInput } from './NodeDAO';
 export { SongDAO } from './SongDAO';

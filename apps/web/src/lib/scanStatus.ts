@@ -144,7 +144,7 @@ function describeScanState(scan: LibraryScanSummary | null, songCount: number, l
   // No scan row at all. The library has never been pointed at the scanner, so there is no
   // count to report and an action to suggest — which is why this is not folded into `idle`.
   if (scan === null) {
-    return { tone: 'neutral', label: labels.never, detail: null, notice: { type: 'success', text: labels.never } };
+    return { tone: 'neutral', label: labels.never, detail: null, notice: { kind: 'success', message: labels.never } };
   }
 
   // `split`/`join` rather than `replace`: the substituted value is a number and
@@ -180,7 +180,7 @@ function describeScanState(scan: LibraryScanSummary | null, songCount: number, l
     // Terminal: the retry budget is spent and nothing will re-attempt it. An error tone is
     // right here, and the label names the remedy, because this is the one status where the
     // operator's action is the only thing that changes the outcome.
-    return { tone: 'error', label: labels.stalled, detail, notice: { type: 'error', text: labels.stalled } };
+    return { tone: 'error', label: labels.stalled, detail, notice: { kind: 'error', message: labels.stalled } };
   }
 
   // A finished scan that indexed nothing. Checked **after** `scanning` and `failed`, because
@@ -193,7 +193,7 @@ function describeScanState(scan: LibraryScanSummary | null, songCount: number, l
   // And it is a notice, because nothing else will change it — the same argument as
   // `stalled`, and the reason this is not merely a warning badge.
   if (songCount === 0) {
-    return { tone: 'error', label: labels.empty, detail: null, notice: { type: 'error', text: labels.empty } };
+    return { tone: 'error', label: labels.empty, detail: null, notice: { kind: 'error', message: labels.empty } };
   }
 
   return { tone: 'success', label: labels.idle, detail, notice: void 0 };

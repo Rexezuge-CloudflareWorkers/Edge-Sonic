@@ -47,7 +47,7 @@ describe('describeProbe', () => {
     expect(presented.label).toBe('The WebDAV username or password was rejected.');
     // `type: 'error'` is what earns `role="alert"` in `NoticeBar`. A failed probe
     // must interrupt, not be replaced by the next polite message.
-    expect(presented.notice.type).toBe('error');
+    expect(presented.notice.kind).toBe('error');
   });
 
   it('keeps a 401 and a 404 distinguishable', () => {
@@ -59,12 +59,12 @@ describe('describeProbe', () => {
   it('reports success without borrowing the failure wording', () => {
     const presented = describeProbe(OK, LABELS);
     expect(presented.tone).toBe('success');
-    expect(presented.notice.type).toBe('success');
+    expect(presented.notice.kind).toBe('success');
     // The badge is a verdict the row keeps showing; the notice is a one-shot
     // confirmation. They used to be one string, which is how a success notice ended
     // up reading "Probe finished." next to a failure badge.
     expect(presented.label).toBe(LABELS.reachable);
-    expect(presented.notice.text).toBe(LABELS.probed);
+    expect(presented.notice.message).toBe(LABELS.probed);
   });
 
   it('falls back to a label rather than rendering an empty badge', () => {
@@ -78,7 +78,7 @@ describe('describeProbe', () => {
     // derived from one result precisely so they cannot drift.
     for (const result of [OK, REJECTED_PASSWORD, MISSING_ROOT, UNREACHABLE]) {
       const presented = describeProbe(result, LABELS);
-      expect(presented.notice.text).toBe(result.ok ? LABELS.probed : presented.label);
+      expect(presented.notice.message).toBe(result.ok ? LABELS.probed : presented.label);
     }
   });
 });

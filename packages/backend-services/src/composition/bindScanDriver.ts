@@ -23,7 +23,7 @@
  * rather than a throw. Layer 3 cannot construct the object-backed one (a namespace stub is
  * `apps/api`'s business), so the default is the one whose only dependency is in this package.
  */
-import type { Container } from '@edge-sonic/backend-runtime/di';
+import type { Container } from '@rexezuge/runtime';
 import { InProcessScanDriver } from '../library/ScanDriver';
 import type { ScanDriver } from '../library/ScanDriver';
 import { Tokens } from './tokens';

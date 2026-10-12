@@ -6,7 +6,7 @@
  * A sender that is not a `send` function is treated as absent rather than
  * throwing at scope-construction time.
  */
-import type { Container } from '@edge-sonic/backend-runtime/di';
+import type { Container } from '@rexezuge/runtime';
 import { QueueService } from '../queue/queueService';
 import type { QueueSender } from '../queue/queueService';
 import type { RequestScopeEnv } from './serviceFactory';

@@ -36,11 +36,11 @@ import { toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { LibraryService } from '@edge-sonic/backend-services/library';
 import { readAudioTags } from '@edge-sonic/media-tags';
-import { UUIDUtil } from '@edge-sonic/shared/utils';
+import { UUIDUtil } from '@rexezuge/shared';
 import { BUNDLES } from '@edge-sonic/shared/i18n';
 import { elList } from '@edge-sonic/subsonic';
 import { WebDavClient } from '@edge-sonic/webdav';
-import { NotFoundError } from '@edge-sonic/backend-errors';
+import { NotFoundError } from '@rexezuge/errors';
 
 /**
 `apps/api/src/index.ts` imports this specifier; nothing else may.

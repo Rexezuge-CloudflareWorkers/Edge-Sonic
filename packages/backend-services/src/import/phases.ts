@@ -34,7 +34,7 @@
  * than being caught, because a phase that swallowed it would report success over a short
  * playlist.
  */
-import { UUIDUtil } from '@edge-sonic/shared/utils';
+import { UUIDUtil } from '@rexezuge/shared';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import { matchRemoteSongs } from './matchRemoteIds';
 import { authorizedSongIds, toCandidate, unresolvedFor } from './phaseShared';

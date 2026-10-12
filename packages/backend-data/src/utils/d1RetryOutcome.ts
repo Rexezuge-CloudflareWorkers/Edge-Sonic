@@ -11,7 +11,7 @@
  * on one path and as a **throw** on the other, and only one of those reaches a `catch`. Two
  * functions, one per path, is the honest shape.
  */
-import { DatabaseError } from '@edge-sonic/backend-errors';
+import { DatabaseError } from '@rexezuge/errors';
 import { isD1ErrorRetryable } from './D1ErrorClassifier';
 import type { D1Result } from './D1Types';
 import { backoffDelay, sleep } from './D1Utils';

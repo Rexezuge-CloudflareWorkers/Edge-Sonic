@@ -1,8 +1,14 @@
-import { ServiceError } from './IServiceError';
-import type { ErrorCode } from './IServiceError';
+import { PayloadTooLargeError } from '@rexezuge/errors';
 
 /**
  * A write could not be issued because the invocation's subrequest budget was already spent.
+ *
+ * Local shim, kept in `backend-errors` until the kit publishes the converged
+ * class (proposed in the SDK repo: `SubrequestBudgetExhaustedError extends
+ * PayloadTooLargeError` with `type` overridden, the `DatabaseError` precedent,
+ * so the catalog keeps one row per status). When that lands, delete this file
+ * and re-point its importers at `@rexezuge/errors` — the name is identical, so
+ * it is one specifier per file and no call-site change.
  *
  * ### Why this is a distinct error and not a `DatabaseError`
  *
@@ -25,21 +31,10 @@ import type { ErrorCode } from './IServiceError';
  * class as `PayloadTooLargeError`, and the client-facing remedy is the same shape — ask for
  * less in one request.
  */
-class SubrequestBudgetExhaustedError extends ServiceError {
+class SubrequestBudgetExhaustedError extends PayloadTooLargeError {
   constructor(message?: string) {
     super(message ?? 'This request asks for more database work than one invocation can issue. Send fewer items at once.');
-  }
-
-  public getErrorCode(): ErrorCode {
-    return 413;
-  }
-
-  public getErrorType(): string {
-    return 'SubrequestBudgetExhausted';
-  }
-
-  public getErrorMessage(): string {
-    return this.message;
+    this.type = 'SubrequestBudgetExhausted';
   }
 }
 

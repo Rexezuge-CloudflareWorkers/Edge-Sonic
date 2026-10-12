@@ -28,6 +28,7 @@ import {
   SongDerivationDAO,
   SongIndexDAO,
   UserDAO,
+  UserEmailDAO,
   D1_MAX_BIND_PARAMETERS,
   MAX_BILLED_ROWS_PER_ROW,
   TABLE_INDEX_COUNTS,
@@ -47,7 +48,8 @@ import {
 import { ImportSourceService } from '@edge-sonic/backend-services/import';
 import { AUDIO_SUFFIXES } from '@edge-sonic/backend-services/index';
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { NotFoundError, SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { NotFoundError } from '@rexezuge/errors';
 import {
   albumKeyFor,
   buildReport,
@@ -1198,6 +1200,123 @@ describe('D1 predicate rule: lowercase the parameter, never the column', () => {
     // hot path.
     const scanned = queryPlan(handle, 'SELECT * FROM users WHERE lower(username) = ?', ['ann']);
     expect(scanned).toContain('SCAN users');
+  });
+});
+
+describe('the address registry is the kit identity design', () => {
+  async function seedUserWithEmail(username: string, email: string | null): Promise<string> {
+    const encrypted = await encryptData('sesame', await testKey());
+    const users = new UserDAO(handle.db);
+    return (await users.create({ username, passwordCiphertext: encrypted.ciphertext, passwordIv: encrypted.iv, email })).id;
+  }
+
+  it('creates the registry objects the migration declares', () => {
+    const tables = (
+      handle.raw.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'user_emails'").all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name);
+    expect(tables).toEqual(['user_emails']);
+    const indexes = (
+      handle.raw
+        .prepare(
+          "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name IN ('users', 'user_emails') AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all() as Array<{
+        name: string;
+      }>
+    ).map((row) => row.name);
+    expect(indexes).toContain('idx_users_current_email');
+    expect(indexes).toContain('idx_user_emails_user');
+  });
+
+  it('registers a supplied address, verified and lowercased, beside the user row', async () => {
+    const emails = new UserEmailDAO(handle.db);
+    const userId = await seedUserWithEmail('Reggie', 'Reggie@Example.COM');
+    const row = await new UserDAO(handle.db).findById(userId);
+    expect(row?.email).toBe('Reggie@Example.COM');
+    expect(row?.current_email).toBe('reggie@example.com');
+    expect(await emails.resolveVerified('REGGIE@example.com')).toMatchObject({ user_id: userId });
+    expect(await emails.listByUserId(userId)).toEqual([expect.objectContaining({ email: 'reggie@example.com', is_verified: 1 })]);
+  });
+
+  it('leaves an address-less account out of the registry rather than bucketing NULL', async () => {
+    const emails = new UserEmailDAO(handle.db);
+    const userId = await seedUserWithEmail('NoMail', null);
+    expect(await new UserDAO(handle.db).findById(userId)).toMatchObject({ email: null, current_email: null });
+    expect(await emails.listByUserId(userId)).toEqual([]);
+  });
+
+  it('treats a blank address as absent, so two blank creates do not collide', async () => {
+    const emails = new UserEmailDAO(handle.db);
+    const first = await seedUserWithEmail('BlankOne', ' '.repeat(3));
+    const second = await seedUserWithEmail('BlankTwo', '');
+    expect(await new UserDAO(handle.db).findById(first)).toMatchObject({ current_email: null });
+    expect(await emails.listByUserId(second)).toEqual([]);
+  });
+
+  it('refuses a verified address already held elsewhere, and releases a moved one', async () => {
+    const emails = new UserEmailDAO(handle.db);
+    const users = new UserDAO(handle.db);
+    const first = await seedUserWithEmail('Holder', 'shared@example.com');
+    await expect(seedUserWithEmail('Taker', 'SHARED@example.com')).rejects.toThrow('already registered');
+    // The refused create left no user row behind it.
+    expect(await users.findByUsername('Taker')).toBeNull();
+    // Release is a move, not a revoke: the holder's `current_email` still owns
+    // the address until they move off it, and the `UNIQUE` index says so.
+    await emails.revoke('shared@example.com');
+    expect(await emails.resolveVerified('shared@example.com')).toBeNull();
+    await expect(seedUserWithEmail('Heir', 'shared@example.com')).rejects.toThrow();
+    await users.setCurrentEmail(first, 'holder-new@example.com');
+    const second = await seedUserWithEmail('Heir', 'shared@example.com');
+    expect(await emails.resolveVerified('shared@example.com')).toMatchObject({ user_id: second });
+    expect(await users.findById(first)).toMatchObject({ current_email: 'holder-new@example.com' });
+    // The claim re-pointed the revoked row at its new holder.
+    expect(await emails.get('shared@example.com')).toMatchObject({ user_id: second, is_verified: 1 });
+  });
+
+  it('revokes every verified address but the new one, in claim order', async () => {
+    const emails = new UserEmailDAO(handle.db);
+    const userId = await seedUserWithEmail('Mover', 'old@example.com');
+    expect(await emails.register({ email: 'new@example.com', userId, isVerified: true, now: 1 })).toBe('claimed');
+    expect(await emails.register({ email: 'old@example.com', userId, isVerified: true, now: 1 })).toBe('already-claimed');
+    await emails.revokeAllVerified(userId, 'new@example.com');
+    expect(await emails.listByUserId(userId)).toEqual([
+      expect.objectContaining({ email: 'new@example.com', is_verified: 1 }),
+      expect.objectContaining({ email: 'old@example.com', is_verified: 0 }),
+    ]);
+  });
+
+  it('runs the shipped backfill over a pre-0011 row, not a fixture of it', async () => {
+    // A row as `0008` left it: an address, no `current_email`, no registry entry.
+    // The statements below are `0011_user_identity.sql` minus its `ADD COLUMN`,
+    // which runs once per database and so cannot re-run here.
+    const encrypted = await encryptData('sesame', await testKey());
+    handle.raw.exec(
+      `INSERT INTO users (id, username, username_ci, password_ciphertext, password_iv, key_version, email, current_email, is_admin, is_enabled, scrobbling_enabled, created_at, updated_at)
+       VALUES ('legacy-1', 'Legacy', 'legacy', '${encrypted.ciphertext}', '${encrypted.iv}', 1, 'Legacy@Example.COM', NULL, 0, 1, 1, 1, 1)`,
+    );
+    handle.raw.exec(
+      `UPDATE users SET current_email = lower(email) WHERE current_email IS NULL AND email IS NOT NULL;
+       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_current_email ON users(current_email);
+       INSERT OR IGNORE INTO user_emails (email, user_id, is_verified, created_at)
+       SELECT lower(email), id, 1, created_at FROM users WHERE email IS NOT NULL;`,
+    );
+    expect(await new UserDAO(handle.db).findById('legacy-1')).toMatchObject({ current_email: 'legacy@example.com' });
+    expect(await new UserEmailDAO(handle.db).resolveVerified('legacy@example.com')).toMatchObject({ user_id: 'legacy-1' });
+  });
+
+  it('resolves through the primary key, and refuses a second holder at the schema level', async () => {
+    await seedUserWithEmail('Schema', 'schema@example.com');
+    const plan = queryPlan(handle, 'SELECT * FROM user_emails WHERE email = ? AND is_verified = 1 LIMIT 1', ['schema@example.com']);
+    expect(plan).not.toContain('SCAN user_emails');
+    await expect(seedUserWithEmail('SchemaDupe', 'SCHEMA@example.com')).rejects.toThrow();
+  });
+
+  it('cascades the registry with the user, because the address dies with the account', async () => {
+    const userId = await seedUserWithEmail('Ephemeral', 'ephemeral@example.com');
+    await new UserDAO(handle.db).delete(userId);
+    expect(await new UserEmailDAO(handle.db).listByUserId(userId)).toEqual([]);
   });
 });
 

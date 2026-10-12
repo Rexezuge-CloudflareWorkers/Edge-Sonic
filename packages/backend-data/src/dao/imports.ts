@@ -13,7 +13,7 @@
  * comes from" and "the list of places this user came from" one query with two answers.
  */
 import { BaseDAO } from './BaseDAO';
-import { UUIDUtil } from '@edge-sonic/shared/utils';
+import { UUIDUtil } from '@rexezuge/shared';
 import { nowSeconds } from './identity';
 import type { CountRow, ImportRunRow, ImportSourceRow } from './rows';
 

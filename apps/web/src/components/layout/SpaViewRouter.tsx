@@ -1,6 +1,6 @@
 import { Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { ShowNotice } from '../../hooks/useNotice';
+import type { ShowNotice } from '@rexezuge/web';
 import { AppPage } from './AppPage';
 import { Card } from '../ui/Card';
 import Unauthorized from './Unauthorized';

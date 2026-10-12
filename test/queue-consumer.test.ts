@@ -105,7 +105,7 @@ describe('EdgeSonicWorker.onScheduled', () => {
     const worker = new EdgeSonicWorker();
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      await expect(worker.onScheduled({} as never)).resolves.toBeUndefined();
+      await expect(worker.onScheduled({} as never, {} as never, {} as never)).resolves.toBeUndefined();
     } finally {
       spy.mockRestore();
     }

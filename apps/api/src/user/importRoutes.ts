@@ -39,7 +39,7 @@
  * long as the scan took, against the same client timeout the scan's own deadline exists for — and
  * the operator's answer to "it did nothing" would be to press the button again.
  */
-import { BadRequestError } from '@edge-sonic/backend-errors';
+import { BadRequestError } from '@rexezuge/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { IMPORT_PHASES, assertScansIdle, isImportInFlight, parseReport } from '@edge-sonic/backend-services/import';
 import type { ImportPhase, RemoteSubsonicClient } from '@edge-sonic/backend-services/import';

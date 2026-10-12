@@ -41,7 +41,7 @@
  */
 import { DatabaseSync } from 'node:sqlite';
 import { D1_MAX_BIND_PARAMETERS } from '@edge-sonic/backend-data/dao';
-import type { D1PreparedStatement, D1Queryable, D1Result } from '@edge-sonic/backend-data/utils';
+import type { D1PreparedStatement, D1Queryable, D1Result } from '@rexezuge/d1';
 
 /**
 Thrown when a statement fails, carrying SQLite's message.

@@ -27,9 +27,9 @@
  * honest outcome on a deployment with no `SCAN` binding rather than a `TypeError` from a stub
  * the caller never supplied.
  */
-import type { Container } from '@edge-sonic/backend-runtime/di';
+import type { Container } from '@rexezuge/runtime';
 import { IndexDropDAO, IndexStatsDAO } from '@edge-sonic/backend-data/dao';
-import type { D1Queryable } from '@edge-sonic/backend-data/utils';
+import type { D1Queryable } from '@rexezuge/d1';
 import type { SubrequestMeter } from '@edge-sonic/shared';
 import { IndexDropService } from '../library/IndexDropService';
 import type { ScanControl } from '../library/IndexDropService';

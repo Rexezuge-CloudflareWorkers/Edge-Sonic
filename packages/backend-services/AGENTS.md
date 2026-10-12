@@ -2,7 +2,11 @@
 
 Scope: `packages/backend-services/**`. Parent index: `../../AGENTS.md`.
 
-Layer 3: layers 0–2, and never `apps/*`.
+Layer 3: layers 0–2 plus the `@rexezuge/*` kernel (`errors`, `runtime`,
+`shared`, and the `d1`/`runtime` shapes used as types), and never `apps/*`.
+The framework floor moved to the kit; what stays local is behaviour the kit
+deliberately leaves to the consumer (the dual-dialect `ErrorMapper`, the
+metered DAOs, the KV/logger/config layers).
 
 ## Auth: two systems, on purpose
 

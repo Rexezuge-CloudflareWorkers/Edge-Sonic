@@ -34,7 +34,7 @@
  * 45-second client timeout the scan's own deadline exists for — and the operator's answer to
  * "it did nothing" would be to press it again.
  */
-import { ConflictError } from '@edge-sonic/backend-errors';
+import { ConflictError } from '@rexezuge/errors';
 import { dailyRowWriteShare } from '@edge-sonic/backend-runtime/config';
 
 /**

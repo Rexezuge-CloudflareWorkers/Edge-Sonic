@@ -5,10 +5,10 @@ import { Button } from '../components/ui/Button';
 import { Input, Label } from '../components/ui/Input';
 import { Badge } from '../components/ui/Badge';
 import { Card, CardHeader, CardTitle } from '../components/ui/Card';
-import { EmptyState, LoadingSpinner } from '../components/layout/PageState';
+import { EmptyState, LoadingSpinner } from '@rexezuge/web';
 import { listLibraries } from '../services/libraryService';
 import { createUser, deleteUser, listUsers, setUserEnabled, setUserLibraries } from '../services/userService';
-import type { ShowNotice } from '../hooks/useNotice';
+import type { ShowNotice } from '@rexezuge/web';
 import type { LibrarySummary, UserSummary } from '../types';
 
 /**
@@ -180,8 +180,14 @@ function UsersView({ showNotice }: { showNotice: ShowNotice }) {
       ) : users.length === 0 ? (
         <EmptyState
           icon={<UserPlus className="h-6 w-6 text-[var(--color-text-muted)]" aria-hidden="true" />}
-          title={t('users.empty', 'No users yet')}
-          description={t('users.emptyHint', 'Create an account, then sign in to this server from any Subsonic client.')}
+          message={
+            <>
+              <p className="font-medium text-[var(--color-text-primary)]">{t('users.empty', 'No users yet')}</p>
+              <p className="mx-auto mt-1 max-w-md text-xs">
+                {t('users.emptyHint', 'Create an account, then sign in to this server from any Subsonic client.')}
+              </p>
+            </>
+          }
         />
       ) : (
         <ul className="space-y-2">

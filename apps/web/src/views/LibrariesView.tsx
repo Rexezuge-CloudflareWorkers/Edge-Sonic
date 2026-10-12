@@ -3,12 +3,12 @@ import { t } from 'i18next';
 import { HardDrive, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Card, CardHeader, CardTitle } from '../components/ui/Card';
-import { EmptyState, LoadingSpinner } from '../components/layout/PageState';
+import { EmptyState, LoadingSpinner } from '@rexezuge/web';
 import { LibraryForm } from '../components/library/LibraryForm';
 import { LibraryRow } from '../components/library/LibraryRow';
 import type { RunAction } from '../components/library/LibraryRow';
 import { createLibrary, deleteLibrary, listLibraries, updateLibrary } from '../services/libraryService';
-import type { ShowNotice } from '../hooks/useNotice';
+import type { ShowNotice } from '@rexezuge/web';
 import { toPatch } from '../lib/libraryDraft';
 import type { LibraryDraft } from '../lib/libraryDraft';
 import { isAdvancingStatus } from '../lib/scanStatus';
@@ -150,7 +150,7 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
     setBusy(id);
     try {
       const override = await action();
-      if (override) showNotice(override.type, override.text);
+      if (override) showNotice(override.kind, override.message);
       else showNotice('success', success);
       await reload();
     } catch (error) {
@@ -236,8 +236,14 @@ function LibrariesView({ showNotice }: { showNotice: ShowNotice }) {
         ) : libraries.length === 0 ? (
           <EmptyState
             icon={<HardDrive className="h-6 w-6 text-[var(--color-text-muted)]" aria-hidden="true" />}
-            title={t('libraries.empty', 'No libraries yet')}
-            description={t('libraries.emptyHint', 'Register a WebDAV origin to give Subsonic clients something to browse.')}
+            message={
+              <>
+                <p className="font-medium text-[var(--color-text-primary)]">{t('libraries.empty', 'No libraries yet')}</p>
+                <p className="mx-auto mt-1 max-w-md text-xs">
+                  {t('libraries.emptyHint', 'Register a WebDAV origin to give Subsonic clients something to browse.')}
+                </p>
+              </>
+            }
           />
         ) : (
           <ul className="space-y-2">

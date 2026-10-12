@@ -76,7 +76,7 @@
  * budget for it is exactly the thing being corrected.
  */
 const TABLE_INDEX_COUNTS: Readonly<Record<string, number>> = {
-  users: 2,
+  users: 3,
   libraries: 2,
   user_libraries: 2,
   nodes: 3,
@@ -96,6 +96,10 @@ const TABLE_INDEX_COUNTS: Readonly<Record<string, number>> = {
   import_sources: 2,
   import_runs: 3,
   import_play_count_progress: 1,
+  // The address registry: the implicit `email TEXT PRIMARY KEY` autoindex plus
+  // `idx_user_emails_user`. Added by `0011_user_identity.sql` with the
+  // `current_email` unique index that moved `users` from 2 to 3.
+  user_emails: 2,
 };
 
 /**

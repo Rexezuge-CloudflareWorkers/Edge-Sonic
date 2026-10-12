@@ -44,8 +44,9 @@
  * cannot shadow anything else: there is no DAV capability probe here to lose, but
  * the same guard keeps a blanket `OPTIONS` handler from swallowing a future one.
  */
-import { AbstractEntrypointWorker } from '@edge-sonic/backend-runtime/base';
-import { ErrorSanitizationUtil } from '@edge-sonic/shared/utils';
+import { AbstractEntrypointWorker } from '@rexezuge/runtime';
+import type { WorkerExecutionContext, WorkerScheduledController } from '@rexezuge/runtime';
+import { ErrorSanitizationUtil } from '@rexezuge/shared';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { Hono } from 'hono';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -266,7 +267,7 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
    * Fail-soft when queues or D1 are unavailable — the alarm/poll paths remain
    * the truth.
    */
-  public async onScheduled(env: Cloudflare.Env): Promise<void> {
+  public async onScheduled(_event: WorkerScheduledController, env: Cloudflare.Env, _ctx: WorkerExecutionContext): Promise<void> {
     try {
       const scope = createRequestScope(env);
       const queue = scope.get(Tokens.QueueService);

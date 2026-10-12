@@ -16,7 +16,7 @@
  * and `song_count` is the number of entries rather than the highest position, because
  * that is the number a progress bar is drawn from.
  */
-import { UUIDUtil } from '@edge-sonic/shared/utils';
+import { UUIDUtil } from '@rexezuge/shared';
 import { BaseDAO } from './BaseDAO';
 import type { TrackedStatement } from '../utils/D1Types';
 import { chunkArray } from './chunking';

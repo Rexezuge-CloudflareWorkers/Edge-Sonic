@@ -5,7 +5,7 @@
  * owns only scope lifecycle and the two per-feature keys.
  */
 import { SubrequestCounter } from '@edge-sonic/shared';
-import { Container } from '@edge-sonic/backend-runtime/di';
+import { Container } from '@rexezuge/runtime';
 import { AppConfiguration, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
 import { KvCache } from '@edge-sonic/backend-runtime/kv';
 import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
@@ -27,7 +27,7 @@ import {
   SongMatchDAO,
   UserDAO,
 } from '@edge-sonic/backend-data/dao';
-import type { D1Queryable } from '@edge-sonic/backend-data/utils';
+import type { D1Queryable } from '@rexezuge/d1';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import { AccessAuthService } from '../auth/AccessAuthService';
 import { SubsonicAuthService } from '../auth/SubsonicAuthService';

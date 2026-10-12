@@ -30,7 +30,7 @@
  * says. This path reads a `Depth: 1` listing and nothing below it, so it does not get to
  * decide that a folder has been descended into — see `persistChildren`.
  */
-import { BadRequestError, NotFoundError } from '@edge-sonic/backend-errors';
+import { BadRequestError, NotFoundError } from '@rexezuge/errors';
 import type { LibraryRow, NodeRow, SongRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
 import { deriveShortSongId } from '@edge-sonic/subsonic';
 import { toLibraryPath } from '@edge-sonic/webdav';

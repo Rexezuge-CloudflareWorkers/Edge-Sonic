@@ -5,7 +5,7 @@ import { Button } from '../components/ui/Button';
 import { Input, Label } from '../components/ui/Input';
 import { Badge } from '../components/ui/Badge';
 import { Card, CardHeader, CardTitle } from '../components/ui/Card';
-import { EmptyState, LoadingSpinner } from '../components/layout/PageState';
+import { EmptyState, LoadingSpinner } from '@rexezuge/web';
 import { PhaseRow } from '../components/import/RunReport';
 import {
   IMPORT_PHASES,
@@ -18,7 +18,7 @@ import {
   startImport,
 } from '../services/importService';
 import { listUsers } from '../services/userService';
-import type { ShowNotice } from '../hooks/useNotice';
+import type { ShowNotice } from '@rexezuge/web';
 import type { ImportPhase, ImportRunSummary, ImportSourceSummary, PhaseReport, UserSummary } from '../types';
 
 /**
@@ -297,8 +297,14 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
         )}
         {sources.length === 0 ? (
           <EmptyState
-            title={t('import.noSources', 'No import sources yet')}
-            description={t('import.noSourcesDescription', 'Add the server you are moving from to begin.')}
+            message={
+              <>
+                <p className="font-medium text-[var(--color-text-primary)]">{t('import.noSources', 'No import sources yet')}</p>
+                <p className="mx-auto mt-1 max-w-md text-xs">
+                  {t('import.noSourcesDescription', 'Add the server you are moving from to begin.')}
+                </p>
+              </>
+            }
           />
         ) : (
           <ul className="space-y-2">
@@ -402,8 +408,14 @@ function ImportView({ showNotice }: { showNotice: ShowNotice }) {
         )}
         {runs.length === 0 ? (
           <EmptyState
-            title={t('import.noRuns', 'No imports yet')}
-            description={t('import.noRunsDescription', 'Imports you run will be listed here with anything they could not match.')}
+            message={
+              <>
+                <p className="font-medium text-[var(--color-text-primary)]">{t('import.noRuns', 'No imports yet')}</p>
+                <p className="mx-auto mt-1 max-w-md text-xs">
+                  {t('import.noRunsDescription', 'Imports you run will be listed here with anything they could not match.')}
+                </p>
+              </>
+            }
           />
         ) : (
           <ul className="space-y-1">

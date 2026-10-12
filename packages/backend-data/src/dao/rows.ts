@@ -18,6 +18,12 @@ interface UserRow {
   password_iv: string;
   key_version: number;
   email: string | null;
+  /**
+  Mutable sign-in address, lowercased; `NULL` when the account has no address.
+  `email` is the frozen first-seen anchor. Added by `0011_user_identity.sql`
+  with the `user_emails` registry — see `UserEmailDAO`.
+  */
+  current_email: string | null;
   is_admin: number;
   is_enabled: number;
   scrobbling_enabled: number;

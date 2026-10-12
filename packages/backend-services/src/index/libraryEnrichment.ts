@@ -38,7 +38,7 @@
  * selection so a chunk that spends its whole page still fits the ceiling; `canAfford`
  * still decides per track at runtime, and the remainder is simply the next chunk's.
  */
-import { ConflictError } from '@edge-sonic/backend-errors';
+import { ConflictError } from '@rexezuge/errors';
 import { SUBSREQUESTS_PER_ENRICHED_TRACK } from '@edge-sonic/backend-runtime/config';
 import type { EnrichableRow, LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import type { SubrequestCounter } from '@edge-sonic/shared';

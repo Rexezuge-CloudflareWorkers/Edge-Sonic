@@ -41,7 +41,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
-import { ConflictError } from '@edge-sonic/backend-errors';
+import { ConflictError } from '@rexezuge/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { MAX_CONSECUTIVE_FAILURES, d1AllowancePause } from '@edge-sonic/backend-services/index';
 import type { ChunkResult, EnrichChunkResult, ScanDailyBudget } from '@edge-sonic/backend-services/index';

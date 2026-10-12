@@ -16,7 +16,7 @@
  * this repository keeps getting wrong: a claim placed where nothing measures whether it still
  * applies. Each is now attached to the call it is about.
  */
-import type { Container } from '@edge-sonic/backend-runtime/di';
+import type { Container } from '@rexezuge/runtime';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { SubrequestMeter } from '@edge-sonic/shared';
