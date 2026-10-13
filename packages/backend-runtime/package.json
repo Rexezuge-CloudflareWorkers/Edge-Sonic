@@ -20,8 +20,8 @@
   "dependencies": {
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
-    "@rexezuge/runtime": "link:../../../SDK/packages/runtime",
-    "@rexezuge/shared": "link:../../../SDK/packages/shared"
+    "@rexezuge/runtime": "1.7.0",
+    "@rexezuge/shared": "1.7.0"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

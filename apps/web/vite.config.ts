@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { KIT_DEDUPE } from '@rexezuge/tooling/vitest';
+import { KIT_DEDUPE } from '@rexezuge/tooling';
 import path from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 
@@ -16,6 +16,11 @@ export default defineConfig({
   // install gives the symlinked package its own `node_modules`, and the SPA would
   // then bundle two Reacts — every hook in a kit component reads a dispatcher the
   // app's copy never initialised.
+  //
+  // From the **root** barrel, not `@rexezuge/tooling/vitest` where a Vite config
+  // would naturally look: `KIT_DEDUPE` is exported from both as of the kit's next
+  // release, but at 1.7.0 only the root carries it, and the `/vitest` sub-barrel
+  // failed at config-load time with `does not provide an export named 'KIT_DEDUPE'`.
   resolve: { dedupe: [...KIT_DEDUPE] },
   plugins: [
     react(),

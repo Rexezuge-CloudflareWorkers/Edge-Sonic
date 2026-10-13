@@ -19,10 +19,10 @@
   "dependencies": {
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
-    "@rexezuge/d1": "link:../../../SDK/packages/d1",
-    "@rexezuge/errors": "link:../../../SDK/packages/errors",
-    "@rexezuge/identity": "link:../../../SDK/packages/identity",
-    "@rexezuge/shared": "link:../../../SDK/packages/shared"
+    "@rexezuge/d1": "1.7.0",
+    "@rexezuge/errors": "1.7.0",
+    "@rexezuge/identity": "1.7.0",
+    "@rexezuge/shared": "1.7.0"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
