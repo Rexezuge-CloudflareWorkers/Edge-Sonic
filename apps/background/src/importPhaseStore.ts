@@ -24,7 +24,7 @@
  * the same `0` for a different reason, and a reader could not tell which.
  */
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import type { Token } from '@edge-sonic/backend-runtime';
+import type { Token } from '@rexezuge/runtime';
 import type { PhaseStore } from '@edge-sonic/backend-services/import';
 
 /**

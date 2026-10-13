@@ -29,8 +29,8 @@
  * wall-clock deadline the counter knows nothing about, and adds the per-unit reservations that
  * have to be made before the work rather than after it.
  */
-import { NO_SUBREQUESTS_SPENT, subrequestSpend } from '@edge-sonic/shared';
-import type { SubrequestCounter, SubrequestKind, SubrequestSpend } from '@edge-sonic/shared';
+import { NO_SUBREQUESTS_SPENT, subrequestSpend } from '@rexezuge/shared';
+import type { SubrequestCounter, SubrequestKind, SubrequestSpend } from '@rexezuge/shared';
 
 interface ScanBudgetOptions {
   /**

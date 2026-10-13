@@ -21,7 +21,8 @@
 import { toLibraryPath } from '@edge-sonic/webdav';
 import type { DavResource } from '@edge-sonic/webdav';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
-import { nextMidnightUtc } from '@edge-sonic/backend-data/utils';
+import { nextMidnightUtc } from '@rexezuge/d1';
+
 import { dailyWriteAllowanceSpent, d1AllowancePause, pausedResult } from './scanRetry';
 
 /**

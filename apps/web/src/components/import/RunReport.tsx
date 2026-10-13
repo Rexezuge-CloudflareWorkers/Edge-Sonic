@@ -17,8 +17,8 @@
  * inventing a threshold of its own that could disagree with the server's.
  */
 import { useTranslation } from 'react-i18next';
-import { Badge } from '../ui/Badge';
 import type { PhaseReport, UnresolvedItem } from '../../types';
+import { Badge } from '@rexezuge/web';
 
 /**
  * Why an item did not resolve, in words an operator can act on.

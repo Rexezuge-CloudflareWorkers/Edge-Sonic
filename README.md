@@ -33,10 +33,9 @@ apps/web          the operator SPA
 packages/subsonic the protocol: ids, envelope, node model, serializers, MD5
 packages/webdav   the 207 reader and the PROPFIND/GET client
 packages/media-tags  MP3, FLAC, Ogg Vorbis/Opus header readers
-packages/shared   i18n and small utilities
-packages/backend-errors    the error taxonomy
+packages/shared   the backend string bundle
 packages/backend-data      DAOs over D1Queryable
-packages/backend-runtime   config, KV cache + breaker, the worker base class
+packages/backend-runtime   config, the KV domain table, the workflow failure policy
 packages/backend-services  auth, library, scan, enrichment, composition
 functions        the Cloudflare Pages catch-all that forwards to the Worker
 scripts          repo tooling, grouped by who runs it; see scripts/README.md

@@ -19,7 +19,7 @@ import { ENRICH_TRACKS_PER_CHUNK } from '@edge-sonic/backend-runtime/config';
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import { SongEnrichmentDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@rexezuge/d1';
-import type { SubrequestCounter } from '@edge-sonic/shared';
+import type { SubrequestCounter } from '@rexezuge/shared';
 import { LibraryEnrichmentService } from '../index/libraryEnrichment';
 import { InProcessEnrichDriver } from '../library/EnrichDriver';
 import type { EnrichDriver } from '../library/EnrichDriver';

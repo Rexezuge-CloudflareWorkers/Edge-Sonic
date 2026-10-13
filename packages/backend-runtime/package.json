@@ -10,8 +10,6 @@
     "./base/*": "./src/base/*.ts",
     "./config": "./src/config/index.ts",
     "./config/*": "./src/config/*.ts",
-    "./di": "./src/di/index.ts",
-    "./di/*": "./src/di/*.ts",
     "./logger": "./src/logger.ts",
     "./kv": "./src/kv/index.ts",
     "./kv/*": "./src/kv/*.ts"
@@ -21,7 +19,9 @@
   },
   "dependencies": {
     "@edge-sonic/shared": "workspace:*",
-    "@edge-sonic/subsonic": "workspace:*"
+    "@edge-sonic/subsonic": "workspace:*",
+    "@rexezuge/runtime": "1.7.0",
+    "@rexezuge/shared": "1.7.0"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

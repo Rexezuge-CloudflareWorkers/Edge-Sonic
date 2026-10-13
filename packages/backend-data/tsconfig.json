@@ -16,8 +16,6 @@
     "paths": {
       "@edge-sonic/shared": ["../shared/src"],
       "@edge-sonic/shared/*": ["../shared/src/*"],
-      "@edge-sonic/backend-errors": ["../backend-errors/src"],
-      "@edge-sonic/backend-errors/*": ["../backend-errors/src/*"],
       "@edge-sonic/backend-runtime": ["../backend-runtime/src"],
       "@edge-sonic/backend-runtime/*": ["../backend-runtime/src/*"]
     }

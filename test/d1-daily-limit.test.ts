@@ -35,7 +35,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import { DatabaseError } from '@rexezuge/errors';
-import { isD1DailyLimitError, isD1ErrorRetryable, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
+import { isD1DailyLimitError, isD1ErrorRetryable, nextMidnightUtc } from '@rexezuge/d1';
+
 import {
   ScanService,
   d1AllowancePause,
@@ -44,7 +45,7 @@ import {
   willResumeWithoutAPoll,
 } from '@edge-sonic/backend-services/index';
 import { SCAN_ROW_COUNT_PERSIST_INTERVAL } from '@edge-sonic/background/scanPause';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 import {
   D1_DAILY_ROW_WRITE_LIMIT,

@@ -41,7 +41,7 @@
 import { ConflictError } from '@rexezuge/errors';
 import { SUBSREQUESTS_PER_ENRICHED_TRACK } from '@edge-sonic/backend-runtime/config';
 import type { EnrichableRow, LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
-import type { SubrequestCounter } from '@edge-sonic/shared';
+import type { SubrequestCounter } from '@rexezuge/shared';
 import { ScanBudget, stopReason } from './scanBudget';
 import type { EnrichmentCost } from './scanEnrichment';
 import type { EnrichFacts } from './EnrichmentService';

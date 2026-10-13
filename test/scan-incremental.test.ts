@@ -27,8 +27,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MAX_CONSECUTIVE_FAILURES, ScanService } from '@edge-sonic/backend-services/index';
 import { SCAN_DERIVE_MAX_ROWS_PER_CHUNK, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
+import { SubrequestCounter } from '@rexezuge/shared';
 import {
   DERIVED_VERSION,
   GROUPING_SOURCE_DERIVED,

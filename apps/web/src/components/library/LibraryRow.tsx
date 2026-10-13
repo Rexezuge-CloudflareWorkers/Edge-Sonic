@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from 'i18next';
 import { Pencil, RefreshCw, Search, Trash2 } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
 import { LibraryForm } from './LibraryForm';
 import { probeLibrary, startLibraryEnrich, startLibraryScan, stepLibraryEnrich, stepLibraryScan } from '../../services/libraryService';
 import type { LibraryDraft } from '../../lib/libraryDraft';
@@ -10,6 +8,7 @@ import { describeProbe, describeScan, describeStopReason } from '../../lib/probe
 import { describeScanState } from '../../lib/scanStatus';
 import { describeEnrichState } from '../../lib/enrichStatus';
 import type { ChunkStopReason, LibrarySummary, Notice, ProbeResult } from '../../types';
+import { Badge, Button } from '@rexezuge/web';
 
 /**
  * Run a row action, then let the view refresh.

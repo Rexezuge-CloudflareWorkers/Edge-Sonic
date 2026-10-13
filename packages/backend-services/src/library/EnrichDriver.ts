@@ -13,7 +13,7 @@
  * chunk in-process when there is no object to do it.
  */
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
-import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
 import type { EnrichChunkResult } from '../index/enrichRetry';
 import type { ScanDailyBudget } from '../index/scanTypes';
 

@@ -10,7 +10,7 @@
  */
 import { DERIVED_VERSION, deriveFromPath, deriveTitleFromFileName } from './pathConvention';
 import { GROUPING_SOURCE_DERIVED } from './groupingSource';
-import type { TrackedStatement } from '../utils/D1Types';
+import type { TrackedStatement } from '@rexezuge/d1';
 
 /**
  * One row's file facts, as the indexer holds them.

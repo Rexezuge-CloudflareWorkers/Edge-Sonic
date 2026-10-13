@@ -43,9 +43,9 @@
  */
 import { BaseDAO } from './BaseDAO';
 import type { WriteBatchResult } from './BaseDAO';
-import type { D1Queryable } from '../utils/D1Types';
-import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { D1Queryable } from '@rexezuge/d1';
+import { UNMETERED_SUBREQUESTS } from '@rexezuge/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import { deriveFromPath, deriveTitleFromFileName, DERIVED_VERSION } from './pathConvention';
 import { GROUPING_SOURCE_DERIVED } from './groupingSource';
 import { nowSeconds } from './identity';

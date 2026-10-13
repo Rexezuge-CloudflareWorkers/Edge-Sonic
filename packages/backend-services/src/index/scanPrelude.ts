@@ -20,7 +20,7 @@ import type { DerivationCost } from './deriveBackfill';
 import { decideStep, idleResult, stalledResult, unableToAdvance } from './scanRetry';
 import type { ScanBudget } from './scanBudget';
 import type { ChunkResult, ScanDeps } from './scanTypes';
-import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
 import type { LibraryRow, ScanStateRow } from '@edge-sonic/backend-data/dao';
 
 /**

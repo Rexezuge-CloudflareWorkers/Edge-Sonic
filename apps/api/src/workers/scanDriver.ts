@@ -28,7 +28,7 @@
  * path whose fallback is a Durable Object — that asymmetry is what the `MediaWorker` split is for,
  * and widening the port would quietly undo it.
  */
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { ChunkResult } from '@edge-sonic/backend-services/index';
 import type { ScanDriver, ScanRunner } from '@edge-sonic/backend-services/library';

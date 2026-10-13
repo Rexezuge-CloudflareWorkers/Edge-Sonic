@@ -1,8 +1,6 @@
 import { Database, Disc3, Globe } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../components/ui/Button';
-import { Card } from '../components/ui/Card';
-import { AppPage } from '@rexezuge/web';
+import { AppPage, Button, Card } from '@rexezuge/web';
 import { ZERO_TRUST_AUTHENTICATION_PATH } from '../lib/constants';
 import { hasPriorSignInAttempt, rememberSignInAttempt } from '../lib/signInLoop';
 

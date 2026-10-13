@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { queueNamesIn } from '../../scripts/lib/wrangler-config/resources';
+import { queueNamesIn } from '@rexezuge/tooling/src/scripts/wrangler-config/resources';
 
 describe('queueNamesIn: what the deploy creates', () => {
   it('returns nothing when no queues are declared', () => {

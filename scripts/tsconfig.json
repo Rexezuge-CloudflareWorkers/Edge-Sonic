@@ -7,6 +7,13 @@
     // type-aware rules into noise.
     "lib": ["ESNext", "DOM"],
     "noUncheckedIndexedAccess": true,
+    // These scripts run under `tsx`, which resolves an explicit `.ts` specifier,
+    // and they now import `@rexezuge/tooling`'s shipped `src/` — written that way
+    // on purpose, because a script that resolves paths relative to the repository it
+    // runs in is run from disk rather than bundled. The flag is what lets a
+    // `noEmit` config typecheck that form; the build config that *emits* those
+    // files uses `rewriteRelativeImportExtensions` instead.
+    "allowImportingTsExtensions": true,
     "types": ["node"]
   },
   "include": ["**/*.ts"],

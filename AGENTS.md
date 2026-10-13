@@ -47,7 +47,6 @@ reader: the split is by **who needs the answer**, not by directory.
 | `media-tags`      | [`packages/media-tags/README.md`](packages/media-tags/README.md)           |
 | `webdav`          | [`packages/webdav/README.md`](packages/webdav/README.md)                   |
 | `backend-runtime` | [`packages/backend-runtime/README.md`](packages/backend-runtime/README.md) |
-| `backend-errors`  | [`packages/backend-errors/README.md`](packages/backend-errors/README.md)   |
 | `shared`          | [`packages/shared/README.md`](packages/shared/README.md)                   |
 
 ### Decision records

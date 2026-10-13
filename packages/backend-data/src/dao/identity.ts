@@ -235,124 +235,45 @@ class UserDAO extends BaseDAO {
 }
 
 /**
- * One known address for an account, and the registry operations on it.
+ * The address registry is `@rexezuge/identity`'s `UserEmailDAO`, re-exported
+ * here so every existing import path keeps resolving.
  *
- * The statements are `@rexezuge/identity`'s `UserEmailDAO` verbatim — the
- * registry is the kit's design (frozen anchor, verified-only resolution,
- * revocable-and-re-pointable rows) — re-homed here because every DAO in this
- * layer constructs with the invocation's `SubrequestMeter` and the kit's DAO
- * takes none. If the kit's SQL changes, this class ports it; the two must
- * never drift, because a registry that resolves differently from the design
- * hands one account's history to another.
+ * It used to be re-homed into this file verbatim, with a comment demanding the
+ * two "never drift" — and nothing measured that. The three things that kept the
+ * copy here were each answered in the kit:
+ *
+ * - **The meter.** The local copy constructed with the invocation's
+ *   `SubrequestMeter` because the kit's DAO took none. `UserEmailDAO` now takes
+ *   one, so adopting it does not un-meter a repository whose every other
+ *   statement is charged. A DAO that charges nothing does not under-report
+ *   loudly; it spends a subrequest the ceiling never saw, and the failure
+ *   surfaces as the platform terminating an invocation with no application error.
+ * - **The SQL.** Identical, and `migrations/0011_user_identity.sql` already
+ *   states that it follows the kit's `UPGRADE_USER_IDENTITY` phases 2 and 3.
+ * - **The schema.** `user_emails` matches `USERS_SCHEMA` character for character.
+ *
+ * ## What did **not** converge, and why
+ *
+ * `UserDAO` and `UserIdentityService` stay local. The kit's `users` table has no
+ * `password_ciphertext`, `password_iv`, `key_version`, `username_ci`, `is_admin`,
+ * `is_enabled` or `scrobbling_enabled`, and its `id` alphabet is `usr_<hex>`
+ * against this repository's bare UUIDs. Its `createUser` and this repository's
+ * `create` are mutually exclusive, and login is username-based against
+ * `username_ci` rather than against the kit's bare `username`.
+ *
+ * Adopting them would be a migration of the authentication model, not an
+ * adoption of a DAO — a decision with its own product consequences, and not one
+ * a kit-adoption pass should make silently.
  *
  * `is_verified` gates authentication: `1` may resolve the account, `0` was
- * changed away from and is retained only so rows written before the change
- * stay attributable. A revoked row is re-pointed (not deleted) when a later
- * account legitimately claims the address, so an address is never permanently
- * reserved. Login itself stays username-based (`findByUsername`); the registry
- * is what a future address change moves through, and what `resolveVerified`
- * answers today.
+ * changed away from and is retained only so rows written before the change stay
+ * attributable. A revoked row is re-pointed (not deleted) when a later account
+ * legitimately claims the address, so an address is never permanently reserved.
+ * Login itself stays username-based (`findByUsername`); the registry is what a
+ * future address change moves through, and what `resolveVerified` answers today.
  */
-interface UserEmailRow {
-  email: string;
-  user_id: string;
-  is_verified: number;
-  created_at: number;
-}
-
-type EmailClaim = 'claimed' | 'already-claimed';
-
-class UserEmailDAO extends BaseDAO {
-  /**
-   * Claim an address for an account.
-   *
-   * An existing verified row is left alone: the address already belongs to
-   * someone, and silently re-pointing it would hand one account's identity to
-   * another. Callers check `resolveVerified` first and reject on a hit.
-   * An unverified (revoked) row is re-pointed, which releases the address.
-   */
-  public async register(input: { email: string; userId: string; isVerified: boolean; now: number }): Promise<EmailClaim> {
-    const email = input.email.toLowerCase();
-    const existing = await this.get(email);
-    if (existing && existing.is_verified === 1) return 'already-claimed';
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare(
-            `INSERT INTO user_emails (email, user_id, is_verified, created_at)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(email) DO UPDATE SET user_id = excluded.user_id, is_verified = excluded.is_verified`,
-          )
-          .bind(email, input.userId, input.isVerified ? 1 : 0, input.now)
-          .run(),
-      'userEmails.register',
-    );
-    return 'claimed';
-  }
-
-  public async get(email: string): Promise<UserEmailRow | null> {
-    // Lowercase the *parameter*: the column is stored lowercased by every
-    // writer, so `lower(email) = ?` matched identically while making the
-    // primary key unusable.
-    return await this.withRetry(
-      async () =>
-        await this.database.prepare('SELECT * FROM user_emails WHERE email = ? LIMIT 1').bind(email.toLowerCase()).first<UserEmailRow>(),
-      'userEmails.get',
-    );
-  }
-
-  /*
-   * Resolution for authentication: only a verified address identifies an
-   * account.
-   */
-  public async resolveVerified(email: string): Promise<UserEmailRow | null> {
-    return await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT * FROM user_emails WHERE email = ? AND is_verified = 1 LIMIT 1')
-          .bind(email.toLowerCase())
-          .first<UserEmailRow>(),
-      'userEmails.resolveVerified',
-    );
-  }
-
-  public async listByUserId(userId: string): Promise<UserEmailRow[]> {
-    const result = await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('SELECT * FROM user_emails WHERE user_id = ? ORDER BY is_verified DESC, created_at ASC')
-          .bind(userId)
-          .all<UserEmailRow>(),
-      'userEmails.listByUserId',
-    );
-    return result.results ?? [];
-  }
-
-  /*
-   * Revoke an address for authentication while keeping it attributable.
-   */
-  public async revoke(email: string): Promise<void> {
-    await this.withRetry(
-      async () => await this.database.prepare('UPDATE user_emails SET is_verified = 0 WHERE email = ?').bind(email.toLowerCase()).run(),
-      'userEmails.revoke',
-    );
-  }
-
-  /**
-   * Revoke every verified address for an account. Used when an account's login
-   * address changes, so only the new address authenticates it.
-   */
-  public async revokeAllVerified(userId: string, exceptEmail: string): Promise<void> {
-    await this.withRetry(
-      async () =>
-        await this.database
-          .prepare('UPDATE user_emails SET is_verified = 0 WHERE user_id = ? AND email != ?')
-          .bind(userId, exceptEmail.toLowerCase())
-          .run(),
-      'userEmails.revokeAllVerified',
-    );
-  }
-}
+import { UserEmailDAO } from '@rexezuge/identity';
+export type { EmailClaim, UserEmailRow } from '@rexezuge/identity';
 
 class LibraryDAO extends BaseDAO {
   public async findById(id: string): Promise<LibraryRow | null> {
@@ -476,5 +397,6 @@ class LibraryDAO extends BaseDAO {
   }
 }
 
-export { UserDAO, UserEmailDAO, LibraryDAO, nowSeconds };
-export type { UserEmailRow, EmailClaim };
+export { UserDAO, LibraryDAO, nowSeconds };
+
+export { UserEmailDAO } from '@rexezuge/identity';

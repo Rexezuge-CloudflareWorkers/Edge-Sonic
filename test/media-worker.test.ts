@@ -35,7 +35,7 @@ import { MediaWorker } from '@edge-sonic/background';
 import { getMediaStub, getScanStub, hasMediaBinding, hasScanBinding } from '../apps/api/src/workers/scanStubs';
 import { createHarness } from './helpers/harness';
 import type { Harness } from './helpers/harness';
-import type { SubrequestKind, SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestKind, SubrequestMeter } from '@rexezuge/shared';
 
 let harness: Harness;
 

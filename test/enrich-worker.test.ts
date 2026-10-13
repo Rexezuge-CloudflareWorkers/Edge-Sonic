@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EnrichWorker } from '@edge-sonic/background';
 import { ConflictError } from '@rexezuge/errors';
 import { SongDAO } from '@edge-sonic/backend-data/dao';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import { createHarness } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 

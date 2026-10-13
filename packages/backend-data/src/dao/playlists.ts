@@ -18,7 +18,7 @@
  */
 import { UUIDUtil } from '@rexezuge/shared';
 import { BaseDAO } from './BaseDAO';
-import type { TrackedStatement } from '../utils/D1Types';
+import type { TrackedStatement } from '@rexezuge/d1';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
 import { nowSeconds } from './identity';

@@ -10,15 +10,15 @@ part: what exists, what runs it, and what refuses to merge.
 
 `pnpm-workspace.yaml` globs `apps/*`, `packages/*`, and `test`. That is **12 projects**:
 
-| Layer | Projects                                                       | May import                                               |
-| ----- | -------------------------------------------------------------- | -------------------------------------------------------- |
-| 0     | `shared`, `backend-errors`, `subsonic`, `media-tags`, `webdav` | nothing                                                  |
-| 1     | `backend-runtime`                                              | layer 0                                                  |
-| 2     | `backend-data`                                                 | layer 0                                                  |
-| 3     | `backend-services`                                             | layers 0–2, never `apps/*`                               |
-| app   | `background`                                                   | layers 0–3, never `apps/api`                             |
-| app   | `api`                                                          | layers 0–3 + `background`; `backend-data` **types only** |
-| app   | `web`                                                          | the browser                                              |
+| Layer | Projects                                     | May import                                               |
+| ----- | -------------------------------------------- | -------------------------------------------------------- |
+| 0     | `shared`, `subsonic`, `media-tags`, `webdav` | nothing                                                  |
+| 1     | `backend-runtime`                            | layer 0                                                  |
+| 2     | `backend-data`                               | layer 0                                                  |
+| 3     | `backend-services`                           | layers 0–2, never `apps/*`                               |
+| app   | `background`                                 | layers 0–3, never `apps/api`                             |
+| app   | `api`                                        | layers 0–3 + `background`; `backend-data` **types only** |
+| app   | `web`                                        | the browser                                              |
 
 Enforced by `no-restricted-imports` in `eslint.config.mjs`, not by convention — and the
 enforcement has gaps worth knowing: there is **no** layer block for `subsonic` or
@@ -71,7 +71,7 @@ integration config has no thresholds, deliberately.
 **Coverage floors are `89 / 78 / 92 / 92`** (statements / branches / functions / lines),
 against a measured 90.40 / 79.70 / 93.69 / 93.34. They are a **measured** floor: lower one
 to make CI green and the gate stops saying anything. `apps/web` is deliberately _not_ in the
-coverage `include`, and `packages/backend-errors` is excluded because it is a pure taxonomy
+coverage `include`
 whose mapping out is tested.
 
 **The god-file guard is a ratchet, not a ceiling.** It was `300 warn / 400 error` — a hard

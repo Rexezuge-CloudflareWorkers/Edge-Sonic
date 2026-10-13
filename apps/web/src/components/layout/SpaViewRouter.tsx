@@ -1,14 +1,13 @@
 import { Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { ShowNotice } from '@rexezuge/web';
-import { AppPage } from './AppPage';
-import { Card } from '../ui/Card';
-import Unauthorized from './Unauthorized';
+import { AppPage, Unauthorized } from '@rexezuge/web';
 import { LandingView } from '../../views/LandingView';
 import { LibrariesView } from '../../views/LibrariesView';
 import { UsersView } from '../../views/UsersView';
 import ImportView from '../../views/ImportView';
 import { SettingsView } from '../../views/SettingsView';
+import { Card } from '@rexezuge/web';
 
 interface SpaViewRouterProps {
   /**
@@ -90,7 +89,13 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         path="/libraries"
         element={
           signedOut
-            ? page(<Unauthorized message={t('errors.signInToViewLibraries', 'Sign in to view libraries.')} />)
+            ? page(
+                <Unauthorized
+                  title={t('unauthorized.title', 'Access required')}
+                  message={t('errors.signInToViewLibraries', 'Sign in to view libraries.')}
+                  actionLabel={t('unauthorized.action', 'Sign in with Cloudflare Access')}
+                />,
+              )
             : page(<LibrariesView showNotice={showNotice} />)
         }
       />
@@ -98,7 +103,13 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         path="/users"
         element={
           signedOut
-            ? page(<Unauthorized message={t('errors.signInToViewUsers', 'Sign in to view users.')} />)
+            ? page(
+                <Unauthorized
+                  title={t('unauthorized.title', 'Access required')}
+                  message={t('errors.signInToViewUsers', 'Sign in to view users.')}
+                  actionLabel={t('unauthorized.action', 'Sign in with Cloudflare Access')}
+                />,
+              )
             : page(<UsersView showNotice={showNotice} />)
         }
       />
@@ -112,7 +123,13 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         path="/import"
         element={
           signedOut
-            ? page(<Unauthorized message={t('errors.signInToViewImport', 'Sign in to import.')} />)
+            ? page(
+                <Unauthorized
+                  title={t('unauthorized.title', 'Access required')}
+                  message={t('errors.signInToViewImport', 'Sign in to import.')}
+                  actionLabel={t('unauthorized.action', 'Sign in with Cloudflare Access')}
+                />,
+              )
             : page(<ImportView showNotice={showNotice} />)
         }
       />
@@ -128,7 +145,13 @@ function SpaViewRouter({ authorized, showNotice }: SpaViewRouterProps) {
         path="/settings"
         element={
           signedOut
-            ? page(<Unauthorized message={t('errors.signInToViewSettings', 'Sign in to view settings.')} />)
+            ? page(
+                <Unauthorized
+                  title={t('unauthorized.title', 'Access required')}
+                  message={t('errors.signInToViewSettings', 'Sign in to view settings.')}
+                  actionLabel={t('unauthorized.action', 'Sign in with Cloudflare Access')}
+                />,
+              )
             : page(<SettingsView showNotice={showNotice} />)
         }
       />

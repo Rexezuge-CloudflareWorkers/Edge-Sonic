@@ -21,9 +21,9 @@
  */
 import { BaseDAO } from './BaseDAO';
 import type { WriteBatchResult } from './BaseDAO';
-import type { D1Queryable } from '../utils/D1Types';
-import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { D1Queryable } from '@rexezuge/d1';
+import { UNMETERED_SUBREQUESTS } from '@rexezuge/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import type { SongRow } from './rows';
 import { nowSeconds } from './identity';
 import { SongIdLookupDAO } from './songIdLookup';

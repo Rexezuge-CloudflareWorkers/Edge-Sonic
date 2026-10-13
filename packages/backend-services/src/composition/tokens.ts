@@ -18,7 +18,7 @@ import type {
   SongMatchDAO,
   UserDAO,
 } from '@edge-sonic/backend-data/dao';
-import type { SubrequestCounter } from '@edge-sonic/shared';
+import type { SubrequestCounter } from '@rexezuge/shared';
 import type { Token } from '@rexezuge/runtime';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';

@@ -3,23 +3,26 @@
 /**
  * Materializes `wrangler.jsonc` and provisions what it refers to.
  *
- * Run by the `deploy-worker` job before `wrangler deploy`, and by the backup
- * workflow before `wrangler d1 export` — so the database a backup covers is
- * resolved from the same config the deploy targets, with no second
- * `D1_DATABASE_ID` secret to keep in sync.
+ * The five ordered calls are `@rexezuge/tooling`'s, converged from this file and
+ * Durable-DAV's. This repository keeps the entrypoint so the `deploy-worker` job
+ * and the backup workflow keep invoking a path they already name, and it adds one
+ * thing the kit's script does not: it resolves `@rexezuge/tooling`'s shipped
+ * `src/` rather than its `dist/`, because these scripts are **run from disk with
+ * `tsx`** and resolve paths relative to the repository they run in.
  *
- * Five ordered calls, each in `lib/wrangler-config/`: read or copy the config,
- * refuse one older than the template requires, apply the caller's patches, then
- * create whatever resources it names and write their real ids over the
- * placeholders. This file is only the order; it has nothing else to do.
- *
- * The one thing it does beyond calling is publish what `provisionWranglerResources`
- * created, which the backup workflow reads to refuse exporting a database that did not
- * exist until this run.
+ * The kit's version is also a superset — `WRANGLER_CONFIG_PATH` and
+ * `WRANGLER_TEMPLATE_PATH` override the two paths it otherwise derives from
+ * `process.cwd()`, which is what lets a repo script or a test drive it from
+ * somewhere else.
  */
-import { setOutput } from '../lib/github-actions';
-import { applyTopLevelPatch, applyVarsPatch, ensureMinimumConfigVersion, prepareConfigFile } from '../lib/wrangler-config/patches';
-import { provisionWranglerResources } from '../lib/wrangler-config/resources';
+import { setOutput } from '@rexezuge/tooling/src/scripts/lib/github-actions';
+import {
+  applyTopLevelPatch,
+  applyVarsPatch,
+  ensureMinimumConfigVersion,
+  prepareConfigFile,
+} from '@rexezuge/tooling/src/scripts/wrangler-config/patches';
+import { provisionWranglerResources } from '@rexezuge/tooling/src/scripts/wrangler-config/resources';
 
 prepareConfigFile();
 ensureMinimumConfigVersion();

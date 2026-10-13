@@ -19,7 +19,7 @@
 import type { Container } from '@rexezuge/runtime';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';
 import type { AppConfiguration } from '@edge-sonic/backend-runtime/config';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import { matchRemoteAlbums, matchRemoteArtists, resolveGrouping } from '../import/albumIdentity';
 import { ImportSourceService } from '../import/sourceService';
 import { Tokens } from './tokens';

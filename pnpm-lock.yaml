@@ -9,15 +9,12 @@ importers:
   .:
     dependencies:
       '@rexezuge/tooling':
-        specifier: 1.3.0
-        version: 1.3.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.9)(typescript-eslint@8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)
+        specifier: 1.7.0
+        version: 1.7.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.9)(typescript-eslint@8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)
     devDependencies:
       '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:packages/backend-data
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:packages/backend-errors
       '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:packages/backend-runtime
@@ -129,9 +126,6 @@ importers:
       '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:../../packages/backend-data
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:../../packages/backend-errors
       '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../../packages/backend-runtime
@@ -151,14 +145,17 @@ importers:
         specifier: workspace:*
         version: link:../../packages/subsonic
       '@rexezuge/errors':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
+      '@rexezuge/http':
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/shared':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       hono:
         specifier: 4.13.13
         version: 4.13.13
@@ -178,9 +175,6 @@ importers:
       '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:../../packages/backend-data
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:../../packages/backend-errors
       '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../../packages/backend-runtime
@@ -196,12 +190,18 @@ importers:
       '@edge-sonic/webdav':
         specifier: workspace:*
         version: link:../../packages/webdav
+      '@rexezuge/d1':
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/errors':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
+      '@rexezuge/shared':
+        specifier: 1.7.0
+        version: 1.7.0
     devDependencies:
       '@types/node':
         specifier: 26.6.4
@@ -213,11 +213,8 @@ importers:
   apps/web:
     dependencies:
       '@rexezuge/web':
-        specifier: 1.3.0
-        version: 1.3.0(lucide-react@1.53.0(@types/react@19.3.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      class-variance-authority:
-        specifier: 0.7.1
-        version: 0.7.1
+        specifier: 1.7.0
+        version: 1.7.0(lucide-react@1.53.0(@types/react@19.3.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       clsx:
         specifier: 2.1.1
         version: 2.1.1
@@ -270,34 +267,24 @@ importers:
 
   packages/backend-data:
     dependencies:
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:../backend-errors
       '@edge-sonic/shared':
         specifier: workspace:*
         version: link:../shared
       '@edge-sonic/subsonic':
         specifier: workspace:*
         version: link:../subsonic
+      '@rexezuge/d1':
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/errors':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
+      '@rexezuge/identity':
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/shared':
-        specifier: 1.3.0
-        version: 1.3.0
-    devDependencies:
-      '@types/node':
-        specifier: 26.6.4
-        version: 26.6.4
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
-
-  packages/backend-errors:
-    dependencies:
-      '@rexezuge/errors':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
     devDependencies:
       '@types/node':
         specifier: 26.6.4
@@ -314,6 +301,12 @@ importers:
       '@edge-sonic/subsonic':
         specifier: workspace:*
         version: link:../subsonic
+      '@rexezuge/runtime':
+        specifier: 1.7.0
+        version: 1.7.0
+      '@rexezuge/shared':
+        specifier: 1.7.0
+        version: 1.7.0
     devDependencies:
       '@types/node':
         specifier: 26.6.4
@@ -327,9 +320,6 @@ importers:
       '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:../backend-data
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:../backend-errors
       '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../backend-runtime
@@ -346,17 +336,17 @@ importers:
         specifier: workspace:*
         version: link:../webdav
       '@rexezuge/d1':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/errors':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/shared':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       jose:
         specifier: 6.2.12
         version: 6.2.12
@@ -409,9 +399,6 @@ importers:
       '@edge-sonic/backend-data':
         specifier: workspace:*
         version: link:../packages/backend-data
-      '@edge-sonic/backend-errors':
-        specifier: workspace:*
-        version: link:../packages/backend-errors
       '@edge-sonic/backend-runtime':
         specifier: workspace:*
         version: link:../packages/backend-runtime
@@ -434,17 +421,17 @@ importers:
         specifier: workspace:*
         version: link:../packages/webdav
       '@rexezuge/d1':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/errors':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       '@rexezuge/shared':
-        specifier: 1.3.0
-        version: 1.3.0
+        specifier: 1.7.0
+        version: 1.7.0
       vitest:
         specifier: 4.1.11
         version: 4.1.11(@types/node@26.6.4)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2)(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
@@ -489,6 +476,11 @@ packages:
   '@asamuzakjp/dom-selector@9.2.4':
     resolution: {integrity: sha512-YnVzxDxLaqL0t7Q4wfcgHZjg55Wm6y5EaO7Bhu3q9J7wq/8iw3PhsnWiOQhYekx4VexnbkgWpTT6n+QIV7kczw==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
+
+  '@asteasolutions/zod-to-openapi@8.5.0':
+    resolution: {integrity: sha512-SABbKiObg5dLRiTFnqiW1WWwGcg1BJfmHtT2asIBnBHg6Smy/Ms2KHc650+JI4Hw7lSkdiNebEGXpwoxfben8Q==}
+    peerDependencies:
+      zod: ^4.0.0
 
   '@babel/code-frame@7.29.7':
     resolution: {integrity: sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==}
@@ -1251,20 +1243,26 @@ packages:
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
 
-  '@rexezuge/d1@1.3.0':
-    resolution: {integrity: sha512-easaWVpg0w2A8m+SmUmdineN0MhiM7IqL8B0vZ+k0AKjXUL2fVG9FAVA1YyZ/FTe9EjbBJdoHg8Ztn9Jw5I8Rw==}
+  '@rexezuge/d1@1.7.0':
+    resolution: {integrity: sha512-CGmYwOMnzbW34w4JCOuh5PPwoFXJMVYS94gnBhc+WWnrYJjBOQnIfPVhxdT1kepWU9sKejNPPvrFuMu7wH7xyw==}
 
-  '@rexezuge/errors@1.3.0':
-    resolution: {integrity: sha512-EdrLpUdxYKqo6ATuYYFtC9q11QKNFAx8fCR+FjXjZbnDWYtkHXK1Gm0willDIwnxJmg8JkA9zJJEStyckB3KkQ==}
+  '@rexezuge/errors@1.7.0':
+    resolution: {integrity: sha512-OgpT+rtMT3xSV639gmEV+kq3HsFRIctR8mB3Wx1aqhUlvTyjcUh6MjdB3AiKoPaVBk10bwC+wCZial/RQC7DsA==}
 
-  '@rexezuge/runtime@1.3.0':
-    resolution: {integrity: sha512-04xfSXoQxWzK0bpT+UTp37me7MVFwO1i7ZZGpix4unBQ/jw3/COrEFYUYnT9PqXPcRR94TLFSZfzIsRMDo65QA==}
+  '@rexezuge/http@1.7.0':
+    resolution: {integrity: sha512-bNn/xxGSTRczL0+JFV1HkUpGdmpCaw1luDlGyBjmr7HKEwDCsoN9o2GJoB3dLFPguKMNqrn5/aDhU8GoGozETw==}
 
-  '@rexezuge/shared@1.3.0':
-    resolution: {integrity: sha512-DrUvKLb1IOawa+zeYIptAa3IK+n2Tul6MjVDQ7KwZLHXOnT/tjZX4w6JR+458pRtZsIxT3FEXFrL5ZenmFGmJg==}
+  '@rexezuge/identity@1.7.0':
+    resolution: {integrity: sha512-Hv4SfUMq2/S3YWchOeb7l9FHw2ycpMYGTIcD5GYCjPZk+97e0ANgtppQ0WQjqOZvEUlgVgEonUjkpNT3P3+z4A==}
 
-  '@rexezuge/tooling@1.3.0':
-    resolution: {integrity: sha512-sAQZtWPUzXO8KPHYbQI8f7trCgCYrUV0uhZ8m8m1/o2BQJ01gVutO9uRpcZsALHth4ZChc+sytyvVlPPl271pA==}
+  '@rexezuge/runtime@1.7.0':
+    resolution: {integrity: sha512-lCAC2FhZPWwOSyrFKg0j0VsmfMKQa5SJUMEgWA3kZgP8o61UGBfSUwlGN+iAPnJbvjTNxlU56Mf87VkHeGQXGQ==}
+
+  '@rexezuge/shared@1.7.0':
+    resolution: {integrity: sha512-Owxtwd7mnfODgQQDImYwIWedXB+YR4YM9R7yN9aLczWkI7PzOOqQlo3tDEI9wbxqjmlWLm6145SS2rZLqjr0SA==}
+
+  '@rexezuge/tooling@1.7.0':
+    resolution: {integrity: sha512-zrj0tWaKshQODJVDS5KdN54DB3OazUEhBqhHe5SQRWZ3ym4/l4fRQzws2AYVWKCYT5vyhem7aTjJNlaDyheW/Q==}
     peerDependencies:
       eslint: ^10.0.0
       eslint-config-prettier: ^10.1.8
@@ -1279,8 +1277,8 @@ packages:
       typescript-eslint: ^8.0.0
       vitest: ^4.0.0
 
-  '@rexezuge/web@1.3.0':
-    resolution: {integrity: sha512-bNDtTMmwnbSKB60e5uN82Bkyo6KEEi9pti5LBm51x/1akXgRPDICyd/0nirYHo8p/x4Kcgni+VY92NiDl8hXbg==}
+  '@rexezuge/web@1.7.0':
+    resolution: {integrity: sha512-OBQB0HKR0SUcjsTL8z6FXDWUpZKZFbptui9wlK6FDkDWEdbR9Dg3jBZFOngPwDiW1cs8hOVvrhkvwJhUoyFmjw==}
     peerDependencies:
       lucide-react: ^1.49.0
       react: ^19.3.0
@@ -1684,6 +1682,9 @@ packages:
     resolution: {integrity: sha512-Cxwpt2SfTzTtXcfOlzGEee8O+c+MmUgGrNiBcXnuWxuFJHe6a5Hz7qwhwe5OgaSYI0IJvkLqWX1ASG+cJOkEiA==}
     engines: {node: '>=10'}
 
+  argparse@2.0.1:
+    resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
+
   aria-query@5.3.0:
     resolution: {integrity: sha512-b0P0sZPKtyu8HkeRAfCq0IfURZK+SuwMjY1UXGBU27wpAiTwQAIlq56IbIO+ytk/JjS1fMR14ee5WBBfKi5J6A==}
 
@@ -1744,15 +1745,17 @@ packages:
     resolution: {integrity: sha512-NUPRluOfOiTKBKvWPtSD4PhFvWCqOi0BGStNWs57X9js7XGTprSmFoz5F0tWhR4WPjNeR9jXqdC7/UpSJTnlRg==}
     engines: {node: '>=18'}
 
+  chanfana@3.4.0:
+    resolution: {integrity: sha512-zNXyjQWnuhxd2m5QOQjAT7dCi8jg/SXckhD3y/Z6PKJfsf/XfSlvxyxFJpJh8O19lrvrsM4SUgEz2628imtWJQ==}
+    engines: {node: '>=18'}
+    hasBin: true
+
   change-case@5.4.4:
     resolution: {integrity: sha512-HRQyTk2/YPEkt9TnUPbOpr64Uw3KOicFWPVBb+xiHvd6eBx/qPr9xqfBFDT8P2vWsvvz4jbEkfDe71W3VyNu2w==}
 
   ci-info@4.4.0:
     resolution: {integrity: sha512-77PSwercCZU2Fc4sX94eF8k8Pxte6JAwL4/ICZLFjJLqegs7kCuAsqqj/70NQF6TvDpgFjkubQB2FW2ZZddvQg==}
     engines: {node: '>=8'}
-
-  class-variance-authority@0.7.1:
-    resolution: {integrity: sha512-Ka+9Trutv7G8M6WT6SeiRWz792K5qEqIGEGzXKhAE6xOWAY6pPH8U+9IY3oCMv6kqTmLsv7Xh/2w2RigkePMsg==}
 
   clsx@2.1.1:
     resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
@@ -2121,6 +2124,10 @@ packages:
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
+  js-yaml@4.3.2:
+    resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
+    hasBin: true
+
   jsdoc-type-pratt-parser@9.2.2:
     resolution: {integrity: sha512-eFY7Rlscvv/BpY6UsVsjKwMhu1tJO/F4U/vC9g3yeRy/JqszuO1UP6Vdq+85G+3FP6fEw/sWR8a5ftPFY86csw==}
     engines: {node: ^22.22.2 || >=24.15.0}
@@ -2389,6 +2396,9 @@ packages:
   obug@2.2.1:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
+
+  openapi3-ts@4.6.1:
+    resolution: {integrity: sha512-XW9MOldkhoICNeXVzzmXzmOW5G73ppOEGmh7fLCqHjgfdEYCGGN+00MlVCeUZgovjjfC56j9tvtDt1zGabNjjA==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -2868,6 +2878,10 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
+  yargs-parser@22.0.0:
+    resolution: {integrity: sha512-rwu/ClNdSMpkSrUb+d6BRsSkLUq1fmfsY6TOpYzTwvwkg1/NRG85KBy3kq++A8LKQwX6lsu+aWad+2khvuXrqw==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=23}
+
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
@@ -2905,6 +2919,11 @@ snapshots:
       css-tree: 3.2.1
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
+
+  '@asteasolutions/zod-to-openapi@8.5.0(zod@4.6.5)':
+    dependencies:
+      openapi3-ts: 4.6.1
+      zod: 4.6.5
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -3451,20 +3470,34 @@ snapshots:
 
   '@poppinss/exception@1.2.3': {}
 
-  '@rexezuge/d1@1.3.0':
+  '@rexezuge/d1@1.7.0':
     dependencies:
-      '@rexezuge/errors': 1.3.0
-      '@rexezuge/shared': 1.3.0
+      '@rexezuge/errors': 1.7.0
+      '@rexezuge/shared': 1.7.0
 
-  '@rexezuge/errors@1.3.0': {}
+  '@rexezuge/errors@1.7.0': {}
 
-  '@rexezuge/runtime@1.3.0': {}
-
-  '@rexezuge/shared@1.3.0': {}
-
-  '@rexezuge/tooling@1.3.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.9)(typescript-eslint@8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)':
+  '@rexezuge/http@1.7.0':
     dependencies:
-      '@rexezuge/d1': 1.3.0
+      '@rexezuge/errors': 1.7.0
+      '@rexezuge/shared': 1.7.0
+      chanfana: 3.4.0
+      hono: 4.13.13
+      jose: 6.2.12
+
+  '@rexezuge/identity@1.7.0':
+    dependencies:
+      '@rexezuge/d1': 1.7.0
+      '@rexezuge/errors': 1.7.0
+      '@rexezuge/shared': 1.7.0
+
+  '@rexezuge/runtime@1.7.0': {}
+
+  '@rexezuge/shared@1.7.0': {}
+
+  '@rexezuge/tooling@1.7.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.9)(typescript-eslint@8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)':
+    dependencies:
+      '@rexezuge/d1': 1.7.0
       eslint: 10.12.0(jiti@2.7.0)
       eslint-config-prettier: 10.1.8(eslint@10.12.0(jiti@2.7.0))
       eslint-plugin-prettier: 5.5.6(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.9)
@@ -3478,10 +3511,10 @@ snapshots:
       typescript-eslint: 8.71.1(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3)
       vitest: 4.1.11(@types/node@26.6.4)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.2)(vite@8.3.4(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
-  '@rexezuge/web@1.3.0(lucide-react@1.53.0(@types/react@19.3.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@rexezuge/web@1.7.0(lucide-react@1.53.0(@types/react@19.3.0)(react@19.3.0))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@rexezuge/errors': 1.3.0
-      '@rexezuge/shared': 1.3.0
+      '@rexezuge/errors': 1.7.0
+      '@rexezuge/shared': 1.7.0
       lucide-react: 1.53.0(@types/react@19.3.0)(react@19.3.0)
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
@@ -3837,6 +3870,8 @@ snapshots:
 
   ansi-styles@5.2.0: {}
 
+  argparse@2.0.1: {}
+
   aria-query@5.3.0:
     dependencies:
       dequal: 2.0.3
@@ -3891,13 +3926,17 @@ snapshots:
 
   chai@6.2.2: {}
 
+  chanfana@3.4.0:
+    dependencies:
+      '@asteasolutions/zod-to-openapi': 8.5.0(zod@4.6.5)
+      js-yaml: 4.3.2
+      openapi3-ts: 4.6.1
+      yargs-parser: 22.0.0
+      zod: 4.6.5
+
   change-case@5.4.4: {}
 
   ci-info@4.4.0: {}
-
-  class-variance-authority@0.7.1:
-    dependencies:
-      clsx: 2.1.1
 
   clsx@2.1.1: {}
 
@@ -4302,6 +4341,10 @@ snapshots:
 
   js-tokens@4.0.0: {}
 
+  js-yaml@4.3.2:
+    dependencies:
+      argparse: 2.0.1
+
   jsdoc-type-pratt-parser@9.2.2:
     dependencies:
       '@types/estree': 1.0.9
@@ -4519,6 +4562,10 @@ snapshots:
   node-releases@2.0.56: {}
 
   obug@2.2.1: {}
+
+  openapi3-ts@4.6.1:
+    dependencies:
+      yaml: 2.9.1
 
   optionator@0.9.4:
     dependencies:
@@ -4933,6 +4980,8 @@ snapshots:
   yallist@3.1.1: {}
 
   yaml@2.9.1: {}
+
+  yargs-parser@22.0.0: {}
 
   yocto-queue@0.1.0: {}
 

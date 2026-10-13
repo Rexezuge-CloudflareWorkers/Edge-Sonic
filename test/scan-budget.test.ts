@@ -56,8 +56,8 @@ import {
   SUBSREQUESTS_PER_FOLDER_BASE,
   WORKER_SUBSREQUEST_CEILING,
 } from '@edge-sonic/backend-runtime/config';
-import { SubrequestCounter } from '@edge-sonic/shared';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestCounter } from '@rexezuge/shared';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
 import { DERIVED_VERSION, billedRowsForTable, deriveFromPath, deriveTitleFromFileName } from '@edge-sonic/backend-data/dao';
 import type { ChildNodeRow, LibraryRow, NodeRow, ScanStateRow, SongRow } from '@edge-sonic/backend-data/dao';
 import { fakeDav } from './helpers/fakeDav';

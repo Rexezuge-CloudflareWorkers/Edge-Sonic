@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_UUID } from '../../scripts/lib/wrangler-config/types';
+import { DEFAULT_UUID } from '@rexezuge/tooling/src/scripts/wrangler-config/types';
 import { resolveD1Target } from '../../scripts/backup/d1-target';
 import { evaluateConfig } from '../../scripts/backup/destination-config';
 

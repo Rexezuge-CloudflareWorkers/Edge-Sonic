@@ -16,7 +16,7 @@
  * a status-code assertion cannot see.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KvCache, resetBreakerForTests } from '@edge-sonic/backend-runtime/kv';
+import { createKvCache, resetBreakerForTests } from '@edge-sonic/backend-runtime/kv';
 import { sniffImageType } from '@edge-sonic/media-tags';
 import { deadKv, fakeKv } from './helpers/fakeKv';
 
@@ -29,22 +29,22 @@ describe('KvCache is a cache, not a dependency', () => {
   });
 
   it('reads and writes when healthy', async () => {
-    const cache = new KvCache(fakeKv().ns);
+    const cache = createKvCache(fakeKv().ns);
     expect(await cache.putJson(DOMAIN, [PART, 'artists'], { a: 1 })).toBe(true);
     expect(await cache.getJson(DOMAIN, [PART, 'artists'])).toEqual({ a: 1 });
   });
 
   it('reads as a miss when the binding is absent', async () => {
-    // `new KvCache(null)` is what the composition root builds when `env.CACHE` is
+    // `createKvCache(null)` is what the composition root builds when `env.CACHE` is
     // missing. It must not be a separate code path from a failing binding.
-    const cache = new KvCache(null);
+    const cache = createKvCache(null);
     expect(cache.available).toBe(false);
     expect(await cache.getJson(DOMAIN, [PART, 'artists'])).toBeNull();
     expect(await cache.putJson(DOMAIN, [PART, 'artists'], { a: 1 })).toBe(false);
   });
 
   it('reads as a miss when every operation throws', async () => {
-    const cache = new KvCache(deadKv());
+    const cache = createKvCache(deadKv());
     expect(await cache.getJson(DOMAIN, [PART, 'artists'])).toBeNull();
     // A failed write is reported as "not stored", never thrown: the caller has
     // already got its answer from D1 and must not now fail on the cache.
@@ -53,21 +53,21 @@ describe('KvCache is a cache, not a dependency', () => {
   });
 
   it('never throws, for any operation, with a throwing namespace', async () => {
-    const cache = new KvCache(deadKv());
+    const cache = createKvCache(deadKv());
     await expect(cache.del(DOMAIN, [PART, 'x'])).resolves.toBeUndefined();
     await expect(cache.purgePrefix(DOMAIN, [PART])).resolves.toBe(0);
   });
 
   it('treats a corrupt value as a miss rather than an error', async () => {
     // A truncated or hand-edited value must degrade to a recompute, not a 500.
-    const cache = new KvCache(fakeKv({ 'songMeta:v1:lib1:artists': '{not json' }).ns);
+    const cache = createKvCache(fakeKv({ 'songMeta:v1:lib1:artists': '{not json' }).ns);
     expect(await cache.getJson(DOMAIN, [PART, 'artists'])).toBeNull();
   });
 
   it('skips a value that exceeds the domain size limit', async () => {
     // Refusing to store is correct: KV rejects it anyway, and a truncated write would
     // be worse than none.
-    const cache = new KvCache(fakeKv().ns);
+    const cache = createKvCache(fakeKv().ns);
     const oversized = 'x'.repeat(600 * 1024);
     expect(await cache.putText(DOMAIN, [PART, 'big'], oversized)).toBe(false);
   });
@@ -104,7 +104,7 @@ describe('binary values survive the cache', () => {
 
   it('returns the exact bytes that were written', async () => {
     for (const domain of ['albumArt', 'songMeta'] as const) {
-      const cache = new KvCache(fakeKv().ns);
+      const cache = createKvCache(fakeKv().ns);
       expect(await cache.putBytes(domain, [PART, 'cover'], JPEG)).toBe(true);
       const read = await cache.getBytes(domain, [PART, 'cover']);
       expect(read).not.toBeNull();
@@ -117,7 +117,7 @@ describe('binary values survive the cache', () => {
     // omits the argument is the defect, and on a real binding the bytes come back
     // corrupted rather than absent, so nothing else in the request would report it.
     const store = fakeKv();
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     await cache.putBytes('albumArt', [PART, 'cover'], JPEG);
     await cache.getBytes('albumArt', [PART, 'cover']);
     expect(store.requestedTypes.at(-1)).toBe('arrayBuffer');
@@ -129,7 +129,7 @@ describe('binary values survive the cache', () => {
     // served — silently, with a non-zero length, so it cannot be mistaken for the
     // cached *absence* an album with no artwork leaves behind.
     const store = fakeKv();
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     expect(await cache.putBytes('albumArt', [PART, 'cover'], JPEG)).toBe(true);
 
     const asText = await store.ns.get('albumArt:v1:lib1:cover');
@@ -148,7 +148,7 @@ describe('binary values survive the cache', () => {
     // is mangled differently from a JPEG and a reader that handled only one of them
     // would still look correct.
     const store = fakeKv();
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     await cache.putBytes('albumArt', [PART, 'cover'], PNG);
     expect(sniffImageType((await cache.getBytes('albumArt', [PART, 'cover'])) ?? new Uint8Array(0))).toBe('image/png');
     const asText = await store.ns.get('albumArt:v1:lib1:cover');
@@ -160,7 +160,7 @@ describe('binary values survive the cache', () => {
     // artwork", and reads it back as exactly that. A reader that turned empty into
     // `null` — or into a byte of padding — would turn a correct negative into a
     // re-probe on every request, or a corrupt cover.
-    const cache = new KvCache(fakeKv().ns);
+    const cache = createKvCache(fakeKv().ns);
     expect(await cache.putBytes('albumArt', [PART, 'none'], new Uint8Array(0))).toBe(true);
     const read = await cache.getBytes('albumArt', [PART, 'none']);
     expect(read).not.toBeNull();
@@ -179,7 +179,7 @@ describe('KV circuit breaker', () => {
 
   it('opens after consecutive failures and then fails fast', async () => {
     const failing = fakeKv({}, { failAll: true });
-    const cache = new KvCache(failing.ns);
+    const cache = createKvCache(failing.ns);
 
     // The threshold is 3: the first three calls reach the namespace, the fourth does
     // not. That is the whole point — a hanging namespace must not be paid for on
@@ -202,7 +202,7 @@ describe('KV circuit breaker', () => {
     // probing on every call.
     vi.useFakeTimers();
     const failing = fakeKv({}, { failAll: true });
-    const cache = new KvCache(failing.ns);
+    const cache = createKvCache(failing.ns);
     for (let attempt = 0; attempt < 3; attempt += 1) await cache.getText(DOMAIN, [PART, 'k']);
     expect(failing.calls.get).toBe(3);
 
@@ -216,13 +216,13 @@ describe('KV circuit breaker', () => {
     // picked up on its own, on the first call after the cooldown.
     vi.useFakeTimers();
     const store = fakeKv({}, { failAll: true });
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     for (let attempt = 0; attempt < 3; attempt += 1) await cache.getText(DOMAIN, [PART, 'k']);
     expect(store.calls.get).toBe(3);
 
     // The namespace recovers.
     const recovered = fakeKv({ 'songMeta:v1:lib1:k': 'value' });
-    const shared = new KvCache(recovered.ns);
+    const shared = createKvCache(recovered.ns);
     vi.advanceTimersByTime(5100);
 
     // The breaker state is module-level (one namespace, one breaker per isolate),
@@ -237,7 +237,7 @@ describe('KV circuit breaker', () => {
 
   it('counts a successful call as a reset', async () => {
     const store = fakeKv({ 'songMeta:v1:lib1:k': 'v' });
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     // Three successes in a row must not accumulate toward the threshold.
     for (let attempt = 0; attempt < 10; attempt += 1) {
       expect(await cache.getText(DOMAIN, [PART, 'k'])).toBe('v');
@@ -256,7 +256,7 @@ describe('cache writes are budgeted', () => {
     // just read spends that budget for nothing, and a client that re-reads the same
     // key in a loop exhausts it.
     const store = fakeKv({ 'songMeta:v1:lib1:artists': '{"cached":true}' });
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await cache.getJson(DOMAIN, [PART, 'artists']);
     }
@@ -267,7 +267,7 @@ describe('cache writes are budgeted', () => {
     // Invalidation is version-in-key: a superseded entry becomes unreachable on its
     // own. Nothing here may spend a delete.
     const store = fakeKv({ 'songMeta:v1:lib1:artists': '{}' });
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     await cache.getJson(DOMAIN, [PART, 'artists']);
     await cache.getText(DOMAIN, [PART, 'artists']);
     expect(store.calls.delete).toBe(0);
@@ -277,7 +277,7 @@ describe('cache writes are budgeted', () => {
     // This is the invalidation mechanism: no delete, no eviction, and a scan that
     // bumps the version cannot serve a stale aggregate even for one request.
     const store = fakeKv();
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     await cache.putJson(DOMAIN, ['lib1', '1', 'artists'], { version: 1 });
     expect(await cache.getJson(DOMAIN, ['lib1', '1', 'artists'])).toEqual({ version: 1 });
     expect(await cache.getJson(DOMAIN, ['lib1', '2', 'artists'])).toBeNull();

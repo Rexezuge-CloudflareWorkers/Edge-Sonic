@@ -24,7 +24,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { encryptData, generateAesGcmKey } from '@edge-sonic/backend-data/crypto';
 import { ScanBudget, TreeService, reconcileFolder } from '@edge-sonic/backend-services/index';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import { WebDavClient } from '@edge-sonic/webdav';
 import { fakeDav } from './helpers/fakeDav';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
@@ -34,11 +34,13 @@ import { sqliteQueryable } from './helpers/sqlite';
 import type { SqliteQueryable } from './helpers/sqlite';
 
 let handle: SqliteQueryable;
-let keyPromise: Promise<string> | undefined;
+let testKeyValue: string | undefined;
 
-function testKey(): Promise<string> {
-  keyPromise ??= generateAesGcmKey();
-  return keyPromise;
+function testKey(): string {
+  // Synchronous, and cached: one key for the whole file so a regeneration does
+  // not change the corpus the assertions are written against.
+  testKeyValue ??= generateAesGcmKey();
+  return testKeyValue;
 }
 
 function nowSeconds(): number {

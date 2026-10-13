@@ -1,9 +1,9 @@
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
-import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
-import type { SubrequestMeter } from '@edge-sonic/shared';
-import type { D1PreparedStatement, D1Queryable, D1Result, TrackedStatement } from '../utils/D1Types';
-import { executeD1WithRetry } from '../utils/D1Utils';
-import { billedRowsFor } from './billedRows';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
+import { UNMETERED_SUBREQUESTS } from '@rexezuge/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
+import { BaseDAO as KitBaseDAO, executeWithRetry } from '@rexezuge/d1';
+import type { D1Queryable, D1Result, TrackedStatement } from '@rexezuge/d1';
+import { billedRowsFor, billedRowsForTable } from './billedRows';
 
 /**
  * What a write batch actually managed to write.
@@ -98,11 +98,10 @@ interface WriteBatchResult {
  * in production is precisely the failure this class of bug is made of: a path that spends
  * nothing because nothing was watching it.
  */
-abstract class BaseDAO {
-  constructor(
-    protected readonly database: D1Queryable,
-    private readonly meter: SubrequestMeter = UNMETERED_SUBREQUESTS,
-  ) {}
+abstract class BaseDAO extends KitBaseDAO {
+  constructor(database: D1Queryable, meter: SubrequestMeter = UNMETERED_SUBREQUESTS) {
+    super(database, meter, { billedRowsForTable: (table, logicalRows) => billedRowsForTable(table, logicalRows) });
+  }
 
   /**
    * Run a statement — or a read — with bounded retries on transient faults.
@@ -122,8 +121,12 @@ abstract class BaseDAO {
    * the reading D1's own limits page states.
    */
   protected withRetry<T>(operation: () => Promise<T>, context: string): Promise<T> {
-    this.meter.charge(1, 'd1');
-    return executeD1WithRetry(operation, context);
+    this.subrequests.charge(1, 'd1');
+    // The kit's engine is typed over `D1Result` because that is what every statement
+    // resolves to; this layer's callers wrap the statement, so the payload here is a
+    // `D1Result`-shaped envelope rather than the result itself. The assertion is on the
+    // *shape*, never on the value — the retry engine reads `success` and `error` only.
+    return executeWithRetry((): Promise<D1Result> => operation() as Promise<D1Result>, context) as Promise<T>;
   }
 
   /**
@@ -145,15 +148,7 @@ abstract class BaseDAO {
    * wants is the other kind of wrong.
    */
   protected prepare(query: string): TrackedStatement {
-    const track = (statement: D1PreparedStatement): TrackedStatement => ({
-      sql: query,
-      statement,
-      // A **new** pair, mirroring the platform: Cloudflare's `bind()` returns a new
-      // statement rather than mutating and returning the same one, so a pair that
-      // mutated in place would model a statement the runtime does not have.
-      bind: (...values: unknown[]): TrackedStatement => track(statement.bind(...values)),
-    });
-    return track(this.database.prepare(query));
+    return this.tracked(query);
   }
 
   /**
@@ -168,8 +163,8 @@ abstract class BaseDAO {
    * So a composition's meter is reachable from a subclass, and the only way to build a DAO is
    * from a DAO that already has one.
    */
-  protected get subrequests(): SubrequestMeter {
-    return this.meter;
+  public override get subrequests(): SubrequestMeter {
+    return super.subrequests;
   }
 
   /**
@@ -187,9 +182,9 @@ abstract class BaseDAO {
    * where every other batching decision in this layer is made.
    */
   protected requireSubrequests(statements: number, context: string): void {
-    if (!Number.isFinite(this.meter.ceiling) || statements <= this.meter.remaining) return;
+    if (!Number.isFinite(this.subrequests.ceiling) || statements <= this.subrequests.remaining) return;
     throw new SubrequestBudgetExhaustedError(
-      `Reading ${context} needs about ${statements} queries and ${this.meter.remaining} remain in this invocation.`,
+      `Reading ${context} needs about ${statements} queries and ${this.subrequests.remaining} remain in this invocation.`,
     );
   }
 
@@ -211,7 +206,7 @@ abstract class BaseDAO {
    * can bound anything.
    */
   protected async runWriteStatement(tracked: TrackedStatement, context: string): Promise<{ changes: number; billedRows: number }> {
-    const result: D1Result = await this.withRetry(async () => await tracked.statement.run(), context);
+    const result: D1Result = await this.withRetry((): Promise<D1Result> => tracked.statement.run(), context);
     const changes = result?.meta?.changes ?? 0;
     return { changes, billedRows: billedRowsFor(tracked.sql, changes) };
   }
@@ -250,7 +245,7 @@ abstract class BaseDAO {
     // gets `truncated` and finishes on the next chunk.
     if (options?.requireComplete === true && !this.canFitAll(statements.length)) {
       throw new SubrequestBudgetExhaustedError(
-        `Writing ${statements.length} rows for ${context} needs ${statements.length} subrequests and ${this.meter.remaining} remain in this invocation.`,
+        `Writing ${statements.length} rows for ${context} needs ${statements.length} subrequests and ${this.subrequests.remaining} remain in this invocation.`,
       );
     }
 
@@ -265,7 +260,7 @@ abstract class BaseDAO {
       const group = statements.slice(offset, offset + fits);
       // Charged before the group is issued, and for its pessimistic cost, so the ceiling is
       // never crossed by the accounting being later than the request.
-      this.meter.charge(fits, 'd1');
+      this.subrequests.charge(fits, 'd1');
       written += group.length;
 
       if (this.database.batch) {
@@ -273,7 +268,15 @@ abstract class BaseDAO {
         // takes `D1PreparedStatement[]`. A wrapper reaching it is the object it does not
         // know how to execute.
         const raw = group.map((entry) => entry.statement);
-        const results: D1Result[] = await executeD1WithRetry(async () => await this.database.batch!(raw), context);
+        // The kit's engine is typed over a single `D1Result`, because that is what every
+        // statement call resolves to. A batch resolves to an **array** of them. The engine
+        // reads only `success` and `error` to decide whether to retry, and an array of
+        // results is checked element-wise below — so the cast is over the payload's
+        // cardinality, not over a value anything reads differently.
+        const results = (await executeWithRetry(
+          (): Promise<D1Result> => this.database.batch!(raw) as unknown as Promise<D1Result>,
+          context,
+        )) as unknown as D1Result[];
         changes += (results ?? []).reduce((total, result) => total + (result.meta?.changes ?? 0), 0);
         // Zipped against `group` rather than summed on its own, because `billedRowsFor`
         // needs the *SQL* to know which table's index entries the change rewrote, and only
@@ -283,7 +286,7 @@ abstract class BaseDAO {
         billedRows += group.reduce((total, entry, at) => total + billedRowsFor(entry.sql, results[at]?.meta?.changes ?? 0), 0);
       } else {
         for (const entry of group) {
-          const result: D1Result = await executeD1WithRetry(async () => await entry.statement.run(), context);
+          const result: D1Result = await executeWithRetry((): Promise<D1Result> => entry.statement.run(), context);
           const changed = result.meta?.changes ?? 0;
           changes += changed;
           billedRows += billedRowsFor(entry.sql, changed);
@@ -303,8 +306,7 @@ abstract class BaseDAO {
    * left" is written down.
    */
   private fitCount(available: number): number {
-    if (!Number.isFinite(this.meter.ceiling)) return available;
-    return Math.max(0, Math.min(available, Math.floor(this.meter.remaining)));
+    return this.fitToSubrequestBudget(available);
   }
 
   /**
@@ -319,8 +321,7 @@ abstract class BaseDAO {
    * would render it as an empty library.
    */
   protected clampToSubrequestBudget(requested: number, perStatement: number): number {
-    if (!Number.isFinite(this.meter.ceiling)) return requested;
-    const affordable = Math.max(1, Math.floor(this.meter.remaining)) * Math.max(1, perStatement);
+    const affordable = Math.max(1, this.fitToSubrequestBudget(Number.MAX_SAFE_INTEGER)) * Math.max(1, perStatement);
     return Math.max(1, Math.min(Math.max(0, requested), affordable));
   }
 
@@ -332,7 +333,7 @@ abstract class BaseDAO {
    * keeps every existing test double working.
    */
   private canFitAll(count: number): boolean {
-    return !Number.isFinite(this.meter.ceiling) || count <= this.meter.remaining;
+    return this.subrequests.canAfford(count);
   }
 }
 

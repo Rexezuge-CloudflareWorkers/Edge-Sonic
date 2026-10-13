@@ -16,10 +16,11 @@
  * cannot move a wall clock, but deleting the alarm would leave a spent allowance
  * unrecovered until an operator noticed.
  */
-import { isD1DailyLimitError, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
-import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { isD1DailyLimitError, nextMidnightUtc } from '@rexezuge/d1';
+
+import { NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
 import { LAST_ERROR_MAX } from './scanTypes';
-import type { SubrequestSpend } from '@edge-sonic/shared';
+import type { SubrequestSpend } from '@rexezuge/shared';
 
 /**
  * An enrichment run's state, as the service reports it.

@@ -34,8 +34,7 @@
  * environment, must not be grandfathered because it is already in the database.
  */
 import { BadRequestError, NotFoundError } from '@rexezuge/errors';
-import { isPrivateOrInternalHost, MAX_REMOTE_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@rexezuge/shared';
-import { isLocalhostName } from '@edge-sonic/shared/utils';
+import { isLocalhostName, isPrivateOrInternalHost, MAX_REMOTE_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@rexezuge/shared';
 
 /**
 Matches `LibraryService`'s, so a mount path may not smuggle a traversal.

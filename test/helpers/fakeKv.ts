@@ -139,19 +139,30 @@ function fakeKv(initial: Record<string, string> = {}, options: FakeKvOptions = {
     throw new Error('KV unavailable');
   };
 
+  // Overloaded rather than one widened signature, because the platform's own overloads
+  // are what the double has to model. A single
+  // `(key, type?) => string | ArrayBuffer | null` accepts everything and therefore
+  // **forbids** the two calls that are meant to be narrow — which is exactly how a
+  // reader that forgets `'arrayBuffer'` compiles. The double has to be as narrow as
+  // the thing it stands in for, or it stops catching the defect it was written to catch.
+  function get(key: string): Promise<string | null>;
+  function get(key: string, type: 'text'): Promise<string | null>;
+  function get(key: string, type: 'arrayBuffer'): Promise<ArrayBuffer | null>;
+  async function get(key: string, type?: 'text' | 'arrayBuffer'): Promise<string | ArrayBuffer | null> {
+    calls.get += 1;
+    requestedTypes.push(type);
+    if (options.failAll || options.failReads) return await refuse();
+    const value = store.get(key);
+    if (value === undefined) return null;
+    // `'arrayBuffer'` is the only path that returns bytes. Anything else — including
+    // the platform's default, which is `'text'` — goes through the lossy decode, so a
+    // `getBytes` that forgets the type reads a corrupted value here exactly as it does
+    // in production.
+    return type === 'arrayBuffer' ? storedBytes(value).slice().buffer : asText(value);
+  }
+
   const ns: KvNamespaceLike = {
-    async get(key: string, type?: 'text' | 'arrayBuffer'): Promise<string | ArrayBuffer | null> {
-      calls.get += 1;
-      requestedTypes.push(type);
-      if (options.failAll || options.failReads) return await refuse();
-      const value = store.get(key);
-      if (value === undefined) return null;
-      // `'arrayBuffer'` is the only path that returns bytes. Anything else — including
-      // the platform's default, which is `'text'` — goes through the lossy decode, so a
-      // `getBytes` that forgets the type reads a corrupted value here exactly as it does
-      // in production.
-      return type === 'arrayBuffer' ? storedBytes(value).slice().buffer : asText(value);
-    },
+    get,
     async put(key: string, value: string | ArrayBuffer): Promise<void> {
       calls.put += 1;
       if (options.failAll) return await refuse();

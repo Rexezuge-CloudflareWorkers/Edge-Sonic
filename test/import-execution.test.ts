@@ -30,7 +30,7 @@ import { PlayCountImportWorker } from '../apps/background/src/PlayCountImportWor
 import { LibraryImportWorkflow, WALK_START_FAILED } from '../apps/background/src/LibraryImportWorkflow';
 import { NonRetryableError } from 'cloudflare:workflows';
 import { ImportPlayCountProgressDAO, ImportRunDAO, ImportSourceDAO, LibraryDAO, PlayCountDAO, UserDAO } from '@edge-sonic/backend-data/dao';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
 import { DatabaseError } from '@rexezuge/errors';
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { encryptData } from '@edge-sonic/backend-data/crypto';

@@ -52,7 +52,8 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import { SCAN_CHUNK_SUBSREQUEST_BUDGET, SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
-import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
+import { isD1DailyLimitError } from '@rexezuge/d1';
+
 import { MAX_CONSECUTIVE_FAILURES } from '@edge-sonic/backend-services/index';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import type { LibraryScope } from '@edge-sonic/backend-data/dao';

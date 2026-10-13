@@ -18,8 +18,7 @@
 import { BadRequestError, ConflictError, NotFoundError } from '@rexezuge/errors';
 import { decryptData, encryptData } from '@edge-sonic/backend-data/crypto';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
-import { isPrivateOrInternalHost, MAX_REMOTE_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@rexezuge/shared';
-import { isLocalhostName } from '@edge-sonic/shared/utils';
+import { isLocalhostName, isPrivateOrInternalHost, MAX_REMOTE_URL_LENGTH as SSRF_MAX_URL_LENGTH } from '@rexezuge/shared';
 import { WebDavClient, WebDavError, toLibraryPath } from '@edge-sonic/webdav';
 import { classifyBeforeRequest, credentialUnreadable, fromStatus, reachable, unreachable } from './probeOutcome';
 import type { ProbeOutcome } from './probeOutcome';
