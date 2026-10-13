@@ -1,8 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle } from 'lucide-react';
-import { Button } from '../ui/Button';
-import { Card, CardHeader, CardTitle } from '../ui/Card';
 import { TypeToConfirmModal } from '../modals/TypeToConfirmModal';
 import {
   confirmPhraseForAll,
@@ -13,6 +11,7 @@ import {
   describeLibraryDrop,
 } from '../../lib/indexDrop';
 import type { LibraryIndexStats } from '../../types';
+import { Button, Card, CardHeader, CardTitle } from '@rexezuge/web';
 
 /**
  * The Danger Zone: drop a scanned index, keeping the library registered.

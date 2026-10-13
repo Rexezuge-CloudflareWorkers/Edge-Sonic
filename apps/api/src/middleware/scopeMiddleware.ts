@@ -1,7 +1,7 @@
 import type { Next } from 'hono';
 import { asScopedContext, setRequestScope } from '@rexezuge/runtime';
 import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composition';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import { BaseRoute } from '../endpoints/BaseRoute';
 import type { UserContext } from '../endpoints/BaseRoute';
 import { getScanStub, hasScanBinding } from '../workers/scanStubs';

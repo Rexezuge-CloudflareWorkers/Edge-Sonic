@@ -35,7 +35,7 @@
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import { NodeDAO, SongDAO, DERIVED_VERSION } from '@edge-sonic/backend-data/dao';
 import { TreeService, nodeRowNeedsWrite, reconcileFolder } from '@edge-sonic/backend-services/index';
 import type { DesiredNodeRow, ScanDeps } from '@edge-sonic/backend-services/index';

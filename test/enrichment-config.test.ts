@@ -22,7 +22,7 @@ import {
   DEFAULT_TAG_READ_TAIL_BYTES,
   MAX_PAGE_SIZE_CEILING,
 } from '@edge-sonic/backend-runtime/config';
-import { resetBreakerForTests, KvCache, KV_DOMAINS } from '@edge-sonic/backend-runtime/kv';
+import { createKvCache, KV_DOMAINS, resetBreakerForTests } from '@edge-sonic/backend-runtime/kv';
 import { createLogger, setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import { resolveKey } from '@edge-sonic/backend-services/composition';
 import { EnrichmentService } from '@edge-sonic/backend-services/index';
@@ -358,7 +358,7 @@ function makeEnrichment(seed: Partial<Record<string, unknown>> = {}): {
       },
     },
     clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
-    kv: new KvCache(cache.ns),
+    kv: createKvCache(cache.ns),
     resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
     readBytes: 131_072,
     timeoutMs: 1000,
@@ -489,7 +489,7 @@ describe('EnrichmentService', () => {
         },
       },
       clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, failing.fetch),
-      kv: new KvCache(fakeKv().ns),
+      kv: createKvCache(fakeKv().ns),
       resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
       readBytes: 131_072,
       timeoutMs: 1000,
@@ -555,7 +555,7 @@ describe('EnrichmentService', () => {
         },
       },
       clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, gone.fetch),
-      kv: new KvCache(fakeKv().ns),
+      kv: createKvCache(fakeKv().ns),
       resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
       readBytes: 131_072,
       timeoutMs: 1000,
@@ -611,7 +611,7 @@ describe('EnrichmentService', () => {
     // The outage requirement, at the service level: `KvCache` is best-effort and D1 is
     // authoritative, so a dead cache costs latency and nothing else.
     const { applied, library, dav } = makeEnrichment();
-    const deadCache = new KvCache(fakeKv({}, { failAll: true }).ns);
+    const deadCache = createKvCache(fakeKv({}, { failAll: true }).ns);
     const service = new EnrichmentService({
       songs: {
         findById: async () => null,
@@ -757,7 +757,7 @@ function makeOggEnrichment(
       },
     },
     clientFor: async () => new WebDavClient('https://dav.example.com', '/dav', { username: 'u', password: 'p' }, dav.fetch),
-    kv: new KvCache(cache.ns),
+    kv: createKvCache(cache.ns),
     resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
     // 400 covers the two header pages (303 + 69) and stops inside the final page, so
     // the prefix read genuinely cannot see the file's length. That is the condition
@@ -969,7 +969,7 @@ describe('a row enriched by an older reader', () => {
     const { service, applied, library, cache } = makeOggEnrichment(file);
     // Written through `KvCache` rather than by hand, so the test does not encode the key
     // layout — a hard-coded key would break when `KV_KEY_VERSION` moved, quietly.
-    await new KvCache(cache.ns).putJson('songMeta', ['s1'], {
+    await createKvCache(cache.ns).putJson('songMeta', ['s1'], {
       mtimeMs: 1000,
       readerVersion: READER_VERSION - 1,
       durationSeconds: 3,
@@ -1003,7 +1003,7 @@ describe('a row enriched by an older reader', () => {
     // The tags are real and were written — the row is not empty, it is *incomplete*, and
     // that is the distinction this entry used to erase.
     expect(applied[0]?.metadata.artist).toBe('Bon Iver');
-    expect(await new KvCache(cache.ns).getJson('songMeta', ['s1'])).toBeNull();
+    expect(await createKvCache(cache.ns).getJson('songMeta', ['s1'])).toBeNull();
 
     // And the read is not skipped for it, so a deployment that fixes the setting gets the
     // duration on the next call rather than serving the recorded absence for ever.
@@ -1030,7 +1030,7 @@ describe('a row enriched by an older reader', () => {
     // pass with the reader's guard removed. A hard-coded timestamp here would be one more
     // thing to keep in step with `makeSong`, so it is read off the row it has to match.
     const song = opusSong(file.length);
-    await new KvCache(cache.ns).putJson('songMeta', ['s1'], {
+    await createKvCache(cache.ns).putJson('songMeta', ['s1'], {
       mtimeMs: song.mtime_ms,
       readerVersion: song.reader_version,
       durationSeconds: null,
@@ -1072,7 +1072,7 @@ describe('a cached enrichment carries the tags', () => {
 
     await service.enrich(library, opusSong(file.length) as never);
 
-    const entry = await new KvCache(cache.ns).getJson<Record<string, unknown>>('songMeta', ['s1']);
+    const entry = await createKvCache(cache.ns).getJson<Record<string, unknown>>('songMeta', ['s1']);
     expect(entry?.artist).toBe('Bon Iver');
     expect(entry?.album).toBe('For Emma');
   });
@@ -1214,7 +1214,7 @@ describe('AppConfiguration.validate', () => {
 });
 
 describe('LOG_LEVEL, which was declared and inert', () => {
-  afterEach(() => setLogLevel(null));
+  afterEach(() => setLogLevel(undefined));
 
   it('lets a module-scope logger emit at the configured level', () => {
     // ### The defect
@@ -1499,9 +1499,9 @@ describe('KvCache domain policy', () => {
     // get through before the fast path engaged.
     resetBreakerForTests();
     const failing = fakeKv({}, { failAll: true });
-    for (let attempt = 0; attempt < 3; attempt += 1) await new KvCache(failing.ns).getText('songMeta', ['x']);
+    for (let attempt = 0; attempt < 3; attempt += 1) await createKvCache(failing.ns).getText('songMeta', ['x']);
     // A *different* instance, same process.
-    expect(await new KvCache(failing.ns).getText('songMeta', ['x'])).toBeNull();
+    expect(await createKvCache(failing.ns).getText('songMeta', ['x'])).toBeNull();
     expect(failing.calls.get).toBe(3);
     resetBreakerForTests();
   });
@@ -1509,7 +1509,7 @@ describe('KvCache domain policy', () => {
   it('reports an oversized value as not stored rather than throwing', async () => {
     resetBreakerForTests();
     const store = fakeKv();
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     // KV would reject it anyway; refusing locally turns a wasted round trip into a
     // skipped one.
     expect(await cache.putText('songMeta', ['a', 'b'], 'x'.repeat(700_000))).toBe(false);
@@ -1534,14 +1534,14 @@ describe('KvCache domain policy', () => {
     // the `songMeta` rule. A domain that caches a *derived aggregate* is the case the
     // version-in-key rule is for, and there is none.
     const store = fakeKv();
-    const cache = new KvCache(store.ns);
+    const cache = createKvCache(store.ns);
     await cache.putBytes('albumArt', ['L1', 'Bon Iver/For Emma', '1000x5000'], new Uint8Array([1, 2, 3]));
     expect([...store.entries().keys()]).toEqual(['albumArt:v1:L1:Bon%20Iver%2FFor%20Emma:1000x5000']);
   });
 
   it('returns zero from a purge when the namespace refuses', async () => {
     resetBreakerForTests();
-    expect(await new KvCache(fakeKv({}, { failAll: true }).ns).purgePrefix('songMeta')).toBe(0);
+    expect(await createKvCache(fakeKv({}, { failAll: true }).ns).purgePrefix('songMeta')).toBe(0);
   });
 });
 

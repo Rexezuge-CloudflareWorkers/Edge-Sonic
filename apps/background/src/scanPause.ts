@@ -33,7 +33,8 @@
  *   enforces.
  */
 import { dailyRowWriteShare } from '@edge-sonic/backend-runtime/config';
-import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
+import { isD1DailyLimitError } from '@rexezuge/d1';
+
 import { d1AllowancePause, pausedResult, willResumeWithoutAPoll } from '@edge-sonic/backend-services/index';
 import type { ChunkResult, ScanDailyBudget } from '@edge-sonic/backend-services/index';
 

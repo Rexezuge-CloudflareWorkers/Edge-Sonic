@@ -23,9 +23,9 @@
  * two counts *and* the billing table. Splitting it would put that function somewhere that
  * cannot see the arithmetic, which is the placement this file exists to refuse.
  */
-import { UNMETERED_SUBREQUESTS } from '@edge-sonic/shared';
-import type { SubrequestMeter } from '@edge-sonic/shared';
-import type { D1Queryable } from '../utils/D1Types';
+import { UNMETERED_SUBREQUESTS } from '@rexezuge/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
+import type { D1Queryable } from '@rexezuge/d1';
 import { BaseDAO } from './BaseDAO';
 import { billedRowsForTable } from './billedRows';
 import { SongCountDAO } from './songCounts';

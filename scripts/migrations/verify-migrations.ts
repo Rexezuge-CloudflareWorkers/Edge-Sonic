@@ -30,7 +30,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isSet, parseFlags } from '../lib/cli-args';
+import { isSet, parseFlags } from '@rexezuge/tooling/src/scripts/lib/cli-args';
 import { checkMigrations, DIGEST_PREFIX, parseLock, type CheckResult, type MigrationFile } from './lock-check';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');

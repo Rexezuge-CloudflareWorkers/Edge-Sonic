@@ -5,7 +5,7 @@
  * Actions or touching a real account.
  */
 
-import { DEFAULT_UUID } from '../lib/wrangler-config/types';
+import { DEFAULT_UUID } from '@rexezuge/tooling/src/scripts/wrangler-config/types';
 
 export interface D1DatabaseBinding {
   binding?: string;

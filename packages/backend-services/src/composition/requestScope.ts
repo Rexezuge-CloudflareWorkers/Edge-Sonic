@@ -4,10 +4,10 @@
  * Table-driven DAO wiring and service wiring live in sibling modules; this file
  * owns only scope lifecycle and the two per-feature keys.
  */
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import { Container } from '@rexezuge/runtime';
 import { AppConfiguration, WORKER_SUBSREQUEST_CEILING } from '@edge-sonic/backend-runtime/config';
-import { KvCache } from '@edge-sonic/backend-runtime/kv';
+import { createKvCache } from '@edge-sonic/backend-runtime/kv';
 import { setLogLevel } from '@edge-sonic/backend-runtime/logger';
 import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import {
@@ -82,7 +82,7 @@ function createRequestScope(
   // `null` deliberately clears any inherited value: two scopes in one isolate (a test
   // driving two configurations, or a future background worker with a different env) must
   // not inherit the other's level.
-  setLogLevel(config.getLogLevel());
+  setLogLevel(config.getLogLevel() ?? undefined);
 
   // The invocation's subrequest budget, and the first thing constructed in this scope because
   // everything below charges it.
@@ -106,7 +106,7 @@ function createRequestScope(
   // The meter is passed because a KV operation is a subrequest like any other. It was not, so
   // a cold scan chunk spent 20 cache reads per folder against a budget that had never heard of
   // them — see `docs/issues/free-plan-subrequest-ceiling.md`.
-  scope.bindValue(Tokens.KvCache, new KvCache((env as { CACHE?: KvNamespaceLike }).CACHE ?? null, subrequests));
+  scope.bindValue(Tokens.KvCache, createKvCache((env as { CACHE?: KvNamespaceLike }).CACHE ?? null, subrequests));
   scope.bindValue(Tokens.AppConfig, config);
 
   // Per-feature keys. Two separate bindings on purpose:

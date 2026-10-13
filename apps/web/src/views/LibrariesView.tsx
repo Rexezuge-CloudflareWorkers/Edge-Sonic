@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { t } from 'i18next';
 import { HardDrive, Plus, RefreshCw } from 'lucide-react';
-import { Button } from '../components/ui/Button';
-import { Card, CardHeader, CardTitle } from '../components/ui/Card';
-import { EmptyState, LoadingSpinner } from '@rexezuge/web';
+import { Button, Card, CardHeader, CardTitle, EmptyState, LoadingSpinner } from '@rexezuge/web';
 import { LibraryForm } from '../components/library/LibraryForm';
 import { LibraryRow } from '../components/library/LibraryRow';
 import type { RunAction } from '../components/library/LibraryRow';

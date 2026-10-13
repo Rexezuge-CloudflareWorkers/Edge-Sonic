@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSet, parseFlags, valueOf } from '../../scripts/lib/cli-args';
+import { isSet, parseFlags, valueOf } from '@rexezuge/tooling/src/scripts/lib/cli-args';
 
 describe('parseFlags', () => {
   it('reads a boolean flag', () => {

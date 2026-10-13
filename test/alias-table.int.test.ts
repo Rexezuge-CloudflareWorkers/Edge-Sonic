@@ -25,10 +25,8 @@ import { describe, expect, it } from 'vitest';
 import { LibraryImportWorkflow, MediaWorker, PlayCountImportWorker, ScanWorker } from '@edge-sonic/background';
 import { deriveFromPath } from '@edge-sonic/backend-data/dao';
 import { encryptData } from '@edge-sonic/backend-data/crypto';
-import { executeD1WithRetry } from '@edge-sonic/backend-data/utils';
-import { Container } from '@edge-sonic/backend-runtime/di';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
-import { KvCache } from '@edge-sonic/backend-runtime/kv';
+import { createKvCache } from '@edge-sonic/backend-runtime/kv';
 import { createLogger } from '@edge-sonic/backend-runtime/logger';
 import { AccessAuthService } from '@edge-sonic/backend-services/auth';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
@@ -40,7 +38,6 @@ import { UUIDUtil } from '@rexezuge/shared';
 import { BUNDLES } from '@edge-sonic/shared/i18n';
 import { elList } from '@edge-sonic/subsonic';
 import { WebDavClient } from '@edge-sonic/webdav';
-import { NotFoundError } from '@rexezuge/errors';
 
 /**
 `apps/api/src/index.ts` imports this specifier; nothing else may.
@@ -57,11 +54,8 @@ describe('the shared alias table', () => {
       background: ScanWorker,
       'backend-data/dao': deriveFromPath,
       'backend-data/crypto': encryptData,
-      'backend-data/utils': executeD1WithRetry,
-      'backend-errors': NotFoundError,
-      'backend-runtime/di': Container,
       'backend-runtime/config': AppConfiguration,
-      'backend-runtime/kv': KvCache,
+      'backend-runtime/kv': createKvCache,
       'backend-runtime/logger': createLogger,
       'backend-services/auth': AccessAuthService,
       'backend-services/composition': createRequestScope,

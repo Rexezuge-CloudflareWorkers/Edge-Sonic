@@ -13,6 +13,11 @@
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
+    // A suite that exercises a repo script now imports `@rexezuge/tooling`'s
+    // shipped `src/`, which writes its relative specifiers with explicit `.ts`
+    // extensions because `tsx` resolves that form. The flag is what lets this
+    // `noEmit` config typecheck it; see the same note in `scripts/tsconfig.json`.
+    "allowImportingTsExtensions": true,
     "types": ["vitest/globals", "node", "vite/client"],
     "jsx": "react-jsx",
     "paths": {
@@ -20,8 +25,6 @@
       "@edge-sonic/background/*": ["../apps/background/src/*"],
       "@edge-sonic/shared": ["../packages/shared/src"],
       "@edge-sonic/shared/*": ["../packages/shared/src/*"],
-      "@edge-sonic/backend-errors": ["../packages/backend-errors/src"],
-      "@edge-sonic/backend-errors/*": ["../packages/backend-errors/src/*"],
       "@edge-sonic/backend-runtime": ["../packages/backend-runtime/src"],
       "@edge-sonic/backend-runtime/*": ["../packages/backend-runtime/src/*"],
       "@edge-sonic/backend-data": ["../packages/backend-data/src"],

@@ -6,7 +6,7 @@
  * surface), remote (third-party credential). See `serviceFactory.resolveKey`.
  */
 import type { Container } from '@rexezuge/runtime';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import { resolveKey } from './serviceFactory';
 import type { RequestScopeEnv } from './serviceFactory';
 import { Tokens } from './tokens';

@@ -15,8 +15,12 @@ import { aliasTable } from './test/helpers/aliases';
 // Raise these as coverage grows. Never lower them to excuse a regression in
 // code that is already covered.
 //
-// Set from a measurement of 90.40/79.70/93.69/93.34, floored to whole
-// percent (statements/branches/functions/lines).
+// Set from a measurement of 90.45/79.47/93.35/93.38, floored to whole
+// percent (statements/branches/functions/lines). Re-measured after the kit
+// adoption, which deleted the forked D1 kernel, the local `shared` utilities and
+// four SPA primitives: the floors are unchanged because the measurement held,
+// and three of the four numbers rose — a deleted fork with no branching of its
+// own is not a loss of coverage, it is a loss of files.
 //
 // The branch floor is the one left behind, because 80 would sit above the measurement.
 // Branch coverage is what moves most when code is added, so a floor a routine PR trips is
@@ -42,15 +46,6 @@ export default defineUnitVitestConfig({
   include: ['test/**/*.test.{ts,tsx}'],
   exclude: ['**/node_modules/**', '**/dist/**'],
   coverageInclude: ['apps/api/src/**/*.ts', 'apps/background/src/**/*.ts', 'packages/**/src/**/*.ts'],
-  coverageExclude: [
-    // `packages/backend-errors` is a pure taxonomy shim: one subclass of the
-    // kit's `PayloadTooLargeError` carrying a constant type and the message it
-    // was constructed with. There is no branching to exercise, so a 0% here
-    // measures the file count, not the risk. What is load-bearing — that the
-    // refusal reaches the mapper as a 413 — is tested through the suites that
-    // throw it. Re-include this package if the shim ever grows a decision.
-    'packages/backend-errors/**',
-  ],
   thresholds: {
     statements: 89,
     branches: 78,

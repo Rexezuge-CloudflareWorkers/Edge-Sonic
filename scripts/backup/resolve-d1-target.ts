@@ -26,8 +26,8 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { parse } from 'jsonc-parser';
-import { fail, setOutput } from '../lib/github-actions';
-import { CONFIG_PATH } from '../lib/wrangler-config/types';
+import { fail, setOutput } from '@rexezuge/tooling/src/scripts/lib/github-actions';
+import { CONFIG_PATH } from '@rexezuge/tooling/src/scripts/wrangler-config/types';
 import { resolveD1Target, type D1DatabaseBinding, type D1Target } from './d1-target';
 
 // `wrangler.jsonc` keeps `//` comments and trailing commas, so it needs the jsonc

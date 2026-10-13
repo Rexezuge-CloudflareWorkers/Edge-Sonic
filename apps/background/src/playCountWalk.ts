@@ -18,10 +18,10 @@
  * Everything above this function is scheduling — the alarm, the pause, the settle — and everything
  * inside it is arithmetic over a page.
  */
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
 import { runPlayCountAlbumPhase } from '@edge-sonic/backend-services/import';
 import type { PhaseContext } from '@edge-sonic/backend-services/import';
-import type { SubrequestCounter } from '@edge-sonic/shared';
+import type { SubrequestCounter } from '@rexezuge/shared';
 
 /**
  * One statement budget's worth of cost, or wall-clock, spent on one page.

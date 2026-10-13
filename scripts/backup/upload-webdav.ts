@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { fail } from '../lib/github-actions';
+import { fail } from '@rexezuge/tooling/src/scripts/lib/github-actions';
 import { requireRetentionDays } from './retention';
 import { DEFAULT_BASE_PATH, REMOTE, remoteTargetDir } from './webdav-target';
 

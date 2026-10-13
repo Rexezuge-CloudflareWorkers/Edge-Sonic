@@ -1,9 +1,13 @@
 # `@edge-sonic/backend-runtime`
 
-Configuration, the KV cache and its breaker, the subrequest meter every bound
-in this repository is derived from, and the Worker entrypoint policy. Layer 1 —
+Configuration, the KV **domain table**, and the Workflow failure policy. Layer 1 —
 may reach layer 0 only, plus the `@rexezuge/*` kernel packages the framework
 floor now comes from.
+
+This package used to also carry the DI container, the request scope, the logger,
+`EnvParser`, the KV cache and its breaker. Each is `@rexezuge/runtime`'s now, and
+each was written here first — so what follows is not a list of what was deleted but
+of why the copies could not have stayed.
 
 The **behaviour** reachable from configuration, bindings and secrets is documented in
 [`docs/agents/runtime/AGENTS.md`](../../docs/agents/runtime/AGENTS.md). This file is what is
@@ -11,19 +15,19 @@ in the package.
 
 ## What is here
 
-| Path                                    | Holds                                                                                                                               |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `config/ConfigurationDefaults.ts`       | every default, in one file, beside the limit it belongs to                                                                          |
-| `config/subrequests.ts`                 | `WORKER_SUBSREQUEST_CEILING = 50` and **every bound derived from it**                                                               |
-| `config/enrichSubrequests.ts`           | the library-wide enrich chunk's page, derived from the same ceiling (split out when `subrequests.ts` hit the god-file limit)        |
-| `config/ServiceEnv.ts`                  | the declared shape of `env`                                                                                                         |
-| `config/EnvParser.ts`                   | the parsers — `positiveInt`, `nonNegativeInt`, and why both                                                                         |
-| `config/sections/`                      | `AuthConfig`, `LibraryLimits`                                                                                                       |
-| `config/validate.ts`                    | the warnings, kept off the class so it stays a facade                                                                               |
-| `di/RequestScope.ts`, `di/Container.ts` | the pre-kit per-request registry — superseded by `@rexezuge/runtime`, kept for the alias table; production scopes come from the kit |
-| `kv/KvCache.ts`, `kv/KvDomains.ts`      | the cache, the two domains, the breaker                                                                                             |
-| `base/runWorkflow.ts`                   | the Workflow failure policy (the entrypoint base itself is the kit's `AbstractEntrypointWorker`)                                    |
-| `logger.ts`                             | the logger                                                                                                                          |
+| Path                               | Holds                                                                                                                        |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `config/ConfigurationDefaults.ts`  | every default, in one file, beside the limit it belongs to                                                                   |
+| `config/subrequests.ts`            | `WORKER_SUBSREQUEST_CEILING = 50` and **every bound derived from it**                                                        |
+| `config/enrichSubrequests.ts`      | the library-wide enrich chunk's page, derived from the same ceiling (split out when `subrequests.ts` hit the god-file limit) |
+| `config/ServiceEnv.ts`             | the declared shape of `env`                                                                                                  |
+| `config/EnvParser.ts`              | a re-export of the kit's — and why both parsers matter                                                                       |
+| `config/sections/`                 | `AuthConfig`, `LibraryLimits`                                                                                                |
+| `config/validate.ts`               | the warnings, kept off the class so it stays a facade                                                                        |
+| `kv/KvCache.ts`                    | `createKvCache` — the kit's cache bound to **this** repository's domain table                                                |
+| `kv/KvDomains.ts`                  | the two domains, their TTLs and byte ceilings                                                                                |
+| `base/runWorkflow.ts`              | the Workflow failure policy                                                                                                  |
+| `logger.ts`, `config/EnvParser.ts` | re-exports of the kit's, carrying the reasons they were local                                                                |
 
 ## One platform number, and arithmetic rather than a typed constant
 
@@ -53,16 +57,44 @@ track for ever. `nonNegativeInt` had **no callers anywhere** at that moment: the
 that value existing, unused, in the same layer, while the line beside it called the other
 one.
 
-## `Container` comes from the kit, and this codebase still only calls `bindValue`
+## What came from the kit, and what each copy was holding
 
-`@rexezuge/runtime`'s `Container` carries both tiers again — `bind` with a
-factory plus `bindValue` — where this repository's copy had deleted the factory
-tier as unreachable. All thirty registrations in `createRequestScope` are still
-`bindValue`, so the factory tier is still unused here; what changed is only
-where the class lives. The "no binding for token" throw is the kit's, and it is
-still asserted for every entry in `Tokens`.
+| Was local                               | Now                              | What the copy was carrying                                                                                                                                                                                                                                                  |
+| --------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `di/Container.ts`, `di/RequestScope.ts` | `@rexezuge/runtime`              | Both were **dead in production** — only `test/alias-table.int.test.ts` still imported them. The fork also used a different scope key, so it could never have been used with a kit-installed scope.                                                                          |
+| `logger.ts`                             | `@rexezuge/runtime`              | The level resolved **per emit** rather than per construction. Both loggers here are module-level constants, so a constructor-resolved level could only read `process.env`, which workerd does not have: `LOG_LEVEL=debug` shipped, was validated by nothing, and was inert. |
+| `config/EnvParser.ts`                   | `@rexezuge/runtime`              | A guarded `readString` (the kit's cast threw on a `null` env, which is the fail-soft path every caller here is on) and `isValidNonNegativeInt`.                                                                                                                             |
+| `kv/KvCache.ts`                         | `@rexezuge/runtime`              | The circuit breaker and the subrequest charge. Both are in the kit now.                                                                                                                                                                                                     |
+| `kv/KvDomains.ts`                       | **local, and passed to the kit** | The TTL and byte policy, which is per-repo by definition. See below.                                                                                                                                                                                                        |
+| `kv/KvDomains`'s key builder            | `@rexezuge/runtime`              | A 32-bit FNV digest where the kit ships `digest128`. A 32-bit digest over a shared keyspace whose longest keys embed a user-controlled path is collision-searchable.                                                                                                        |
+
+`Container` carries both tiers again — `bind` with a factory plus `bindValue` —
+where this repository's copy had deleted the factory tier as unreachable. All
+thirty registrations in `createRequestScope` are still `bindValue`, so the factory
+tier is still unused here; what changed is only where the class lives. The "no
+binding for token" throw is the kit's, and it is still asserted for every entry in
+`Tokens`.
+
+## Why the domain table stays here
+
+`songMeta` is keyed by the file's own mtime and lasts a week; the kit's `metadata`
+domain lasts two minutes. A TTL is per-repo by definition — a cache holding album
+artwork keyed by a file's mtime and a cache holding session profiles cannot share
+a lifetime. So `KV_DOMAINS` is passed to the kit's `KvCache` rather than taken from
+it, and adopting the kit's table under these names would have silently turned a
+week-long cache into a two-minute one: a hundred extra origin reads a day per
+library, with no error anywhere.
+
+`createKvCache` is a **factory**, not a subclass. The kit's `KvCache` is generic over
+its domain table, so the type has to be pinned somewhere; a subclass that pinned it
+inherited every method with the type argument bound and consumers wrote
+`new KvCache(...)` against it. A factory makes the binding explicit at the one place
+it happens.
 
 ## The KV cache fails soft, and it fails _typed_
+
+`KvCache` itself is the kit's. What follows is the behaviour this repository
+depends on, and the reason the guard it uses is not optional.
 
 A missing binding and a throwing binding are the same code path, and the responses are
 byte-identical to a warm cache. D1 answers.

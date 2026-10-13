@@ -5,7 +5,7 @@
  * `EnrichDriver` states: the two answer different questions about what is running, and one
  * question decided in the scan's file is one edit from being answered by the scan's loop.
  */
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import type { LibraryRow } from '@edge-sonic/backend-data/dao';
 import type { EnrichChunkResult } from '@edge-sonic/backend-services/index';
 import type { EnrichDriver, EnrichRunner } from '@edge-sonic/backend-services/library';

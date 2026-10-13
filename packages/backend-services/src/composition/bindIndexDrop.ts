@@ -30,7 +30,7 @@
 import type { Container } from '@rexezuge/runtime';
 import { IndexDropDAO, IndexStatsDAO } from '@edge-sonic/backend-data/dao';
 import type { D1Queryable } from '@rexezuge/d1';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import { IndexDropService } from '../library/IndexDropService';
 import type { ScanControl } from '../library/IndexDropService';
 import { Tokens } from './tokens';

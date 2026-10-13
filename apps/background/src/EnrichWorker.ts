@@ -40,7 +40,7 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import { READER_VERSION } from '@edge-sonic/media-tags';
-import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
 import { ConflictError } from '@rexezuge/errors';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { MAX_CONSECUTIVE_FAILURES, d1AllowancePause } from '@edge-sonic/backend-services/index';

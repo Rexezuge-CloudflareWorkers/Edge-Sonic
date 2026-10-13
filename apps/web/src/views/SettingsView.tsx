@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, CardHeader, CardTitle } from '../components/ui/Card';
-import { LoadingSpinner } from '@rexezuge/web';
+import { Card, CardHeader, CardTitle, LoadingSpinner } from '@rexezuge/web';
 import { DangerZoneCard } from '../components/settings/DangerZoneCard';
 import { dropAllIndexes, dropLibraryIndex, indexStats, listLibraries } from '../services/libraryService';
 import { describeDropped } from '../lib/indexDrop';

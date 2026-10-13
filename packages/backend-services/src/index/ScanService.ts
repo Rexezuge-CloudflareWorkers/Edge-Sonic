@@ -77,7 +77,7 @@ import { backfill, settle, NO_DERIVATION } from './scanPrelude';
 import type { DerivationCost } from './deriveBackfill';
 import { start } from './scanStart';
 import { ScanBudget, stopReason } from './scanBudget';
-import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
 import { SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
 import {
   dailyAllowancePause,

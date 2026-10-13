@@ -47,8 +47,8 @@ import {
 } from '@edge-sonic/backend-data/dao';
 import { ImportSourceService } from '@edge-sonic/backend-services/import';
 import { AUDIO_SUFFIXES } from '@edge-sonic/backend-services/index';
-import { SubrequestCounter } from '@edge-sonic/shared';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestCounter } from '@rexezuge/shared';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
 import { NotFoundError } from '@rexezuge/errors';
 import {
   albumKeyFor,
@@ -122,10 +122,12 @@ const ALBUM_GROUPING = 'album' as const;
 /**
 Base64 of a 32-byte key, generated once so a file's rows stay readable.
 */
-let keyPromise: Promise<string> | null = null;
-function testKey(): Promise<string> {
-  keyPromise ??= generateAesGcmKey();
-  return keyPromise;
+let testKeyValue: string | null = null;
+function testKey(): string {
+  // Synchronous, and cached: every fixture in this file shares one key so the
+  // rows stay readable and a regeneration does not change the corpus.
+  testKeyValue ??= generateAesGcmKey();
+  return testKeyValue;
 }
 
 function nowSeconds(): number {

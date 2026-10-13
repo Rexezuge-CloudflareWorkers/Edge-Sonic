@@ -27,7 +27,7 @@
  * paper over it.
  */
 
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 import { isUsableKey } from '@edge-sonic/backend-data/crypto';
 
 interface SecretsStoreSecret {
@@ -121,4 +121,4 @@ function resolveKey(
 export { resolveKey };
 export type { RequestScopeEnv, SecretsStoreSecret, KeyProvider };
 
-export { KvCache, type KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
+export { createKvCache, type KvCache, type KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';

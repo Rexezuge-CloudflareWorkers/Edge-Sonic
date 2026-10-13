@@ -14,7 +14,7 @@
 import type { DerivableRow, DerivationWrite, LibraryRow, ScanStateRow, WriteBatchResult } from '@edge-sonic/backend-data/dao';
 import type { ScanNodeStore } from './scanNodeStore';
 import type { EnrichmentCost } from './scanEnrichment';
-import type { SubrequestCounter, SubrequestSpend } from '@edge-sonic/shared';
+import type { SubrequestCounter, SubrequestSpend } from '@rexezuge/shared';
 import type { WebDavClient } from '@edge-sonic/webdav';
 import type { ChunkStopReason } from './scanBudget';
 

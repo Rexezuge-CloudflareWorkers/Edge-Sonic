@@ -15,9 +15,7 @@
     "skipLibCheck": true,
     "paths": {
       "@edge-sonic/shared": ["../shared/src"],
-      "@edge-sonic/shared/*": ["../shared/src/*"],
-      "@edge-sonic/backend-errors": ["../backend-errors/src"],
-      "@edge-sonic/backend-errors/*": ["../backend-errors/src/*"]
+      "@edge-sonic/shared/*": ["../shared/src/*"]
     }
   },
   "include": ["src/**/*.ts"],

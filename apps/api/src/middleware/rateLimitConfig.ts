@@ -18,7 +18,7 @@ import type { Hono } from 'hono';
 import { AppConfiguration, DEFAULT_STREAM_RATE_LIMIT } from '@edge-sonic/backend-runtime/config';
 import { Tokens } from '@edge-sonic/backend-services/composition';
 import { BaseRoute } from '../endpoints/BaseRoute';
-import type { UserContext } from '../endpoints/BaseRoute';
+import type { RateLimitContext } from './rateLimit';
 import { rateLimit } from './rateLimit';
 
 /**
@@ -144,9 +144,17 @@ function registerUserRateLimits(app: LimitApp): void {
  * one, otherwise a fresh parse. A second parse per request is correct but
  * wasteful; sharing the scope's instance keeps one configuration per request.
  */
-function streamLimitFor(c: UserContext): number {
+/**
+ * `max` is a resolver, and a budget that comes from configuration has to read it from
+ * somewhere. The kit's `RateLimitContext` carries `env` for exactly this; `getScope`
+ * narrows on the Hono context, which the same object satisfies — the shape passed below
+ * is the one `getScope` asks for, built from what the kit's context exposes.
+ */
+function streamLimitFor(c: RateLimitContext): number {
   try {
-    return BaseRoute.getScope(c).get(Tokens.AppConfig).getStreamRateLimit();
+    return BaseRoute.getScope({ get: (key: string) => c.get?.(key), env: c.env })
+      .get(Tokens.AppConfig)
+      .getStreamRateLimit();
   } catch {
     return AppConfiguration.fromEnv(c.env).getStreamRateLimit();
   }

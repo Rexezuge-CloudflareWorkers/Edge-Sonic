@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { AlertTriangle, Check, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../ui/Button';
-import { Input, Label } from '../ui/Input';
 import { ModalShell } from './ModalShell';
+import { Button, Input, Label, useCopyToClipboard } from '@rexezuge/web';
 
 /**
  * The second of the two confirmations, and the one that makes the first mean something.
@@ -77,26 +76,22 @@ function TypeToConfirmModal({
 }) {
   const { t } = useTranslation();
   const [input, setInput] = useState('');
-  const [copied, setCopied] = useState(false);
-
-  const matched = input.trim() === expectedName;
 
   /**
-   * Copy the phrase, and never fail.
+   * Copy the phrase, and **only report it as copied if it was.**
    *
-   * `navigator.clipboard` is absent on an insecure origin and denied without a user gesture in
-   * some browsers, and a copy button that throws is worse than one that does nothing — so the
-   * rejection is swallowed and the checkmark still shown. The operator can select the text
-   * with the caret; a thrown error would leave them with no way to do either.
+   * This used to call `setCopied(true)` unconditionally — before the write resolved, and
+   * whether or not `navigator.clipboard` existed. The clipboard is absent on an insecure
+   * origin, which is a real configuration for a self-hosted server, and denied without a
+   * user gesture in some browsers. So the checkmark appeared for a copy that had not
+   * happened, and the operator moved on believing they had the phrase in hand.
+   *
+   * The kit's rule is the right one and it is the opposite of the comment this replaced:
+   * **a false success sends the operator away believing they have something they do
+   * not.** A button that does nothing is visible; a button that lies is not.
    */
-  const handleCopy = () => {
-    const clipboard = globalThis.navigator?.clipboard as Clipboard | undefined;
-    if (clipboard) {
-      void clipboard.writeText(expectedName).catch(() => undefined);
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), COPY_FEEDBACK_TIMEOUT_MS);
-  };
+  const matched = input.trim() === expectedName;
+  const { copied, copy } = useCopyToClipboard();
 
   return (
     <ModalShell onClose={onCancel} widthClass="w-full max-w-md mx-4" ariaLabel={title}>
@@ -112,7 +107,7 @@ function TypeToConfirmModal({
           </code>
           <button
             type="button"
-            onClick={handleCopy}
+            onClick={() => copy(expectedName)}
             title={t('common.copyToClipboard', 'Copy to clipboard')}
             aria-label={t('common.copyToClipboard', 'Copy to clipboard')}
             className="px-2.5 py-2 rounded-lg bg-[var(--color-surface-3)] hover:bg-[var(--color-surface-4)] border border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors duration-150"
@@ -170,14 +165,5 @@ function TypeToConfirmModal({
     </ModalShell>
   );
 }
-
-/**
- * How long the copy button shows its checkmark.
- *
- * In this module rather than `lib/constants.ts` because nothing else on this surface copies
- * anything, and a constant in a shared file with one caller is a constant that describes the
- * wrong scope.
- */
-const COPY_FEEDBACK_TIMEOUT_MS = 1500;
 
 export { TypeToConfirmModal };

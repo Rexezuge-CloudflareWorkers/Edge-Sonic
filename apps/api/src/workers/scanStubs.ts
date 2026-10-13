@@ -30,7 +30,7 @@
  * arrives `undefined` over RPC. The class is the statement.
  */
 import type { EnrichWorker, MediaWorker, ScanWorker } from '@edge-sonic/background';
-import type { SubrequestMeter } from '@edge-sonic/shared';
+import type { SubrequestMeter } from '@rexezuge/shared';
 
 type ScanStub = DurableObjectStub & ScanWorker;
 type MediaStub = DurableObjectStub & MediaWorker;

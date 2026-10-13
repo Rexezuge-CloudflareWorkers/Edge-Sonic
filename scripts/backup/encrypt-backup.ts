@@ -22,7 +22,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, rmSync } from 'node:fs';
-import { fail, setOutput } from '../lib/github-actions';
+import { fail, setOutput } from '@rexezuge/tooling/src/scripts/lib/github-actions';
 import { backupFileName } from './naming';
 
 const SOURCE_FILE = 'backup.sql';

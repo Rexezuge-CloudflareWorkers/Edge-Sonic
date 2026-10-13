@@ -63,6 +63,7 @@
  * not something to put a `console.warn` behind: a warning nobody can act on is a log line
  * that trains people to ignore the log.
  */
+import { statementTable as kitStatementTable } from '@rexezuge/d1';
 
 /**
  * Indexes per table, as the schema declares them.
@@ -125,79 +126,26 @@ const MAX_BILLED_ROWS_PER_ROW = 1 + Math.max(...Object.values(TABLE_INDEX_COUNTS
  * what makes the failure mode "no match, charge the worst case" instead of "matched the
  * wrong word inside a string".
  */
-const LEADING_WRITE_VERB = /^(?:INSERT|REPLACE|UPDATE|DELETE)\b\s*/i;
-
-/**
- * The table named after that verb, skipping `OR <conflict-clause>`, `INTO` and `FROM`.
- *
- * `(?:OR\s+\w+\s+)?` rather than an enumeration of SQLite's five conflict clauses, because the
- * shape is uniform and listing five is five ways to be wrong the next time SQLite adds one. The
- * words it skips are structural, not data.
- *
- * Split from the verb match rather than combined, because combining them is what pushed the
- * single pattern past `sonarjs`'s complexity ceiling — and the complexity is not incidental: a
- * nested alternation over `OR IGNORE|REPLACE|ABORT|FAIL|ROLLBACK` is four extra branches that
- * have to be right for every statement. Two small patterns, each readable on its own.
- */
-const TABLE_AFTER_VERB = /^(?:OR\s+\w+\s+)?(?:INTO\s+|FROM\s+)?["`[]?([A-Z_]\w*)/i;
-
-/**
- * Leading whitespace and `--` comments, removed.
- *
- * A **loop, not one nested-quantifier pattern.** A pattern of the form "any number of
- * `spaces + comment + newline`, then whitespace" is the shape this repository has a standing rule
- * against — an unbounded quantifier wrapping another, over input nothing here controls — and
- * `eslint-plugin-regexp`'s `no-super-linear-backtracking` is silent on it by the same measurement
- * that left the slash-trailing pattern in `toLibraryPath` unguarded. A `while` over the comments is
- * visibly linear instead, and each pass strictly shortens the string.
- *
- * Line comments only, because that is every comment this repository writes inside a SQL string.
- * A C-style block comment would need a real lexer; none is written, so a statement carrying one
- * matches no verb and is charged the worst case — which errs safe.
- */
-function stripLeadingNoise(sql: string): string {
-  let rest = sql.replace(/^\s+/, '');
-  while (rest.startsWith('--')) {
-    const newline = rest.indexOf('\n');
-    // A comment with no newline after it is a comment over the whole remainder, so there is no
-    // verb left to find. Returning the empty string says exactly that, and `null` follows.
-    if (newline === -1) return '';
-    rest = rest.slice(newline + 1).replace(/^\s+/, '');
-  }
-  return rest;
-}
-
 /**
  * The table a statement writes, or `null` when it cannot be told.
  *
- * `null` rather than a default table, because the caller's next question is "how much does
- * this cost" and a fabricated answer to that is worse than admitting ignorance. Every
- * caller turns `null` into the pessimistic charge.
+ * The lexing is `@rexezuge/d1`'s `statementTable`. It was written here first, and
+ * the reason it had to be written here at all is the one recorded above: the
+ * platform's `D1PreparedStatement` carries no `sql`, so nothing downstream could
+ * read it off the statement — which is why the kit now carries the SQL beside the
+ * statement in a `TrackedStatement` and the parser beside it.
  *
- * ### A non-string is `null`, not a `TypeError`
+ * Lowercased because the table names here are the migration's own identifiers, and
+ * a statement may spell one in any case: `INSERT INTO Songs` and `songs` are the
+ * same table, and a map lookup that treated them as different would charge the
+ * worst case for a correct statement.
  *
- * This function is the reason `sql` has to travel beside the statement rather than be read
- * off it — the platform's `D1PreparedStatement` has no `sql` member at all, so reading
- * `statement.sql` produced `undefined` and `stripLeadingNoise` threw
- * `Cannot read properties of undefined (reading 'replace')` on **every** write that
- * measured its cost. It shipped that way: the scan could neither seed its frontier nor
- * advance a chunk while `scan_state` kept reporting `scanning`, and the suite was green
- * because the one D1 double in it returned a `sql` the platform does not have.
- *
- * So the missing case is a *typed* one rather than a runtime accident, and it is handled in
- * the direction this file is written in throughout: an unreadable table charges the
- * schema's worst case, which costs throughput. Throwing cost the whole write half of the
- * product. That asymmetry is the argument, and it is why the guard is here in addition to
- * the type — the type catches the mistake at compile time, and this catches the *class* of
- * it, wherever a future statement arrives from somewhere nobody thought to type.
+ * `null` rather than a default table, because the caller's next question is "how
+ * much does this cost" and a fabricated answer to that is worse than admitting
+ * ignorance. Every caller turns `null` into the pessimistic charge.
  */
 function statementTable(sql: string | undefined): string | null {
-  if (typeof sql !== 'string') return null;
-  const stripped = stripLeadingNoise(sql);
-  const verb = LEADING_WRITE_VERB.exec(stripped);
-  if (verb === null) return null;
-  const table = TABLE_AFTER_VERB.exec(stripped.slice(verb[0].length));
-  return table === null ? null : table[1].toLowerCase();
+  return typeof sql === 'string' ? (kitStatementTable(sql)?.toLowerCase() ?? null) : null;
 }
 
 /**

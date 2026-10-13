@@ -18,9 +18,9 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { parse, type ParseError } from 'jsonc-parser';
-import { fail } from '../lib/github-actions';
-import { isEmptySecretsStoreListing, parseWranglerTableRows } from '../lib/wrangler-table';
-import { CONFIG_PATH } from '../lib/wrangler-config/types';
+import { fail } from '@rexezuge/tooling/src/scripts/lib/github-actions';
+import { isEmptySecretsStoreListing, parseWranglerTableRows } from '@rexezuge/tooling/src/scripts/lib/wrangler-table';
+import { CONFIG_PATH } from '@rexezuge/tooling/src/scripts/wrangler-config/types';
 
 interface WranglerConfig {
   secrets_store_secrets?: Array<{

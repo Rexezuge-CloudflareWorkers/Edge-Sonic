@@ -10,7 +10,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { fail } from '../lib/github-actions';
+import { fail } from '@rexezuge/tooling/src/scripts/lib/github-actions';
 import { requireRetentionDays, retentionCutoff } from './retention';
 import { BACKUP_PREFIX, parseS3ListRow, shouldDeleteBackup } from './s3-prune';
 

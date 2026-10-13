@@ -28,9 +28,9 @@ import { albumKeyFor, matchRemoteAlbums, matchRemoteArtists, matchRemoteSongs, r
 import type { AlbumMatchStore, MatchStore } from '@edge-sonic/backend-services/import';
 import type { SongRow } from '@edge-sonic/backend-data/dao';
 import { albumKeySpec, decodeAlbumKey, decodeId, IdKind } from '@edge-sonic/subsonic';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
 import { SongMatchDAO } from '@edge-sonic/backend-data/dao';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import { sqliteQueryable, execScript } from './helpers/sqlite';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

@@ -14,14 +14,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { READER_VERSION } from '@edge-sonic/media-tags';
 import { ConflictError } from '@rexezuge/errors';
-import { SubrequestCounter } from '@edge-sonic/shared';
+import { SubrequestCounter } from '@rexezuge/shared';
 import {
   ENRICH_TRACKS_PER_CHUNK,
   SCAN_CHUNK_SUBSREQUEST_BUDGET,
   SUBSREQUESTS_PER_ENRICHED_TRACK,
   WORKER_SUBSREQUEST_CEILING,
 } from '@edge-sonic/backend-runtime/config';
-import { KvCache } from '@edge-sonic/backend-runtime/kv';
+import { createKvCache } from '@edge-sonic/backend-runtime/kv';
 import { WebDavClient } from '@edge-sonic/webdav';
 import { SongDAO, SongEnrichmentDAO, ScanStateDAO, billedRowsForTable } from '@edge-sonic/backend-data/dao';
 import { EnrichmentService, LibraryEnrichmentService } from '@edge-sonic/backend-services/index';
@@ -137,7 +137,7 @@ async function setup(trackCount: number, overrides: { chunkMaxRequests?: number 
       applyMetadata: (id, metadata) => songs.applyMetadata(id, metadata),
     },
     clientFor: async (_library, onRequest) => new WebDavClient(BASE_URL, ROOT, { username: 'u', password: 'p' }, dav.fetch, onRequest),
-    kv: new KvCache(cache.ns, meter),
+    kv: createKvCache(cache.ns, meter),
     resolveKey: async () => 'MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=',
     readBytes: 131_072,
     readTailBytes: 65_536,

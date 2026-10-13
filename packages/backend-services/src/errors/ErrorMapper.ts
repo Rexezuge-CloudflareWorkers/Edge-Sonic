@@ -29,7 +29,8 @@
  * signature" is a free oracle for building a valid token.
  */
 import { ConflictError, DatabaseError, NotFoundError, ServiceError, UnauthorizedError } from '@rexezuge/errors';
-import { isD1DailyLimitError } from '@edge-sonic/backend-data/utils';
+import { isD1DailyLimitError } from '@rexezuge/d1';
+
 import { getBackendStrings } from '@edge-sonic/shared/i18n';
 import { ErrorSanitizationUtil } from '@rexezuge/shared';
 import { createLogger } from '@edge-sonic/backend-runtime/logger';

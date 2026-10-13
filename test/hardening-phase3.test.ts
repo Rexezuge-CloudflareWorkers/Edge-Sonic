@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isD1ErrorRetryable } from '@edge-sonic/backend-data/utils';
+import { isD1ErrorRetryable } from '@rexezuge/d1';
+
 import { SCAN_CHUNK_SUBSREQUEST_BUDGET, SUBSREQUESTS_PER_FOLDER_BASE } from '@edge-sonic/backend-runtime/config';
 import { ALBUMS_PER_BATCH } from '../apps/background/src/PlayCountImportWorker';
 

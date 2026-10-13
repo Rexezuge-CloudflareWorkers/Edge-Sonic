@@ -86,7 +86,6 @@ const SUBPATH_EXPORTS: ReadonlyArray<readonly [RegExp, string]> = [
 const PACKAGE_ROOTS: Readonly<Record<string, string>> = {
   background: 'apps/background/src',
   'backend-data': 'packages/backend-data/src',
-  'backend-errors': 'packages/backend-errors/src',
   'backend-runtime': 'packages/backend-runtime/src',
   'backend-services': 'packages/backend-services/src',
   'media-tags': 'packages/media-tags/src',

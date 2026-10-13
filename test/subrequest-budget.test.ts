@@ -52,11 +52,13 @@
  * a cost in throughput, never an availability problem.
  */
 import { describe, expect, it } from 'vitest';
-import { SubrequestCounter, UNMETERED_SUBREQUESTS, subrequestSpend, NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
-import type { SubrequestSpend } from '@edge-sonic/shared';
+import { SubrequestCounter, UNMETERED_SUBREQUESTS, subrequestSpend, NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
+import type { SubrequestSpend } from '@rexezuge/shared';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
 import { Tokens } from '@edge-sonic/backend-services/composition';
-import { KvCache } from '@edge-sonic/backend-runtime/kv';
+import { createKvCache } from '@edge-sonic/backend-runtime/kv';
+import { KvCache as KitKvCache } from '@rexezuge/runtime';
+import type { KvNamespaceLike } from '@edge-sonic/backend-runtime/kv';
 import { NodeDAO, SongDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 import {
   ENRICH_TRACKS_PER_CHUNK,
@@ -78,7 +80,7 @@ import {
   WORKER_SUBSREQUEST_CEILING,
   pageStatementCount,
 } from '@edge-sonic/backend-runtime/config';
-import { SubrequestBudgetExhaustedError } from '@edge-sonic/backend-errors';
+import { SubrequestBudgetExhaustedError } from '@rexezuge/errors';
 import { AppConfiguration } from '@edge-sonic/backend-runtime/config';
 import { sqliteQueryable, execScript } from './helpers/sqlite';
 import { SongDerivationDAO } from '@edge-sonic/backend-data/dao';
@@ -470,7 +472,7 @@ describe('the wiring', () => {
     expect(meter.ceiling).toBe(WORKER_SUBSREQUEST_CEILING);
     // The cache holds the same one, so a KV operation and a D1 statement cannot be counted by
     // two objects that disagree.
-    expect(scope.get(Tokens.KvCache)).toBeInstanceOf(KvCache);
+    expect(scope.get(Tokens.KvCache)).toBeInstanceOf(KitKvCache);
   });
 });
 
@@ -478,9 +480,11 @@ describe('a KV operation is a subrequest', () => {
   it('charges a read, a write and a miss', async () => {
     const meter = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
     const store = new Map<string, string>();
-    const cache = new KvCache(
+    const cache = createKvCache(
       {
-        get: async (key: string) => store.get(key) ?? null,
+        // The platform's overload set, not a widened one — see `fakeKv`. A double that
+        // accepts every shape is not modelling the binding it stands in for.
+        get: (async (key: string): Promise<string | null> => store.get(key) ?? null) as KvNamespaceLike['get'],
         put: async (key: string, value: string) => void store.set(key, value),
         delete: async () => undefined,
         list: async () => ({ keys: [], list_complete: true }),
@@ -502,7 +506,7 @@ describe('a KV operation is a subrequest', () => {
     // Failing soft must not cost budget: an absent `CACHE` answers every request from D1, and
     // charging for a call that was never issued would make the cache's absence look expensive.
     const meter = new SubrequestCounter(WORKER_SUBSREQUEST_CEILING);
-    const cache = new KvCache(null, meter);
+    const cache = createKvCache(null, meter);
     expect(cache.available).toBe(false);
     void cache.getText('songMeta', ['a']);
     expect(meter.spent).toBe(0);

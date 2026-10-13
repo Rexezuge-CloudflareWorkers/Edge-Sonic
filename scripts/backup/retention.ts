@@ -6,7 +6,7 @@
  * are worse than a failed run that names the problem.
  */
 
-import { fail } from '../lib/github-actions';
+import { fail } from '@rexezuge/tooling/src/scripts/lib/github-actions';
 
 /**
  * `YYYY-MM-DD`, `days` before `now`.

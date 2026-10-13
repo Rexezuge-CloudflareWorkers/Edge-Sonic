@@ -37,8 +37,9 @@
  * survives the isolate, and is cleared by `startScan`, which is the operator's escape
  * hatch and needs no surface of its own.
  */
-import { isD1DailyLimitError, nextMidnightUtc } from '@edge-sonic/backend-data/utils';
-import { NO_SUBREQUESTS_SPENT } from '@edge-sonic/shared';
+import { isD1DailyLimitError, nextMidnightUtc } from '@rexezuge/d1';
+
+import { NO_SUBREQUESTS_SPENT } from '@rexezuge/shared';
 import { NO_DERIVATION } from './deriveBackfill';
 import type { DerivationCost } from './deriveBackfill';
 import { LAST_ERROR_MAX, MAX_CONSECUTIVE_FAILURES } from './scanTypes';

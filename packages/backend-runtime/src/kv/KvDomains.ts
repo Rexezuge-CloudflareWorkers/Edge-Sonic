@@ -7,9 +7,21 @@
 // `KvCache` with a closed `KvDomainName` registry so prefixes cannot collide and
 // TTL/size policy lives in one table.
 //
-// The registry is a closed union on purpose: a typo cannot silently create a new
-// keyspace, and the TTL/size policy for every cached value lives in one table
-// rather than at each call site.
+// ## What is the kit's, and what is this repo's
+//
+// **The machinery is `@rexezuge/runtime`'s.** `KvCache` — the fail-soft guard,
+// the circuit breaker, the subrequest charge, the binary entries with their
+// etag — comes from the kit, as do `buildKvKey`, `clampTtl`, `digest128`,
+// `sanitizeSegment`, `utf8ByteLength` and the three key-format constants.
+//
+// **The table below is this repo's**, and it is passed to the kit rather than
+// taken from it. The kit's three shared domains (`session`, `asset`,
+// `metadata`) are the right default for a repo whose cache vocabulary matches
+// them, but a TTL is per-repo by definition: `songMeta` is keyed by the file's
+// own mtime and lasts a week, while `metadata` is invalidated on mutation and
+// lasts two minutes. Adopting the shared table under these names would silently
+// turn a week-long cache into a two-minute one — a hundred extra origin reads a
+// day for every library, with no error anywhere.
 //
 // ## Invalidation is in the key, never a delete
 //
@@ -26,19 +38,11 @@
 // take scan_state.index_version as its first key part so superseded entries go
 // structurally unreachable.
 
-const KV_KEY_VERSION = 'v1';
-const KV_MAX_KEY_LENGTH = 512;
-const KV_MIN_TTL_SECONDS = 60;
+import type { KvDomains } from '@rexezuge/runtime';
 
 type KvDomainName = 'songMeta' | 'albumArt';
 
-interface KvDomainDef {
-  ttlSeconds?: number;
-  maxValueBytes: number;
-  description: string;
-}
-
-const KV_DOMAINS: Record<KvDomainName, KvDomainDef> = {
+const KV_DOMAINS: KvDomains<KvDomainName> = {
   // `getSong` enrichment results (duration, bitrate, tags).
   songMeta: {
     ttlSeconds: 604_800,
@@ -68,43 +72,6 @@ const KV_DOMAINS: Record<KvDomainName, KvDomainDef> = {
   },
 };
 
-function fnv1aHex(input: string): string {
-  let hash = 0x81_1c_9d_c5;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.codePointAt(i) ?? 0;
-    hash = Math.imul(hash, 0x01_00_01_93);
-  }
-  return (hash >>> 0).toString(16).padStart(8, '0');
-}
-
-function sanitizeSegment(segment: string): string {
-  const trimmed = segment.trim();
-  if (!trimmed) throw new Error('KV key segment must not be empty.');
-  return encodeURIComponent(trimmed);
-}
-
-function buildKvKey(domain: KvDomainName, parts: readonly string[]): string {
-  const def = KV_DOMAINS[domain];
-  if (!def) throw new Error(`Unknown KV domain: ${domain}.`);
-  if (parts.length === 0) throw new Error(`KV domain ${domain} requires at least one key part.`);
-  const prefix = `${domain}:${KV_KEY_VERSION}:`;
-  const joined = parts.map((part) => sanitizeSegment(part)).join(':');
-  const full = prefix + joined;
-  if (full.length <= KV_MAX_KEY_LENGTH) return full;
-  // Deterministic fallback: a miss just recomputes, so a 32-bit digest is fine.
-  return `${prefix}h:${fnv1aHex(joined)}`;
-}
-
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).length;
-}
-
-function clampTtl(ttlSeconds: number | undefined, domain: KvDomainName): number | undefined {
-  const effective = ttlSeconds ?? KV_DOMAINS[domain].ttlSeconds;
-  if (effective === undefined) return undefined;
-  return Number.isFinite(effective) ? Math.max(KV_MIN_TTL_SECONDS, Math.floor(effective)) : undefined;
-}
-
-export { KV_DOMAINS, KV_KEY_VERSION, KV_MAX_KEY_LENGTH, KV_MIN_TTL_SECONDS };
-export { buildKvKey, clampTtl, fnv1aHex, utf8ByteLength };
-export type { KvDomainDef, KvDomainName };
+export { KV_DOMAINS };
+export type { KvDomainName };
+export { type KvDomainDef } from '@rexezuge/runtime';

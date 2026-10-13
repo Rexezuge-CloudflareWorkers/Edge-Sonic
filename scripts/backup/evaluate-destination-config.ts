@@ -12,7 +12,7 @@
  * see `destination-config.ts` for why that is not optional here.
  */
 
-import { fail, setOutput } from '../lib/github-actions';
+import { fail, setOutput } from '@rexezuge/tooling/src/scripts/lib/github-actions';
 import { evaluateConfig } from './destination-config';
 
 const config = evaluateConfig(process.env);

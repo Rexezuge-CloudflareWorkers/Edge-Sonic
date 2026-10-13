@@ -54,7 +54,7 @@ statements — see the aggregation rule below. Keeping them apart is what makes 
 page-then-fetch pattern readable in one place instead of duplicated five times.
 
 **Layer 0, so the marker is a parameter and not an import.** `backend-data` depends only on
-`shared`, `backend-errors` and `subsonic`, and the configuration layer sits _above_ it. So
+`shared`, `@rexezuge/errors` and `subsonic`, and the configuration layer sits _above_ it. So
 `deriveFromPath(dirPath, marker)` takes the marker, `SongDAO` and `SongDerivationDAO` take it
 by constructor, and `requestScope.ts` reads `config.getDerivedMarker()` once and passes it to
 both — the same reason `ALBUM_GROUP_BY` is carried per request. `SongDerivationDAO.deriveFor`
@@ -583,13 +583,33 @@ address-change endpoint moves through. Login itself stays username-based.
 
 ## Layer 2 (layer 0 plus the kit kernel)
 
-Import `@edge-sonic/shared`, `@edge-sonic/backend-errors`, `@edge-sonic/subsonic`,
-and the kit packages this layer adopted: `@rexezuge/errors` (the taxonomy),
-`@rexezuge/shared` (UUID and the other pure utilities). The D1 kernel stays
-local — `D1Utils`, `D1ErrorClassifier` (with the daily-allowance handling the
-kit does not cover), `D1Types`, and `BaseDAO` with its subrequest charging and
-billed-row accounting — because each carries behaviour the kit deliberately
-leaves to the consumer. Never `backend-runtime`, `backend-services`, `webdav`
-or `apps/*` — enforced by `no-restricted-imports`. `subsonic` is layer 0 and carries the album key, so it
+Import `@edge-sonic/shared`, `@edge-sonic/subsonic`, and the kit:
+`@rexezuge/errors` (the taxonomy), `@rexezuge/shared` (UUID and the other pure
+utilities), `@rexezuge/d1` (the retry engine, the classifier, the D1 types,
+`BaseDAO` and the AES-GCM envelope) and `@rexezuge/identity` (the address
+registry). Never `backend-runtime`, `backend-services`, `webdav` or `apps/*` —
+enforced by `no-restricted-imports`. `subsonic` is layer 0 and carries the album key, so it
 has no block of its own; it is declared in this package's manifest, which is where a
 dependency that resolves only by hoisting should be noticed.
+
+**What this layer still owns, and why.** Three things, and each is a decision the
+kit deliberately leaves to the consumer:
+
+- **`BaseDAO` extends the kit's and adds the group-splitting write batch.**
+  `runWriteBatch` truncates against the remaining subrequest budget and _reports_
+  the truncation, because truncation is the expected case on Free rather than an
+  edge case and every caller treats "not written" as "not done". The kit's
+  `runTrackedBatch` reports one whole batch; it does not split one.
+- **`dao/billedRows.ts` keeps the table.** The kit owns the accounting _shape_ —
+  a `TrackedStatement` carrying its SQL, and a `WriteResult` carrying `billedRows`
+  beside `changes`. The multiplier is a property of the schema, so the 22-entry
+  `TABLE_INDEX_COUNTS` stays here and is supplied to the kit as a
+  `billedRowsForTable` port. `apps/api` may not import this package's values, so a
+  route quoting `songs * 10` would be a second copy of that table in the one layer
+  that cannot see it.
+- **`UserDAO` and `LibraryDAO` are local.** The kit's `users` table has no
+  `password_ciphertext`, `password_iv`, `key_version`, `username_ci`, `is_admin`,
+  `is_enabled` or `scrobbling_enabled`, and its id alphabet is `usr_<hex>` against
+  this repository's bare UUIDs. `UserEmailDAO` **is** the kit's — the registry's
+  schema matches `USERS_SCHEMA` character for character, and it takes the same
+  meter.

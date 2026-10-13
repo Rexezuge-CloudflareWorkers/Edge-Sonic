@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { KIT_DEDUPE } from '@rexezuge/tooling/vitest';
 import path from 'node:path';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 
@@ -10,6 +11,12 @@ const apiSpaShellPath = path.resolve(apiGeneratedDir, 'spa-shell.ts');
 const apiTarget = 'http://localhost:8787';
 
 export default defineConfig({
+  // One React for the app and for `@rexezuge/web`. A peer is not installed twice
+  // under a registry install, so the two sides already agree there; a `link:`
+  // install gives the symlinked package its own `node_modules`, and the SPA would
+  // then bundle two Reacts — every hook in a kit component reads a dispatcher the
+  // app's copy never initialised.
+  resolve: { dedupe: [...KIT_DEDUPE] },
   plugins: [
     react(),
     tailwindcss(),

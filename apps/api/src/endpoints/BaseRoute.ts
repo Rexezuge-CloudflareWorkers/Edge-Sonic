@@ -25,7 +25,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Context } from 'hono';
 import { BadRequestError } from '@rexezuge/errors';
 import { createRequestScope } from '@edge-sonic/backend-services/composition';
-import { getRequestScope, asScopedContext } from '@rexezuge/runtime';
+import { asScopedContext, tryGetRequestScope } from '@rexezuge/runtime';
 import { toUserResponse } from '@edge-sonic/backend-services/errors';
 import type { UserErrorBody } from '@edge-sonic/backend-services/errors';
 
@@ -49,17 +49,6 @@ type WorkerEnv = { Bindings: Cloudflare.Env; Variables: { AuthenticatedUserEmail
  * variable are declared.
  */
 type UserContext = Context<WorkerEnv>;
-
-/**
- * The kit's missing-scope message, matched literally.
- *
- * `@rexezuge/runtime` does not export it, and the fallback below narrows on
- * this one condition — a bare `catch` would silently re-mint a scope per call
- * site. If the kit rewords it, this comparison misses and the fallback stops
- * firing (fail-closed toward the middleware error, never toward a silent
- * second scope), and the scope tests go red.
- */
-const KIT_SCOPE_MISSING_MESSAGE = 'Request scope is not set. Register the scope middleware before routes.';
 
 /**
 User JSON body cap. Small by design — no user call carries media.
@@ -94,23 +83,20 @@ abstract class BaseRoute {
    * `scopeMiddleware`; falls back to a fresh scope for a call site outside the
    * middleware ordering (a unit test driving a handler directly).
    *
-   * The `catch` is narrowed to the one condition the fallback exists for. A bare `catch`
-   * here would swallow *any* throw from `getRequestScope` — and today that function has
-   * exactly one, so behaviour is correct either way. The cost is what the fallback hides:
-   * it constructs a scope **per call site** rather than per request, which is the defect
-   * `scopeMiddleware` exists to prevent, and the message naming the actual mistake never
-   * reaches a log. Any future throw inside `getRequestScope` would silently reinstate both.
+   * The cost the fallback hides: it constructs a scope **per call site** rather than per
+   * request, which is the defect `scopeMiddleware` exists to prevent.
    */
   public static getScope(c: { get(key: string): unknown; env: unknown }): ReturnType<typeof createRequestScope> {
-    try {
-      return getRequestScope(asScopedContext(c));
-    } catch (error) {
-      // Narrowed to the one condition the fallback exists for. Anything else is a real
-      // fault and propagates: a swallowed fault here is a silently re-minted scope, which
-      // costs a request its shared singletons and reports nothing.
-      if (!(error instanceof Error) || error.message !== KIT_SCOPE_MISSING_MESSAGE) throw error;
-      return createRequestScope(c.env as Cloudflare.Env);
-    }
+    const installed = tryGetRequestScope(asScopedContext(c));
+    // `tryGetRequestScope` rather than a `catch` around `getRequestScope`. The
+    // fallback must fire for **one** condition — no scope installed — and nothing
+    // else. A `catch` cannot say that without matching on the kit's message text,
+    // which is a string comparison across a package boundary: reword the message
+    // and this silently stops matching, and a swallowed *other* fault here is a
+    // silently re-minted scope, which costs the request its shared singletons and
+    // reports nothing.
+    if (installed) return installed;
+    return createRequestScope(c.env as Cloudflare.Env);
   }
 
   /**
