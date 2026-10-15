@@ -1,5 +1,11 @@
 @import 'tailwindcss';
 
+/* Scan the kit's class-based primitives, which live in node_modules and so are
+   outside the Vite root Tailwind scans. See apps/web/AGENTS.md and
+   scripts/build/kit-css-checks.ts; without this every shared control renders
+   unstyled while the build stays green. */
+@source "../node_modules/@rexezuge/web/dist/*.js";
+
 @theme {
   /* Warm dark palette (Edge-Sonic admin shell) */
   --color-surface-base: #100f0d;

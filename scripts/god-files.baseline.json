@@ -60,7 +60,7 @@
   "apps/web/src/components/modals/ModalShell.tsx": 57,
   "apps/web/src/components/modals/TypeToConfirmModal.tsx": 170,
   "apps/web/src/components/settings/DangerZoneCard.tsx": 275,
-  "apps/web/src/globals.css": 113,
+  "apps/web/src/globals.css": 119,
   "apps/web/src/hooks/useCurrentUser.ts": 31,
   "apps/web/src/hooks/useSpaLanguage.ts": 132,
   "apps/web/src/i18n.ts": 112,

@@ -161,6 +161,44 @@ artifact the _deploy_ serves. It cannot detect a stale-but-self-consistent pair,
 why the rebuild before `wrangler deploy` remains an operational duty and not only a
 checked one.
 
+## The kit's controls render class names, and the scanner cannot see them
+
+Tailwind v4 scans only the Vite root — `apps/web` — which excludes `node_modules`.
+Every control this app takes from `@rexezuge/web` renders its styling as Tailwind
+class names inside the package's emitted JavaScript, so without `globals.css` naming
+the kit as a source, none of them are candidates for the build:
+
+    @source "../node_modules/@rexezuge/web/dist/*.js";
+
+That line is load-bearing. Deleting it costs `Button` its background and focus ring,
+`Input` its disabled affordance, `Badge` its variant colours, `NoticeBar` its
+centring and its screen-reader prefix, and `Unauthorized` its link styling — while
+the build stays green, because a class the compiler never sees is not an error, it is
+an absence. The `@theme` colour variables are a separate job and do not cover this: a
+variable nothing references generates nothing, and neither does a class name the
+scanner never reads.
+
+`scripts/build/verify-spa-shell.ts` runs `checkKitCss` for this, over the emitted
+stylesheet, in the same step that already verifies the shell. The shell can be
+internally consistent and still style nothing, so only the CSS itself can tell — and
+the `spa-shell` CI job builds before it verifies, which is what makes the check
+meaningful rather than a test of whatever `dist/` happened to be committed.
+
+**Do not spell a Tailwind utility class name in this file.** The scan root is
+`apps/web/**` and the scanner reads Markdown as readily as JSX, so a class named here
+is emitted into the production bundle whether or not the kit is a source. That is not
+pedantry: it silently satisfies the gate above, which is how half of an earlier list
+of guarded utilities came to measure this paragraph instead of the kit.
+`test/kit-css-checks.test.ts` walks the scan root and fails if any guarded utility is
+written under it, so a documentation edit fails the suite instead of quietly arming
+the guard with a blank. Name the control and what looks wrong without it — `Spinner`
+that stops turning, `NoticeBar` that will not centre — and not the utility.
+
+`scripts/build/kit-css-checks.ts` holds the list and the rule, and keeps one utility
+per kit component this app imports that emits classes at all, so adopting another
+control means adding its token rather than discovering later that half the kit is
+unguarded.
+
 ## Data loading owns its own cancellation
 
 Each view's `load` callback does the fetching and the effect that runs it owns the
