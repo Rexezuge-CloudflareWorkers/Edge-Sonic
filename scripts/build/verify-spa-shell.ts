@@ -26,14 +26,45 @@
  * **The build is a precondition of this check, not a convenience.** Both paths are
  * gitignored and `postinstall` writes a deliberately empty stub, so verifying
  * without building cannot pass.
+ *
+ * On top of those rules it runs `checkKitCss`, which is *not* in the toolkit: the
+ * shell can be internally consistent and still ship a stylesheet with none of the
+ * kit's utilities in it, which is the same blank-operator-UI outcome by a different
+ * road. A consistent shell that styles nothing looks exactly like a working one in
+ * the artefacts, so only the CSS itself can tell.
  */
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { verifySpaShell } from '@rexezuge/tooling/scripts/spa-shell';
+import { checkKitCss } from './kit-css-checks.ts';
+
+/**
+ * Every emitted stylesheet, concatenated.
+ *
+ * Concatenated rather than asserting exactly one: Vite emits one file per CSS entry,
+ * and this check asks "does any sheet the worker will serve carry these utilities",
+ * which stays true — and true for the right reason — if an entry is ever split.
+ */
+function readCssBundle(root: string): string | null {
+  const assets = path.join(root, 'apps/web/dist/assets');
+  let files: string[];
+  try {
+    files = readdirSync(assets).filter((file) => file.endsWith('.css'));
+  } catch {
+    return null;
+  }
+  if (files.length === 0) {
+    return null;
+  }
+  return files.map((file) => readFileSync(path.join(assets, file), 'utf8')).join('\n');
+}
 
 const { problems } = verifySpaShell({ root: process.cwd() });
+const all = [...problems, ...checkKitCss(readCssBundle(process.cwd()))];
 
-if (problems.length > 0) {
+if (all.length > 0) {
   console.error('SPA shell check failed:');
-  for (const problem of problems) console.error(`  - ${problem}`);
+  for (const problem of all) console.error(`  - ${problem}`);
   process.exit(1);
 }
 console.log('SPA shell check passed (apps/api/src/generated/spa-shell.ts matches apps/web/dist).');
