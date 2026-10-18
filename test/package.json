@@ -16,7 +16,7 @@
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
     "@edge-sonic/webdav": "workspace:*",
-    "@rexezuge/d1": "1.7.0",
+    "@rexezuge/d1": "1.9.0",
     "@rexezuge/errors": "1.7.0",
     "@rexezuge/runtime": "1.9.0",
     "@rexezuge/shared": "1.7.0",
