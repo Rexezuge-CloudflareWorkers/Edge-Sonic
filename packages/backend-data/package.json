@@ -21,7 +21,7 @@
     "@edge-sonic/subsonic": "workspace:*",
     "@rexezuge/d1": "1.9.0",
     "@rexezuge/errors": "1.7.0",
-    "@rexezuge/identity": "1.7.0",
+    "@rexezuge/identity": "1.9.0",
     "@rexezuge/shared": "1.7.0"
   },
   "devDependencies": {

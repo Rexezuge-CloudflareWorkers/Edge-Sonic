@@ -280,8 +280,8 @@ importers:
         specifier: 1.7.0
         version: 1.7.0
       '@rexezuge/identity':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.0
+        version: 1.9.0
       '@rexezuge/shared':
         specifier: 1.7.0
         version: 1.7.0
@@ -1090,9 +1090,6 @@ packages:
   '@poppinss/exception@1.2.3':
     resolution: {integrity: sha512-dCED+QRChTVatE9ibtoaxc+WkdzOSjYTKi/+uacHWIsfodVfpsueo3+DKpgU5Px8qXjgmXkSvhXvSCz3fnP9lw==}
 
-  '@rexezuge/d1@1.7.0':
-    resolution: {integrity: sha512-CGmYwOMnzbW34w4JCOuh5PPwoFXJMVYS94gnBhc+WWnrYJjBOQnIfPVhxdT1kepWU9sKejNPPvrFuMu7wH7xyw==}
-
   '@rexezuge/d1@1.9.0':
     resolution: {integrity: sha512-XONq3ibNEEZcJR2Rl0SYl/fWe6EQt4T89MNWPkNr8QqWxRUGk5PER0GwMn8fCsQuRfFr8JxshHWU9a1zbXOd/w==}
 
@@ -1105,8 +1102,8 @@ packages:
   '@rexezuge/http@1.7.0':
     resolution: {integrity: sha512-bNn/xxGSTRczL0+JFV1HkUpGdmpCaw1luDlGyBjmr7HKEwDCsoN9o2GJoB3dLFPguKMNqrn5/aDhU8GoGozETw==}
 
-  '@rexezuge/identity@1.7.0':
-    resolution: {integrity: sha512-Hv4SfUMq2/S3YWchOeb7l9FHw2ycpMYGTIcD5GYCjPZk+97e0ANgtppQ0WQjqOZvEUlgVgEonUjkpNT3P3+z4A==}
+  '@rexezuge/identity@1.9.0':
+    resolution: {integrity: sha512-sOC7u67nn+z5VVO11pxhpNAymH2eLzUkZU/nhHbT8QqEZ/rfew7IgWlJ9wLKJ/xnUTdnvQDP4DFkLcEdipfLBg==}
 
   '@rexezuge/runtime@1.9.0':
     resolution: {integrity: sha512-DNTkGgcBjtuzA1gI00Z6r6XWX2lhP0CkguMJFEM1/APRAByHekTZ0plTkwb7NkmQGl3boS+qUwhBI1QdwmlmMg==}
@@ -3245,11 +3242,6 @@ snapshots:
 
   '@poppinss/exception@1.2.3': {}
 
-  '@rexezuge/d1@1.7.0':
-    dependencies:
-      '@rexezuge/errors': 1.7.0
-      '@rexezuge/shared': 1.7.0
-
   '@rexezuge/d1@1.9.0':
     dependencies:
       '@rexezuge/errors': 1.9.0
@@ -3267,11 +3259,11 @@ snapshots:
       hono: 4.13.13
       jose: 6.2.12
 
-  '@rexezuge/identity@1.7.0':
+  '@rexezuge/identity@1.9.0':
     dependencies:
-      '@rexezuge/d1': 1.7.0
-      '@rexezuge/errors': 1.7.0
-      '@rexezuge/shared': 1.7.0
+      '@rexezuge/d1': 1.9.0
+      '@rexezuge/errors': 1.9.0
+      '@rexezuge/shared': 1.9.0
 
   '@rexezuge/runtime@1.9.0': {}
 
