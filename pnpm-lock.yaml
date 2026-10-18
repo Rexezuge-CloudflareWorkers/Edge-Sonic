@@ -151,8 +151,8 @@ importers:
         specifier: 1.7.0
         version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.0
+        version: 1.9.0
       '@rexezuge/shared':
         specifier: 1.7.0
         version: 1.7.0
@@ -197,8 +197,8 @@ importers:
         specifier: 1.7.0
         version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.0
+        version: 1.9.0
       '@rexezuge/shared':
         specifier: 1.7.0
         version: 1.7.0
@@ -302,8 +302,8 @@ importers:
         specifier: workspace:*
         version: link:../subsonic
       '@rexezuge/runtime':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.0
+        version: 1.9.0
       '@rexezuge/shared':
         specifier: 1.7.0
         version: 1.7.0
@@ -342,8 +342,8 @@ importers:
         specifier: 1.7.0
         version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.0
+        version: 1.9.0
       '@rexezuge/shared':
         specifier: 1.7.0
         version: 1.7.0
@@ -427,8 +427,8 @@ importers:
         specifier: 1.7.0
         version: 1.7.0
       '@rexezuge/runtime':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.0
+        version: 1.9.0
       '@rexezuge/shared':
         specifier: 1.7.0
         version: 1.7.0
@@ -1255,8 +1255,8 @@ packages:
   '@rexezuge/identity@1.7.0':
     resolution: {integrity: sha512-Hv4SfUMq2/S3YWchOeb7l9FHw2ycpMYGTIcD5GYCjPZk+97e0ANgtppQ0WQjqOZvEUlgVgEonUjkpNT3P3+z4A==}
 
-  '@rexezuge/runtime@1.7.0':
-    resolution: {integrity: sha512-lCAC2FhZPWwOSyrFKg0j0VsmfMKQa5SJUMEgWA3kZgP8o61UGBfSUwlGN+iAPnJbvjTNxlU56Mf87VkHeGQXGQ==}
+  '@rexezuge/runtime@1.9.0':
+    resolution: {integrity: sha512-DNTkGgcBjtuzA1gI00Z6r6XWX2lhP0CkguMJFEM1/APRAByHekTZ0plTkwb7NkmQGl3boS+qUwhBI1QdwmlmMg==}
 
   '@rexezuge/shared@1.7.0':
     resolution: {integrity: sha512-Owxtwd7mnfODgQQDImYwIWedXB+YR4YM9R7yN9aLczWkI7PzOOqQlo3tDEI9wbxqjmlWLm6145SS2rZLqjr0SA==}
@@ -3491,7 +3491,7 @@ snapshots:
       '@rexezuge/errors': 1.7.0
       '@rexezuge/shared': 1.7.0
 
-  '@rexezuge/runtime@1.7.0': {}
+  '@rexezuge/runtime@1.9.0': {}
 
   '@rexezuge/shared@1.7.0': {}
 
