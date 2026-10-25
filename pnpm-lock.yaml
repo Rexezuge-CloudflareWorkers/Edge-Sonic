@@ -191,8 +191,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/webdav
       '@rexezuge/d1':
-        specifier: 1.9.0
-        version: 1.9.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/errors':
         specifier: 1.9.2
         version: 1.9.2
@@ -274,8 +274,8 @@ importers:
         specifier: workspace:*
         version: link:../subsonic
       '@rexezuge/d1':
-        specifier: 1.9.0
-        version: 1.9.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/errors':
         specifier: 1.9.2
         version: 1.9.2
@@ -336,8 +336,8 @@ importers:
         specifier: workspace:*
         version: link:../webdav
       '@rexezuge/d1':
-        specifier: 1.9.0
-        version: 1.9.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/errors':
         specifier: 1.9.2
         version: 1.9.2
@@ -421,8 +421,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/webdav
       '@rexezuge/d1':
-        specifier: 1.9.0
-        version: 1.9.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/errors':
         specifier: 1.9.2
         version: 1.9.2
@@ -1092,6 +1092,9 @@ packages:
 
   '@rexezuge/d1@1.9.0':
     resolution: {integrity: sha512-XONq3ibNEEZcJR2Rl0SYl/fWe6EQt4T89MNWPkNr8QqWxRUGk5PER0GwMn8fCsQuRfFr8JxshHWU9a1zbXOd/w==}
+
+  '@rexezuge/d1@1.9.2':
+    resolution: {integrity: sha512-/9YPjn2WEKs53iY3upw7Yix6w4ANw6+CqhebuMVWqCOcoMSVd510JnQgQhGa2LqXOKqXEbkmDxjZopfVrD9aiw==}
 
   '@rexezuge/errors@1.9.0':
     resolution: {integrity: sha512-5pALUuuI0h2ZLnLnNAmBb7f8SXvv87tr2rtszIbnkPhn2LPfYDGRLiAFNVqPZpG204FMuNcaiYydDwxkGhsXzw==}
@@ -3249,6 +3252,11 @@ snapshots:
     dependencies:
       '@rexezuge/errors': 1.9.0
       '@rexezuge/shared': 1.9.0
+
+  '@rexezuge/d1@1.9.2':
+    dependencies:
+      '@rexezuge/errors': 1.9.2
+      '@rexezuge/shared': 1.9.2
 
   '@rexezuge/errors@1.9.0': {}
 
