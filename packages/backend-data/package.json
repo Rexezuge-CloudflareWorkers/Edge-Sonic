@@ -19,7 +19,7 @@
   "dependencies": {
     "@edge-sonic/shared": "workspace:*",
     "@edge-sonic/subsonic": "workspace:*",
-    "@rexezuge/d1": "1.9.0",
+    "@rexezuge/d1": "1.9.2",
     "@rexezuge/errors": "1.9.2",
     "@rexezuge/identity": "1.9.0",
     "@rexezuge/shared": "1.9.2"
