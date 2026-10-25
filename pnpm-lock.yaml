@@ -148,8 +148,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       '@rexezuge/http':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/runtime':
         specifier: 1.9.2
         version: 1.9.2
@@ -1093,17 +1093,14 @@ packages:
   '@rexezuge/d1@1.9.0':
     resolution: {integrity: sha512-XONq3ibNEEZcJR2Rl0SYl/fWe6EQt4T89MNWPkNr8QqWxRUGk5PER0GwMn8fCsQuRfFr8JxshHWU9a1zbXOd/w==}
 
-  '@rexezuge/errors@1.7.0':
-    resolution: {integrity: sha512-OgpT+rtMT3xSV639gmEV+kq3HsFRIctR8mB3Wx1aqhUlvTyjcUh6MjdB3AiKoPaVBk10bwC+wCZial/RQC7DsA==}
-
   '@rexezuge/errors@1.9.0':
     resolution: {integrity: sha512-5pALUuuI0h2ZLnLnNAmBb7f8SXvv87tr2rtszIbnkPhn2LPfYDGRLiAFNVqPZpG204FMuNcaiYydDwxkGhsXzw==}
 
   '@rexezuge/errors@1.9.2':
     resolution: {integrity: sha512-2LBY01Ly8ZJH8YF3pqTfYGFF56WslywFiC3HeeEXSBSD0nKXA6WsELUa/xPbMXIhKnVz8z+UtgshuHsHlSMOeg==}
 
-  '@rexezuge/http@1.7.0':
-    resolution: {integrity: sha512-bNn/xxGSTRczL0+JFV1HkUpGdmpCaw1luDlGyBjmr7HKEwDCsoN9o2GJoB3dLFPguKMNqrn5/aDhU8GoGozETw==}
+  '@rexezuge/http@1.9.2':
+    resolution: {integrity: sha512-kykFRPtAb/zWc81h3SEb78QAgezlTIqK8HUwsAvQ7bsaJ9M//iwZ+P3Vbk150pv/ouGtO7iOLZenn5HcDGcJIA==}
 
   '@rexezuge/identity@1.9.0':
     resolution: {integrity: sha512-sOC7u67nn+z5VVO11pxhpNAymH2eLzUkZU/nhHbT8QqEZ/rfew7IgWlJ9wLKJ/xnUTdnvQDP4DFkLcEdipfLBg==}
@@ -1111,11 +1108,11 @@ packages:
   '@rexezuge/runtime@1.9.2':
     resolution: {integrity: sha512-OfAtxqhCpt9QON1pNBY0IyRc5xEeX3UlkBg5cS1cqzq6FKisL4a/jvV6dJDYZzWCcJAMxzPDfWS1JY3Nj2tbXw==}
 
-  '@rexezuge/shared@1.7.0':
-    resolution: {integrity: sha512-Owxtwd7mnfODgQQDImYwIWedXB+YR4YM9R7yN9aLczWkI7PzOOqQlo3tDEI9wbxqjmlWLm6145SS2rZLqjr0SA==}
-
   '@rexezuge/shared@1.9.0':
     resolution: {integrity: sha512-tTKhzLkK+HEbFturGcSsbHFANOz5kjHmO/wgDMbMJ1N8s4xhaTtsIy92ZoX39Ix1zRw77agsBaGhU7wpdzqDsw==}
+
+  '@rexezuge/shared@1.9.2':
+    resolution: {integrity: sha512-B9PsD8vbAOSNa5TRlH7eXMVTSDxq3KZ+v3eU9SyWyywbtSc21AZkjHjqBoEQkfx3IkfFnBFa6jg5x/PagBtMLA==}
 
   '@rexezuge/tooling@1.9.0':
     resolution: {integrity: sha512-6+mO4hXbhdyJR0XxEeXElIqk6d7QtJSluxlHyGPp525wKZfT3q626r5LxB4wX2Pp7jhQ0nEfxD1N28vNmZQzQA==}
@@ -2248,8 +2245,8 @@ packages:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
 
-  openapi3-ts@4.6.1:
-    resolution: {integrity: sha512-XW9MOldkhoICNeXVzzmXzmOW5G73ppOEGmh7fLCqHjgfdEYCGGN+00MlVCeUZgovjjfC56j9tvtDt1zGabNjjA==}
+  openapi3-ts@4.6.2:
+    resolution: {integrity: sha512-gyyil3DweqhXiEhTqtAs9wwRLfWHmetwhI4kmM5Rn0d6gtmK863Ki7qqbQnp9+Wwlqoe3B1LFWj7kMp5ctE4rQ==}
 
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
@@ -2752,6 +2749,9 @@ packages:
   zod@4.6.5:
     resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
 snapshots:
 
   '@adobe/css-tools@4.5.0': {}
@@ -2771,10 +2771,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@asteasolutions/zod-to-openapi@8.5.0(zod@4.6.5)':
+  '@asteasolutions/zod-to-openapi@8.5.0(zod@4.6.7)':
     dependencies:
-      openapi3-ts: 4.6.1
-      zod: 4.6.5
+      openapi3-ts: 4.6.2
+      zod: 4.6.7
 
   '@babel/code-frame@7.29.7':
     dependencies:
@@ -3250,16 +3250,14 @@ snapshots:
       '@rexezuge/errors': 1.9.0
       '@rexezuge/shared': 1.9.0
 
-  '@rexezuge/errors@1.7.0': {}
-
   '@rexezuge/errors@1.9.0': {}
 
   '@rexezuge/errors@1.9.2': {}
 
-  '@rexezuge/http@1.7.0':
+  '@rexezuge/http@1.9.2':
     dependencies:
-      '@rexezuge/errors': 1.7.0
-      '@rexezuge/shared': 1.7.0
+      '@rexezuge/errors': 1.9.2
+      '@rexezuge/shared': 1.9.2
       chanfana: 3.4.0
       hono: 4.13.13
       jose: 6.2.13
@@ -3272,9 +3270,9 @@ snapshots:
 
   '@rexezuge/runtime@1.9.2': {}
 
-  '@rexezuge/shared@1.7.0': {}
-
   '@rexezuge/shared@1.9.0': {}
+
+  '@rexezuge/shared@1.9.2': {}
 
   '@rexezuge/tooling@1.9.0(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-prettier@5.5.7(eslint-config-prettier@10.1.8(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(prettier@3.9.10))(eslint-plugin-regexp@3.3.1(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-sonarjs@4.2.2(eslint@10.12.0(jiti@2.7.0)))(eslint-plugin-unicorn@76.0.0(eslint@10.12.0(jiti@2.7.0)))(eslint@10.12.0(jiti@2.7.0))(globals@17.13.0)(jsonc-parser@3.3.1)(prettier@3.9.10)(typescript-eslint@8.72.0(eslint@10.12.0(jiti@2.7.0))(typescript@6.0.3))(typescript@6.0.3)(vitest@4.1.11)':
     dependencies:
@@ -3709,11 +3707,11 @@ snapshots:
 
   chanfana@3.4.0:
     dependencies:
-      '@asteasolutions/zod-to-openapi': 8.5.0(zod@4.6.5)
+      '@asteasolutions/zod-to-openapi': 8.5.0(zod@4.6.7)
       js-yaml: 4.3.2
-      openapi3-ts: 4.6.1
+      openapi3-ts: 4.6.2
       yargs-parser: 22.0.0
-      zod: 4.6.5
+      zod: 4.6.7
 
   change-case@5.4.4: {}
 
@@ -4315,7 +4313,7 @@ snapshots:
 
   obug@2.2.1: {}
 
-  openapi3-ts@4.6.1:
+  openapi3-ts@4.6.2:
     dependencies:
       yaml: 2.9.1
 
@@ -4756,3 +4754,5 @@ snapshots:
       zod: 4.6.5
 
   zod@4.6.5: {}
+
+  zod@4.6.7: {}
