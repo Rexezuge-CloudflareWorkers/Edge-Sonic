@@ -145,8 +145,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/subsonic
       '@rexezuge/errors':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/http':
         specifier: 1.7.0
         version: 1.7.0
@@ -194,8 +194,8 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
       '@rexezuge/errors':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/runtime':
         specifier: 1.9.2
         version: 1.9.2
@@ -277,8 +277,8 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
       '@rexezuge/errors':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/identity':
         specifier: 1.9.0
         version: 1.9.0
@@ -339,8 +339,8 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
       '@rexezuge/errors':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/runtime':
         specifier: 1.9.2
         version: 1.9.2
@@ -424,8 +424,8 @@ importers:
         specifier: 1.9.0
         version: 1.9.0
       '@rexezuge/errors':
-        specifier: 1.7.0
-        version: 1.7.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/runtime':
         specifier: 1.9.2
         version: 1.9.2
@@ -1098,6 +1098,9 @@ packages:
 
   '@rexezuge/errors@1.9.0':
     resolution: {integrity: sha512-5pALUuuI0h2ZLnLnNAmBb7f8SXvv87tr2rtszIbnkPhn2LPfYDGRLiAFNVqPZpG204FMuNcaiYydDwxkGhsXzw==}
+
+  '@rexezuge/errors@1.9.2':
+    resolution: {integrity: sha512-2LBY01Ly8ZJH8YF3pqTfYGFF56WslywFiC3HeeEXSBSD0nKXA6WsELUa/xPbMXIhKnVz8z+UtgshuHsHlSMOeg==}
 
   '@rexezuge/http@1.7.0':
     resolution: {integrity: sha512-bNn/xxGSTRczL0+JFV1HkUpGdmpCaw1luDlGyBjmr7HKEwDCsoN9o2GJoB3dLFPguKMNqrn5/aDhU8GoGozETw==}
@@ -3250,6 +3253,8 @@ snapshots:
   '@rexezuge/errors@1.7.0': {}
 
   '@rexezuge/errors@1.9.0': {}
+
+  '@rexezuge/errors@1.9.2': {}
 
   '@rexezuge/http@1.7.0':
     dependencies:
