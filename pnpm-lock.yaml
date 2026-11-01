@@ -280,8 +280,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       '@rexezuge/identity':
-        specifier: 1.9.0
-        version: 1.9.0
+        specifier: 1.9.2
+        version: 1.9.2
       '@rexezuge/shared':
         specifier: 1.9.2
         version: 1.9.2
@@ -1105,8 +1105,8 @@ packages:
   '@rexezuge/http@1.9.2':
     resolution: {integrity: sha512-kykFRPtAb/zWc81h3SEb78QAgezlTIqK8HUwsAvQ7bsaJ9M//iwZ+P3Vbk150pv/ouGtO7iOLZenn5HcDGcJIA==}
 
-  '@rexezuge/identity@1.9.0':
-    resolution: {integrity: sha512-sOC7u67nn+z5VVO11pxhpNAymH2eLzUkZU/nhHbT8QqEZ/rfew7IgWlJ9wLKJ/xnUTdnvQDP4DFkLcEdipfLBg==}
+  '@rexezuge/identity@1.9.2':
+    resolution: {integrity: sha512-ZcGO6tGBcNZDbVHsjryKskTyzrnjtt6ev8xNSltP9QAFBAwh3NxDcsSfOu18pG/SPP6v9JI12tI+WiwzRm87rg==}
 
   '@rexezuge/runtime@1.9.2':
     resolution: {integrity: sha512-OfAtxqhCpt9QON1pNBY0IyRc5xEeX3UlkBg5cS1cqzq6FKisL4a/jvV6dJDYZzWCcJAMxzPDfWS1JY3Nj2tbXw==}
@@ -3270,11 +3270,11 @@ snapshots:
       hono: 4.13.14
       jose: 6.2.13
 
-  '@rexezuge/identity@1.9.0':
+  '@rexezuge/identity@1.9.2':
     dependencies:
-      '@rexezuge/d1': 1.9.0
-      '@rexezuge/errors': 1.9.0
-      '@rexezuge/shared': 1.9.0
+      '@rexezuge/d1': 1.9.2
+      '@rexezuge/errors': 1.9.2
+      '@rexezuge/shared': 1.9.2
 
   '@rexezuge/runtime@1.9.2': {}
 
