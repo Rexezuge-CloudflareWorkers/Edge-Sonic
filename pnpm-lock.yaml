@@ -145,8 +145,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/subsonic
       '@rexezuge/errors':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/http':
         specifier: 1.9.2
         version: 1.9.2
@@ -194,8 +194,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       '@rexezuge/errors':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/runtime':
         specifier: 1.9.4
         version: 1.9.4
@@ -277,8 +277,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       '@rexezuge/errors':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/identity':
         specifier: 1.9.4
         version: 1.9.4
@@ -339,8 +339,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       '@rexezuge/errors':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/runtime':
         specifier: 1.9.4
         version: 1.9.4
@@ -424,8 +424,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       '@rexezuge/errors':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/runtime':
         specifier: 1.9.4
         version: 1.9.4
