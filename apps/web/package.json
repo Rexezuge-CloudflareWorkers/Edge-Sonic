@@ -17,7 +17,7 @@
     "react-i18next": "^17.1.9",
     "react-router-dom": "7.18.4",
     "tailwind-merge": "3.7.0",
-    "@rexezuge/web": "1.9.2"
+    "@rexezuge/web": "1.9.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.3.3",
