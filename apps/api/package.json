@@ -16,7 +16,7 @@
     "@edge-sonic/subsonic": "workspace:*",
     "@rexezuge/errors": "1.9.2",
     "@rexezuge/http": "1.9.2",
-    "@rexezuge/runtime": "1.9.2",
+    "@rexezuge/runtime": "1.9.4",
     "@rexezuge/shared": "1.9.2",
     "hono": "4.13.16",
     "jose": "6.2.13"
