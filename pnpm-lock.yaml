@@ -191,8 +191,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/webdav
       '@rexezuge/d1':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/errors':
         specifier: 1.9.4
         version: 1.9.4
@@ -274,8 +274,8 @@ importers:
         specifier: workspace:*
         version: link:../subsonic
       '@rexezuge/d1':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/errors':
         specifier: 1.9.4
         version: 1.9.4
@@ -336,8 +336,8 @@ importers:
         specifier: workspace:*
         version: link:../webdav
       '@rexezuge/d1':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/errors':
         specifier: 1.9.4
         version: 1.9.4
@@ -421,8 +421,8 @@ importers:
         specifier: workspace:*
         version: link:../packages/webdav
       '@rexezuge/d1':
-        specifier: 1.9.2
-        version: 1.9.2
+        specifier: 1.9.4
+        version: 1.9.4
       '@rexezuge/errors':
         specifier: 1.9.4
         version: 1.9.4
