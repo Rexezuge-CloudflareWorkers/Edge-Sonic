@@ -46,7 +46,7 @@
     "eslint-plugin-unicorn": "76.0.0",
     "globals": "17.14.0",
     "hono": "4.13.16",
-    "i18next": "^26.4.2",
+    "i18next": "^27.2.2",
     "jsdom": "31.0.1",
     "jsonc-parser": "3.3.1",
     "prettier": "3.9.10",
