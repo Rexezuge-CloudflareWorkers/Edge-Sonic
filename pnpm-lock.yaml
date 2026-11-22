@@ -76,8 +76,8 @@ importers:
         specifier: 17.14.0
         version: 17.14.0
       hono:
-        specifier: 4.13.16
-        version: 4.13.16
+        specifier: 4.13.19
+        version: 4.13.19
       i18next:
         specifier: ^26.4.2
         version: 26.4.2(typescript@6.0.3)
@@ -157,8 +157,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       hono:
-        specifier: 4.13.16
-        version: 4.13.16
+        specifier: 4.13.19
+        version: 4.13.19
       jose:
         specifier: 6.2.18
         version: 6.2.18
@@ -1874,8 +1874,8 @@ packages:
   hermes-parser@0.25.1:
     resolution: {integrity: sha512-6pEjquH3rqaI6cYAXYPcz9MS4rY6R4ngRgrgfDshRptUZIc3lw0MCIJIGDj9++mfySOuPTHB4nrSW99BCvOPIA==}
 
-  hono@4.13.16:
-    resolution: {integrity: sha512-AOLOEhvrV+iH92xXCnFr/5+3KjPKcI3xP63XJtX5spAnkznPdHijlIsUTpi7/9EhWqrTCekw5c5zh1K+YsVw7A==}
+  hono@4.13.19:
+    resolution: {integrity: sha512-KmXvQAXwcAHV+muzbIwoJ23niEB5nMoDVr9WcRkU8mvjUECm/1+7v4Jgp7P7a+H6MLFrh+vXrGonGrGS+RQfkA==}
     engines: {node: '>=16.9.0'}
 
   hookified@1.15.1:
@@ -3257,7 +3257,7 @@ snapshots:
       '@rexezuge/errors': 1.9.2
       '@rexezuge/shared': 1.9.2
       chanfana: 3.4.0
-      hono: 4.13.16
+      hono: 4.13.19
       jose: 6.2.18
 
   '@rexezuge/identity@1.9.4':
@@ -4038,7 +4038,7 @@ snapshots:
     dependencies:
       hermes-estree: 0.25.1
 
-  hono@4.13.16: {}
+  hono@4.13.19: {}
 
   hookified@1.15.1: {}
 
