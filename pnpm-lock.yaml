@@ -160,8 +160,8 @@ importers:
         specifier: 4.13.16
         version: 4.13.16
       jose:
-        specifier: 6.2.13
-        version: 6.2.13
+        specifier: 6.2.18
+        version: 6.2.18
     devDependencies:
       '@types/node':
         specifier: 26.6.6
@@ -348,8 +348,8 @@ importers:
         specifier: 1.9.2
         version: 1.9.2
       jose:
-        specifier: 6.2.13
-        version: 6.2.13
+        specifier: 6.2.18
+        version: 6.2.18
     devDependencies:
       '@types/node':
         specifier: 26.6.6
@@ -1968,8 +1968,8 @@ packages:
     resolution: {integrity: sha512-AC/7JofJvZGrrneWNaEnJeOLUx+JlGt7tNa0wZiRPT4MY1wmfKjt2+6O2p2uz2+skll8OZZmJMNqeke7kKbNgQ==}
     hasBin: true
 
-  jose@6.2.13:
-    resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
+  jose@6.2.18:
+    resolution: {integrity: sha512-doV4thUwgkrycJH4yLeqwTGIIZphHl+pk7CPReuMIhYhncmgzdko85MaCG4YQFTxqMFr1/oEH32tZuKKovcDEg==}
 
   js-tokens@10.0.0:
     resolution: {integrity: sha512-lM/UBzQmfJRo9ABXbPWemivdCW8V2G8FHaHdypQaIy523snUjog0W71ayWXTjiR+ixeMyVHN2XcpnTd/liPg/Q==}
@@ -3256,7 +3256,7 @@ snapshots:
       '@rexezuge/shared': 1.9.2
       chanfana: 3.4.0
       hono: 4.13.16
-      jose: 6.2.13
+      jose: 6.2.18
 
   '@rexezuge/identity@1.9.4':
     dependencies:
@@ -4106,7 +4106,7 @@ snapshots:
 
   jiti@2.7.0: {}
 
-  jose@6.2.13: {}
+  jose@6.2.18: {}
 
   js-tokens@10.0.0: {}
 
