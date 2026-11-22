@@ -17,7 +17,7 @@
     "@rexezuge/errors": "1.9.4",
     "@rexezuge/http": "1.9.2",
     "@rexezuge/runtime": "1.9.4",
-    "@rexezuge/shared": "1.9.2",
+    "@rexezuge/shared": "1.9.4",
     "hono": "4.13.19",
     "jose": "6.2.18"
   },
