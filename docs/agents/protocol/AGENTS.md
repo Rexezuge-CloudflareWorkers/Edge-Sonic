@@ -26,8 +26,8 @@ and changing an endpoint's **kind** changes the split. Both now fail a test.
 | ---------------- | ------: | ----------------------------------------------------------------------- |
 | `IMPLEMENTED`    |      43 | the real thing                                                          |
 | `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
-| `EMPTY_RESULT`   |       7 | an empty wrapper, after validating the request                          |
-| `ENDPOINT_NAMES` |      70 | —                                                                       |
+| `EMPTY_RESULT`   |       9 | an empty wrapper, after validating the request                          |
+| `ENDPOINT_NAMES` |      72 | —                                                                       |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
 `code=70` from this registry is unreachable. It is still reached two other ways, both
@@ -81,10 +81,11 @@ compare-reference.ts` reads the same call off a configured reference and compare
   something both endpoints actually publish.
 - **"Not implemented" is four answers, and `code=70` was right for none of them.**
   `getLyrics`, `getLyricsBySongId`, `getArtistInfo`, `getArtistInfo2`, `getTopSongs`,
-  `getInternetRadioStations` and `getShares` answered `code=70` while being endpoints a
-  client calls routinely — `getLyrics` on every track — so `code=70` said the server had
-  _failed_ where the truth was that there is nothing to report. `EMPTY_RESULT` answers each with its own
-  wrapper and no items, after validating the request: an unresolvable `id` is `code=70`
+  `getInternetRadioStations`, `getShares`, `getAlbumInfo` and `getAlbumInfo2` answered
+  `code=70` while being endpoints a client calls routinely — `getLyrics` on every track —
+  so `code=70` said the server had _failed_ where the truth was nothing to report.
+  `EMPTY_RESULT` answers each with its own wrapper and no items, after validating the request:
+  an unresolvable `id` is `code=70`
   and an absent required parameter is `code=10`, because "the lyrics of that song do not
   exist" and "that song has no lyrics" look identical in a response and mean opposite
   things. `UNIMPLEMENTED` carries a `kind`: `gone` → 410, `not-implemented` → 501,
@@ -94,7 +95,7 @@ compare-reference.ts` reads the same call off a configured reference and compare
   is the answer `EMPTY_RESULT` was introduced to replace. **A name in two registry tables
   is routed by whichever was assigned last and reported by neither**, and five were when
   `EMPTY_RESULT` was introduced because the overlap test existed and did not look there.
-- **The wrapper element's name is not the endpoint's name.** **All seven** empty-result
+- **The wrapper element's name is not the endpoint's name.** **All nine** empty-result
   wrappers differ — `getLyrics` answers `<lyrics>`, `getTopSongs` answers `<topSongs>` —
   and naming one after its endpoint answers `200` with the payload under the wrong key,
   which reads as "no data" rather than "wrong key". Both names are stated.

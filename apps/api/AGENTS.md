@@ -564,9 +564,10 @@ body is not audio.
 `UNIMPLEMENTED` carries a `kind`, and `code=70` is the **fourth** of them rather than the
 only one: `gone` → 410, `not-implemented` → 501, `not-authorized` → `code=50`, `absent` →
 `code=70`. **No entry uses `absent` today**, so the registry answers 410 five times, 501
-twelve times and `code=50` three times, and `code=70` from here is unreachable. The seven
-endpoints a client calls routinely — `getLyrics` on every track among them — are in
-`EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
+twelve times and `code=50` three times, and `code=70` from here is unreachable. The nine
+endpoints a client calls routinely — `getLyrics` on every track and `getAlbumInfo2` on every
+album screen among them — are in `EMPTY_RESULT`, each with **its own wrapper name**, validated
+before it answers empty.
 `code=70` is still right for an endpoint this server does not have at all, which is the
 case `getOpenSubsonicExtensions` was in — the protocol says a
 server supporting no extensions returns an empty _list_, and answering a failure from the

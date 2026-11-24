@@ -7,12 +7,10 @@
  * ### Endpoints this server does not have, and how each says so
  *
  * Videos, podcasts, shares, jukebox, chat, internet radio, last.fm info and lyrics are not
- * implemented — and **"not implemented" is three different answers**, because a client acts
- * on each one differently. They used to be one list answering `code=70`, which is the
- * right answer for none of them:
+ * implemented — and **"not implemented" is three different answers**, because a client
+ * acts on each differently. They used to be one list answering `code=70`, which fit none:
  *
- * - **`gone`** — retired from this server: HTTP 410 and a plain-text body. A client that
- *   keeps calling `getVideos` learns the endpoint is not coming back and can stop asking.
+ * - **`gone`** — retired: HTTP 410 and a plain-text body, so a client can stop asking.
  *   Navidrome draws this line at video, captions and chat.
  * - **`not-implemented`** — deliberately not built: HTTP 501. The same idea with a different
  *   promise, "not now" rather than "never". Navidrome uses it for podcasts and the jukebox.
@@ -24,11 +22,8 @@
  *   a client calling `getLyrics` for a track with no lyrics must render "no lyrics", not an
  *   error. Navidrome answers `{"lyrics":{"value":""}}`.
  *
- * The remaining entries are absent for want of an external service this server does not
- * have — last.fm, for artist and album info and for similarity — which is why they keep
- * `code=70` while `getLyrics` does not. Telling "I have no such integration" apart from "I
- * have it and there is nothing to say" is the whole point, and a single list could not say
- * either.
+ * The rest are absent for want of an external service — last.fm similarity — and keep
+ * `code=70`, because "no such integration" and "nothing to say" are different claims.
  *
  * Transcoding is a separate matter: `stream` and `download` **are** implemented and
  * simply ignore `maxBitRate`/`format`, serving the original bytes with the
@@ -175,6 +170,14 @@ interface EmptyEndpoint {
   readonly reason: string;
 }
 
+const ALBUM_INFO: EmptyEndpoint = {
+  wrapper: 'albumInfo',
+  listKeys: null,
+  idKinds: ['al', 'alk', 's'],
+  requiredParams: [],
+  reason: 'last.fm album info is not configured',
+};
+
 /**
  * Endpoints that work and have nothing to say.
  *
@@ -183,16 +186,10 @@ interface EmptyEndpoint {
  * render "no lyrics", and `code=70` told it the server had failed. Navidrome answers
  * `{"lyrics":{"value":""}}` and `{"topSongs":{}}`.
  *
- * `getArtistInfo` and `getTopSongs` are here rather than in `UNIMPLEMENTED` despite having
- * no last.fm integration, which is the subtle half of this table. `getAlbumInfo` and
- * `getSimilarSongs` keep `code=70` and theirs do not, and the difference is deliberate: an
- * **artist page** and a **top-songs panel** are rendered from an empty result without an
- * error, while an album info card and a "more like this" row are *absence of a feature*, and
- * a client that hides the row when the server says `code=70` is doing the right thing.
- *
- * That line is a judgement about which empty answers read as "nothing here" and which read
- * as "not supported", and it is the reason `reason` is recorded on every entry: it is what
- * would be reviewed if one of these moved.
+ * `getArtistInfo`, `getAlbumInfo` and `getTopSongs` are here despite having no last.fm
+ * integration, because their panels render from an empty result. Only `getSimilarSongs`
+ * keeps `code=70`: a "more like this" row is a feature this server does not have. `reason`
+ * is what would be reviewed if one of these moved.
  */
 const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
   // No list at all: the protocol types this payload as a single `value`, so the wrapper is a
@@ -228,6 +225,9 @@ const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
     requiredParams: [],
     reason: 'last.fm artist info is not configured',
   },
+  // Both spellings answer under `albumInfo`; Navic calls `getAlbumInfo2` on every album screen.
+  getAlbumInfo: ALBUM_INFO,
+  getAlbumInfo2: ALBUM_INFO,
   // Keyed on an artist *name*, so there is no id to resolve and nothing to validate.
   getTopSongs: {
     wrapper: 'topSongs',
@@ -317,7 +317,7 @@ function absentHandler(name: string, entry: AbsentEndpoint): RestHandler {
  * The handler for an endpoint that exists and has nothing to report.
  *
  * @param wrapper The element to answer, which is **not** the endpoint's name — see
- *   `EmptyEndpoint.wrapper`, where six of the seven differ from it.
+ *   `EmptyEndpoint.wrapper`, where all nine differ from it.
  * @param listKeys The wrapper's repeated child, or `null` for a record payload. `getLyrics`
  *   types its body as a single `value`, so there is nothing to list.
  * @param idKinds The id kinds this endpoint accepts, or `null` when it takes no id. An id

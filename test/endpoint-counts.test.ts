@@ -6,8 +6,8 @@ import { ENDPOINT_NAMES, UNIMPLEMENTED } from '../apps/api/src/rest/endpoints';
  *
  * ### Why numerals and not just shape
  *
- * `docs/agents/protocol/AGENTS.md` publishes a table — 43 implemented, 20 unimplemented, 7
- * answering an empty result, 70 names — and says the counts "are asserted in
+ * `docs/agents/protocol/AGENTS.md` publishes a table — 43 implemented, 20 unimplemented, 9
+ * answering an empty result, 72 names — and says the counts "are asserted in
  * `test/endpoint-registry.test.ts`". They were not. Every assertion in that file was about
  * *shape*: cross-map disjointness, a non-empty reason per entry, `ENDPOINT_NAMES` completeness.
  * None of them contained a numeral, so any number of endpoints could be added or removed and
@@ -42,18 +42,18 @@ describe('the endpoint registry counts', () => {
     expect(countKinds()).toEqual({ gone: 5, 'not-implemented': 12, 'not-authorized': 3 });
   });
 
-  it('publishes 7 endpoints that answer an empty wrapper rather than a failure', () => {
-    // `getLyrics` and the four artist-info/radio endpoints are called routinely by real clients;
-    // each was `code=70` before it was given a wrapper, which told a client the server had failed
-    // where the truth is that there is nothing to report. Their count is the guard on that.
-    expect(counts.emptyResult).toBe(7);
+  it('publishes 9 endpoints that answer an empty wrapper rather than a failure', () => {
+    // `getLyrics` and the artist-info/radio/album-info endpoints are called routinely by real
+    // clients; each was `code=70` before it was given a wrapper, which told a client the server
+    // had failed where the truth is that there is nothing to report. Their count is the guard.
+    expect(counts.emptyResult).toBe(9);
   });
 
-  it('publishes 70 endpoint names in total', () => {
+  it('publishes 72 endpoint names in total', () => {
     // The sum, and therefore a cross-check on the three above: if one moves and another does not,
     // this is the assertion that says so.
-    expect(counts.names).toBe(43 + 20 + 7);
-    expect(counts.names).toBe(70);
+    expect(counts.names).toBe(43 + 20 + 9);
+    expect(counts.names).toBe(72);
   });
 
   it('splits the unimplemented kinds as the guide publishes them', () => {
@@ -78,4 +78,4 @@ function countKinds(): Record<string, number> {
  * export its empty-result table under a name that narrows it, and a count read from the same
  * object it is counting is not a measurement.
  */
-const EMPTY_RESULT_COUNT = 7;
+const EMPTY_RESULT_COUNT = 9;
