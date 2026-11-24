@@ -259,7 +259,7 @@ describe('the endpoint registry', () => {
           wrong.push(`${name}: answered ${JSON.stringify(envelope.error)}`);
           continue;
         }
-        // Under the declared `wrapper`, **not** the endpoint name. Six of the seven differ,
+        // Under the declared `wrapper`, **not** the endpoint name. All nine differ,
         // and looking under `name` is precisely how a payload arriving under the wrong
         // element goes unnoticed: the endpoint answers 200 and the client's field is simply
         // absent, which reads as "no data" rather than "wrong key".
