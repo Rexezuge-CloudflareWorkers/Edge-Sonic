@@ -169,9 +169,17 @@ function describeDropped(t: Translate, songs: number, libraries: number, billedR
  * pulling in `i18next`. `react-i18next`'s `TFunction` is not referenced here on purpose: that
  * would make this file's types depend on a package the browser bundle does not ship, which is
  * the coupling `lib/probe.ts` exists to avoid.
+ *
+ * The two call signatures are not one signature with an optional `vars`: i18next 27 changed
+ * `TFunction` to tuple-shaped overloads `[key, defaultValue]` and
+ * `[key, defaultValue, options]`. A single `(key, fallback, vars?)` signature is not assignable
+ * to them — the optional third position has no matching overload — so the real `t` from
+ * `useTranslation()` stops type-checking against this interface. Mirroring the two arities keeps
+ * it structurally compatible without importing i18next's types.
  */
 interface Translate {
-  (key: string, fallback: string, vars?: Record<string, string | number>): string;
+  (key: string, fallback: string): string;
+  (key: string, fallback: string, vars: Record<string, string | number>): string;
 }
 
 export {
