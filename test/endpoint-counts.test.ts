@@ -6,8 +6,8 @@ import { ENDPOINT_NAMES, UNIMPLEMENTED } from '../apps/api/src/rest/endpoints';
  *
  * ### Why numerals and not just shape
  *
- * `docs/agents/protocol/AGENTS.md` publishes a table — 45 implemented, 20 unimplemented, 7
- * answering an empty result, 72 names — and says the counts "are asserted in
+ * `docs/agents/protocol/AGENTS.md` publishes a table — 47 implemented, 20 unimplemented, 7
+ * answering an empty result, 74 names — and says the counts "are asserted in
  * `test/endpoint-registry.test.ts`". They were not. Every assertion in that file was about
  * *shape*: cross-map disjointness, a non-empty reason per entry, `ENDPOINT_NAMES` completeness.
  * None of them contained a numeral, so any number of endpoints could be added or removed and
@@ -29,8 +29,8 @@ describe('the endpoint registry counts', () => {
     names: ENDPOINT_NAMES.length,
   };
 
-  it('publishes 45 implemented endpoints', () => {
-    expect(counts.implemented).toBe(45);
+  it('publishes 47 implemented endpoints', () => {
+    expect(counts.implemented).toBe(47);
   });
 
   it('publishes 20 unimplemented endpoints, and their kinds split 5 / 12 / 3', () => {
@@ -46,16 +46,16 @@ describe('the endpoint registry counts', () => {
     // The artist-info/radio/album-info endpoints are called routinely by real clients; each was
     // `code=70` before it was given a wrapper, which told a client the server had failed where
     // the truth is that there is nothing to report. Their count is the guard. `getLyrics` and
-    // `getLyricsBySongId` left this table for `lyrics.ts`, which reads the tags and sidecars and
-    // answers the same empty shape from the endpoint itself rather than from a promise.
+    // `getLyricsBySongId` left this table for `lyrics.ts`, which reads the tags and sidecars;
+    // the two similar-song spellings are now implemented in `similar.ts`, reading genres.
     expect(counts.emptyResult).toBe(7);
   });
 
-  it('publishes 72 endpoint names in total', () => {
+  it('publishes 74 endpoint names in total', () => {
     // The sum, and therefore a cross-check on the three above: if one moves and another does not,
     // this is the assertion that says so.
-    expect(counts.names).toBe(45 + 20 + 7);
-    expect(counts.names).toBe(72);
+    expect(counts.names).toBe(47 + 20 + 7);
+    expect(counts.names).toBe(74);
   });
 
   it('splits the unimplemented kinds as the guide publishes them', () => {

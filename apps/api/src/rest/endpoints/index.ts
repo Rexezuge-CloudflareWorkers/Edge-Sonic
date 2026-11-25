@@ -24,8 +24,9 @@
  *   `lyrics.ts`, which answers `{"lyrics":{"value":""}}` for a track with none — the same
  *   shape Navidrome answers.
  *
- * The rest are absent for want of an external service — last.fm similarity — and keep
- * `code=70`, because "no such integration" and "nothing to say" are different claims.
+ * Similarity is answered locally, from shared genres in the index (`similar.ts`), so it is
+ * no longer absent for want of last.fm. The remaining last.fm panels are empty results
+ * rather than failures; "no such integration" and "nothing to say" are still different claims.
  *
  * Transcoding is a separate matter: `stream` and `download` **are** implemented and
  * simply ignore `maxBitRate`/`format`, serving the original bytes with the
@@ -45,6 +46,7 @@ import { annotationEndpoints } from './annotations';
 import { stateEndpoints } from './state';
 import { userEndpoints } from './users';
 import { lyricsEndpoints } from './lyrics';
+import { similarEndpoints } from './similar';
 
 /**
  * A handler returns either a finished `Response` (a binary endpoint such as
@@ -193,9 +195,9 @@ const ALBUM_INFO: EmptyEndpoint = {
  * the tags and sidecars rather than a table promising it would not.
  *
  * `getArtistInfo`, `getAlbumInfo` and `getTopSongs` are here despite having no last.fm
- * integration, because their panels render from an empty result. Only `getSimilarSongs`
- * keeps `code=70`: a "more like this" row is a feature this server does not have. `reason`
- * is what would be reviewed if one of these moved.
+ * integration, because their panels render from an empty result. Both `getSimilarSongs`
+ * spellings are implemented in `similar.ts`, answering from shared genres in the index.
+ * `reason` is what would be reviewed if one of these moved.
  */
 const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
   // `getArtistInfo` takes an artist **or** an album id, per the protocol, so both are
@@ -256,6 +258,7 @@ const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {
   ...stateEndpoints,
   ...userEndpoints,
   ...lyricsEndpoints,
+  ...similarEndpoints,
 };
 
 /**

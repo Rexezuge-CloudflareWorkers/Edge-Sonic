@@ -53,10 +53,10 @@ export { SongDerivationDAO } from './songDerivation';
 export type { DerivableRow, DerivationWrite } from './songDerivation';
 export { SongIndexDAO } from './songIndex';
 export type { GenreCountRow } from './songIndex';
-// Looking a song up by **path** or by `(album_ci, title_ci)` — the two ways an import can
-// resolve a foreign id. Its own module because `SongDAO` is one row and already over the
-// soft god-file limit, and because the pair-keyed predicate is the only place in the layer
-// that has to derive a batch size for two variables per key.
+export { SongSimilarDAO } from './songSimilar';
+export type { SimilarSeed, SimilarArtistRow } from './songSimilar';
+// Import lookups by **path** or by `(album_ci, title_ci)`, in their own module because `SongDAO`
+// is over the god-file limit and the pair-keyed predicate needs its own two-variable batch size.
 export { SongMatchDAO, keyForPair } from './songMatch';
 export { AnnotationDAO, AuthThrottleDAO } from './UserStateDAO';
 // Per-user play counts. Its own module because one table carries **two** semantics — a scrobble
