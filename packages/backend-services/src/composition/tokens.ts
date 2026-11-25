@@ -33,6 +33,7 @@ import type { EnrichDriver } from '../library/EnrichDriver';
 import type { ScanService } from '../index/ScanService';
 import type { LibraryEnrichmentService } from '../index/libraryEnrichment';
 import type { TreeService } from '../index/TreeService';
+import type { LyricsService } from '../index/lyrics';
 import type { ImportSourceService } from '../import/sourceService';
 import type { EnrichmentService } from '../index/EnrichmentService';
 
@@ -152,6 +153,14 @@ const Tokens = {
    */
   IndexStore: Symbol('IndexStore') as Token<{ stats: IndexStatsDAO; drop: IndexDropDAO }>,
   TreeService: Symbol('TreeService') as Token<TreeService>,
+  /**
+   * Lyrics, from a `.lrc`/`.txt` sidecar or the track's own tags.
+   *
+   * A service rather than route code because the precedence, the cache key and the
+   * negative-cache rule are one decision, and they are the parts a second implementation
+   * gets wrong. Both lyric endpoints share it; neither knows where the text came from.
+   */
+  LyricsService: Symbol('LyricsService') as Token<LyricsService>,
   ScanService: Symbol('ScanService') as Token<ScanService>,
   /**
    * How **this deployment** advances a library's index — one `ScanDriver` strategy, chosen once.

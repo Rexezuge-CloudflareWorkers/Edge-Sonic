@@ -564,15 +564,17 @@ body is not audio.
 `UNIMPLEMENTED` carries a `kind`, and `code=70` is the **fourth** of them rather than the
 only one: `gone` → 410, `not-implemented` → 501, `not-authorized` → `code=50`, `absent` →
 `code=70`. **No entry uses `absent` today**, so the registry answers 410 five times, 501
-twelve times and `code=50` three times, and `code=70` from here is unreachable. The nine
-endpoints a client calls routinely — `getLyrics` on every track and `getAlbumInfo2` on every
-album screen among them — are in `EMPTY_RESULT`, each with **its own wrapper name**, validated
-before it answers empty.
+twelve times and `code=50` three times, and `code=70` from here is unreachable. The seven
+endpoints a client calls routinely — `getAlbumInfo2` on every album screen among them — are
+in `EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
+`getLyrics` and `getLyricsBySongId` are **implemented** (see below), so the empty lyric shape
+is now an answer rather than a promise.
 `code=70` is still right for an endpoint this server does not have at all, which is the
 case `getOpenSubsonicExtensions` was in — the protocol says a
 server supporting no extensions returns an empty _list_, and answering a failure from the
 **capability-discovery** call told a client it could not ask the question, which is the one
-answer it cannot use. It is implemented now and reports `[]`.
+answer it cannot use. It is implemented now and advertises `songLyrics` v1, which
+`getLyricsBySongId` keeps: `lang`, `synced` and millisecond `line.start` on every line.
 
 `tokenInfo` is the same shape of gap from the other side: it was absent entirely, so a
 client holding a stored token — on a server that had just authenticated that token — got
@@ -600,6 +602,42 @@ grouping step wrapped the result again as `[[]]`, so a client reading `.length` 
 list, which is what makes `array: true` mean "render as a JSON array" rather than "render as
 an array wrapped in another array". The exception to "an empty list is an absent key", and the reason it is not arbitrary:
 it is a bare list at a key rather than a record wrapping one.
+
+## Lyrics: a sidecar first, the tags second, and the cache is a claim
+
+`endpoints/lyrics.ts` owns both spellings. `getLyrics` is keyed on `artist`/`title` and
+answers one plain `value`; `getLyricsBySongId` is keyed on a song id and answers
+`structuredLyrics` with `lang`, `synced` and millisecond `line.start`. Both resolve through
+`context.lyrics` (`LyricsService`), so the precedence cannot differ between a client on the
+old call and one on the new one:
+
+1. **`.lrc` before `.txt` before the track's own tags.** Only an LRC carries offsets, so a
+   track with both should show a scrolling panel rather than a block of text. An
+   exact-stem sidecar wins (`01.lrc` for `01.flac`), then a conventional `lyrics`/`song`
+   stem, and a single unrelated sidecar **only when it is the only one in the folder** — a
+   folder of tracks with one `notes.txt` must not give every track the same lyrics.
+2. **Discovery runs before the cache read**, because the key carries the chosen sidecar's
+   path and revision. A key built from the song alone would serve the old lyric until the
+   entry's 30-day life ended, so replacing `01.txt` with `01.lrc` would show nothing new.
+3. **Only a completed look is cached.** A read that threw, or a folder listing that failed,
+   returns the best answer available and caches nothing — a `503` recorded as "no lyrics"
+   would survive every retry, which is the same defect the enrichment path shipped. A
+   cached absence is a legitimate entry and is what keeps an instrumental from re-reading
+   its folder on every play.
+4. **Nothing is written to D1**, and the reader has its own version counter
+   (`LYRICS_READER_VERSION`) in the KV key. Bumping `READER_VERSION` instead would re-read
+   every file in the library to correct a lyric, which is the wrong cost for the wrong
+   answer.
+
+`getLyrics` answers `{"lyrics":{"value":""}}` for a title it cannot resolve _and_ for a
+request that named no title, because the protocol marks the pair optional; that is a
+success, not `code=10`. `getLyricsBySongId` validates its id and answers `code=70` for a
+song that does not exist — "that song has no lyrics" and "that song does not exist" look
+identical in a panel. `line` is flagged `array: true` per child, because a one-line lyric
+would otherwise collapse to a bare object.
+
+Asserted in `test/lyrics.test.ts` (precedence by content, the cache, the negative-cache
+rule) and `test/media-tags-lyrics.test.ts` (LRC parsing, `USLT`, Vorbis).
 
 ## Never
 

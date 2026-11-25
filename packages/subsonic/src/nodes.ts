@@ -49,6 +49,21 @@ interface ElementNode {
    */
   readonly jsonArray?: boolean;
   /**
+   * The JSON key this element's text content belongs under, rather than `#text`.
+   *
+   * OpenSubsonic's `Lyrics` and `Line` types are the case: the schema says
+   * `{"value": "..."}` for the text and `{"start": 123, "value": "..."}` for a timed
+   * line. The XML is `<lyrics>…</lyrics>` and `<line start="123">…</line>` — a text
+   * node — while the JSON is a **record** whose key is `value`. Without this flag the
+   * serializer's scalar collapse produces the text itself for the childless case, and
+   * `{"#text": ...}` for the one with a `start` attribute; neither is a field any
+   * client reads.
+   *
+   * Checked before that scalar collapse, because `line` is exactly the element the
+   * collapse would otherwise claim: one text child, plus an attribute.
+   */
+  readonly textKey?: string;
+  /**
    * The repeated child element(s) this wrapper always carries in JSON.
    *
    * Declared rather than inferred so an **empty** list still renders as `[]`; see
@@ -117,6 +132,24 @@ function elList(
   };
 }
 
+/**
+ * Build an element whose text content is a JSON field named by `textKey`.
+ *
+ * The value is a **text node**, so XML renders it as element content and JSON renders it
+ * under `textKey` rather than `#text`. `attrs` stays separate so a timed lyric line can
+ * carry `start` beside the text without becoming a record of `#text`.
+ *
+ * ```ts
+ * elText('lyrics', 'value', 'La la la')
+ * // <lyrics>La la la</lyrics> / {"value": "La la la"}
+ * elText('line', 'value', 'La la la', { start: 1000 })
+ * // <line start="1000">La la la</line> / {"start": 1000, "value": "La la la"}
+ * ```
+ */
+function elText(name: string, textKey: string, value: string, attrs?: Readonly<Record<string, Scalar | null | undefined>>): ElementNode {
+  return { name, textKey, ...(attrs && { attrs }), children: [value] };
+}
+
 function isElementNode(node: Node): node is ElementNode {
   return typeof node === 'object' && node !== null && 'name' in node;
 }
@@ -148,5 +181,5 @@ function elArray(
   };
 }
 
-export { el, elList, elArray, isElementNode };
+export { el, elList, elArray, elText, isElementNode };
 export type { ElementNode, Node, Scalar };

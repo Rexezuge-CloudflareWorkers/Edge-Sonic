@@ -148,25 +148,33 @@ async function startScan(context: RestContext): Promise<EnvelopeResponse> {
  * ### Why this is a list of finished nodes and not a list of names
  *
  * Because an entry is not a name. The protocol's shape is
- * `{"name": "transcodeOffset", "versions": [1]}` — and `versions` is an **array**, which
- * `el`'s attribute map cannot hold, since its values are scalars. So a list of names would
- * need a builder that silently could not express the shape it was promising, and the
- * mistake would surface as a malformed entry on the wire rather than as a type error. A
- * list of `ElementNode`s makes adding an extension a type-checked edit, and the empty
- * default is the honest answer today.
+ * `{"name": "songLyrics", "versions": [1]}` — and `versions` is an **array**, which `el`'s
+ * attribute map cannot hold, since its values are scalars. So a list of names would need a
+ * builder that silently could not express the shape it was promising, and the mistake would
+ * surface as a malformed entry on the wire rather than as a type error. A list of
+ * `ElementNode`s makes adding an extension a type-checked edit.
  *
- * Empty, and asserted empty in `test/endpoints.test.ts`. A list that drifts from what the
- * product actually implements is worse than an empty one: a client reads it as a promise,
- * calls the extension, and gets `code=70` from a server that just said it would work. So
- * adding an extension is a change **here and in the test**, which is the point of naming
- * the set rather than inlining `[]` in the handler.
+ * ### `songLyrics` v1, and why the versions element is flagged
+ *
+ * `getLyricsBySongId` answers the OpenSubsonic `structuredLyrics` payload with `lang` and
+ * `synced` on every entry and millisecond `start` on every timed line, which is what
+ * version 1 of the extension promises. An element with one scalar child normally collapses
+ * to that scalar, so `versions` carries `array: true` — the schema says a list, and a client
+ * iterating `versions` would otherwise read `1`.
+ *
+ * A list that drifts from what the product actually implements is worse than an empty one:
+ * a client reads it as a promise, calls the extension, and gets `code=70` from a server that
+ * just said it would work. So adding an extension is a change **here and in the test**,
+ * which is the point of naming the set rather than inlining it in the handler.
  */
-const OPEN_SUBSONIC_EXTENSIONS: readonly ElementNode[] = [];
+const OPEN_SUBSONIC_EXTENSIONS: readonly ElementNode[] = [
+  el('openSubsonicExtension', { name: 'songLyrics' }, [{ ...el('versions', {}, [1]), array: true }]),
+];
 
 /**
- * `getOpenSubsonicExtensions` — the extensions this server supports, which is none.
+ * `getOpenSubsonicExtensions` — the extensions this server supports.
  *
- * ### Why it answers `[]` and not `code=70`
+ * ### Why an empty list is not `code=70`
  *
  * Because the two are different statements. `code=70` says "this server does not do that",
  * and the protocol uses it for endpoints that are *absent*. This one is **present** and
@@ -184,14 +192,14 @@ const OPEN_SUBSONIC_EXTENSIONS: readonly ElementNode[] = [];
  * `elList`: a client doing `response.openSubsonicExtensions.length` throws on `undefined`
  * and renders nothing on `[]`.
  *
- * Empty is also the *truthful* answer rather than a dodge. The extensions the spec defines
- * are `apiKeyAuthentication`, `transcoding`, `songLyrics`, `sonicSimilarity`,
+ * The list is the *truthful* answer rather than a wish list. The extensions the spec
+ * defines are `apiKeyAuthentication`, `transcoding`, `songLyrics`, `sonicSimilarity`,
  * `transcodeOffset`, `formPost`, `playbackReport`, `indexBasedQueue`, `template`,
- * `topSongsByArtistId` and `getPodcastEpisode` — none of which this server implements. We
- * authenticate with `u` + `t` rather than with an `apiKey` parameter, so advertising
- * `apiKeyAuthentication` would be a claim about a credential path we do not have. A client
- * that reads this list and adapts to it is being told the truth, which is the entire
- * purpose of the endpoint.
+ * `topSongsByArtistId` and `getPodcastEpisode` — of which only `songLyrics` is
+ * implemented. We authenticate with `u` + `t` rather than with an `apiKey` parameter, so
+ * advertising `apiKeyAuthentication` would be a claim about a credential path we do not
+ * have. A client that reads this list and adapts to it is being told the truth, which is
+ * the entire purpose of the endpoint.
  */
 async function getOpenSubsonicExtensions(context: RestContext): Promise<EnvelopeResponse> {
   return respond(context, openSubsonicExtensionsPayload());
@@ -222,6 +230,12 @@ function openSubsonicExtensionsPayload(): ElementNode {
   return {
     name: 'openSubsonicExtensions',
     array: true,
+    // The flag that puts the **children themselves** at this key, rather than an object
+    // wrapping a repeated `openSubsonicExtension` child. The protocol's JSON is a bare
+    // array of records, and the wrapper and the child differ in name here, so `array`
+    // alone would render `{"openSubsonicExtension": [...]}` — the shape `elList` produces
+    // for every other Subsonic list and the wrong one for this key.
+    jsonArray: true,
     ...(OPEN_SUBSONIC_EXTENSIONS.length > 0 && { children: [...OPEN_SUBSONIC_EXTENSIONS] }),
   };
 }

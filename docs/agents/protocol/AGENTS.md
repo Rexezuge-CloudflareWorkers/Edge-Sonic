@@ -24,9 +24,9 @@ and changing an endpoint's **kind** changes the split. Both now fail a test.
 
 | Map              | Entries | Answers                                                                 |
 | ---------------- | ------: | ----------------------------------------------------------------------- |
-| `IMPLEMENTED`    |      43 | the real thing                                                          |
+| `IMPLEMENTED`    |      45 | the real thing                                                          |
 | `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
-| `EMPTY_RESULT`   |       9 | an empty wrapper, after validating the request                          |
+| `EMPTY_RESULT`   |       7 | an empty wrapper, after validating the request                          |
 | `ENDPOINT_NAMES` |      72 | —                                                                       |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
@@ -80,24 +80,34 @@ compare-reference.ts` reads the same call off a configured reference and compare
   the only thing that knows which element type it is; and the parity assertion compares
   something both endpoints actually publish.
 - **"Not implemented" is four answers, and `code=70` was right for none of them.**
-  `getLyrics`, `getLyricsBySongId`, `getArtistInfo`, `getArtistInfo2`, `getTopSongs`,
-  `getInternetRadioStations`, `getShares`, `getAlbumInfo` and `getAlbumInfo2` answered
-  `code=70` while being endpoints a client calls routinely — `getLyrics` on every track —
-  so `code=70` said the server had _failed_ where the truth was nothing to report.
-  `EMPTY_RESULT` answers each with its own wrapper and no items, after validating the request:
-  an unresolvable `id` is `code=70`
-  and an absent required parameter is `code=10`, because "the lyrics of that song do not
-  exist" and "that song has no lyrics" look identical in a response and mean opposite
-  things. `UNIMPLEMENTED` carries a `kind`: `gone` → 410, `not-implemented` → 501,
+  `getArtistInfo`, `getArtistInfo2`, `getTopSongs`, `getInternetRadioStations`, `getShares`,
+  `getAlbumInfo` and `getAlbumInfo2` answered `code=70` while being endpoints a client
+  calls routinely — `getAlbumInfo2` on every album screen — so `code=70` said the server
+  had _failed_ where the truth was nothing to report. `EMPTY_RESULT` answers each with its
+  own wrapper and no items, after validating the request: an unresolvable `id` is `code=70`
+  and an absent required parameter is `code=10`, because "the artist info of that artist
+  does not exist" and "that artist has no info" look identical in a response and mean
+  opposite things. `UNIMPLEMENTED` carries a `kind`: `gone` → 410, `not-implemented` → 501,
   `not-authorized` → `code=50`, `absent` → `code=70`. **No entry uses `absent`
   today**: the table holds 5 `gone`, 12 `not-implemented` and 3 `not-authorized`, so the
   registry answers 410, 501 and `code=50`, so `code=70` from here is unreachable — which
   is the answer `EMPTY_RESULT` was introduced to replace. **A name in two registry tables
   is routed by whichever was assigned last and reported by neither**, and five were when
   `EMPTY_RESULT` was introduced because the overlap test existed and did not look there.
-- **The wrapper element's name is not the endpoint's name.** **All nine** empty-result
-  wrappers differ — `getLyrics` answers `<lyrics>`, `getTopSongs` answers `<topSongs>` —
-  and naming one after its endpoint answers `200` with the payload under the wrong key,
+- **`getLyrics` left `EMPTY_RESULT` for an implementation, and the empty answer stayed.**
+  It used to be a table entry promising `{"lyrics":{}}` without reading anything;
+  `endpoints/lyrics.ts` now answers `{"lyrics":{"value":""}}` — the shape Navidrome
+  answers — for a title it cannot resolve _and_ for a request that named no title at all,
+  because the protocol marks `artist` and `title` optional. `getLyricsBySongId` is the
+  OpenSubsonic half and answers `code=70` for a song that does not exist, since "that song
+  has no lyrics" and "that song does not exist" look identical in a lyric panel. Its
+  `structuredLyrics` carries `lang: "und"` (the tag format does not name one), `synced`
+  (whether the lines carry offsets) and millisecond `line.start`. `line` is flagged
+  `array: true` **per child**, because a one-line lyric would otherwise collapse to a bare
+  object and a client iterating it would read its keys.
+- **The wrapper element's name is not the endpoint's name.** **Every** empty-result
+  wrapper differs — `getShares` answers `<shares>`, `getArtistInfo2` answers `<artistInfo2>`
+  — and naming one after its endpoint answers `200` with the payload under the wrong key,
   which reads as "no data" rather than "wrong key". Both names are stated.
 - **An OpenSubsonic array whose wrapper and child are the same word is a bare array.**
   `Child.artists` is `"artists": [{…}]`, not `{"artists":{"artist":[…]}}`: a Subsonic list
@@ -225,10 +235,20 @@ compare-reference.ts` reads the same call off a configured reference and compare
   `getOpenSubsonicExtensions` sat in the `UNIMPLEMENTED` registry with the reason "no
   extensions are advertised", so the **capability-discovery** call answered a failure —
   the one answer a client cannot act on, from a server whose every envelope carries
-  `openSubsonic: true` and therefore sends clients looking for it. It returns `[]` now, and
-  is the sole entry in `PUBLIC_ENDPOINTS`, because the protocol requires it to be reachable
-  without credentials; safe because the payload is a compile-time constant, asserted on the
-  whole envelope's key set so a future version string cannot reach an anonymous caller.
+  `openSubsonic: true` and therefore sends clients looking for it. It advertises
+  `songLyrics` v1 now, and is the sole entry in `PUBLIC_ENDPOINTS`, because the protocol
+  requires it to be reachable without credentials; safe because the payload is a
+  compile-time constant, asserted on the whole envelope's key set so a future version
+  string cannot reach an anonymous caller.
+- **An advertised extension is a promise another route has to keep.** `songLyrics` v1
+  promises `lang`, `synced` and millisecond `line.start` from `getLyricsBySongId`, and
+  that endpoint answers all three. `apiKeyAuthentication` stays unlisted — we
+  authenticate with `u` + `t`, and advertising it would be a claim about a credential path
+  this server does not have. The element needs `jsonArray: true` (the children at the key,
+  not wrapped under a repeated `openSubsonicExtension`) and `array: true` on `versions`
+  (or `[1]` collapses to `1`); both are the serializer's job and neither is the only shape
+  the schema allows. Asserted in `test/endpoints.test.ts` from the payload, because a list
+  that drifts from the product is worse than an empty one.
   `tokenInfo` was absent entirely, so a client holding a stored token got `code=70` from a
   server that had just authenticated that token. Both were found by reading the
   OpenSubsonic endpoint list against the registry — and **nothing in the suite asserted the

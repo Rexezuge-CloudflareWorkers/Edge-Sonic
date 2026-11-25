@@ -734,38 +734,31 @@ describe('system endpoints', () => {
    * asking it before it has any is exactly the case that mattered.
    */
   describe('getOpenSubsonicExtensions', () => {
-    it('answers with an empty list, which is the truthful answer for this server', async () => {
+    it('advertises `songLyrics` v1, the one extension this server implements', async () => {
       const { status, body } = await harness.rest('getOpenSubsonicExtensions');
       expect(status).toBe(200);
       expect(body['subsonic-response'].status).toBe('ok');
-      // An **array**, present and empty — not an absent key. A client doing
-      // `response.openSubsonicExtensions.length` throws on `undefined` and renders nothing
-      // on `[]`, which is the repo's "an absent value is a value" rule applied to the one
-      // call a client makes to decide what else it may ask for.
-      expect(body['subsonic-response'].openSubsonicExtensions).toEqual([]);
+      // A bare array of records at this key, not an object wrapping a repeated
+      // `openSubsonicExtension` child. `jsonArray` puts the children themselves there and
+      // `array` on `versions` keeps `[1]` from collapsing to `1` — the schema types it as a
+      // list, and a client iterating `versions` reads a number otherwise.
+      expect(body['subsonic-response'].openSubsonicExtensions).toEqual([{ name: 'songLyrics', versions: [1] }]);
     });
 
-    it('is an empty array rather than a nested or absent one', async () => {
-      // The three shapes this key can take, and only one is usable. `{}` gives a client
-      // reading `.length` `undefined`; `[[]]` is an array of one empty array, so `.length`
-      // is `1` and iterating it yields nothing. `[]` is the shape the protocol's own JSON
-      // uses, and the only one a client can act on.
-      const { body } = await harness.rest('getOpenSubsonicExtensions');
-      const value = body['subsonic-response'].openSubsonicExtensions;
-      expect(Array.isArray(value)).toBe(true);
-      expect(value).toHaveLength(0);
-    });
-
-    it('advertises no extension this server does not implement', async () => {
-      // The paired half. A list that drifts from the product is *worse* than an empty one:
-      // a client reads it as a promise, calls the extension, and gets `code=70` from a
-      // server that just said it would work. So the set is asserted empty, and adding an
-      // extension is a change to `OPEN_SUBSONIC_EXTENSIONS` **and** to this line.
+    it('advertises only extensions this server actually answers', async () => {
+      // The paired half, and the reason this is asserted from the payload rather than from
+      // the constant alone: a list that drifts from the product is *worse* than an empty
+      // one — a client reads it as a promise, calls the extension, and gets `code=70` from
+      // a server that just said it would work.
       //
-      // `apiKeyAuthentication` is the one worth naming: we authenticate with `u` + `t`, not
-      // with an `apiKey` parameter, so advertising it would be a claim about a credential
-      // path this server does not have.
-      expect(OPEN_SUBSONIC_EXTENSIONS).toEqual([]);
+      // `songLyrics` is a promise `getLyricsBySongId` keeps: `lang`, `synced` on every entry
+      // and millisecond `start` on every timed line. `apiKeyAuthentication` is the one worth
+      // naming as *absent* — we authenticate with `u` + `t`, not with an `apiKey` parameter,
+      // so advertising it would be a claim about a credential path this server does not have.
+      const { body } = await harness.rest('getOpenSubsonicExtensions');
+      const advertised = (body['subsonic-response'].openSubsonicExtensions as Array<{ name: string }>).map((entry) => entry.name);
+      expect(advertised).toEqual(['songLyrics']);
+      expect(OPEN_SUBSONIC_EXTENSIONS.map((entry) => entry.attrs?.name)).toEqual(['songLyrics']);
     });
 
     it('answers without credentials, because the protocol requires it to be public', async () => {
@@ -776,7 +769,7 @@ describe('system endpoints', () => {
       // No `u`, no `t`. Every other endpoint on this surface refuses this.
       expect(response.status).toBe(200);
       expect(body['subsonic-response'].status).toBe('ok');
-      expect(body['subsonic-response'].openSubsonicExtensions).toEqual([]);
+      expect(body['subsonic-response'].openSubsonicExtensions).toEqual([{ name: 'songLyrics', versions: [1] }]);
     });
 
     it('discloses nothing about the deployment, which is what makes it safe to be public', async () => {

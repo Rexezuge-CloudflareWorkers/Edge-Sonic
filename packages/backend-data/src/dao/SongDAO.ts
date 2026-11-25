@@ -116,6 +116,42 @@ class SongDAO extends BaseDAO {
     return await new SongIdLookupDAO(this.database, this.subrequests).findBySongId(id);
   }
 
+  /**
+   * The first song matching an artist and/or title, in a stable order.
+   *
+   * `getLyrics` has no id — the protocol lets a client ask by `artist` and `title` — so this
+   * is the legacy lookup. Both halves are `_ci` columns so the predicate does not lowercase
+   * a column in SQL; callers lowercase the terms before binding.
+   *
+   * `artistCi: null` means "no artist predicate", not "artist is NULL": a client that sends
+   * only a title is asking a narrower question, not asking for untagged tracks. A null
+   * `titleCi` matches nothing and returns `null`, because lyrics are keyed on the title and
+   * a title-less request is not a query.
+   *
+   * `ORDER BY library_id, path` makes the answer deterministic when two tracks share the
+   * pair. The legacy endpoint cannot express "which one", so the first in index order is
+   * the only defensible choice.
+   */
+  public async findByArtistAndTitle(scope: LibraryScope, artistCi: string | null, titleCi: string | null): Promise<SongRow | null> {
+    if (titleCi === null) return null;
+    const libraries = libraryScope(scope);
+    const where = [libraries.sql, 'title_ci = ?'];
+    const values: unknown[] = [...libraries.values, titleCi];
+    if (artistCi !== null) {
+      where.push('artist_ci = ?');
+      values.push(artistCi);
+    }
+
+    return await this.withRetry(
+      async () =>
+        await this.database
+          .prepare(`SELECT * FROM songs WHERE ${where.join(' AND ')} ORDER BY library_id, path LIMIT 1`)
+          .bind(...values)
+          .first<SongRow>(),
+      'songs.findByArtistAndTitle',
+    );
+  }
+
   public async listByDirectory(libraryId: string, dirPath: string): Promise<SongRow[]> {
     const result = await this.withRetry(
       async () =>

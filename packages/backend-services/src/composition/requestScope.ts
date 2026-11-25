@@ -38,6 +38,7 @@ import type { ScanDriver } from '../library/ScanDriver';
 import type { EnrichDriver } from '../library/EnrichDriver';
 import { ScanService } from '../index/ScanService';
 import { TreeService } from '../index/TreeService';
+import { LyricsService } from '../index/lyrics';
 import { EnrichmentService } from '../index/EnrichmentService';
 import type { RequestScopeEnv } from './serviceFactory';
 import { bindKeys } from './bindKeys';
@@ -228,6 +229,19 @@ function createRequestScope(
         upsertFileFacts: async (inputs) => (await scope.get(Tokens.SongDAO)()).upsertFileFacts(inputs),
       },
       clientFor,
+      timeoutMs: config.getWebdavTimeoutMs(),
+    }),
+  );
+
+  // Lyrics are re-derived from the origin and cached in KV, like artwork. The folder read
+  // is `TreeService.children` so a folder the index has never seen is materialized and
+  // persisted rather than costing a `PROPFIND` on every lyric request.
+  scope.bindValue(
+    Tokens.LyricsService,
+    new LyricsService({
+      cache: scope.get(Tokens.KvCache),
+      clientFor,
+      children: async (library, dirPath) => (await scope.get(Tokens.TreeService).children(library, dirPath)).children,
       timeoutMs: config.getWebdavTimeoutMs(),
     }),
   );

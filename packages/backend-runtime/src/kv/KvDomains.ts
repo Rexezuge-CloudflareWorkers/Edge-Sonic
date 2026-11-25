@@ -32,15 +32,17 @@
 // client that 404s on every inner path used to exhaust a whole day's budget in
 // ~40 minutes while answering every request correctly.
 //
-// Both live domains key on the file's own mtimeMs+size, so a re-tagged track's
+// Every live domain keys on the file's own mtimeMs+size, so a re-tagged track's
 // entry becomes unreachable when the file moves, while a rescan that finds
-// nothing new leaves every entry valid. A future aggregate-caching domain must
-// take scan_state.index_version as its first key part so superseded entries go
-// structurally unreachable.
+// nothing new leaves every entry valid. `songLyrics` extends that key with the
+// chosen sidecar's revision and the lyrics reader's version, because its answer
+// can come from a different file than the track. A future aggregate-caching
+// domain must take scan_state.index_version as its first key part so superseded
+// entries go structurally unreachable.
 
 import type { KvDomains } from '@rexezuge/runtime';
 
-type KvDomainName = 'songMeta' | 'albumArt';
+type KvDomainName = 'songMeta' | 'albumArt' | 'songLyrics';
 
 const KV_DOMAINS: KvDomains<KvDomainName> = {
   // `getSong` enrichment results (duration, bitrate, tags).
@@ -69,6 +71,19 @@ const KV_DOMAINS: KvDomains<KvDomainName> = {
     ttlSeconds: 2_592_000,
     maxValueBytes: 8 * 1024 * 1024,
     description: 'Album artwork bytes, keyed by the source track path and its mtime/size.',
+  },
+  // Lyrics text, from a sidecar or the track's own tags.
+  //
+  // Keyed like `albumArt` — the song's and the chosen sidecar's revisions, plus the lyrics
+  // reader's version — because lyrics are re-derived from the origin and never written to
+  // D1. 64 KiB holds several thousand lines; a value over it is a lyric file this cache
+  // declines to store rather than one the endpoint fails to serve. The negative answer is
+  // the same payload with no lines, which is what keeps an instrumental from re-reading
+  // every folder on every play.
+  songLyrics: {
+    ttlSeconds: 2_592_000,
+    maxValueBytes: 64 * 1024,
+    description: 'Lyrics text for one song, keyed by the song and sidecar revisions.',
   },
 };
 
