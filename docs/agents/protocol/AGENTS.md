@@ -24,10 +24,10 @@ and changing an endpoint's **kind** changes the split. Both now fail a test.
 
 | Map              | Entries | Answers                                                                 |
 | ---------------- | ------: | ----------------------------------------------------------------------- |
-| `IMPLEMENTED`    |      45 | the real thing                                                          |
+| `IMPLEMENTED`    |      47 | the real thing                                                          |
 | `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
 | `EMPTY_RESULT`   |       7 | an empty wrapper, after validating the request                          |
-| `ENDPOINT_NAMES` |      72 | —                                                                       |
+| `ENDPOINT_NAMES` |      74 | —                                                                       |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
 `code=70` from this registry is unreachable. It is still reached two other ways, both
@@ -105,6 +105,19 @@ compare-reference.ts` reads the same call off a configured reference and compare
   (whether the lines carry offsets) and millisecond `line.start`. `line` is flagged
   `array: true` **per child**, because a one-line lyric would otherwise collapse to a bare
   object and a client iterating it would read its keys.
+- **"Similar" is a local claim, and the two spellings have different wrapper names.**
+  `getSimilarSongs` and `getSimilarSongs2` used to be absent for want of last.fm; they are
+  implemented in `similar.ts` from shared genres in the index, which is a narrower claim
+  than the reference server's and is stated as such. The first accepts an artist, album or
+  song id, the second an artist id only — but both rank the same candidates from the same
+  signals, and both validate the id before answering. An absent id is `code=70`, not
+  `code=10`: an id here is a selector, so "no id" and "bad id" are the same request. The
+  wrappers are `similarSongs` and `similarSongs2`, each with `song` children; naming either
+  after its endpoint answers `200` with a field no client reads. The answer is
+  **deterministic** — seed artist first, then shared-genre count — rather than the spec's
+  "random": a radio queue a client can reproduce, and a response a test can assert. An
+  empty answer is a present wrapper with no `song` key; a seed song is excluded only from
+  its own list, while an artist seed includes that artist's own songs.
 - **The wrapper element's name is not the endpoint's name.** **Every** empty-result
   wrapper differs — `getShares` answers `<shares>`, `getArtistInfo2` answers `<artistInfo2>`
   — and naming one after its endpoint answers `200` with the payload under the wrong key,

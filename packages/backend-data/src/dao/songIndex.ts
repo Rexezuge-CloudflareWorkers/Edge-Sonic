@@ -17,7 +17,7 @@
  * request. What this file does is make the SQL grouping and the TypeScript grouping **the same
  * function of the same columns**, which is the property every bug below was a violation of.
  */
-import { BaseDAO } from './BaseDAO';
+import { SongSimilarDAO } from './songSimilar';
 import { chunkArray } from './chunking';
 import { bindChunkSize } from './sqlLimits';
 import { albumKeySpec, specFromKey } from '@edge-sonic/subsonic';
@@ -82,7 +82,7 @@ interface GenreCountRow {
   readonly album_count: number;
 }
 
-class SongIndexDAO extends BaseDAO {
+class SongIndexDAO extends SongSimilarDAO {
   /**
    * A page of albums, as every row of every album on that page.
    *
