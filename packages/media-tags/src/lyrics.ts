@@ -168,7 +168,10 @@ function decodeUsltPayload(bytes: Uint8Array, start: number, length: number): st
         : encoding === 2
           ? new TextDecoder('utf-16be').decode(body)
           : new TextDecoder('utf-8').decode(body);
-  const cleaned = text.replace(/^\uFEFF/, '').replace(/\s+$/, '');
+  // `trimEnd` rather than `/\s+$/`: the anchored-at-the-end quantifier is quadratic on a
+  // lyric with a long interior whitespace run followed by a non-space, and the bytes are
+  // uncontrolled. Both use the ECMAScript whitespace set, so the answer is unchanged.
+  const cleaned = text.replace(/^\uFEFF/, '').trimEnd();
   return cleaned.trim().length > 0 ? cleaned : null;
 }
 

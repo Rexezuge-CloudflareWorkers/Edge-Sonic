@@ -295,7 +295,7 @@
   "test/queue-consumer.test.ts": 114,
   "test/queue-cron.test.ts": 114,
   "test/rate-limit.test.ts": 579,
-  "test/redos-linear-parsing.test.ts": 595,
+  "test/redos-linear-parsing.test.ts": 702,
   "test/scan-budget.test.ts": 1238,
   "test/scan-convergence.test.ts": 1208,
   "test/scan-do.test.ts": 504,

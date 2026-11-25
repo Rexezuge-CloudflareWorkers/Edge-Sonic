@@ -1,12 +1,13 @@
 /**
- * The two untrusted-input parsers cannot be quadratic.
+ * The three untrusted-input parsers cannot be quadratic.
  *
  * ### What is asserted, and what is not
  *
- * Two functions read a string that came off the wire and used a regular expression on it:
- * `toLibraryPath` (a `DAV:href`, in `packages/webdav`) and `fromFlatAlbumFolder` (a
- * directory name, in `packages/backend-data`). CodeQL reported both as *polynomial regular
- * expression used on uncontrolled data*, and both are genuinely quadratic — not
+ * Three functions read a string that came off the wire and used a regular expression on it:
+ * `toLibraryPath` (a `DAV:href`, in `packages/webdav`), `fromFlatAlbumFolder` (a directory
+ * name, in `packages/backend-data`), and `readEmbeddedLyrics` (an ID3 `USLT` tag's decoded
+ * lyric text, in `packages/media-tags`). CodeQL reported all three as *polynomial regular
+ * expression used on uncontrolled data*, and all three are genuinely quadratic — not
  * exponentially so, which is the shape every linter looks for, but quadratically:
  *
  *     n           \s+[-–—]\s+     /\/+$/ on an interior run
@@ -15,33 +16,38 @@
  *     40,000        1,741 ms               1,245 ms
  *     100,000      10,891 ms               7,774 ms
  *
- * Four times the work per doubling, on both. The mechanism is the same in each: an
- * **unbounded quantifier followed by a character that can fail**, with the scan unanchored.
- * For each of the *n* start positions inside a run of *n* identical characters, the engine
- * retries every length the run could have, so the cost is the *square* of the run rather
- * than its length.
+ * Four times the work per doubling, on each. The third, `/\s+$/` from the lyrics decoder,
+ * measured on the same machine at 4,000 / 8,000 / 16,000 / 32,000 spaces in an interior run
+ * followed by a non-space: 12 / 47 / 188 / 755 ms — the same quadrupling. The mechanism is
+ * the same in all three: an **unbounded quantifier followed by a character that can fail**,
+ * with the scan unanchored at the start. For each of the *n* start positions inside a run of
+ * *n* identical characters, the engine retries every length the run could have, so the cost
+ * is the *square* of the run rather than its length.
  *
- * Neither function needs the whole run. `stripSlashes` walks in from each end and stops at
+ * None of the three needs the whole run. `stripSlashes` walks in from each end and stops at
  * the first non-slash. `findAlbumSeparator` walks left to right and stops at the first
  * dash-like character with whitespace on both sides — and because both sides of the split
  * are `.trim()`ed by the caller, the *extent* of the whitespace runs cannot change the
  * answer, which is what lets it answer with the dash's own index and never measure a run.
+ * `decodeUsltPayload` now uses `trimEnd`, which walks back from the end once and stops at
+ * the first non-whitespace.
  *
  * ### Why this is a measurement and not a lint rule
  *
  * Because `pnpm run lint` already runs `eslint-plugin-regexp`'s
- * `no-super-linear-backtracking` and `sonarjs`'s `slow-regex`, and **neither fires on either
- * of these.** Probed directly:
+ * `no-super-linear-backtracking` and `sonarjs`'s `slow-regex`, and **neither fires on any of
+ * these three.** Probed directly:
  *
  *     /^(a+)+$/        both fire      (exponential — the shape they look for)
  *     /\s+[-–—]\s+/    slow-regex     (quadratic)
  *     /\/+$/           neither         (quadratic)
+ *     /\s+$/           neither         (quadratic — probed the same way)
  *
- * So the repository was lint-clean over a live denial of service, and the only instrument
- * that found it was CodeQL, which is not a test and does not run on every commit. The
- * assertions below are what makes this class visible locally. There is no lint rule for
- * "quadratic in the input", which is why the timing assertions are load-bearing rather than
- * belt-and-braces.
+ * So the repository was lint-clean over three live denial-of-service paths, and the only
+ * instrument that found them was CodeQL, which is not a test and does not run on every
+ * commit. The assertions below are what makes this class visible locally. There is no lint
+ * rule for "quadratic in the input", which is why the timing assertions are load-bearing
+ * rather than belt-and-braces.
  *
  * ### Why the references are `new RegExp` and not literals
  *
@@ -57,6 +63,7 @@ import { describe, expect, it } from 'vitest';
 
 import { deriveFromPath } from '@edge-sonic/backend-data/dao';
 import { DERIVED_MARKER } from './helpers/harness';
+import { readEmbeddedLyrics } from '@edge-sonic/media-tags';
 import { toLibraryPath } from '@edge-sonic/webdav';
 
 /**
@@ -590,5 +597,105 @@ describe('fuzzed against the oracle', () => {
       const observed = derivedNames(input);
       expect(observed, `input ${JSON.stringify(input)}`).toEqual(oracle);
     }
+  });
+});
+
+/**
+ * The third pattern, rebuilt from a string for the same reason as the other two: CodeQL
+ * scans `test/` too, and a literal `/\s+$/` here would re-open the finding this file closes.
+ *
+ * `$` anchors the match's end but not its start, so `\s+` is tried from every position
+ * inside a run. A trailing run that matches is fast-pathed by V8; it is the *interior* run
+ * that ends in a non-space where every attempted length fails `$`, and that is the shape
+ * fed through the public seam below.
+ */
+/* eslint-disable-next-line prefer-regex-literals -- a literal here would re-trip CodeQL's own query */
+const QUADRATIC_TRAILING_WHITESPACE = new RegExp(String.raw`\s+$`);
+
+function concatBytes(...parts: readonly (readonly number[])[]): number[] {
+  return parts.flat();
+}
+
+/**
+ * An ID3v2.4 file carrying one `USLT` frame, written from the frame layout rather than from
+ * the reader: header, syncsafe tag size, frame id, syncsafe frame size, flags, encoding byte,
+ * three-byte language, a single-byte-terminated descriptor, then the lyric. Encoding 0 is
+ * Latin-1, so `charCodeAt(0)` is the exact byte mapping; the BOM cases use UTF-8 (3), whose
+ * bytes are written with `TextEncoder` rather than shared with the decoder.
+ */
+function usltFile(lyric: string, encoding = 0): Uint8Array {
+  const asciiBytes = (text: string): number[] => [...text].map((char) => char.charCodeAt(0));
+  const syncsafe = (value: number): number[] => [(value >>> 21) & 0x7f, (value >>> 14) & 0x7f, (value >>> 7) & 0x7f, value & 0xff];
+  // Latin-1 folds U+FEFF to 0xff, so the BOM cases are written as UTF-8 (encoding 3).
+  const body = encoding === 0 ? asciiBytes(lyric) : [...new TextEncoder().encode(lyric)];
+  const payload = concatBytes([encoding], asciiBytes('eng'), [0x00], body);
+  const frame = concatBytes(asciiBytes('USLT'), syncsafe(payload.length), [0, 0], payload);
+  return Uint8Array.from(concatBytes(asciiBytes('ID3'), [4, 0, 0], syncsafe(frame.length), frame));
+}
+
+/**
+ * "Trailing whitespace removed", derived from the definition rather than from `trimEnd`.
+ *
+ * Walk back once from the end while the character is whitespace. The whitespace test uses
+ * the engine's own `\s` rather than a hand-copied list of code points, because a copied list
+ * is exactly the fixture that would agree with a wrong reader. One character at a time is
+ * linear, which is the point: the oracle cannot have the defect it is meant to catch.
+ */
+function trimTrailingWhitespaceOracle(text: string): string {
+  let end = text.length;
+  while (end > 0 && /\s/.test(text.charAt(end - 1))) end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * The decoder strips a leading BOM before the trailing whitespace, in that order.
+ * Keeping the oracle in that same order keeps the comparison about the trim, not the BOM.
+ */
+function cleanedOracle(text: string): string {
+  return trimTrailingWhitespaceOracle(text.startsWith('\uFEFF') ? text.slice(1) : text);
+}
+
+describe('embedded lyric trailing whitespace stays linear', () => {
+  it.each([
+    ['a plain lyric', 'la la la', 'la la la', 0],
+    ['spaces, a tab and a newline at the end', 'la la la \t\n', 'la la la', 0],
+    ['a leading BOM, stripped before the trim', '\uFEFFla la la', 'la la la', 3],
+    ['a trailing BOM, which `\\s` covers too', 'la la la\uFEFF', 'la la la', 3],
+    ['whitespace only, which is no lyric at all', ' \t\n', null, 0],
+  ])('decodes %s', (_reason, lyric, expected, encoding) => {
+    const observed = readEmbeddedLyrics(usltFile(lyric, encoding));
+    expect(observed).toBe(expected);
+    expect(observed).toBe(cleanedOracle(lyric).trim().length > 0 ? cleanedOracle(lyric) : null);
+  });
+
+  it('matches the oracle on a hostile interior run of spaces with a trailing non-space', () => {
+    // The adversarial shape, and every part of it is load-bearing:
+    //
+    // - A run that *ends* the string matches `\s+$` on its first attempt and costs nothing,
+    //   so a long trailing run is not the case to assert. The run must be followed by a
+    //   non-space for `$` to fail at every attempted length.
+    // - A real character before the run keeps the answer distinguishable: a reader that
+    //   stopped early would answer differently from the one that walked the whole line.
+    const hostile = `a${' '.repeat(HOSTILE_LENGTH)}b`;
+    let observed: string | null = null;
+    const elapsedMs = bestOfFiveMs(() => {
+      observed = readEmbeddedLyrics(usltFile(hostile));
+    });
+
+    expect(observed).toBe(hostile);
+    expect(observed).toBe(cleanedOracle(hostile));
+    expect(elapsedMs).toBeLessThan(LINEAR_BUDGET_MS);
+  });
+
+  it('the hostile input was genuinely adversarial, and the gap is orders of magnitude', () => {
+    // The teeth for the budget above, for the same reason as the other two: without a
+    // measured ratio, `LINEAR_BUDGET_MS` is a number nobody has checked against the thing
+    // it excludes. At 16,000 spaces the old pattern costs ~190 ms a call while the oracle
+    // is measured in microseconds.
+    const hostile = `a${' '.repeat(HOSTILE_LENGTH / 2.5)}b`;
+    const quadratic = bestOfFiveMs(() => hostile.replace(QUADRATIC_TRAILING_WHITESPACE, ''));
+    const linear = bestOfFiveMs(() => trimTrailingWhitespaceOracle(hostile));
+
+    expect(quadratic).toBeGreaterThan(linear * 50);
   });
 });
