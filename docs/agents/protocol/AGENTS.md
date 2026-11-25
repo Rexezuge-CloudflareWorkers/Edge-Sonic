@@ -24,9 +24,9 @@ and changing an endpoint's **kind** changes the split. Both now fail a test.
 
 | Map              | Entries | Answers                                                                 |
 | ---------------- | ------: | ----------------------------------------------------------------------- |
-| `IMPLEMENTED`    |      47 | the real thing                                                          |
+| `IMPLEMENTED`    |      51 | the real thing                                                          |
 | `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
-| `EMPTY_RESULT`   |       7 | an empty wrapper, after validating the request                          |
+| `EMPTY_RESULT`   |       3 | an empty wrapper, after validating the request                          |
 | `ENDPOINT_NAMES` |      74 | —                                                                       |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
@@ -118,6 +118,23 @@ compare-reference.ts` reads the same call off a configured reference and compare
   "random": a radio queue a client can reproduce, and a response a test can assert. An
   empty answer is a present wrapper with no `song` key; a seed song is excluded only from
   its own list, while an artist seed includes that artist's own songs.
+- **Info is a local claim, and the repeated child is named after the field.** The four info
+  panels used to be table entries promising empty wrappers; `endpoints/info.ts` now reads
+  `DESCRIPTION`/`COMMENT` and MusicBrainz ids from the track's own tags and ranks similar
+  artists from shared genres. Both album spellings answer `albumInfo`, the two artist
+  spellings their own wrappers, and the repeated child element is `similarArtist` — the
+  field name, **not** the element type (`artist`/`ArtistID3`). Building it as `artist` puts
+  the records under `artist` in JSON and leaves `similarArtist` absent, which reads as "no
+  similar artists" rather than "wrong key". The two spellings also publish **different
+  element types**: `artistInfo.similarArtist` is `Array of artist` and carries no
+  `coverArt`/`albumCount`; `artistInfo2.similarArtist` is `Array of ArtistID3` and does.
+  One builder serving both is the `AlbumID3.title`/`isDir` defect again.
+- **A field this server cannot answer is absent, not an empty default.** `lastFmUrl` and the
+  three `*ImageUrl` fields are omitted from every info panel: there is no last.fm integration,
+  and a `/rest/getCoverArt` URL without credentials would 401 on fetch. Clients already draw
+  images from the `coverArt` ids albums and artists publish. `notes`/`biography`/`musicBrainzId`
+  are likewise omitted when the tags carry none — an empty string is a claim that the field is
+  supported and empty, not that it was never read.
 - **The wrapper element's name is not the endpoint's name.** **Every** empty-result
   wrapper differs — `getShares` answers `<shares>`, `getArtistInfo2` answers `<artistInfo2>`
   — and naming one after its endpoint answers `200` with the payload under the wrong key,

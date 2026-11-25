@@ -39,6 +39,7 @@ import type { EnrichDriver } from '../library/EnrichDriver';
 import { ScanService } from '../index/ScanService';
 import { TreeService } from '../index/TreeService';
 import { LyricsService } from '../index/lyrics';
+import { EntityInfoService } from '../index/entityInfo';
 import { EnrichmentService } from '../index/EnrichmentService';
 import type { RequestScopeEnv } from './serviceFactory';
 import { bindKeys } from './bindKeys';
@@ -242,6 +243,18 @@ function createRequestScope(
       cache: scope.get(Tokens.KvCache),
       clientFor,
       children: async (library, dirPath) => (await scope.get(Tokens.TreeService).children(library, dirPath)).children,
+      timeoutMs: config.getWebdavTimeoutMs(),
+    }),
+  );
+
+  // Info is re-derived from the origin and cached in KV, like lyrics. Nothing reaches D1:
+  // a failed read is reported as absent and cached as nothing, so a transient failure cannot
+  // become a month-long "this album has no notes".
+  scope.bindValue(
+    Tokens.EntityInfoService,
+    new EntityInfoService({
+      cache: scope.get(Tokens.KvCache),
+      clientFor,
       timeoutMs: config.getWebdavTimeoutMs(),
     }),
   );

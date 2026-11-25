@@ -40,6 +40,16 @@ one-byte scan cuts it in half and shifts the text.
 Tested in `test/media-tags-lyrics.test.ts`, where every container is laid out from its
 specification and the comment list is decoded back independently before the reader sees it.
 
+## Info shares the bytes, but not the reader version
+
+`readEmbeddedInfo` extracts `DESCRIPTION`/`COMMENT`/`NOTES` and the album/artist MusicBrainz
+ids for the four info endpoints, from the same bounded prefix. `INFO_READER_VERSION` is
+separate from both `READER_VERSION` and `LYRICS_READER_VERSION`: info is cached in KV and never
+written to D1, so a corrected extractor only has to orphan its own entries. ID3's `COMM`,
+`TXXX` and `USLT` frames share `id3Text.ts`'s frame-size, encoding and descriptor-terminator
+rules — one implementation, because two copies of a byte-layout rule are free to disagree on
+encodings that no ASCII fixture exercises. Tested in `test/media-tags-info.test.ts`.
+
 ## An Ogg page is not a packet
 
 Packets are delimited by the **segment table**: a packet ends where a lacing entry is below

@@ -148,4 +148,4 @@ async function getSimilarSongs2(context: RestContext): Promise<EnvelopeResponse>
 
 const similarEndpoints = { getSimilarSongs, getSimilarSongs2 };
 
-export { similarEndpoints, getSimilarSongs, getSimilarSongs2 };
+export { similarEndpoints, getSimilarSongs, getSimilarSongs2, signalsOf };

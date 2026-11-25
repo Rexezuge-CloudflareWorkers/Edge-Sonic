@@ -44,3 +44,5 @@ export { embeddedAlbumArt, pictureFromFile, ART_TRACK_LIMIT, ART_PREFIX_BYTES, A
 export type { ArtSource, EmbeddedArtDeps, ResolvedArt } from './embeddedArt';
 export { LyricsService, chooseSidecar, lyricsKey, LYRICS_PREFIX_BYTES, LYRICS_SIDECAR_BYTES } from './lyrics';
 export type { CachedLyrics, LyricsDeps, LyricsSong, ResolvedLyrics } from './lyrics';
+export { EntityInfoService, INFO_PREFIX_BYTES, infoKey } from './entityInfo';
+export type { EntityInfoDeps, InfoSong, ResolvedInfo } from './entityInfo';

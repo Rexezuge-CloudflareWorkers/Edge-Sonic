@@ -42,7 +42,7 @@
 
 import type { KvDomains } from '@rexezuge/runtime';
 
-type KvDomainName = 'songMeta' | 'albumArt' | 'songLyrics';
+type KvDomainName = 'songMeta' | 'albumArt' | 'songLyrics' | 'entityInfo';
 
 const KV_DOMAINS: KvDomains<KvDomainName> = {
   // `getSong` enrichment results (duration, bitrate, tags).
@@ -84,6 +84,15 @@ const KV_DOMAINS: KvDomains<KvDomainName> = {
     ttlSeconds: 2_592_000,
     maxValueBytes: 64 * 1024,
     description: 'Lyrics text for one song, keyed by the song and sidecar revisions.',
+  },
+  // Album notes and artist biographies read from a track's tags, for the four info
+  // endpoints. Never written to D1, so the key carries the info reader's version rather
+  // than the row's: a corrected extractor makes superseded entries unreachable without
+  // re-reading the whole library. A prose comment is bounded well below 64 KiB.
+  entityInfo: {
+    ttlSeconds: 2_592_000,
+    maxValueBytes: 64 * 1024,
+    description: 'Album and artist info read from a track tags, keyed by the file revision.',
   },
 };
 

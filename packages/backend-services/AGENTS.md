@@ -588,6 +588,17 @@ shape is correct on `/user` — and matching it is what removed a split-brain wh
 rate limiter's 429 emitted `Exception` while every other user error emitted
 `{error:{code,message}}`. One surface, one dialect, one decoder.
 
+## Info
+
+`index/entityInfo.ts` is the service behind all four album/artist info endpoints. It reads
+notes/biographies and MusicBrainz ids from a track's bounded prefix and caches them in the
+`entityInfo` KV domain, keyed by the file's revision and `INFO_READER_VERSION`. Like lyrics,
+nothing is written to D1: a corrected reader makes old entries unreachable instead of
+re-reading every file in the library. The negative entry is written only when the ranged read
+completed — a `503` remembered as "no notes" would survive every retry until the file moved.
+One service behind four endpoints is what keeps the two spellings of each question from
+disagreeing about which file was read; `Tokens.EntityInfoService` is the binding.
+
 ## Composition
 
 `composition/requestScope.ts` (`createRequestScope`) is the composition root: table-driven

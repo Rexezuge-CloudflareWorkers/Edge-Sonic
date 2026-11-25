@@ -15,7 +15,7 @@ import type { LibraryService } from '@edge-sonic/backend-services/library';
 import type { TreeService } from '@edge-sonic/backend-services/index';
 import type { MediaStub } from '../workers/scanStubs';
 import type { ScanDriver } from '@edge-sonic/backend-services/library';
-import type { EnrichmentService, LyricsService } from '@edge-sonic/backend-services/index';
+import type { EnrichmentService, LyricsService, EntityInfoService } from '@edge-sonic/backend-services/index';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, PlayCountDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
@@ -58,6 +58,11 @@ interface RestContext {
    * precedence and the cache key cannot differ between the legacy and OpenSubsonic shapes.
    */
   readonly lyrics: LyricsService;
+  /**
+   * Album notes and artist biographies, from a track's tags. All four info endpoints share
+   * it, so the two spellings of each question cannot disagree about which file was read.
+   */
+  readonly entityInfo: EntityInfoService;
   /**
    * The per-library media worker stub, or `null` when no `MEDIA_DO` binding is
    * configured. **Separate from the scan driver**, and not an aesthetic choice:

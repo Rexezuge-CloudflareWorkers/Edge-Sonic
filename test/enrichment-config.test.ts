@@ -1528,13 +1528,13 @@ describe('KvCache domain policy', () => {
     // next person reads it as evidence the strategy is in force. So the domains are gone
     // and what the header now says is the rule with **no live example**, which is what is
     // actually true.
-    expect(Object.keys(KV_DOMAINS).sort()).toEqual(['albumArt', 'songLyrics', 'songMeta']);
+    expect(Object.keys(KV_DOMAINS).sort()).toEqual(['albumArt', 'entityInfo', 'songLyrics', 'songMeta']);
 
     // Every surviving domain is keyed by its own file's revision, not by scan version —
-    // the `songMeta` rule. `songLyrics` is the third: a lyric is re-derived from the
-    // origin, and its key carries the song's revision, the chosen sidecar's revision and
-    // the lyrics reader's own counter. A domain that caches a *derived aggregate* is the
-    // case the version-in-key rule is for, and there is none.
+    // the `songMeta` rule. `songLyrics` and `entityInfo` are the third and fourth: both are
+    // re-derived from the origin, and both keys carry the song's revision and their own
+    // reader counter (plus the chosen sidecar's revision for lyrics). A domain that caches
+    // a *derived aggregate* is the case the version-in-key rule is for, and there is none.
     const store = fakeKv();
     const cache = createKvCache(store.ns);
     await cache.putBytes('albumArt', ['L1', 'Bon Iver/For Emma', '1000x5000'], new Uint8Array([1, 2, 3]));

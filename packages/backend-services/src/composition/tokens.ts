@@ -34,6 +34,7 @@ import type { ScanService } from '../index/ScanService';
 import type { LibraryEnrichmentService } from '../index/libraryEnrichment';
 import type { TreeService } from '../index/TreeService';
 import type { LyricsService } from '../index/lyrics';
+import type { EntityInfoService } from '../index/entityInfo';
 import type { ImportSourceService } from '../import/sourceService';
 import type { EnrichmentService } from '../index/EnrichmentService';
 
@@ -161,6 +162,11 @@ const Tokens = {
    * gets wrong. Both lyric endpoints share it; neither knows where the text came from.
    */
   LyricsService: Symbol('LyricsService') as Token<LyricsService>,
+  /**
+   * Album notes and artist biographies, from a track's tags, cached in KV. One service behind
+   * all four info endpoints so the two spellings of each question cannot disagree.
+   */
+  EntityInfoService: Symbol('EntityInfoService') as Token<EntityInfoService>,
   ScanService: Symbol('ScanService') as Token<ScanService>,
   /**
    * How **this deployment** advances a library's index — one `ScanDriver` strategy, chosen once.

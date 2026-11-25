@@ -289,6 +289,54 @@ async function compare(config: Config): Promise<Difference[]> {
 }
 
 /**
+ * Ids from each server's own browse, for endpoints that cannot be compared with a shared
+ * parameter. An id from one server is meaningless to the other, so supplying one to both
+ * would compare two not-found envelopes and report agreement about nothing.
+ */
+async function drillId(server: Config['reference'], source: 'album' | 'artist'): Promise<string | null> {
+  const endpoint = source === 'album' ? 'getAlbumList2' : 'getArtists';
+  const params: Record<string, string> = source === 'album' ? { type: 'alphabeticalByName', size: '1' } : {};
+  const body = (await call(server, endpoint, params, true)) as Record<string, unknown>;
+  const envelope = body['subsonic-response'] as Record<string, unknown>;
+  if (source === 'album') {
+    const list = envelope['albumList2'] as { album?: Array<{ id: string }> } | undefined;
+    return list?.album?.[0]?.id ?? null;
+  }
+  const artists = envelope['artists'] as { index?: Array<{ artist?: Array<{ id: string }> }> } | undefined;
+  return artists?.index?.find((index) => (index.artist?.length ?? 0) > 0)?.artist?.[0]?.id ?? null;
+}
+
+/**
+ * The four info panels, drilled per server.
+ *
+ * A note here is a field a client would hit: the wrapper, the repeated `similarArtist`
+ * element and the two different artist element types are all invisible from inside this
+ * repository, which is why the script exists.
+ */
+async function compareInfo(config: Config): Promise<Difference[]> {
+  const differences: Difference[] = [];
+  for (const [endpoint, source] of [
+    ['getAlbumInfo2', 'album'],
+    ['getArtistInfo2', 'artist'],
+  ] as const) {
+    const [referenceId, edgeId] = await Promise.all([drillId(config.reference, source), drillId(config.edge, source)]);
+    if (referenceId === null || edgeId === null) continue;
+    const [reference, edge] = await Promise.all([
+      call(config.reference, endpoint, { id: referenceId }, config.json),
+      call(config.edge, endpoint, { id: edgeId }, config.json),
+    ]);
+    const referenceBody = (reference as Record<string, unknown>)['subsonic-response'] as Record<string, unknown> | undefined;
+    const edgeBody = (edge as Record<string, unknown>)['subsonic-response'] as Record<string, unknown> | undefined;
+    if (!referenceBody || !edgeBody) {
+      differences.push({ endpoint, what: 'not an envelope', detail: `reference=${describe(reference)} edge=${describe(edge)}` });
+      continue;
+    }
+    differences.push(...compareOne(`${endpoint} (drilled)`, referenceBody, edgeBody));
+  }
+  return differences;
+}
+
+/**
  * The XML root's namespace, which JSON cannot show.
  *
  * Checked separately because it is invisible to every other assertion in this file:
@@ -316,7 +364,7 @@ async function main(): Promise<void> {
   for (const note of await compareNamespace(config)) console.log(note);
   console.log('');
 
-  const differences = await compare(config);
+  const differences = [...(await compare(config)), ...(await compareInfo(config))];
   if (differences.length === 0) {
     console.log('no differences in attribute key sets');
     return;

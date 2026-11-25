@@ -24,9 +24,11 @@
  *   `lyrics.ts`, which answers `{"lyrics":{"value":""}}` for a track with none — the same
  *   shape Navidrome answers.
  *
- * Similarity is answered locally, from shared genres in the index (`similar.ts`), so it is
- * no longer absent for want of last.fm. The remaining last.fm panels are empty results
- * rather than failures; "no such integration" and "nothing to say" are still different claims.
+ * Similarity is answered locally, from shared genres in the index (`similar.ts`), and the
+ * four info panels (`info.ts`) read notes and identifiers from the track's own tags. Both
+ * are narrower claims than last.fm's, stated rather than hidden behind a failure or an
+ * empty result. The remaining absent panels are still empty results rather than failures;
+ * "no such integration" and "nothing to say" are different claims.
  *
  * Transcoding is a separate matter: `stream` and `download` **are** implemented and
  * simply ignore `maxBitRate`/`format`, serving the original bytes with the
@@ -47,6 +49,7 @@ import { stateEndpoints } from './state';
 import { userEndpoints } from './users';
 import { lyricsEndpoints } from './lyrics';
 import { similarEndpoints } from './similar';
+import { infoEndpoints } from './info';
 
 /**
  * A handler returns either a finished `Response` (a binary endpoint such as
@@ -175,50 +178,22 @@ interface EmptyEndpoint {
   readonly reason: string;
 }
 
-const ALBUM_INFO: EmptyEndpoint = {
-  wrapper: 'albumInfo',
-  listKeys: null,
-  idKinds: ['al', 'alk', 's'],
-  requiredParams: [],
-  reason: 'last.fm album info is not configured',
-};
-
 /**
  * Endpoints that work and have nothing to say.
  *
- * Not failures at all, which is why they are in neither `IMPLEMENTED` (they are not in
- * `system.ts`) nor `UNIMPLEMENTED`: a client calling `getArtistInfo` must render an empty
- * panel, and `code=70` told it the server had failed. Navidrome answers `{"topSongs":{}}`.
+ * Not failures at all, which is why they are in neither `IMPLEMENTED` nor `UNIMPLEMENTED`:
+ * a client calling `getInternetRadioStations` must render an empty panel, and `code=70` told
+ * it the server had failed. Navidrome answers `{"topSongs":{}}`.
  *
- * `getLyrics` used to live here and now does not: it is implemented in `lyrics.ts`, which
- * answers `{"lyrics":{"value":""}}` — the same shape, from the endpoint that actually reads
- * the tags and sidecars rather than a table promising it would not.
+ * Four endpoints used to live here and now do not: `getLyrics`/`getLyricsBySongId` are
+ * implemented in `lyrics.ts` from sidecars and tags; the two `getAlbumInfo` and two
+ * `getArtistInfo` spellings are implemented in `info.ts`, reading notes and MusicBrainz ids
+ * from the track's tags and ranking similar artists from the index. A table entry promising
+ * an empty payload is a promise a real implementation can keep better than a placeholder.
  *
- * `getArtistInfo`, `getAlbumInfo` and `getTopSongs` are here despite having no last.fm
- * integration, because their panels render from an empty result. Both `getSimilarSongs`
- * spellings are implemented in `similar.ts`, answering from shared genres in the index.
  * `reason` is what would be reviewed if one of these moved.
  */
 const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
-  // `getArtistInfo` takes an artist **or** an album id, per the protocol, so both are
-  // accepted and neither is demanded.
-  getArtistInfo: {
-    wrapper: 'artistInfo',
-    listKeys: ['biography', 'similarArtist'],
-    idKinds: ['ar', 'al'],
-    requiredParams: [],
-    reason: 'last.fm artist info is not configured',
-  },
-  getArtistInfo2: {
-    wrapper: 'artistInfo2',
-    listKeys: ['biography', 'similarArtist'],
-    idKinds: ['ar'],
-    requiredParams: [],
-    reason: 'last.fm artist info is not configured',
-  },
-  // Both spellings answer under `albumInfo`; Navic calls `getAlbumInfo2` on every album screen.
-  getAlbumInfo: ALBUM_INFO,
-  getAlbumInfo2: ALBUM_INFO,
   // Keyed on an artist *name*, so there is no id to resolve and nothing to validate.
   getTopSongs: {
     wrapper: 'topSongs',
@@ -259,6 +234,7 @@ const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {
   ...userEndpoints,
   ...lyricsEndpoints,
   ...similarEndpoints,
+  ...infoEndpoints,
 };
 
 /**

@@ -138,4 +138,6 @@ export { findPicture, materializePicture, resolveImageBytes, id3TagSize, sniffIm
 export { LYRICS_READER_VERSION, LYRICS_TAGS, readEmbeddedLyrics } from './lyrics';
 export { decodeLyricsText, parseLyricsText } from './lyricsText';
 export type { LyricsLine, ParsedLyrics } from './lyricsText';
+export { INFO_READER_VERSION, NOTE_TAGS, readEmbeddedInfo } from './info';
+export type { EmbeddedInfo } from './info';
 export type { EmbeddedPicture, PictureSource, PictureRange, OggCommentRange, PictureReader, PictureLimits } from './picture';
