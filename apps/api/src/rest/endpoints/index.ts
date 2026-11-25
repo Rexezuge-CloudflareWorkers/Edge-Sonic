@@ -6,7 +6,7 @@
  *
  * ### Endpoints this server does not have, and how each says so
  *
- * Videos, podcasts, shares, jukebox, chat, internet radio, last.fm info and lyrics are not
+ * Videos, podcasts, shares, jukebox, chat, internet radio and last.fm info are not
  * implemented — and **"not implemented" is three different answers**, because a client
  * acts on each differently. They used to be one list answering `code=70`, which fit none:
  *
@@ -19,8 +19,10 @@
  *   of the three that is a statement about the *caller* rather than the server.
  * - **`empty`** — the endpoint exists, works, and has nothing to report, so it answers its
  *   own wrapper with no items. Not a failure at all, and `code=70` was actively wrong here:
- *   a client calling `getLyrics` for a track with no lyrics must render "no lyrics", not an
- *   error. Navidrome answers `{"lyrics":{"value":""}}`.
+ *   a client calling `getArtistInfo` for an unconfigured integration must render an empty
+ *   panel, not an error. Lyrics used to be the other example and are now implemented in
+ *   `lyrics.ts`, which answers `{"lyrics":{"value":""}}` for a track with none — the same
+ *   shape Navidrome answers.
  *
  * The rest are absent for want of an external service — last.fm similarity — and keep
  * `code=70`, because "no such integration" and "nothing to say" are different claims.
@@ -42,6 +44,7 @@ import { mediaEndpoints } from './media';
 import { annotationEndpoints } from './annotations';
 import { stateEndpoints } from './state';
 import { userEndpoints } from './users';
+import { lyricsEndpoints } from './lyrics';
 
 /**
  * A handler returns either a finished `Response` (a binary endpoint such as
@@ -182,9 +185,12 @@ const ALBUM_INFO: EmptyEndpoint = {
  * Endpoints that work and have nothing to say.
  *
  * Not failures at all, which is why they are in neither `IMPLEMENTED` (they are not in
- * `system.ts`) nor `UNIMPLEMENTED`: a client calling `getLyrics` for an instrumental must
- * render "no lyrics", and `code=70` told it the server had failed. Navidrome answers
- * `{"lyrics":{"value":""}}` and `{"topSongs":{}}`.
+ * `system.ts`) nor `UNIMPLEMENTED`: a client calling `getArtistInfo` must render an empty
+ * panel, and `code=70` told it the server had failed. Navidrome answers `{"topSongs":{}}`.
+ *
+ * `getLyrics` used to live here and now does not: it is implemented in `lyrics.ts`, which
+ * answers `{"lyrics":{"value":""}}` — the same shape, from the endpoint that actually reads
+ * the tags and sidecars rather than a table promising it would not.
  *
  * `getArtistInfo`, `getAlbumInfo` and `getTopSongs` are here despite having no last.fm
  * integration, because their panels render from an empty result. Only `getSimilarSongs`
@@ -192,23 +198,6 @@ const ALBUM_INFO: EmptyEndpoint = {
  * is what would be reviewed if one of these moved.
  */
 const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
-  // No list at all: the protocol types this payload as a single `value`, so the wrapper is a
-  // record and carries nothing. It also takes no `id` — the protocol lets it fall back to
-  // `artist` and `title` — so there is nothing to validate.
-  getLyrics: {
-    wrapper: 'lyrics',
-    listKeys: null,
-    idKinds: null,
-    requiredParams: [],
-    reason: 'this track has no lyrics, and none are embedded',
-  },
-  getLyricsBySongId: {
-    wrapper: 'lyricsList',
-    listKeys: ['structuredLyrics'],
-    idKinds: ['s'],
-    requiredParams: [],
-    reason: 'this track has no lyrics, and none are embedded',
-  },
   // `getArtistInfo` takes an artist **or** an album id, per the protocol, so both are
   // accepted and neither is demanded.
   getArtistInfo: {
@@ -266,6 +255,7 @@ const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {
   ...annotationEndpoints,
   ...stateEndpoints,
   ...userEndpoints,
+  ...lyricsEndpoints,
 };
 
 /**

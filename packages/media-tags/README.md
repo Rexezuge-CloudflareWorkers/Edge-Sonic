@@ -22,6 +22,24 @@ A truncated cover is a cover that "loaded" and renders as a grey box, so a pictu
 block header is past the prefix is reported as **not locatable** and the caller answers the
 placeholder — never as a partial image.
 
+## Lyrics are text, and their reader has a version of its own
+
+`lyrics.ts` answers two questions, because Subsonic has an endpoint for each: a plain
+`value` (`getLyrics`) and millisecond-offset lines (`getLyricsBySongId`). So
+`readEmbeddedLyrics` takes bytes and returns the lyric **string** — `LYRICS`,
+`UNSYNCEDLYRICS`, `SYNCEDLYRICS` in a Vorbis comment; `USLT` in ID3v2 — and
+`parseLyricsText` turns text from _either_ source into lines, honouring LRC's `[mm:ss.xx]`
+markers, multi-timestamp repeats and `[offset:±ms]`.
+
+`LYRICS_READER_VERSION` is deliberately **not** `READER_VERSION`. The latter stamps `songs`
+rows, so bumping it re-reads every file in the library; lyrics are never written to D1, so a
+corrected extractor only needs its KV key to move. The ID3 walk skips a frame by its
+declared size and a `USLT` descriptor's terminator is **two** bytes under UTF-16 — a
+one-byte scan cuts it in half and shifts the text.
+
+Tested in `test/media-tags-lyrics.test.ts`, where every container is laid out from its
+specification and the comment list is decoded back independently before the reader sees it.
+
 ## An Ogg page is not a packet
 
 Packets are delimited by the **segment table**: a packet ends where a lacing entry is below

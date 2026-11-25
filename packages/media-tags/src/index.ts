@@ -135,4 +135,7 @@ export { readFlac, hasFlacMagic } from './flac';
 export { readOpus, readVorbis, hasOggMagic, readOggTailDuration } from './ogg';
 export { readId3v2, hasId3Magic } from './mp3';
 export { findPicture, materializePicture, resolveImageBytes, id3TagSize, sniffImageType } from './picture';
+export { LYRICS_READER_VERSION, LYRICS_TAGS, readEmbeddedLyrics } from './lyrics';
+export { decodeLyricsText, parseLyricsText } from './lyricsText';
+export type { LyricsLine, ParsedLyrics } from './lyricsText';
 export type { EmbeddedPicture, PictureSource, PictureRange, OggCommentRange, PictureReader, PictureLimits } from './picture';

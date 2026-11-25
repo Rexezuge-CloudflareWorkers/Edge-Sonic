@@ -606,15 +606,29 @@ describe('the error surface', () => {
     expect(response.headers.get('content-type')).toContain('text/plain');
   });
 
-  it('answers an endpoint that exists with an empty wrapper, not a failure', async () => {
+  it('answers a track with no lyrics with an empty value, not a failure', async () => {
     // `getLyrics` was `code=70`. A client calls it on every track and `code=70` reads as
     // "the server failed" where the truth is "this instrumental has no lyrics". The wrapper
-    // is present and empty, so "nothing to report" stays distinguishable from "not
-    // implemented" — which is the whole reason the absent-endpoint table has four answers.
+    // is present with an empty `value`, which is the shape Navidrome answers and the one a
+    // lyric panel can render — so "nothing to report" stays distinguishable from "not
+    // implemented", which is the whole reason the absent-endpoint table has four answers.
+    //
+    // `id` is ignored by the legacy call, and deliberately: the protocol keys it on
+    // `artist` and `title`, and a request naming neither is the empty answer rather than
+    // `code=10`.
     const { status, body } = await rest('getLyrics', { id: subsonicId('s', 'a/track.flac') });
     expect(status).toBe(200);
     expect(body['subsonic-response'].error).toBeUndefined();
-    expect(body['subsonic-response'].lyrics).toEqual({});
+    expect(body['subsonic-response'].lyrics).toEqual({ value: '' });
+  });
+
+  it('answers the lyrics of a song that does not exist with `code=70`, not empty', async () => {
+    // The paired half, and the reason `getLyricsBySongId` validates its id at all: "that
+    // song does not exist" and "that song has no lyrics" look identical in a lyric panel
+    // and mean opposite things to whoever is debugging a library.
+    const { status, body } = await rest('getLyricsBySongId', { id: subsonicId('s', 'does/not/exist.flac') });
+    expect(status).toBe(200);
+    expect(body['subsonic-response'].error?.code).toBe(70);
   });
 
   it('refuses a client version it cannot serve, with the code that says which side is old', async () => {

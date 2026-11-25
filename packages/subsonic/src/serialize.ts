@@ -138,6 +138,23 @@ function childToJsonValue(node: ElementNode): unknown {
 
   const attributeEntries = Object.entries(node.attrs ?? {}).filter(([, value]) => isPresent(value));
 
+  // A `textKey` element's text content is a **named field**, not `#text`, and not the whole
+  // value. OpenSubsonic's `Lyrics.value` and `Line.value` are the case: the schema's JSON is
+  // `{"value": "..."}` beside any attributes, so this branch precedes the scalar collapse —
+  // which would otherwise turn a childless `lyrics` into a bare string and a `line` carrying
+  // `start` into `{"start": 1, "#text": "..."}`. Neither key appears in the schema.
+  if (node.textKey !== undefined) {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node.attrs ?? {})) {
+      if (isPresent(value)) result[key] = value;
+    }
+    result[node.textKey] = children
+      .filter((child) => !isElementNode(child))
+      .map(String)
+      .join('');
+    return result;
+  }
+
   // An element with no attributes and exactly one **scalar** child is that scalar.
   //
   // Subsonic uses text content for values — `<position>42000</position>`,

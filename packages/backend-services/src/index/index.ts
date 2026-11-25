@@ -42,3 +42,5 @@ export { resolveTailDuration, recordsLengthAtTheEnd, NO_TAIL_DURATION } from './
 export type { TailDuration } from './oggTailDuration';
 export { embeddedAlbumArt, pictureFromFile, ART_TRACK_LIMIT, ART_PREFIX_BYTES, ART_MAX_BYTES, ART_MAX_TAG_BYTES } from './embeddedArt';
 export type { ArtSource, EmbeddedArtDeps, ResolvedArt } from './embeddedArt';
+export { LyricsService, chooseSidecar, lyricsKey, LYRICS_PREFIX_BYTES, LYRICS_SIDECAR_BYTES } from './lyrics';
+export type { CachedLyrics, LyricsDeps, LyricsSong, ResolvedLyrics } from './lyrics';

@@ -183,6 +183,18 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   one about the same bytes, and the suite could not see it because the formats were asserted
   through the path that already worked. One answer per question, and the second answer must
   be the first one's callee rather than its twin.
+- **Lyrics do not get `READER_VERSION`, and their precedence is the feature.**
+  `packages/media-tags/src/lyrics.ts` extracts a lyric string (`LYRICS`/`UNSYNCEDLYRICS`/
+  `SYNCEDLYRICS`, ID3 `USLT`) and `parseLyricsText` turns text from a tag _or_ an
+  `.lrc`/`.txt` sidecar into lines. `LYRICS_READER_VERSION` is separate because lyrics are
+  never written to D1: bumping the song-row counter to correct them would re-read every
+  file in the library, while a lyrics bump only makes the KV entry unreachable.
+  `LyricsService` (`backend-services/index/lyrics.ts`) owns the order — `.lrc`, then
+  `.txt`, then the tags — because only an LRC carries the offsets
+  `getLyricsBySongId` publishes. The discovery runs **before** the cache read, since the
+  key carries the chosen sidecar's revision; and the negative entry follows the rule
+  above: written only when the discovery _and_ every attempted read completed, because a
+  `503` remembered as "no lyrics" survives every retry. Asserted in `test/lyrics.test.ts`.
 
 ## See also
 

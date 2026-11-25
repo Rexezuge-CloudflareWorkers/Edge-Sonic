@@ -15,7 +15,7 @@ import type { LibraryService } from '@edge-sonic/backend-services/library';
 import type { TreeService } from '@edge-sonic/backend-services/index';
 import type { MediaStub } from '../workers/scanStubs';
 import type { ScanDriver } from '@edge-sonic/backend-services/library';
-import type { EnrichmentService } from '@edge-sonic/backend-services/index';
+import type { EnrichmentService, LyricsService } from '@edge-sonic/backend-services/index';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, PlayCountDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
@@ -53,6 +53,11 @@ interface RestContext {
    * `MediaWorker` and this is never reached.
    */
   readonly enrichment: EnrichmentService;
+  /**
+   * Lyrics for one song, from a sidecar or the tags. Both lyric endpoints share it, so the
+   * precedence and the cache key cannot differ between the legacy and OpenSubsonic shapes.
+   */
+  readonly lyrics: LyricsService;
   /**
    * The per-library media worker stub, or `null` when no `MEDIA_DO` binding is
    * configured. **Separate from the scan driver**, and not an aesthetic choice:
