@@ -24,9 +24,9 @@ and changing an endpoint's **kind** changes the split. Both now fail a test.
 
 | Map              | Entries | Answers                                                                 |
 | ---------------- | ------: | ----------------------------------------------------------------------- |
-| `IMPLEMENTED`    |      51 | the real thing                                                          |
+| `IMPLEMENTED`    |      52 | the real thing                                                          |
 | `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
-| `EMPTY_RESULT`   |       3 | an empty wrapper, after validating the request                          |
+| `EMPTY_RESULT`   |       2 | an empty wrapper, after validating the request                          |
 | `ENDPOINT_NAMES` |      74 | —                                                                       |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
@@ -129,6 +129,20 @@ compare-reference.ts` reads the same call off a configured reference and compare
   element types**: `artistInfo.similarArtist` is `Array of artist` and carries no
   `coverArt`/`albumCount`; `artistInfo2.similarArtist` is `Array of ArtistID3` and does.
   One builder serving both is the `AlbumID3.title`/`isDir` defect again.
+- **A top-songs chart is a local, personal claim, and no plays is not a zero-ranked list.**
+  `getTopSongs` used to be an empty wrapper; `endpoints/topSongs.ts` now ranks the artist's
+  songs by the calling user's own `play_counts`, which is the only chart this server has
+  evidence for. `artist` is a **name**, not an id: the parameter is lowercased in JS and
+  matched against `artist_ci`/`album_artist_ci`, because `lower(column)` would drop the
+  index and a missing name is `code=10`, the contract the empty entry held. The ranking
+  joins play counts as the driving table and breaks ties by `(library_id, path)`, so it is
+  deterministic and stays inside the caller's granted union. A song with count 0 is
+  excluded — path order dressed as a chart is a claim about data nothing measured — and an
+  artist nobody played answers a present `topSongs` wrapper with no `song` key. The wrapper
+  is `topSongs`, never the endpoint's name. `topSongsByArtistId` is **not** advertised: an
+  extension is a promise, and accepting an `id` is a second lookup path. Asserted in
+  `test/top-songs.test.ts` (shape at one and many, ranking, scope, the empty answer) with
+  the query plan of the statement that actually runs.
 - **A field this server cannot answer is absent, not an empty default.** `lastFmUrl` and the
   three `*ImageUrl` fields are omitted from every info panel: there is no last.fm integration,
   and a `/rest/getCoverArt` URL without credentials would 401 on fetch. Clients already draw

@@ -55,6 +55,9 @@ export { SongIndexDAO } from './songIndex';
 export type { GenreCountRow } from './songIndex';
 export { SongSimilarDAO } from './songSimilar';
 export type { SimilarSeed, SimilarArtistRow } from './songSimilar';
+// Per-user top-songs ranking. Own module because the play-count join is a different question
+// from a genre ranking, and putting it in `songIndex.ts` would put that file over the ceiling.
+export { SongTopDAO, topSongsQuery } from './songTop';
 // Import lookups by **path** or by `(album_ci, title_ci)`, in their own module because `SongDAO`
 // is over the god-file limit and the pair-keyed predicate needs its own two-variable batch size.
 export { SongMatchDAO, keyForPair } from './songMatch';

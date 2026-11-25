@@ -24,8 +24,9 @@
  *   `lyrics.ts`, which answers `{"lyrics":{"value":""}}` for a track with none — the same
  *   shape Navidrome answers.
  *
- * Similarity is answered locally, from shared genres in the index (`similar.ts`), and the
- * four info panels (`info.ts`) read notes and identifiers from the track's own tags. Both
+ * Similarity is answered locally, from shared genres in the index (`similar.ts`), the
+ * four info panels (`info.ts`) read notes and identifiers from the track's own tags, and
+ * `getTopSongs` (`topSongs.ts`) ranks the artist's songs by this user's play counts. All
  * are narrower claims than last.fm's, stated rather than hidden behind a failure or an
  * empty result. The remaining absent panels are still empty results rather than failures;
  * "no such integration" and "nothing to say" are different claims.
@@ -50,6 +51,7 @@ import { userEndpoints } from './users';
 import { lyricsEndpoints } from './lyrics';
 import { similarEndpoints } from './similar';
 import { infoEndpoints } from './info';
+import { topSongsEndpoints } from './topSongs';
 
 /**
  * A handler returns either a finished `Response` (a binary endpoint such as
@@ -164,8 +166,8 @@ interface EmptyEndpoint {
   /**
    * Parameters the endpoint cannot be asked without, whose absence is `code=10`.
    *
-   * `getTopSongs` is keyed on an artist **name**, so it has no id to resolve — but it does
-   * need `artist`, and answering `{"topSongs":{}}` to a request that named nobody told a
+   * `getTopSongs` used to be keyed on an artist **name**, so it had no id to resolve — but it did
+   * need `artist`, and answering `{"topSongs":{}}` to a request that named nobody had told a
    * client the charts were empty when it had asked a different question. `code=10` says "name
    * an artist", which is the one thing the caller can act on.
    */
@@ -185,23 +187,15 @@ interface EmptyEndpoint {
  * a client calling `getInternetRadioStations` must render an empty panel, and `code=70` told
  * it the server had failed. Navidrome answers `{"topSongs":{}}`.
  *
- * Four endpoints used to live here and now do not: `getLyrics`/`getLyricsBySongId` are
- * implemented in `lyrics.ts` from sidecars and tags; the two `getAlbumInfo` and two
- * `getArtistInfo` spellings are implemented in `info.ts`, reading notes and MusicBrainz ids
- * from the track's tags and ranking similar artists from the index. A table entry promising
+ * Five endpoints used to live here and now do not: `getTopSongs` (`topSongs.ts`) ranks
+ * this user's plays; `getLyrics`/`getLyricsBySongId` are implemented in `lyrics.ts` from
+ * sidecars and tags; the four info panels in `info.ts` read notes and MusicBrainz ids
+ * from the track's tags; they rank similar artists from the index. A table entry promising
  * an empty payload is a promise a real implementation can keep better than a placeholder.
  *
  * `reason` is what would be reviewed if one of these moved.
  */
 const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
-  // Keyed on an artist *name*, so there is no id to resolve and nothing to validate.
-  getTopSongs: {
-    wrapper: 'topSongs',
-    listKeys: ['song'],
-    idKinds: null,
-    requiredParams: ['artist'],
-    reason: 'last.fm charts are not configured',
-  },
   getInternetRadioStations: {
     wrapper: 'internetRadioStations',
     listKeys: ['internetRadioStation'],
@@ -235,6 +229,7 @@ const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {
   ...lyricsEndpoints,
   ...similarEndpoints,
   ...infoEndpoints,
+  ...topSongsEndpoints,
 };
 
 /**
