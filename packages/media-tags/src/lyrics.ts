@@ -25,6 +25,7 @@
  * no lyrics rather than a partial line, because a half-read lyric is worse than none.
  */
 import { readUintBE } from './bits';
+import { id3FrameSize, decodeDescribedFrame } from './id3Text';
 import { hasFlacMagic } from './flac';
 import { id3TagSize } from './id3Picture';
 import { hasId3Magic } from './mp3';
@@ -119,7 +120,7 @@ function id3Lyrics(bytes: Uint8Array): string | null {
   while (cursor + 10 <= end) {
     const frameId = String.fromCharCode(...bytes.subarray(cursor, cursor + 4));
     if (!/^[A-Z0-9]{4}$/.test(frameId)) break;
-    const size = readFrameSize(bytes, cursor + 4, majorVersion);
+    const size = id3FrameSize(bytes, cursor + 4, majorVersion) ?? 0;
     if (size <= 0 || cursor + 10 + size > end) break;
     if (frameId === 'USLT' || frameId === 'ULT') {
       const value = decodeUsltPayload(bytes, cursor + 10, size);
@@ -130,84 +131,16 @@ function id3Lyrics(bytes: Uint8Array): string | null {
   return null;
 }
 
-function readFrameSize(bytes: Uint8Array, offset: number, majorVersion: number): number {
-  if (majorVersion >= 4) {
-    return (
-      ((bytes[offset] & 0x7f) << 21) | ((bytes[offset + 1] & 0x7f) << 14) | ((bytes[offset + 2] & 0x7f) << 7) | (bytes[offset + 3] & 0x7f)
-    );
-  }
-  return readUintBE(bytes, offset, 4) ?? 0;
-}
-
 /**
  * A `USLT` frame: encoding byte, three-byte language, a terminated content descriptor, then
  * the lyric text to the end of the frame.
  *
- * The descriptor is skipped rather than decoded: it names the lyric's purpose (`Lyrics`,
- * `Karaoke`) and is not content. Its terminator width follows the encoding — two bytes for
- * UTF-16 — and stepping one byte at a time through UTF-16 finds a `00 00` straddling two
- * characters, cutting the descriptor in half and shifting the lyric by one byte.
+ * The descriptor is skipped rather than published: it names the lyric's purpose (`Lyrics`,
+ * `Karaoke`) and is not content. Its terminator width and the text encoding are the shared
+ * rule in `./id3Text`, which the info reader uses too.
  */
 function decodeUsltPayload(bytes: Uint8Array, start: number, length: number): string | null {
-  const end = start + length;
-  if (start + 4 > end) return null;
-  const encoding = bytes[start];
-  // Two encodings need the wide terminator: `1` is UTF-16 with a BOM, `2` is UTF-16BE
-  // without one. Everything else is single-byte terminated.
-  const wideTerminator = encoding === 1 || encoding === 2;
-  const at = findDescriptorEnd(bytes, start + 4, end, wideTerminator);
-  if (at === -1) return null;
-
-  const body = bytes.subarray(at, end);
-  if (body.length === 0) return null;
-  const text =
-    encoding === 0
-      ? latin1(body)
-      : encoding === 1
-        ? decodeUtf16WithBom(body)
-        : encoding === 2
-          ? new TextDecoder('utf-16be').decode(body)
-          : new TextDecoder('utf-8').decode(body);
-  // `trimEnd` rather than `/\s+$/`: the anchored-at-the-end quantifier is quadratic on a
-  // lyric with a long interior whitespace run followed by a non-space, and the bytes are
-  // uncontrolled. Both use the ECMAScript whitespace set, so the answer is unchanged.
-  const cleaned = text.replace(/^\uFEFF/, '').trimEnd();
-  return cleaned.trim().length > 0 ? cleaned : null;
-}
-
-/**
- * Where a `USLT` content descriptor ends — the byte after its terminator, or `-1`.
- *
- * The width follows the encoding, and that is the whole point: stepping one byte at a time
- * through a UTF-16 descriptor finds a `00 00` straddling two characters, cutting it in half
- * and shifting the lyric. Stepping by two keeps the terminator aligned with the code units
- * it separates.
- */
-function findDescriptorEnd(bytes: Uint8Array, from: number, end: number, wide: boolean): number {
-  if (wide) {
-    for (let index = from; index + 2 <= end; index += 2) {
-      if (bytes[index] === 0 && bytes[index + 1] === 0) return index + 2;
-    }
-    return -1;
-  }
-  for (let index = from; index < end; index += 1) {
-    if (bytes[index] === 0) return index + 1;
-  }
-  return -1;
-}
-
-function latin1(bytes: Uint8Array): string {
-  let out = '';
-  for (const byte of bytes) out += String.fromCharCode(byte);
-  return out;
-}
-
-function decodeUtf16WithBom(bytes: Uint8Array): string {
-  if (bytes.length < 2) return '';
-  const littleEndian = bytes[0] === 0xff && bytes[1] === 0xfe;
-  const bigEndian = bytes[0] === 0xfe && bytes[1] === 0xff;
-  const payload = littleEndian || bigEndian ? bytes.subarray(2) : bytes;
-  return new TextDecoder(littleEndian ? 'utf-16le' : bigEndian ? 'utf-16be' : 'utf-16le').decode(payload);
+  return decodeDescribedFrame(bytes, start, length, 3)?.value ?? null;
 }
 
 export { LYRICS_READER_VERSION, LYRICS_TAGS, readEmbeddedLyrics };

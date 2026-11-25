@@ -30,6 +30,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createHarness, ALBUM_DIR, subsonicId } from './helpers/harness';
+import { addSong } from './helpers/infoFixtures';
 import type { Harness, SubsonicBody } from './helpers/harness';
 
 /**
@@ -234,6 +235,42 @@ afterEach(() => {
   harness.close();
 });
 
+/**
+ * The info payloads, as a client declares them.
+ *
+ * `biography`, `notes` and `musicBrainzId` are optional strings in the schema; a client
+ * with a default reads an absent key fine but throws on a record where a string should be.
+ * `similarArtist` is `Array of artist` in `artistInfo` and `Array of ArtistID3` in
+ * `artistInfo2` — the second has `coverArt`, the first does not. Both `id` and `name` are
+ * required on the child, so a nested array or an object for one of them is fatal.
+ */
+function decodeInfoRecord(info: unknown, at: string): Record<string, unknown> {
+  if (typeof info !== 'object' || info === null) throw new Error(`Expected JsonObject at path: $.${at}`);
+  const record = info as Record<string, unknown>;
+  for (const key of ['biography', 'notes', 'musicBrainzId']) {
+    if (key in record) decodeString(record[key], `${at}.${key}`);
+  }
+  return record;
+}
+
+function decodeSimilarArtists(info: Record<string, unknown>, at: string, id3: boolean): Array<{ id: string; name: string }> {
+  const value = info['similarArtist'];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`Expected JsonArray, but had ${describeValue(value)} as the serialized body of ${at}.similarArtist`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== 'object' || entry === null) throw new Error(`Expected JsonObject at path: $.${at}.similarArtist.${index}`);
+    const record = entry as Record<string, unknown>;
+    const result = {
+      id: decodeString(record['id'], `${at}.similarArtist.${index}.id`),
+      name: decodeString(record['name'], `${at}.similarArtist.${index}.name`),
+    };
+    if (id3) decodeString(record['coverArt'], `${at}.similarArtist.${index}.coverArt`);
+    return result;
+  });
+}
+
 async function call(endpoint: string, extra: Record<string, string> = {}): Promise<SubsonicBody['subsonic-response']> {
   const { body } = await harness.rest(endpoint, extra);
   return body['subsonic-response'];
@@ -278,6 +315,20 @@ describe('the answers decode as the schema types them', () => {
     // its absence is the only safe state. Asserted so adding it in the wrong shape fails
     // here rather than on a client.
     expect(field<Record<string, unknown>>(envelope, 'album')).not.toHaveProperty('genres');
+  });
+
+  it('decodes the info payloads, including both similar-artist element types', async () => {
+    await addSong(harness, 'Other/Band/01.flac', { artist: 'Other Band', album: 'Band', genre: 'Indie' });
+    const first = await call('getArtistInfo', { id: subsonicId('ar', 'Bon Iver') });
+    const v1 = decodeInfoRecord(field(first, 'artistInfo'), 'artistInfo');
+    expect(decodeSimilarArtists(v1, 'artistInfo', false)).toEqual([{ id: expect.any(String), name: 'Other Band' }]);
+
+    const second = await call('getArtistInfo2', { id: subsonicId('ar', 'Bon Iver') });
+    const v2 = decodeInfoRecord(field(second, 'artistInfo2'), 'artistInfo2');
+    expect(decodeSimilarArtists(v2, 'artistInfo2', true)).toHaveLength(1);
+
+    const album = await call('getAlbumInfo2', { id: subsonicId('al', ALBUM_DIR) });
+    expect(decodeInfoRecord(field(album, 'albumInfo'), 'albumInfo')).toEqual({});
   });
 
   it('decodes getAlbum for a one-track album, which is the case that shipped broken', async () => {

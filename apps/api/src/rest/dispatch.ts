@@ -228,6 +228,7 @@ async function buildContext(
     scan: scope.get(Tokens.ScanDriver),
     enrichment: scope.get(Tokens.EnrichmentService),
     lyrics: scope.get(Tokens.LyricsService),
+    entityInfo: scope.get(Tokens.EntityInfoService),
     // The media object is resolved separately and deliberately: a Durable Object handles one event
     // at a time, so routing this through the scan's object would put a chunk walking the origin on
     // the critical path of `getSong` and `getCoverArt`.

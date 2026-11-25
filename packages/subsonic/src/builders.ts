@@ -352,6 +352,57 @@ function scanStatusElement(status: ScanStatus): ElementNode {
 }
 
 /**
+ * An `albumInfo` record: `notes` and a MusicBrainz id, both optional in the schema.
+ *
+ * Prose is a scalar child, not an attribute, so JSON collapses it to a string under the
+ * key the schema names. A field this server cannot answer is omitted rather than published
+ * as `''`: an empty default is a claim of support, and there is no last.fm integration here.
+ */
+function albumInfoElement(notes: string | null, musicBrainzId: string | null): ElementNode {
+  return el('albumInfo', {}, [
+    ...(notes === null ? [] : [el('notes', {}, [notes])]),
+    ...(musicBrainzId === null ? [] : [el('musicBrainzId', {}, [musicBrainzId])]),
+  ]);
+}
+
+/**
+ * A similar artist in an info panel.
+ *
+ * The two spellings answer two **different element types**: `artistInfo.similarArtist` is
+ * `Array of artist`, whose schema declares `id`, `name`, `artistImageUrl`, `starred` and the
+ * ratings; `artistInfo2.similarArtist` is `Array of ArtistID3`, which declares `coverArt` and
+ * `albumCount`. One builder serving both would publish one element's fields on the other —
+ * the same defect class as `AlbumID3.title`/`isDir` — so the caller states which it is building.
+ * `albumCount` is omitted rather than defaulted to `0`, which would be a count nobody measured.
+ */
+function infoArtistElement(id: string, name: string, id3: boolean): ElementNode {
+  // The repeated element is named after the *field*, `similarArtist`, not after its type
+  // (`artist` / `ArtistID3`). Naming it `artist` puts the records under `artist` in JSON
+  // and leaves `similarArtist` — the key every client reads — absent.
+  return el('similarArtist', { id, name, ...(id3 && { coverArt: id }) });
+}
+
+/**
+ * An `artistInfo`/`artistInfo2` record.
+ *
+ * The list key is stated, because a single similar artist must still render as an array and
+ * none must render as an absent key — Navidrome's shape, and the one every client is written
+ * against. `biography` and `musicBrainzId` are scalar children for the same reason as `notes`.
+ */
+function artistInfoElement(
+  wrapper: 'artistInfo' | 'artistInfo2',
+  biography: string | null,
+  musicBrainzId: string | null,
+  similar: readonly ElementNode[],
+): ElementNode {
+  return elList(wrapper, 'similarArtist', {}, [
+    ...(biography === null ? [] : [el('biography', {}, [biography])]),
+    ...(musicBrainzId === null ? [] : [el('musicBrainzId', {}, [musicBrainzId])]),
+    ...similar,
+  ]);
+}
+
+/**
 `{ error }` is handled by the envelope, not here.
 */
 export {
@@ -366,5 +417,8 @@ export {
   userFolderElements,
   scanStatusElement,
   childElement,
+  albumInfoElement,
+  infoArtistElement,
+  artistInfoElement,
 };
 export type { Attrs };

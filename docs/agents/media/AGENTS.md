@@ -195,6 +195,15 @@ Violating any of these reintroduces a fixed defect. The suite asserts each one.
   key carries the chosen sidecar's revision; and the negative entry follows the rule
   above: written only when the discovery _and_ every attempted read completed, because a
   `503` remembered as "no lyrics" survives every retry. Asserted in `test/lyrics.test.ts`.
+- **Info has its own reader version and its own decoder rule.** `info.ts` extracts
+  `DESCRIPTION`/`COMMENT`/`NOTES` and the two MusicBrainz ids from a track's tags for the
+  four info endpoints, with `INFO_READER_VERSION` for the same reason lyrics have their own
+  counter: nothing is written to D1, so a corrected extractor only moves a KV key. ID3's
+  `COMM`, `TXXX` and `USLT` frames share `id3Text.ts`'s encoding and terminator rules — the
+  UTF-16 descriptor terminator is two bytes, and an ASCII descriptor written under a wide
+  encoding byte needs the unaligned pass as well. `EntityInfoService` caches an absence only
+  when the ranged read completed. Asserted in `test/media-tags-info.test.ts` and
+  `test/entity-info.test.ts`.
 
 ## See also
 

@@ -21,7 +21,7 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 - `src/rest/dispatch.ts` — the `/rest` dispatcher: version check, authentication, the
   `RestContext`, and the endpoint table.
 - `src/rest/endpoints/` — one module per protocol area. `index.ts` holds the table and
-  the known-but-unimplemented list.
+  the known-but-unimplemented list; `info.ts` owns all four album/artist info panels.
 - `src/rest/context.ts` — the per-request shape: `songs` (row state) and `songIndex`
   (the aggregate reads), plus `params`, `format`, `pageSize` and `maxOffset`.
 - `src/rest/mappers.ts` — song rows to protocol records, and the names both a song element and the
@@ -564,11 +564,11 @@ body is not audio.
 `UNIMPLEMENTED` carries a `kind`, and `code=70` is the **fourth** of them rather than the
 only one: `gone` → 410, `not-implemented` → 501, `not-authorized` → `code=50`, `absent` →
 `code=70`. **No entry uses `absent` today**, so the registry answers 410 five times, 501
-twelve times and `code=50` three times, and `code=70` from here is unreachable. The seven
-endpoints a client calls routinely — `getAlbumInfo2` on every album screen among them — are
-in `EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
-`getLyrics` and `getLyricsBySongId` are **implemented** (see below), so the empty lyric shape
-is now an answer rather than a promise.
+twelve times and `code=50` three times, and `code=70` from here is unreachable. The three
+endpoints a client calls routinely — `getTopSongs`, `getInternetRadioStations`, `getShares` —
+are in `EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
+Lyrics, similar songs and the four info panels are **implemented** (see below), so their
+empty shapes are now answers rather than promises.
 `code=70` is still right for an endpoint this server does not have at all, which is the
 case `getOpenSubsonicExtensions` was in — the protocol says a
 server supporting no extensions returns an empty _list_, and answering a failure from the
@@ -638,6 +638,30 @@ would otherwise collapse to a bare object.
 
 Asserted in `test/lyrics.test.ts` (precedence by content, the cache, the negative-cache
 rule) and `test/media-tags-lyrics.test.ts` (LRC parsing, `USLT`, Vorbis).
+
+## Info panels: a local claim behind four endpoint names
+
+`endpoints/info.ts` owns `getAlbumInfo`/2 and `getArtistInfo`/2. Both album spellings answer
+under `albumInfo`; the artist spellings answer under `artistInfo`/`artistInfo2`. The repeated
+child element is `similarArtist` — the field's name, not the type's — and the two artist
+spellings publish **different element types**: v1 `artist` has no `coverArt`/`albumCount`,
+v2 `ArtistID3` does. One builder serving both is the `AlbumID3.title`/`isDir` defect again.
+
+`context.entityInfo` (`EntityInfoService`) reads notes/biographies and MusicBrainz ids from
+the **first row in the group's own deterministic order** — album: `compareAlbumTracks`,
+artist: the seed query's `library_id, path` order. It caches in a new KV domain keyed by the
+file's revision and `INFO_READER_VERSION`, writes nothing to D1, and caches a negative answer
+only when the read completed. An id is a selector (`code=70` for absent, undecodable or
+ungranted), and both tag reads and similar-artist ranking stay inside the resolved scope.
+
+Similar artists come from `SongSimilarDAO.listSimilarArtists`, the same shared-genre signal
+`getSimilarSongs` uses; the ranking returns lowercased keys, so display spellings are
+resolved through the same representative rows `getArtists` publishes before an element is
+built. `count` defaults to **20** via `optionalInt`; `includeNotPresent` is a documented no-op
+because every artist this server can name is present. Image URLs and `lastFmUrl` are absent:
+there is no last.fm integration, and a cover-art URL without credentials would 401 when a
+client fetched it. Asserted in `test/album-info.test.ts`, `test/artist-info.test.ts`,
+`test/entity-info.test.ts` (the cache contract) and `test/media-tags-info.test.ts` (bytes).
 
 ## Never
 

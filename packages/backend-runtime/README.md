@@ -83,7 +83,9 @@ artwork keyed by a file's mtime and a cache holding session profiles cannot shar
 a lifetime. So `KV_DOMAINS` is passed to the kit's `KvCache` rather than taken from
 it, and adopting the kit's table under these names would have silently turned a
 week-long cache into a two-minute one: a hundred extra origin reads a day per
-library, with no error anywhere.
+library, with no error anywhere. `songLyrics` and `entityInfo` share that file-revision
+keying but carry their own reader versions, because neither value is written to D1: a
+corrected extractor has to orphan old entries without re-reading the whole library.
 
 `createKvCache` is a **factory**, not a subclass. The kit's `KvCache` is generic over
 its domain table, so the type has to be pinned somewhere; a subclass that pinned it
