@@ -79,6 +79,20 @@ function decodeUtf16WithBom(bytes: Uint8Array): string {
 }
 
 /**
+ * Trailing NUL padding, removed without a regex.
+ *
+ * `/\0+$/` anchors the end but not the start, so a decoded frame with a long *interior*
+ * run of NULs followed by a non-NUL makes `$` fail from every start position inside the
+ * run — quadratic in a string whose bytes the file controls. Walking back once from the
+ * end removes the same maximal run, in time proportional to its length.
+ */
+function trimTrailingNuls(text: string): string {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 0) end -= 1;
+  return text.slice(0, end);
+}
+
+/**
  * Decode an ID3 text body under its encoding byte, dropping a BOM and any trailing NUL
  * padding. Whitespace-only text is absent: a `COMM= ` is a junk note, and publishing a
  * blank biography beside a real artist panel is worse than publishing none.
@@ -94,10 +108,10 @@ function decodeId3Text(bytes: Uint8Array, start: number, end: number, encoding: 
         : encoding === 2
           ? new TextDecoder('utf-16be').decode(body)
           : new TextDecoder('utf-8').decode(body);
-  const cleaned = text
-    .replace(/^\uFEFF/, '')
-    .replace(/\0+$/, '')
-    .trimEnd();
+  // `trimTrailingNuls` rather than `/\0+$/` for the same reason lyrics use `trimEnd`:
+  // the anchored-at-the-end quantifier is quadratic on a long interior NUL run, and the
+  // frame bytes are uncontrolled. Both remove the same maximal trailing run.
+  const cleaned = trimTrailingNuls(text.replace(/^\uFEFF/, '')).trimEnd();
   return cleaned.trim().length > 0 ? cleaned : null;
 }
 

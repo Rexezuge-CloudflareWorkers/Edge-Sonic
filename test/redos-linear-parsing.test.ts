@@ -1,14 +1,16 @@
 /**
- * The three untrusted-input parsers cannot be quadratic.
+ * Four regexes over untrusted input cannot be quadratic.
  *
  * ### What is asserted, and what is not
  *
- * Three functions read a string that came off the wire and used a regular expression on it:
+ * Four functions read a string that came off the wire and used a regular expression on it:
  * `toLibraryPath` (a `DAV:href`, in `packages/webdav`), `fromFlatAlbumFolder` (a directory
- * name, in `packages/backend-data`), and `readEmbeddedLyrics` (an ID3 `USLT` tag's decoded
- * lyric text, in `packages/media-tags`). CodeQL reported all three as *polynomial regular
- * expression used on uncontrolled data*, and all three are genuinely quadratic — not
- * exponentially so, which is the shape every linter looks for, but quadratically:
+ * name, in `packages/backend-data`), `readEmbeddedLyrics` (an ID3 `USLT` tag's decoded
+ * lyric text, in `packages/media-tags`), and `decodeId3Text` (any ID3 text frame's decoded
+ * body, in the same package — the shared decoder the info endpoints reach). CodeQL reported
+ * all four as *polynomial regular expression used on uncontrolled data*, and all four are
+ * genuinely quadratic — not exponentially so, which is the shape every linter looks for,
+ * but quadratically:
  *
  *     n           \s+[-–—]\s+     /\/+$/ on an interior run
  *     8,000            70 ms                  50 ms
@@ -18,32 +20,34 @@
  *
  * Four times the work per doubling, on each. The third, `/\s+$/` from the lyrics decoder,
  * measured on the same machine at 4,000 / 8,000 / 16,000 / 32,000 spaces in an interior run
- * followed by a non-space: 12 / 47 / 188 / 755 ms — the same quadrupling. The mechanism is
- * the same in all three: an **unbounded quantifier followed by a character that can fail**,
- * with the scan unanchored at the start. For each of the *n* start positions inside a run of
- * *n* identical characters, the engine retries every length the run could have, so the cost
- * is the *square* of the run rather than its length.
+ * followed by a non-space: 12 / 47 / 188 / 755 ms — the same quadrupling. The fourth,
+ * `/\0+$/` from the shared ID3 decoder, has that shape on a run of NULs and is measured in
+ * its own block below. The mechanism is the same in all four: an **unbounded quantifier
+ * followed by a character that can fail**, with the scan unanchored at the start. For each
+ * of the *n* start positions inside a run of *n* identical characters, the engine retries
+ * every length the run could have, so the cost is the *square* of the run rather than its
+ * length.
  *
- * None of the three needs the whole run. `stripSlashes` walks in from each end and stops at
+ * None of the four needs the whole run. `stripSlashes` walks in from each end and stops at
  * the first non-slash. `findAlbumSeparator` walks left to right and stops at the first
  * dash-like character with whitespace on both sides — and because both sides of the split
  * are `.trim()`ed by the caller, the *extent* of the whitespace runs cannot change the
  * answer, which is what lets it answer with the dash's own index and never measure a run.
  * `decodeUsltPayload` now uses `trimEnd`, which walks back from the end once and stops at
- * the first non-whitespace.
+ * the first non-whitespace; `decodeId3Text` does the same for NUL padding with a loop.
  *
  * ### Why this is a measurement and not a lint rule
  *
  * Because `pnpm run lint` already runs `eslint-plugin-regexp`'s
  * `no-super-linear-backtracking` and `sonarjs`'s `slow-regex`, and **neither fires on any of
- * these three.** Probed directly:
+ * these.** Probed directly:
  *
  *     /^(a+)+$/        both fire      (exponential — the shape they look for)
  *     /\s+[-–—]\s+/    slow-regex     (quadratic)
  *     /\/+$/           neither         (quadratic)
  *     /\s+$/           neither         (quadratic — probed the same way)
  *
- * So the repository was lint-clean over three live denial-of-service paths, and the only
+ * So the repository was lint-clean over four live denial-of-service paths, and the only
  * instrument that found them was CodeQL, which is not a test and does not run on every
  * commit. The assertions below are what makes this class visible locally. There is no lint
  * rule for "quadratic in the input", which is why the timing assertions are load-bearing
@@ -648,11 +652,28 @@ function trimTrailingWhitespaceOracle(text: string): string {
 }
 
 /**
- * The decoder strips a leading BOM before the trailing whitespace, in that order.
- * Keeping the oracle in that same order keeps the comparison about the trim, not the BOM.
+ * "Trailing NUL padding removed", derived from the definition rather than from the reader.
+ *
+ * Same shape as the whitespace oracle, and deliberately a `'\0'` comparison rather than the
+ * reader's `charCodeAt(...) === 0`: an oracle that shares the production predicate is a
+ * fixture that would agree with a wrong reader, which is the failure mode this suite is
+ * here to exclude. One walk back from the end is linear, so the oracle cannot carry the
+ * quadratic defect it is meant to catch.
+ */
+function trimTrailingNulsOracle(text: string): string {
+  let end = text.length;
+  while (end > 0 && text.charAt(end - 1) === '\0') end -= 1;
+  return text.slice(0, end);
+}
+
+/**
+ * The decoder strips a leading BOM, then trailing NULs, then trailing whitespace, in that
+ * order. Keeping the oracle in that same order keeps the comparison about the trims, not
+ * about which one went first.
  */
 function cleanedOracle(text: string): string {
-  return trimTrailingWhitespaceOracle(text.startsWith('\uFEFF') ? text.slice(1) : text);
+  const withoutBom = text.startsWith('\uFEFF') ? text.slice(1) : text;
+  return trimTrailingWhitespaceOracle(trimTrailingNulsOracle(withoutBom));
 }
 
 describe('embedded lyric trailing whitespace stays linear', () => {
@@ -695,6 +716,62 @@ describe('embedded lyric trailing whitespace stays linear', () => {
     const hostile = `a${' '.repeat(HOSTILE_LENGTH / 2.5)}b`;
     const quadratic = bestOfFiveMs(() => hostile.replace(QUADRATIC_TRAILING_WHITESPACE, ''));
     const linear = bestOfFiveMs(() => trimTrailingWhitespaceOracle(hostile));
+
+    expect(quadratic).toBeGreaterThan(linear * 50);
+  });
+});
+
+/**
+ * The fourth pattern, rebuilt from a string for the same reason as the other three: CodeQL
+ * scans `test/` too, and a literal `/\0+$/` here would re-open the finding this file closes.
+ *
+ * `decodeId3Text` shares its cleanup between the lyric and info readers, so this is the one
+ * regex on a decoded frame's body rather than on a path or a folder name. `$` anchors the
+ * match's end but not its start, so `\0+` is tried from every position inside a run. It is
+ * the *interior* run that ends in a non-NUL where every attempted length fails `$`, and that
+ * is the shape fed through the public seam below — a run of padding at the very end is
+ * fast-pathed by V8 and would prove nothing.
+ */
+/* eslint-disable-next-line prefer-regex-literals -- a literal here would re-trip CodeQL's own query */
+const QUADRATIC_TRAILING_NULS = new RegExp(String.raw`\0+$`);
+
+describe('ID3 text trailing NUL padding stays linear', () => {
+  it.each([
+    ['a plain lyric', 'la la la', 'la la la', 0],
+    ['trailing NUL padding', 'la la la\0\0\0', 'la la la', 0],
+    ['a leading BOM before the padding', '\uFEFFla la la\0', 'la la la', 3],
+    ['NUL padding only, which is no lyric at all', '\0\0\0', null, 0],
+    ['an interior NUL, which is content rather than padding', 'la\0la\0', 'la\0la', 0],
+    ['whitespace after the NULs, where the trim order matters', 'la la la\0 \t', 'la la la\0', 0],
+  ])('decodes %s', (_reason, lyric, expected, encoding) => {
+    const observed = readEmbeddedLyrics(usltFile(lyric, encoding));
+    expect(observed).toBe(expected);
+    expect(observed).toBe(cleanedOracle(lyric).trim().length > 0 ? cleanedOracle(lyric) : null);
+  });
+
+  it('matches the oracle on a hostile interior run of NULs with a trailing non-NUL', () => {
+    // The adversarial shape, for the same reason as the whitespace run: a trailing run of
+    // NULs would match on the first attempt, so the run must be followed by a real character
+    // for `$` to fail at every attempted length. The leading `a` keeps the answer
+    // distinguishable from one a reader that stopped early would give.
+    const hostile = `a${'\0'.repeat(HOSTILE_LENGTH)}b`;
+    let observed: string | null = null;
+    const elapsedMs = bestOfFiveMs(() => {
+      observed = readEmbeddedLyrics(usltFile(hostile));
+    });
+
+    expect(observed).toBe(hostile);
+    expect(observed).toBe(cleanedOracle(hostile));
+    expect(elapsedMs).toBeLessThan(LINEAR_BUDGET_MS);
+  });
+
+  it('the hostile NUL input was genuinely adversarial, and the gap is orders of magnitude', () => {
+    // The teeth for the budget above: without a measured ratio, `LINEAR_BUDGET_MS` is a
+    // number nobody has checked against the quadratic pattern it excludes. The reference
+    // is built from a string above so this measurement does not re-open the CodeQL alert.
+    const hostile = `a${'\0'.repeat(HOSTILE_LENGTH / 2.5)}b`;
+    const quadratic = bestOfFiveMs(() => hostile.replace(QUADRATIC_TRAILING_NULS, ''));
+    const linear = bestOfFiveMs(() => trimTrailingNulsOracle(hostile));
 
     expect(quadratic).toBeGreaterThan(linear * 50);
   });
