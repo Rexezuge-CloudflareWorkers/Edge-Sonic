@@ -6,7 +6,7 @@ import { ENDPOINT_NAMES, UNIMPLEMENTED } from '../apps/api/src/rest/endpoints';
  *
  * ### Why numerals and not just shape
  *
- * `docs/agents/protocol/AGENTS.md` publishes a table — 51 implemented, 20 unimplemented, 3
+ * `docs/agents/protocol/AGENTS.md` publishes a table — 52 implemented, 20 unimplemented, 2
  * answering an empty result, 74 names — and says the counts "are asserted in
  * `test/endpoint-registry.test.ts`". They were not. Every assertion in that file was about
  * *shape*: cross-map disjointness, a non-empty reason per entry, `ENDPOINT_NAMES` completeness.
@@ -29,10 +29,10 @@ describe('the endpoint registry counts', () => {
     names: ENDPOINT_NAMES.length,
   };
 
-  it('publishes 51 implemented endpoints', () => {
-    // Lyrics, similar songs and the four info panels are local implementations now; only
-    // three endpoints still answer an empty wrapper.
-    expect(counts.implemented).toBe(51);
+  it('publishes 52 implemented endpoints', () => {
+    // Lyrics, similar songs, the four info panels and top songs are local implementations
+    // now; only two endpoints still answer an empty wrapper.
+    expect(counts.implemented).toBe(52);
   });
 
   it('publishes 20 unimplemented endpoints, and their kinds split 5 / 12 / 3', () => {
@@ -44,19 +44,19 @@ describe('the endpoint registry counts', () => {
     expect(countKinds()).toEqual({ gone: 5, 'not-implemented': 12, 'not-authorized': 3 });
   });
 
-  it('publishes 3 endpoints that answer an empty wrapper rather than a failure', () => {
-    // The radio/shares/top-songs endpoints are called routinely by real clients; each was
+  it('publishes 2 endpoints that answer an empty wrapper rather than a failure', () => {
+    // The radio and shares endpoints are called routinely by real clients; each was
     // `code=70` before it was given a wrapper, which told a client the server had failed where
     // the truth is that there is nothing to report. Their count is the guard. Lyrics, similar
-    // songs and the four info panels left this table for real implementations reading tags,
-    // sidecars and the index.
-    expect(counts.emptyResult).toBe(3);
+    // songs, the four info panels and top songs left this table for real implementations
+    // reading tags, sidecars, play counts and the index.
+    expect(counts.emptyResult).toBe(2);
   });
 
   it('publishes 74 endpoint names in total', () => {
     // The sum, and therefore a cross-check on the three above: if one moves and another does not,
     // this is the assertion that says so.
-    expect(counts.names).toBe(51 + 20 + 3);
+    expect(counts.names).toBe(52 + 20 + 2);
     expect(counts.names).toBe(74);
   });
 
@@ -82,4 +82,4 @@ function countKinds(): Record<string, number> {
  * export its empty-result table under a name that narrows it, and a count read from the same
  * object it is counting is not a measurement.
  */
-const EMPTY_RESULT_COUNT = 3;
+const EMPTY_RESULT_COUNT = 2;

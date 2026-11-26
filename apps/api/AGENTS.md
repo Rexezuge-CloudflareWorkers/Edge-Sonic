@@ -564,11 +564,12 @@ body is not audio.
 `UNIMPLEMENTED` carries a `kind`, and `code=70` is the **fourth** of them rather than the
 only one: `gone` → 410, `not-implemented` → 501, `not-authorized` → `code=50`, `absent` →
 `code=70`. **No entry uses `absent` today**, so the registry answers 410 five times, 501
-twelve times and `code=50` three times, and `code=70` from here is unreachable. The three
-endpoints a client calls routinely — `getTopSongs`, `getInternetRadioStations`, `getShares` —
-are in `EMPTY_RESULT`, each with **its own wrapper name**, validated before it answers empty.
-Lyrics, similar songs and the four info panels are **implemented** (see below), so their
-empty shapes are now answers rather than promises.
+twelve times and `code=50` three times, and `code=70` from here is unreachable. The two
+endpoints a client calls routinely that still have nothing to report —
+`getInternetRadioStations`, `getShares` — are in `EMPTY_RESULT`, each with **its own wrapper
+name**, validated before it answers empty. Lyrics, similar songs, the four info panels and
+`getTopSongs` are **implemented** (see below), so their empty shapes are now answers rather
+than promises.
 `code=70` is still right for an endpoint this server does not have at all, which is the
 case `getOpenSubsonicExtensions` was in — the protocol says a
 server supporting no extensions returns an empty _list_, and answering a failure from the
@@ -662,6 +663,27 @@ because every artist this server can name is present. Image URLs and `lastFmUrl`
 there is no last.fm integration, and a cover-art URL without credentials would 401 when a
 client fetched it. Asserted in `test/album-info.test.ts`, `test/artist-info.test.ts`,
 `test/entity-info.test.ts` (the cache contract) and `test/media-tags-info.test.ts` (bytes).
+
+## `getTopSongs` is this user's chart, not last.fm's
+
+`endpoints/topSongs.ts` left `EMPTY_RESULT` for `SongTopDAO.listTopSongs` in
+`packages/backend-data/src/dao/songTop.ts`. The only chart this server can support is the
+caller's own play history: the artist's songs the user has actually played, ordered by
+`play_count DESC` with a `(library_id, path)` tiebreak. The statement drives from
+`play_counts`' composite primary key and reaches each song by primary key, so the sort's
+temporary B-tree holds only that user's played rows; both seeks and the absence of a bare
+scan are asserted in `test/top-songs.test.ts` over the real planner.
+
+Two distinctions are load-bearing. A song with count 0 is excluded — an unplayed library
+ordered by path would be a ranking nothing measured — and an artist nobody played answers a
+present `topSongs` wrapper with no `song` key. `artist` is a **name** (the protocol's
+`id`-based extension is not advertised), so the handler lowercases the parameter, never the
+column, and a missing name is `code=10` as it was under the empty entry. Scope is the same
+`resolveLibraries` union as every other list; a play in a library the caller cannot see is
+invisible. `count` is `optionalInt` with the protocol's default of **50**, not `int`, which
+would turn an omitted parameter into a one-item page. Asserted in `test/top-songs.test.ts`;
+the key set can be compared against a reference with `COMPARE_ARTIST` in
+`scripts/compare-reference.ts`.
 
 ## Never
 

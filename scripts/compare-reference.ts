@@ -27,7 +27,9 @@
  * ```
  *
  * Credentials come from the environment and are never written to disk or to a default.
- * `f=json` is forced, because a shape comparison cannot be read off XML.
+ * `f=json` is forced, because a shape comparison cannot be read off XML. Set
+ * `COMPARE_ARTIST` to include `getTopSongs` — without a played artist on the edge, both
+ * answers are empty and no field set is compared.
  *
  * ### Reading the output
  *
@@ -79,6 +81,10 @@ const CALLS: readonly { endpoint: string; params?: Record<string, string> }[] = 
   { endpoint: 'getRandomSongs', params: { size: '5' } },
   { endpoint: 'search2', params: { query: 'a', albumCount: '3', artistCount: '3', songCount: '3' } },
   { endpoint: 'search3', params: { query: 'a', albumCount: '3', artistCount: '3', songCount: '3' } },
+  // Only when named: an artist from the edge's library whose tracks the edge user has played.
+  // Without plays this server honestly answers an empty wrapper, which would compare an
+  // empty key set against the reference's chart and report nothing useful either way.
+  ...(process.env.COMPARE_ARTIST ? [{ endpoint: 'getTopSongs', params: { artist: process.env.COMPARE_ARTIST } }] : []),
 ];
 
 function readConfig(): Config {
