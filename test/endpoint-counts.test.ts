@@ -6,7 +6,7 @@ import { ENDPOINT_NAMES, UNIMPLEMENTED } from '../apps/api/src/rest/endpoints';
  *
  * ### Why numerals and not just shape
  *
- * `docs/agents/protocol/AGENTS.md` publishes a table — 52 implemented, 20 unimplemented, 2
+ * `docs/agents/protocol/AGENTS.md` publishes a table — 56 implemented, 17 unimplemented, 1
  * answering an empty result, 74 names — and says the counts "are asserted in
  * `test/endpoint-registry.test.ts`". They were not. Every assertion in that file was about
  * *shape*: cross-map disjointness, a non-empty reason per entry, `ENDPOINT_NAMES` completeness.
@@ -29,39 +29,38 @@ describe('the endpoint registry counts', () => {
     names: ENDPOINT_NAMES.length,
   };
 
-  it('publishes 52 implemented endpoints', () => {
-    // Lyrics, similar songs, the four info panels and top songs are local implementations
-    // now; only two endpoints still answer an empty wrapper.
-    expect(counts.implemented).toBe(52);
+  it('publishes 56 implemented endpoints', () => {
+    // The four sharing endpoints joined the implemented set, which is why the unimplemented
+    // total fell by three and the empty-result total by one; only the internet-radio listing
+    // still answers an empty wrapper.
+    expect(counts.implemented).toBe(56);
   });
 
-  it('publishes 20 unimplemented endpoints, and their kinds split 5 / 12 / 3', () => {
+  it('publishes 17 unimplemented endpoints, and their kinds split 5 / 9 / 3', () => {
     // The split is published alongside the total in the same table, so it is pinned with it. It is
     // also the number that would move if an endpoint changed *kind* — which is a different act
     // from adding one, and one with a different consequence: `gone` answers 410, `not-implemented`
     // answers 501, and `not-authorized` answers `code=50` in an HTTP 200 envelope.
-    expect(counts.unimplemented).toBe(20);
-    expect(countKinds()).toEqual({ gone: 5, 'not-implemented': 12, 'not-authorized': 3 });
+    expect(counts.unimplemented).toBe(17);
+    expect(countKinds()).toEqual({ gone: 5, 'not-implemented': 9, 'not-authorized': 3 });
   });
 
-  it('publishes 2 endpoints that answer an empty wrapper rather than a failure', () => {
-    // The radio and shares endpoints are called routinely by real clients; each was
-    // `code=70` before it was given a wrapper, which told a client the server had failed where
-    // the truth is that there is nothing to report. Their count is the guard. Lyrics, similar
-    // songs, the four info panels and top songs left this table for real implementations
-    // reading tags, sidecars, play counts and the index.
-    expect(counts.emptyResult).toBe(2);
+  it('publishes 1 endpoint that answers an empty wrapper rather than a failure', () => {
+    // Only the internet-radio listing remains here. `getShares` was called routinely by real
+    // clients and answered an empty wrapper, but it has left this table for a real implementation
+    // reading `shares` and `share_entries`.
+    expect(counts.emptyResult).toBe(1);
   });
 
   it('publishes 74 endpoint names in total', () => {
     // The sum, and therefore a cross-check on the three above: if one moves and another does not,
     // this is the assertion that says so.
-    expect(counts.names).toBe(52 + 20 + 2);
+    expect(counts.names).toBe(56 + 17 + 1);
     expect(counts.names).toBe(74);
   });
 
   it('splits the unimplemented kinds as the guide publishes them', () => {
-    expect(countKinds()).toEqual({ gone: 5, 'not-implemented': 12, 'not-authorized': 3 });
+    expect(countKinds()).toEqual({ gone: 5, 'not-implemented': 9, 'not-authorized': 3 });
   });
 });
 
@@ -82,4 +81,4 @@ function countKinds(): Record<string, number> {
  * export its empty-result table under a name that narrows it, and a count read from the same
  * object it is counting is not a measurement.
  */
-const EMPTY_RESULT_COUNT = 2;
+const EMPTY_RESULT_COUNT = 1;

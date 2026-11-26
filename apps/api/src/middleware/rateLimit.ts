@@ -33,7 +33,7 @@ import { RateLimitedError } from '@rexezuge/errors';
 import { SubsonicError, ErrorCode, errorResponse, resolveFormat } from '@edge-sonic/subsonic';
 import { BaseRoute } from '../endpoints/BaseRoute';
 
-type Surface = 'rest' | 'user';
+type Surface = 'rest' | 'user' | 'share';
 
 interface RateLimitOptions {
   windowMs: number;
@@ -63,6 +63,15 @@ function throttledFor(surface: Surface, retryAfter: number, c: RateLimitContext)
       { format: resolveFormat(c.req.query?.('f')), jsonpCallback: c.req.query?.('callback') ?? null },
       true,
     );
+  }
+  // A share URL is opened in a browser, so its 429 is a plain document rather than either
+  // JSON dialect: a visitor is the reader here, and neither the SPA's `Exception` nor the
+  // Subsonic envelope is a body they can act on.
+  if (surface === 'share') {
+    return new Response(`Too many requests. Retry after ${retryAfter}s.`, {
+      status: 429,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Retry-After': String(retryAfter) },
+    });
   }
   const limited = new RateLimitedError();
   return c.json(BaseRoute.toErrorBody(limited.status, limited.message), limited.status);

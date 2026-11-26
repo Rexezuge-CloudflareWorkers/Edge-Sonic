@@ -18,7 +18,12 @@ import { createHarness } from './helpers/harness';
 import type { Harness } from './helpers/harness';
 import { ORIGIN } from './helpers/harness';
 import { SECURITY_HEADERS, isSensitiveJsonPath } from '../apps/api/src/middleware/securityHeaders';
-import { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits } from '../apps/api/src/middleware/rateLimitConfig';
+import {
+  RATE_LIMIT_DEFS,
+  registerRestRateLimits,
+  registerShareRateLimits,
+  registerUserRateLimits,
+} from '../apps/api/src/middleware/rateLimitConfig';
 
 describe('isSensitiveJsonPath', () => {
   it('names a path this router actually serves', () => {
@@ -27,6 +32,10 @@ describe('isSensitiveJsonPath', () => {
     expect(isSensitiveJsonPath('/user/users')).toBe(true);
     expect(isSensitiveJsonPath('/user/me')).toBe(true);
     expect(isSensitiveJsonPath('/rest/stream.view')).toBe(true);
+    // A share id `is` the credential, so a cached page hands the capability to whoever shares
+    // the cache. This is the prefix the predicate gained with the feature, and the assertion
+    // that would notice it being dropped.
+    expect(isSensitiveJsonPath('/share/3f2a7c1e-0000-4000-8000-000000000000')).toBe(true);
   });
 
   it('leaves the public surfaces cacheable', () => {
@@ -110,14 +119,18 @@ describe('the rate-limit table', () => {
     // Git slices `RATE_LIMIT_DEFS.slice(0, 3)` / `.slice(3)`, which means inserting a
     // definition at index 3 silently reclassifies it — a new `/rest` limit would become
     // a user limit and start being keyed on the wrong identity. The `surface` field
-    // makes that impossible, and this asserts the split is total and disjoint.
+    // makes that impossible, and this asserts the split is total and disjoint across the
+    // three surfaces the worker now serves.
     const rest = RATE_LIMIT_DEFS.filter((def) => def.surface === 'rest');
     const user = RATE_LIMIT_DEFS.filter((def) => def.surface === 'user');
-    expect(rest.length + user.length).toBe(RATE_LIMIT_DEFS.length);
+    const share = RATE_LIMIT_DEFS.filter((def) => def.surface === 'share');
+    expect(rest.length + user.length + share.length).toBe(RATE_LIMIT_DEFS.length);
     expect(rest.length).toBeGreaterThan(0);
     expect(user.length).toBeGreaterThan(0);
+    expect(share.length).toBeGreaterThan(0);
     for (const def of rest) expect(def.path.startsWith('/rest/'), def.path).toBe(true);
     for (const def of user) expect(def.path.startsWith('/user/'), def.path).toBe(true);
+    for (const def of share) expect(def.path.startsWith('/share/'), def.path).toBe(true);
   });
 
   it('gives every definition a reason, so the table can be tuned without archaeology', () => {
@@ -128,11 +141,36 @@ describe('the rate-limit table', () => {
     }
   });
 
-  it('exports both registrars, and the worker calls one of each', () => {
+  it('exports all three registrars, and the worker calls one of each', () => {
     // The route order in `EdgeSonicWorker` depends on these being separately callable:
-    // `/rest` before its route, `/user` after the auth middleware. Asserting they are
-    // callable is weak, so the ordering itself is asserted in `worker.int.test.ts`.
+    // `/rest` and `/share` before their routes, `/user` after the auth middleware.
+    // Asserting they are callable is weak, so the ordering itself is asserted in
+    // `worker.int.test.ts`.
     expect(typeof registerRestRateLimits).toBe('function');
     expect(typeof registerUserRateLimits).toBe('function');
+    expect(typeof registerShareRateLimits).toBe('function');
+  });
+});
+
+describe('the headers on a share page', () => {
+  it('never caches the capability id, and sends the tight CSP', async () => {
+    // A share id is the whole credential: a cached page hands it to whoever shares the cache,
+    // and a `Referer` leaks it to the next site the visitor follows. The page also renders
+    // attacker-controlled filenames, so it gets `default-src 'none'` rather than the SPA's
+    // policy, which allows inline script.
+    const harness: Harness = await createHarness();
+    try {
+      const response = await harness.fetch(`${ORIGIN}/share/does-not-exist`);
+      // The 404 is the answer, and the headers must still be there — a miss is exactly the
+      // response a cache would otherwise keep and replay to a later, valid visitor.
+      expect(response.status).toBe(404);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+      const csp = response.headers.get('content-security-policy') ?? '';
+      expect(csp).toContain("default-src 'none'");
+      expect(csp).not.toContain('unsafe-inline');
+    } finally {
+      harness.close();
+    }
   });
 });

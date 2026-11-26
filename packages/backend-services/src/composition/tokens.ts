@@ -11,6 +11,7 @@ import type {
   PlaylistDAO,
   PlayCountDAO,
   ScanStateDAO,
+  ShareDAO,
   SongDAO,
   SongDerivationDAO,
   SongEnrichmentDAO,
@@ -27,6 +28,7 @@ import type { AccessAuthService } from '../auth/AccessAuthService';
 import type { SubsonicAuthService } from '../auth/SubsonicAuthService';
 import type { UserService } from '../auth/UserService';
 import type { LibraryService } from '../library/LibraryService';
+import type { ShareService } from '../share/ShareService';
 import type { IndexDropService } from '../library/IndexDropService';
 import type { ScanDriver } from '../library/ScanDriver';
 import type { EnrichDriver } from '../library/EnrichDriver';
@@ -77,6 +79,13 @@ const Tokens = {
   */
   SongIndexDAO: Symbol('SongIndexDAO') as Token<() => Promise<SongIndexDAO>>,
   PlaylistDAO: Symbol('PlaylistDAO') as Token<() => Promise<PlaylistDAO>>,
+  /**
+   * The capability stores. Two tables, one lifecycle: a share row and its frozen entries.
+   * Separate from `PlaylistDAO` because a playlist is mutable and owned per row, while a
+   * share is a capability whose id *is* the credential; folding the two together would make
+   * "who may list this" answerable in two ways.
+   */
+  ShareDAO: Symbol('ShareDAO') as Token<() => Promise<ShareDAO>>,
   AnnotationDAO: Symbol('AnnotationDAO') as Token<() => Promise<AnnotationDAO>>,
   /**
    * Play counts, bound separately from the annotations.
@@ -133,6 +142,15 @@ const Tokens = {
    */
   AccessAuthService: Symbol('AccessAuthService') as Token<AccessAuthService>,
   LibraryService: Symbol('LibraryService') as Token<LibraryService>,
+  /**
+   * The sharing capability: create/update/delete/list, plus the two public reads.
+   *
+   * A service rather than endpoint code because the *grant* rule — a share never exceeds its
+   * owner's current library grants — is a read of `libraries` that must be applied to every
+   * share regardless of which surface asked. Both the authenticated endpoints and the public
+   * `/share/:id` route go through it, so the two cannot disagree about what is visible.
+   */
+  ShareService: Symbol('ShareService') as Token<ShareService>,
   /**
    * The Danger Zone's drop, and its cost projection.
    *

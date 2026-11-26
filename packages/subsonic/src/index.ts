@@ -30,6 +30,7 @@ export * from './albumId';
 export * from './songId';
 export * from './types';
 export * from './builders';
+export * from './share';
 export * from './extensions';
 export { md5Hex, md5Bytes } from './md5';
 export { sha256Hex, sha256Bytes } from './sha256';

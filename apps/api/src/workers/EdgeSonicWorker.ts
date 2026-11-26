@@ -15,6 +15,7 @@
  * /user/ redirect            — the landing page's Sign In target, returning to `/`
  * scopeMiddleware            — one Container per request
  * OPTIONS *                  — CORS preflight, BEFORE auth (see below)
+ * /share/* limits + routes   — public capability links; no identity to key on
  * /user/*  auth              — Cloudflare Access
  * /user/*  rate limits       — AFTER auth, so a bucket is per operator
  * /user/*  routes
@@ -53,7 +54,15 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { API_BASE_PATH, errorResponse, resolveFormat } from '@edge-sonic/subsonic';
 import { toUserResponse, toSubsonicError } from '@edge-sonic/backend-services/errors';
 import { registerUserRoutes } from '../user/routes';
-import { userAuthentication, registerUserRateLimits, registerRestRateLimits, scopeMiddleware, securityHeaders } from '../middleware';
+import {
+  registerShareRateLimits,
+  registerRestRateLimits,
+  registerUserRateLimits,
+  scopeMiddleware,
+  securityHeaders,
+  userAuthentication,
+} from '../middleware';
+import { registerShareRoutes } from '../share/routes';
 import { createScanWorkerScope } from '@edge-sonic/background/ScanWorkerFactory';
 import { consumeQueueMessage, librariesDueForCron } from '@edge-sonic/background/queueConsumers';
 import { createRequestScope, Tokens } from '@edge-sonic/backend-services/composition';
@@ -175,6 +184,14 @@ class EdgeSonicWorker extends AbstractEntrypointWorker {
     // inside the dispatcher — so its limits are installed before the route.
     //
     registerRestRateLimits(app);
+
+    // The public sharing surface. Two routes, a capability id rather than a credential, so it
+    // sits beside `/rest` rather than inside it: `/rest`'s dispatcher authenticates every
+    // request, and a share is the one thing on this worker a visitor without an account may
+    // read. Its limits are registered before the routes and keyed on the client address,
+    // because there is no identity here to key on.
+    registerShareRateLimits(app);
+    registerShareRoutes(app);
 
     app.use('/user/*', userAuthentication());
     // After the auth middleware, not before: the bucket is per resolved operator, and

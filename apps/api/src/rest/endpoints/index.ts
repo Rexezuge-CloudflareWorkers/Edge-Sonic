@@ -6,7 +6,7 @@
  *
  * ### Endpoints this server does not have, and how each says so
  *
- * Videos, podcasts, shares, jukebox, chat, internet radio and last.fm info are not
+ * Videos, podcasts, jukebox, chat, internet radio and last.fm info are not
  * implemented — and **"not implemented" is three different answers**, because a client
  * acts on each differently. They used to be one list answering `code=70`, which fit none:
  *
@@ -52,6 +52,7 @@ import { lyricsEndpoints } from './lyrics';
 import { similarEndpoints } from './similar';
 import { infoEndpoints } from './info';
 import { topSongsEndpoints } from './topSongs';
+import { shareEndpoints } from './shares';
 
 /**
  * A handler returns either a finished `Response` (a binary endpoint such as
@@ -111,9 +112,6 @@ const UNIMPLEMENTED: Readonly<Record<string, AbsentEndpoint>> = {
   deletePodcastEpisode: { kind: 'not-implemented', reason: 'podcasts are not implemented' },
   downloadPodcastEpisode: { kind: 'not-implemented', reason: 'podcasts are not implemented' },
   jukeboxControl: { kind: 'not-implemented', reason: 'the jukebox is not implemented' },
-  createShare: { kind: 'not-implemented', reason: 'sharing is not implemented' },
-  updateShare: { kind: 'not-implemented', reason: 'sharing is not implemented' },
-  deleteShare: { kind: 'not-implemented', reason: 'sharing is not implemented' },
   getAvatar: { kind: 'not-implemented', reason: 'avatars are not implemented' },
   // The endpoint exists and this caller may not use it. The only kind that is a statement
   // about the caller rather than the server, which is why it gets `code=50` and not a
@@ -136,8 +134,7 @@ interface EmptyEndpoint {
   /**
    * The **wrapper element**, which is not the endpoint's name.
    *
-   * `getLyrics` answers `<lyrics>`, `getTopSongs` answers `<topSongs>`, `getShares` answers
-   * `<shares>`, and `getArtistInfo2` answers `<artistInfo2>` where `getArtistInfo` answers
+   * `getLyrics` answers `<lyrics>`, `getTopSongs` answers `<topSongs>`, `getArtistInfo2` answers
    * `<artistInfo>`. Naming a wrapper after the endpoint it belongs to gets six of these
    * wrong, which is what happened first: the payload arrived under `getLyrics`, and a client
    * reading `lyrics` — the field the schema names — saw nothing at all. The two names are
@@ -187,11 +184,11 @@ interface EmptyEndpoint {
  * a client calling `getInternetRadioStations` must render an empty panel, and `code=70` told
  * it the server had failed. Navidrome answers `{"topSongs":{}}`.
  *
- * Five endpoints used to live here and now do not: `getTopSongs` (`topSongs.ts`) ranks
- * this user's plays; `getLyrics`/`getLyricsBySongId` are implemented in `lyrics.ts` from
- * sidecars and tags; the four info panels in `info.ts` read notes and MusicBrainz ids
- * from the track's tags; they rank similar artists from the index. A table entry promising
- * an empty payload is a promise a real implementation can keep better than a placeholder.
+ * Entrypoints that used to live here now do not: `getTopSongs` (`topSongs.ts`) ranks this
+ * user's plays; `getLyrics`/`getLyricsBySongId` are implemented in `lyrics.ts` from sidecars
+ * and tags; the four info panels in `info.ts` read notes and MusicBrainz ids from the tags;
+ * they rank similar artists from the index. `getShares` left for `shares.ts` too. An entry
+ * promising an empty payload is a promise a real implementation keeps better than a placeholder.
  *
  * `reason` is what would be reviewed if one of these moved.
  */
@@ -202,16 +199,6 @@ const EMPTY_RESULT: Readonly<Record<string, EmptyEndpoint>> = {
     idKinds: null,
     requiredParams: [],
     reason: 'no internet radio stations are configured',
-  },
-  // Sharing is not implemented, so there is nothing to share and nothing to list. Here rather
-  // than in `UNIMPLEMENTED` because this is a listing a client reads on every dashboard:
-  // `code=70` there reads as "sharing is broken" rather than "you have no shares".
-  getShares: {
-    wrapper: 'shares',
-    listKeys: ['share'],
-    idKinds: null,
-    requiredParams: [],
-    reason: 'sharing is not implemented, so there are none',
   },
 };
 
@@ -230,6 +217,7 @@ const IMPLEMENTED: Readonly<Record<string, RestHandler>> = {
   ...similarEndpoints,
   ...infoEndpoints,
   ...topSongsEndpoints,
+  ...shareEndpoints,
 };
 
 /**

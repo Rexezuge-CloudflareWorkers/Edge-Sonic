@@ -28,6 +28,7 @@ reader: the split is by **who needs the answer**, not by directory.
 | What an album **is**: grouping key, id, track order                    | [`docs/agents/albums/AGENTS.md`](docs/agents/albums/AGENTS.md)     |
 | Tags, enrichment and artwork                                           | [`docs/agents/media/AGENTS.md`](docs/agents/media/AGENTS.md)       |
 | Import: moving a player's data in from another Subsonic server         | [`docs/agents/import/AGENTS.md`](docs/agents/import/AGENTS.md)     |
+| Sharing: capability links, the public `/share/:id` surface             | [`docs/agents/shares/AGENTS.md`](docs/agents/shares/AGENTS.md)     |
 
 ### By area
 

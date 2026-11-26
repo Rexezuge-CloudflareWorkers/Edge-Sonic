@@ -27,7 +27,15 @@ type HeaderContext = UserContext;
  * directly, and that assertion is the only thing that would have noticed the
  * inherited one was a no-op.
  */
-const isSensitiveJsonPath = sensitivePaths('/user', '/rest');
+const isSensitiveJsonPath = sensitivePaths('/user', '/rest', '/share');
+
+/**
+ * A share page renders no script and needs no external resource, so its CSP is the tightest
+ * one the product can send: everything denied, no base tag, no form target, no framing. The
+ * SPA's policy cannot be reused — it allows inline script, which a page listing
+ * attacker-controlled filenames has no reason to permit.
+ */
+const SHARE_CONTENT_SECURITY_POLICY = "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 /**
  * Baseline security headers for API JSON responses and the SPA shell.
@@ -52,6 +60,12 @@ function applySecurityHeaders(c: HeaderContext): void {
     const pathname = new URL(c.req.url).pathname;
     if (isSensitiveJsonPath(pathname)) {
       c.header('Cache-Control', 'no-store');
+    }
+    // A share URL is pasted into chats and opened from other sites, so the capability id
+    // must not travel onward in a `Referer` — and the page's own CSP is the tight one.
+    if (pathname === '/share' || pathname.startsWith('/share/')) {
+      c.header('Referrer-Policy', 'no-referrer');
+      c.header('Content-Security-Policy', SHARE_CONTENT_SECURITY_POLICY);
     }
   } catch {
     // URL parsing must never fail the request.

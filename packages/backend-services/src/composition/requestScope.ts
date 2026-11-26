@@ -48,6 +48,7 @@ import { bindEnrichment } from './bindEnrichment';
 import { bindImport } from './bindImport';
 import { bindIndexDrop } from './bindIndexDrop';
 import { bindScanDriver } from './bindScanDriver';
+import { bindShare } from './bindShare';
 import { Tokens } from './tokens';
 
 /**
@@ -202,6 +203,7 @@ function createRequestScope(
    * would say its writes went uncharged.
    */
   bindIndexDrop(scope, db, subrequests, scanFor);
+  bindShare(scope, db, subrequests);
 
   // The optional `onRequest` is the caller's subrequest meter. It is threaded here
   // rather than at each service so a range read and a `PROPFIND` are charged to the

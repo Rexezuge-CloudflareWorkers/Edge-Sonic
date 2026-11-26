@@ -9,6 +9,6 @@
 export { scopeMiddleware } from './scopeMiddleware';
 export { userAuthentication } from './userAuth';
 export { rateLimit, resetRateLimitForTests, clientIp, getRateLimitBucketCountForTests } from './rateLimit';
-export { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits } from './rateLimitConfig';
+export { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits, registerShareRateLimits } from './rateLimitConfig';
 export type { RateLimitDef, LimitSurface } from './rateLimitConfig';
 export { securityHeaders, SECURITY_HEADERS, isSensitiveJsonPath } from './securityHeaders';
