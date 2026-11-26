@@ -11,10 +11,10 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 - `src/workers/EdgeSonicWorker.ts` — Hono routes, no file routing, in this order:
   `securityHeaders` → `onError` → `/health` + SPA shell → `/user/` redirect →
   `scopeMiddleware` →
-  `OPTIONS *` preflight → `/rest/*` limits → `/user/*` (Access) → `/user/*` limits →
-  `/user/*` routes → `/rest/*` (Subsonic). Runs `AppConfiguration.validate()` once per
-  isolate on the first request. The two limit registrars sit on opposite sides of auth
-  on purpose; see below.
+  `OPTIONS *` preflight → `/rest/*` limits → `/share/*` limits + routes →
+  `/user/*` (Access) → `/user/*` limits → `/user/*` routes → `/rest/*` (Subsonic). Runs
+  `AppConfiguration.validate()` once per isolate on the first request. The limit registrars
+  sit on different sides of auth on purpose; see below.
 - `src/endpoints/BaseRoute.ts` — the shared `WorkerEnv` / `UserContext` types and the
   static helpers every route uses: `getScope`, `readJson`, `requireString`,
   `toErrorType`, `toErrorBody`, `jsonError`, `toErrorResponse`.
@@ -37,6 +37,10 @@ Scope: `apps/api/**`. Parent index: `../../AGENTS.md`.
 - `src/middleware/` — `scopeMiddleware`, `userAuth`, `rateLimit`, `rateLimitConfig`,
   `securityHeaders`. `index.ts` is the barrel the worker imports from, so the installed
   set is one list rather than one import line per middleware.
+- `src/share/routes.ts` — the **public** surface: `/share/:id` (a minimal server-rendered
+  landing page that counts the visit) and `/share/:id/stream` (Range passthrough, no visit).
+  It is deliberately not part of `/rest`, whose dispatcher authenticates everything; see
+  [`docs/agents/shares/AGENTS.md`](../../docs/agents/shares/AGENTS.md).
 
 ## Relative imports, not the `@/` alias
 
@@ -225,12 +229,15 @@ so an offline brute force works forever. With no trusted address at all, callers
 
 ## A `no-store` predicate must name a served path
 
-`isSensitiveJsonPath` checks `/user/` and `/rest/`. It arrived from the reference project
-as `startsWith('/user/')` — that project's private surface. This worker registers no
+`isSensitiveJsonPath` checks `/user/`, `/rest/` and `/share/`. It arrived from the reference
+project as `startsWith('/user/')` — that project's private surface. This worker registers no
 `/user/` route, so the predicate could never return `true` and `Cache-Control: no-store`
 was never applied to anything: `/user/me` and `/user/users` shipped with no
 `Cache-Control`. Nothing else in the app would have said so, because the Subsonic envelope
-sets its own `no-store` and the tests that existed all passed. Asserted in
+sets its own `no-store` and the tests that existed all passed. `/share/` joined it because a
+share id **is** the credential: a cached page hands the capability to whoever shares the
+cache. The share route also overrides `Referrer-Policy` to `no-referrer` and its CSP to
+`default-src 'none'`, since the page lists attacker-controlled filenames. Asserted in
 `test/security-headers.test.ts`.
 
 ## The list shapes, and the one element that is not a record
@@ -564,12 +571,12 @@ body is not audio.
 `UNIMPLEMENTED` carries a `kind`, and `code=70` is the **fourth** of them rather than the
 only one: `gone` → 410, `not-implemented` → 501, `not-authorized` → `code=50`, `absent` →
 `code=70`. **No entry uses `absent` today**, so the registry answers 410 five times, 501
-twelve times and `code=50` three times, and `code=70` from here is unreachable. The two
-endpoints a client calls routinely that still have nothing to report —
-`getInternetRadioStations`, `getShares` — are in `EMPTY_RESULT`, each with **its own wrapper
-name**, validated before it answers empty. Lyrics, similar songs, the four info panels and
-`getTopSongs` are **implemented** (see below), so their empty shapes are now answers rather
-than promises.
+nine times and `code=50` three times, and `code=70` from here is unreachable. The one
+endpoint a client calls routinely that still has nothing to report —
+`getInternetRadioStations` — is in `EMPTY_RESULT` with **its own wrapper name**, validated
+before it answers empty. Lyrics, similar songs, the four info panels, `getTopSongs` and the
+four sharing endpoints are **implemented** (see below), so their empty shapes are now
+answers rather than promises.
 `code=70` is still right for an endpoint this server does not have at all, which is the
 case `getOpenSubsonicExtensions` was in — the protocol says a
 server supporting no extensions returns an empty _list_, and answering a failure from the

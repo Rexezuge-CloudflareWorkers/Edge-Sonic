@@ -29,7 +29,7 @@ import { rateLimit } from './rateLimit';
  * index 3 silently reclassifies it — a new `/rest` limit would become a user limit
  * and start being keyed on the wrong identity. A field cannot drift that way.
  */
-type LimitSurface = 'rest' | 'user';
+type LimitSurface = 'rest' | 'user' | 'share';
 
 interface RateLimitDef {
   path: string;
@@ -78,6 +78,22 @@ const RATE_LIMIT_DEFS: readonly RateLimitDef[] = [
     keyPrefix: 'scanstatus',
     surface: 'rest',
     reason: 'Polling drives the scan, so it is capped — but generously, because a client legitimately polls during a scan.',
+  },
+  {
+    path: '/share/:id/stream',
+    windowMs: 60_000,
+    max: 120,
+    keyPrefix: 'sharestream',
+    surface: 'share',
+    reason: 'A shared track is a range request like `/rest/stream`, so the budget must allow seeking without being tight.',
+  },
+  {
+    path: '/share/:id',
+    windowMs: 60_000,
+    max: 60,
+    keyPrefix: 'sharepage',
+    surface: 'share',
+    reason: 'Each view increments `visit_count`, so an unbounded public endpoint would be an unbounded D1 write.',
   },
   {
     path: '/user/*',
@@ -138,6 +154,20 @@ function registerUserRateLimits(app: LimitApp): void {
 }
 
 /**
+ * `/share/*`.
+ *
+ * Registered before the routes and keyed on the client address, like `/rest` and unlike
+ * `/user`: a share is public, so there is no resolved identity to key on. The page budget is
+ * also a **write** budget — every view increments a row — which is why it is lower than the
+ * stream's.
+ */
+function registerShareRateLimits(app: LimitApp): void {
+  for (const def of RATE_LIMIT_DEFS) {
+    if (def.surface === 'share') install(app, def);
+  }
+}
+
+/**
  * Stream budget for one request.
  *
  * Single ownership: the scope's `AppConfig` when middleware ordering installed
@@ -160,5 +190,5 @@ function streamLimitFor(c: RateLimitContext): number {
   }
 }
 
-export { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits };
+export { RATE_LIMIT_DEFS, registerRestRateLimits, registerUserRateLimits, registerShareRateLimits };
 export type { RateLimitDef, LimitSurface };

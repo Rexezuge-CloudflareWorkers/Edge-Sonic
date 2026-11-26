@@ -101,6 +101,10 @@ const TABLE_INDEX_COUNTS: Readonly<Record<string, number>> = {
   // `idx_user_emails_user`. Added by `0011_user_identity.sql` with the
   // `current_email` unique index that moved `users` from 2 to 3.
   user_emails: 2,
+  // `0012_shares.sql`: the implicit id autoindex plus `idx_shares_owner`, and the
+  // composite `(share_id, position)` autoindex plus `idx_share_entries_song`.
+  shares: 2,
+  share_entries: 2,
 };
 
 /**

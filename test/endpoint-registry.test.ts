@@ -234,8 +234,8 @@ describe('the endpoint registry', () => {
     // `getLyrics`, `getArtistInfo`, `getTopSongs`, `getShares` and the radio listing were all
     // `code=70`. Each is an endpoint a client calls routinely — `getLyrics` on every track,
     // `getShares` on every dashboard — and `code=70` told it the server had failed where the
-    // truth is that there is nothing to report. The same mistake `getOpenSubsonicExtensions` was
-    // removed from this list for.
+    // truth is that there is nothing to report. All but the radio listing have since left this
+    // table for real implementations; the rule it states is unchanged.
     //
     // The wrapper is present and carries no items: `{"lyrics":{}}`, not an error and not an
     // absent payload, so a client can tell "nothing to report" from "not implemented".

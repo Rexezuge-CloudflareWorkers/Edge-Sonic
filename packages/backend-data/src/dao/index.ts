@@ -68,6 +68,12 @@ export { AnnotationDAO, AuthThrottleDAO } from './UserStateDAO';
 export { PlayCountDAO } from './playCounts';
 export { ScanStateDAO } from './ScanStateDAO';
 export { PlaylistDAO } from './playlists';
+// Shares are a capability over a frozen selection: their own two tables and their own
+// lifecycle, so not another method on `PlaylistDAO` (which owns a mutable, owned list) or on
+// the annotations DAO (which owns per-user state keyed by item). The row types live beside
+// the DAO because adding them to `rows.ts` would put that file over the god-file ratchet.
+export { ShareDAO } from './shares';
+export type { ShareRow, ShareEntryRow, ShareEntrySongRow } from './shares';
 export type { StarItemType } from './UserStateDAO';
 // Registered remote Subsonic instances and the runs that import from them. A separate DAO
 // from `LibraryDAO` because a remote server is not a library: it holds no music, and its

@@ -142,6 +142,19 @@ describe('the Pages proxy', () => {
     expect(worker.seen[1]!.body).toBeNull();
   });
 
+  it('forwards a public share link, which is not a page asset', async () => {
+    // `/share/:id` is a server-rendered page produced by the Worker, not a file in `dist/`.
+    // Pages resolves a request to a static asset before invoking the catch-all, so the risk
+    // here is the opposite of `/user`: a share link a user pasted into a chat must reach the
+    // Worker rather than 404 at the asset layer.
+    const worker = recordingWorker();
+    await invoke(new Request(`${ORIGIN}/share/3f2a7c1e-0000-4000-8000-000000000000`), worker.fetch);
+
+    const seen = worker.seen[0]!;
+    expect(new URL(seen.url).pathname).toBe('/share/3f2a7c1e-0000-4000-8000-000000000000');
+    expect(seen.headers.get('X-Forwarded-Host')).toBe('edge-sonic.pages.dev');
+  });
+
   it('returns whatever the Worker answered, unaltered', async () => {
     const worker = { fetch: { fetch: async () => new Response('nope', { status: 418 }) } as unknown as Fetcher };
     const response = await invoke(new Request(`${ORIGIN}/rest/nope.view`), worker.fetch);

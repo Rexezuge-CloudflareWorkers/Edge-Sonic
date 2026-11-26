@@ -19,7 +19,9 @@
     "./library": "./src/library/index.ts",
     "./library/*": "./src/library/*.ts",
     "./queue": "./src/queue/index.ts",
-    "./queue/*": "./src/queue/*.ts"
+    "./queue/*": "./src/queue/*.ts",
+    "./share": "./src/share/index.ts",
+    "./share/*": "./src/share/*.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

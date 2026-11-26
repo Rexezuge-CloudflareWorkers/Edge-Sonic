@@ -22,12 +22,12 @@ have moved silently.
 Moving one is deliberate, and the guide is where it is recorded: adding an endpoint changes the total,
 and changing an endpoint's **kind** changes the split. Both now fail a test.
 
-| Map              | Entries | Answers                                                                 |
-| ---------------- | ------: | ----------------------------------------------------------------------- |
-| `IMPLEMENTED`    |      52 | the real thing                                                          |
-| `UNIMPLEMENTED`  |      20 | 410 ×5 `gone`, 501 ×12 `not-implemented`, `code=50` ×3 `not-authorized` |
-| `EMPTY_RESULT`   |       2 | an empty wrapper, after validating the request                          |
-| `ENDPOINT_NAMES` |      74 | —                                                                       |
+| Map              | Entries | Answers                                                                |
+| ---------------- | ------: | ---------------------------------------------------------------------- |
+| `IMPLEMENTED`    |      56 | the real thing                                                         |
+| `UNIMPLEMENTED`  |      17 | 410 ×5 `gone`, 501 ×9 `not-implemented`, `code=50` ×3 `not-authorized` |
+| `EMPTY_RESULT`   |       1 | an empty wrapper, after validating the request                         |
+| `ENDPOINT_NAMES` |      74 | —                                                                      |
 
 `kind: 'absent'` → `code=70` is a **type member and a handler branch with no entry**, so
 `code=70` from this registry is unreachable. It is still reached two other ways, both
@@ -80,7 +80,7 @@ compare-reference.ts` reads the same call off a configured reference and compare
   the only thing that knows which element type it is; and the parity assertion compares
   something both endpoints actually publish.
 - **"Not implemented" is four answers, and `code=70` was right for none of them.**
-  `getArtistInfo`, `getArtistInfo2`, `getTopSongs`, `getInternetRadioStations`, `getShares`,
+  `getArtistInfo`, `getArtistInfo2`, `getTopSongs`, `getInternetRadioStations`,
   `getAlbumInfo` and `getAlbumInfo2` answered `code=70` while being endpoints a client
   calls routinely — `getAlbumInfo2` on every album screen — so `code=70` said the server
   had _failed_ where the truth was nothing to report. `EMPTY_RESULT` answers each with its
@@ -89,7 +89,7 @@ compare-reference.ts` reads the same call off a configured reference and compare
   does not exist" and "that artist has no info" look identical in a response and mean
   opposite things. `UNIMPLEMENTED` carries a `kind`: `gone` → 410, `not-implemented` → 501,
   `not-authorized` → `code=50`, `absent` → `code=70`. **No entry uses `absent`
-  today**: the table holds 5 `gone`, 12 `not-implemented` and 3 `not-authorized`, so the
+  today**: the table holds 5 `gone`, 9 `not-implemented` and 3 `not-authorized`, so the
   registry answers 410, 501 and `code=50`, so `code=70` from here is unreachable — which
   is the answer `EMPTY_RESULT` was introduced to replace. **A name in two registry tables
   is routed by whichever was assigned last and reported by neither**, and five were when
@@ -143,6 +143,18 @@ compare-reference.ts` reads the same call off a configured reference and compare
   extension is a promise, and accepting an `id` is a second lookup path. Asserted in
   `test/top-songs.test.ts` (shape at one and many, ranking, scope, the empty answer) with
   the query plan of the statement that actually runs.
+- **A share's id is the credential, and the wire says nothing more about it.** The four
+  endpoints (`getShares`, `createShare`, `updateShare`, `deleteShare`) are the owner's side;
+  the public `/share/:id` page and its `/share/:id/stream` are a separate surface and never
+  part of `/rest`'s auth path. `share` carries `entry` children built from the ordinary
+  `songElement` renamed, so a client decoding `Child` gets the same attributes it gets on
+  every other endpoint — and both `share` and `entry` are declared lists, because a
+  one-track share is an ordinary share. `expires`/`lastVisited`/`created` are ISO-8601 on
+  the wire while the `expires` **parameter** is epoch milliseconds and the columns hold
+  epoch seconds; the conversion is one helper at the endpoint boundary. There is no
+  endpoint that mints a share from a library or a playlist — the protocol's `id` names
+  songs — and no endpoint that lists a share the caller does not own: a foreign id answers
+  `code=70`, never `code=50`, for the same oracle reason every other id does.
 - **A field this server cannot answer is absent, not an empty default.** `lastFmUrl` and the
   three `*ImageUrl` fields are omitted from every info panel: there is no last.fm integration,
   and a `/rest/getCoverArt` URL without credentials would 401 on fetch. Clients already draw
@@ -150,9 +162,10 @@ compare-reference.ts` reads the same call off a configured reference and compare
   are likewise omitted when the tags carry none — an empty string is a claim that the field is
   supported and empty, not that it was never read.
 - **The wrapper element's name is not the endpoint's name.** **Every** empty-result
-  wrapper differs — `getShares` answers `<shares>`, `getArtistInfo2` answers `<artistInfo2>`
-  — and naming one after its endpoint answers `200` with the payload under the wrong key,
-  which reads as "no data" rather than "wrong key". Both names are stated.
+  wrapper differs — `getInternetRadioStations` answers `<internetRadioStations>`,
+  `getArtistInfo2` answers `<artistInfo2>`, and `getShares` answers `<shares>` — and naming
+  one after its endpoint answers `200` with the payload under the wrong key, which reads as
+  "no data" rather than "wrong key". Both names are stated.
 - **An OpenSubsonic array whose wrapper and child are the same word is a bare array.**
   `Child.artists` is `"artists": [{…}]`, not `{"artists":{"artist":[…]}}`: a Subsonic list
   wrapper puts the value under the _child's_ key (`albumList2.album`), and here the wrapper

@@ -16,6 +16,7 @@ import type { TreeService } from '@edge-sonic/backend-services/index';
 import type { MediaStub } from '../workers/scanStubs';
 import type { ScanDriver } from '@edge-sonic/backend-services/library';
 import type { EnrichmentService, LyricsService, EntityInfoService } from '@edge-sonic/backend-services/index';
+import type { ShareService } from '@edge-sonic/backend-services/share';
 import type { KvCache } from '@edge-sonic/backend-runtime/kv';
 import type { SongDAO, PlaylistDAO, AnnotationDAO, PlayCountDAO, UserDAO, SongIndexDAO } from '@edge-sonic/backend-data/dao';
 
@@ -81,6 +82,10 @@ interface RestContext {
   readonly songIndex: SongIndexDAO;
   readonly users: UserDAO;
   readonly playlists: PlaylistDAO;
+  /**
+  The sharing capability. Owns the grant check for both the authenticated and public reads.
+  */
+  readonly shares: ShareService;
   readonly annotations: AnnotationDAO;
   /**
    * Play counts, separately from the annotations.
